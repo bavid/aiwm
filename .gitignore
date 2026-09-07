@@ -1,0 +1,38 @@
+# Rust
+/target
+**/target
+Cargo.lock.orig
+
+# Node / UI
+node_modules/
+ui/dist/
+.vite/
+
+# Python / sidecar
+.venv/
+**/__pycache__/
+*.pyc
+.ruff_cache/
+.pytest_cache/
+
+# Tauri
+src-tauri/gen/
+
+# Local app data / runtime artifacts (never committed)
+/data/
+/logs/
+*.db
+*.db-shm
+*.db-wal
+*.log
+
+# Model store lives at E:\AI\models — never tracked
+/models/
+
+# Editor / OS
+.DS_Store
+Thumbs.db
+*.local
+.env
+.env.*
+!.env.example

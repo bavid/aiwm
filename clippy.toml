@@ -1,0 +1,4 @@
+# Clippy configuration. Lint levels are set in the workspace Cargo.toml
+# ([workspace.lints]); this file holds only value-based config.
+too-many-arguments-threshold = 8
+cognitive-complexity-threshold = 30

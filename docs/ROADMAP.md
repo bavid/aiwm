@@ -1,0 +1,130 @@
+# Roadmap
+
+Prinzip: dünne vertikale Scheiben, jede für sich nutzbar. Nach jedem Meilenstein
+ein kurzer DONE-Bericht (Implemented / Not implemented / Known issues / Next
+decision).
+
+Gewählter Startpunkt: **Plattform-Kern zuerst** (Discovery-Antwort). Damit ist der
+MVP bewusst *ohne* echte AI-Capability — er beweist die Grundmechanik.
+
+---
+
+## Phase 1 — Architektur & Fundament *(kein Feature-Code)*
+
+**Detailplan: [PHASE_1_PLAN.md](PHASE_1_PLAN.md)** (Toolchain, Repo-Struktur,
+Schema-v1-DDL, Kern-Traits, 10 Arbeitspakete mit DoD).
+
+- [x] Offene Entscheidungen A–G geklärt (siehe [DECISIONS.md](DECISIONS.md))
+- [ ] Diese Dokumente reviewen und freigeben
+- [ ] WP-0…WP-10 gemäß Detailplan
+
+**Deliverable:** App startet, legt DB + Datenordner an, zeigt live GPU/VRAM/RAM/CPU;
+Runtime-Adapter, Job-Zustandsmaschine und Hybrid-Scheduler existieren als
+getestete Schnittstellen mit Fake-Adapter (keine echte Runtime, keine Inferenz).
+
+---
+
+## Phase 2 — MVP: Plattform-Kern
+
+Umfang bewusst eng. **Nicht** enthalten: Online-Discovery-Suche, Download-Manager,
+Benchmarks, Quality-Scores, Plugin-System, Bild/Video, Agents.
+
+1. **Dashboard**
+   - GPU (VRAM, Auslastung, Temp), RAM, CPU — Live (1 Hz, NVML + sysinfo)
+   - Aktueller Job + Queue-Länge
+   - Vier Capability-Buttons (nur „Chat" aktiv, Rest „bald")
+2. **Runtime-Management (Manage-first, llama.cpp)**
+   - llama.cpp/llama-server in fest kuratierter Version herunterladen + einrichten
+     (CUDA-Build), Health-Check, Start/Stop, Auto-Restart bei Crash
+   - Windows Job Object für sauberes Aufräumen
+   - *Attach-Fallback:* vorhandenen llama-server auf Port erkennen
+3. **Model Library (nur lokal)**
+   - Manuelles „Modell hinzufügen": GGUF-Datei/-Ordner wählen → in kanonischen
+     Store übernehmen (verschieben/verlinken), SHA256, Metadaten aus GGUF-Header
+   - Junction-Verknüpfung Store ↔ Runtime
+   - Liste mit: Name, Quant, Größe, geschätztes VRAM, Kontext, Rolle
+   - „Modell testen"-Knopf (kurzer Prompt, misst tok/s, Load-Zeit, VRAM-Peak)
+4. **Resource Manager (Hybrid, session-aware) — Grundausbau**
+   - VRAM-Budget-Rechnung (konservativ), ein resident Slot
+   - Job-Queue mit Zuständen; `blocked`-Zustand mit Klartext-Dialog
+   - Auto-load/unload für Nicht-gepinnte Modelle
+5. **Job-System**
+   - Job „Chat/Completion": Modell wählen (oder Auto) → laden → Prompt → Antwort
+   - Persistenz + Job-Events + Cancel
+6. **Fehler & Diagnostics**
+   - Klartext-Fehler mit Handlungsoptionen (VRAM, Runtime tot, Datei fehlt)
+   - Advanced „Diagnostics"-View: Logs, Runtime-Status, letzte Job-Events
+7. **Settings**
+   - Store-Pfad, Offline-Modus-Schalter, Runtime-Version, Theme
+
+**DONE-Kriterium:** Frisches Windows → App installieren → llama.cpp wird
+eingerichtet → GGUF-Modell hinzufügen → Chat-Job läuft → zweites Modell
+hinzufügen → Wechsel ohne manuelles VRAM-Management → Netz trennen → alles
+funktioniert weiter.
+
+---
+
+## Phase 3 — Bild
+
+- ComfyUI als zweite Manage-first-Runtime (gepinnte Version, gekapselt)
+- Capabilities: Text→Image, Image→Image, Inpaint, Upscale, einfaches Enhancement
+- Feste Pipelines (TOML), Modell-Rollen-Auflösung
+- Einfache UI: Prompt, Style [Auto], Quality, Aspect Ratio, Model [Auto], „Generate"
+- Ausgabe-Galerie + Metadaten (Prompt/Seed/Modell) + Output-Ordner
+- Scheduler koordiniert LLM ↔ Diffusion um das VRAM-Budget
+
+## Phase 4 — Video
+
+- Wan 2.2 5B + LTX distilled als getestete Optionen (14B als „Advanced/langsam")
+- Capabilities: Image→Video, Text→Video, Frame-Interpolation, Video-Upscale
+- Klare Erwartungssteuerung in der UI (Dauer, Auflösung, Zeit)
+- RAM-Warnung wenn Offload-Budget kritisch
+
+## Phase 5 — Agents
+
+- Agent-Profile (Runtime + Modell + Kontext + Tools + Workspace + Pfad-Allowlist)
+- **Adapter 1: Hermes Agent** (Nous Research) — Custom endpoint = lokaler
+  llama-server; nutzt sein eingebautes Memory/Skills/Sub-Agent-System, unser Tool
+  begrenzt Profil/Pfade/Commands. Windows: `bash -l`-Abhängigkeit vorab
+  verifizieren (Git-Bash mitliefern oder WSL2 dokumentieren).
+- **Adapter 2: OpenCode** (`serve`-Modus), erzwungene lokale Endpoint-Config
+- Session-Persistenz + Checkpoints (Hermes: `~/.hermes/` in Backup einbeziehen)
+- Context-Kompaktierung + lokaler Repository-Index (Retrieval) — für OpenCode;
+  bei Hermes durch dessen Memory teils abgedeckt
+- Sicherheitsgrenzen: Command-Approval, kein Netz per Default, Secrets-Isolation
+- Backup/Restore (Export/Import) von Config + DB + Agent-Memory
+- aider als optionaler dritter Adapter notiert
+
+## Phase 6 — Automatisierung & Model-Manager v2
+
+- **Online-Discovery:** HF-Hub- + Ollama-Library-Quellen-Adapter, Suche mit Filtern
+- **Download-Manager:** Queue, Pause/Resume, Verify, Speicherplanung
+- **Kompatibilitäts-Engine:** 🟢/🟡/🔴 vor Download
+- **Dedup-/Unused-/Alte-Versionen-Reports**
+- **Benchmark-System** + gewichteter Quality-Score
+- **Auto-Model-Auswahl** nutzt jetzt Benchmark-Daten
+- **Auto-Pipeline-Auswahl** verfeinert
+- **Collections**, Model-Versionen, Update-Checks
+- Cloud-Provider-Adapter (opt-in): Claude/OpenAI als optionale Agent-Backends
+
+## Später / bewusst offen
+
+- Plugin-/Adapter-Plattform für Dritt-Runtimes (erst wenn interne Adapter stabil)
+- LAN-/Remote-Zugriff (opt-in)
+- Multi-GPU-Scheduling
+- Relighting, Generative Fill, Video-Restoration
+- Weitere Agent-Runtimes (aider, Continue, …)
+
+---
+
+## Was der MVP bewusst NICHT tut
+
+| Nicht im MVP | Grund | Kommt in |
+|---|---|---|
+| Online-Modell-Suche/-Download | eigene große Baustelle, Offline-Fallbacks überall nötig | Phase 6 |
+| Bild-/Video-Generierung | erst Kern stabil | Phase 3/4 |
+| Coding-Agents | braucht Kern + Memory + Sandbox | Phase 5 |
+| Benchmarks / Quality-Score | braucht erst Datenbasis | Phase 6 |
+| Ollama-/LM-Studio-Adapter | llama.cpp reicht für Kern | Phase 3+ (Ollama optional) |
+| Plugin-System | interne Adapter zuerst reifen lassen | nach Phase 6 |
+| Multi-User / Remote | Single-User-Produkt | evtl. nie |

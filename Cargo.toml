@@ -1,0 +1,41 @@
+[workspace]
+resolver = "2"
+members = ["core"]
+# "src-tauri" is added in the next WP-0 step, once the Tauri CLI has scaffolded it.
+
+[workspace.package]
+version = "0.0.1"
+edition = "2021"
+license = "LicenseRef-Proprietary"   # private project, non-commercial (ADR-011)
+rust-version = "1.80"
+
+[workspace.dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "process", "signal", "time", "fs"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-appender = "0.2"
+toml = "0.8"
+uuid = { version = "1", features = ["v7"] }
+time = { version = "0.3", features = ["formatting", "parsing", "macros"] }
+
+[workspace.lints.rust]
+unsafe_code = "warn"
+missing_debug_implementations = "warn"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+todo = "allow"          # scaffolding phase; tighten to "warn" after WP-5
+unwrap_used = "warn"
+expect_used = "warn"
+
+[profile.dev]
+opt-level = 1           # keeps NVML/telemetry loop responsive during `tauri dev`
+
+[profile.release]
+strip = true
+lto = "thin"
+codegen-units = 1
