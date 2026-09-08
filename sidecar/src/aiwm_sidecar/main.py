@@ -17,6 +17,14 @@ from aiwm_sidecar import PROTOCOL_VERSION, __version__
 CAPABILITIES: list[str] = []  # e.g. "inspect_model_file" from Phase 2 onward
 
 _METHOD_NOT_FOUND = -32601
+_NOT_IMPLEMENTED = -32001
+
+# Methods declared in the contract but not served yet.
+_PLANNED = {"inspect_model_file"}
+
+
+def _error(req_id: Any, code: int, message: str) -> dict[str, Any]:
+    return {"jsonrpc": "2.0", "id": req_id, "error": {"code": code, "message": message}}
 
 
 def handle(req: dict[str, Any]) -> dict[str, Any] | None:
@@ -32,12 +40,10 @@ def handle(req: dict[str, Any]) -> dict[str, Any] | None:
         }
     elif method == "ping":
         result = "pong"
+    elif method in _PLANNED:
+        return _error(req_id, _NOT_IMPLEMENTED, f"{method} is not implemented yet")
     else:
-        return {
-            "jsonrpc": "2.0",
-            "id": req_id,
-            "error": {"code": _METHOD_NOT_FOUND, "message": f"method not found: {method}"},
-        }
+        return _error(req_id, _METHOD_NOT_FOUND, f"method not found: {method}")
 
     if req_id is None:
         return None

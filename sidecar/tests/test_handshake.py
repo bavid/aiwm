@@ -20,5 +20,11 @@ def test_unknown_method_is_json_rpc_error():
     assert resp["error"]["code"] == -32601
 
 
+def test_planned_method_reports_not_implemented():
+    resp = handle({"jsonrpc": "2.0", "id": 4, "method": "inspect_model_file"})
+    assert resp is not None
+    assert resp["error"]["code"] == -32001
+
+
 def test_notification_without_id_yields_no_response():
     assert handle({"jsonrpc": "2.0", "method": "ping"}) is None

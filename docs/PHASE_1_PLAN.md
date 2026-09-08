@@ -319,7 +319,7 @@ Logik-Code (Scheduler, Job-Engine, Repos) — Gerüst/Tauri-Host ausgenommen.
 | **WP-1 ✅** | Core-Bootstrap: tokio-main, `config.toml` laden/validieren, `tracing` → rotierende Datei, Datenordner (`%APPDATA%\AIWorkstationManager\`) anlegen, sauberer Ctrl-C-Shutdown | WP-0 | Core startet, schreibt Log, legt Ordner an, beendet sauber |
 | **WP-2 ✅** | `sqlx`-Pool, Migration-Runner, Schema v1, Repository-Traits + SQLite-Impls, Default-Settings | WP-1 | Frische DB aus Migration; Repo-Unit-Tests (in-memory) grün |
 | **WP-3 ✅** | Telemetrie-Modul (NVML + sysinfo), 1-Hz-Sampler, `watch`-Channel, Graceful degradation | WP-1 | Mock-Test grün; reale 4080S-Werte auf der Maschine |
-| **WP-8** | Sidecar-Contract (JSON-RPC), `uv`-Projekt, `main.py` (handshake/ping), `SidecarClient` | WP-1 | Spawn + Handshake + `ping`-Roundtrip; Sidecar stirbt mit Core |
+| **WP-8 ✅** | Sidecar-Contract (JSON-RPC), `uv`-Projekt, `main.py` (handshake/ping), `SidecarClient` | WP-1 | Spawn + Handshake + `ping`-Roundtrip; Sidecar stirbt mit Core |
 | **WP-4 ✅** | `RuntimeAdapter`-Trait, `RuntimeSupervisor`, Windows Job Object, `FakeRuntimeAdapter` | WP-1 | Job-Object-Kill-Test grün; Contract-Tests gegen Fake |
 | **WP-5 ✅** | Job-Zustandsmaschine, `JobEngine`, `Scheduler`-Trait, `HybridScheduler`-Skelett, Szenariomatrix-Tests | WP-2, WP-4 | Übergangs- + Szenariomatrix-Tests grün; Persistenz + Crash-Replay |
 | **WP-6 ✅** | Core-API-Handler, Tauri-Commands, axum HTTP/WS (Loopback), Event-Streams, `JobEngine`-Run-Loop im Daemon | WP-2, WP-3, WP-5 | Beide Transporte liefern identisches JSON; Loopback-only nachgewiesen |
@@ -542,6 +542,26 @@ Verifiziert: `pnpm tauri dev` zeigt das Fenster mit **echten Live-Werten**
 
 Offen für später: `eslint-plugin-react-hooks` in die UI-Lint-Config
 ([TODO.md](TODO.md)).
+
+### WP-8 — Ergebnis (abgeschlossen)
+
+- Sidecar (`sidecar/`): `[project.scripts] aiwm-sidecar` als Entry-Point;
+  `main.py` beantwortet `handshake` / `ping`, `inspect_model_file` meldet
+  `-32001 not implemented` (im Contract, noch nicht bedient).
+- `core::sidecar` — `SidecarClient`:
+  - `spawn(SidecarSpec)` — Child mit gepiptem stdio, in einem `JobObject`
+    (`kill_on_drop` zusätzlich); JSON-RPC 2.0 zeilenweise; Handshake mit
+    15 s Timeout, Protokoll-Version geprüft.
+  - `for_dev()` — startet `uv run --directory <repo>/sidecar aiwm-sidecar`.
+  - `ping()` / `call(method, params)` / `handshake()` / `pid()` / `shutdown()`.
+  - `resolve_uv()` — findet `uv` über PATH, `~/.local/bin`, oder den
+    WinGet-Paketordner (Tests laufen auch ohne `uv` auf PATH).
+- **Nicht** in `App` verdrahtet — der Sidecar wird erst ab Phase 2
+  (`inspect_model_file`) gebraucht.
+
+Tests: **4** (`handshake_and_ping_roundtrip`, `unknown_method_is_an_error`,
+`planned_method_is_not_implemented_yet`, `sidecar_dies_when_client_is_dropped`),
++ 5 pytest im Sidecar. Insgesamt **85 Unit + 1 Integration**. `check.ps1` grün.
 
 ---
 

@@ -6,6 +6,9 @@ requires-python = ">=3.11"
 dependencies = []
 # Real deps land later: huggingface_hub (Phase 6), gguf/safetensors readers (Phase 2).
 
+[project.scripts]
+aiwm-sidecar = "aiwm_sidecar.main:main"
+
 [dependency-groups]
 dev = ["ruff>=0.6", "pytest>=8"]
 

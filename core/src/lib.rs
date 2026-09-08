@@ -44,6 +44,7 @@ pub use runtime::{
     Health, RuntimeAdapter, RuntimeKind, RuntimeRegistry, RuntimeSupervisor, SpawnSpec,
 };
 pub use scheduler::{Decision, HybridScheduler, PlanRequest, Scheduler};
+pub use sidecar::{Handshake, SidecarClient, SidecarSpec};
 
 /// Semantic version of the core crate, surfaced in the sidecar handshake and the
 /// API `about` endpoint.
