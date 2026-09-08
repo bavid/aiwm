@@ -49,9 +49,12 @@ hierher, damit nichts verloren geht.
   aufnehmen (aktuell nur js + typescript-eslint recommended)
 
 ## Vor Phase 3/4
-- Dedizierte Modell-Research-Aufgabe (aktuelle Bild-/Video-Modelle, Quant, VRAM)
-- ComfyUI: minimale getestete Custom-Node-Menge definieren + festpinnen
-- `uv`-verwaltete venv-Strategie pro Runtime + „Repair"-Funktion
+- ~~Modell-Research (Bild-Modelle, Quant, VRAM)~~ → ✅ in [PHASE_3_PLAN.md](PHASE_3_PLAN.md)
+  §Research (SDXL/Flux/SD3.5/Qwen für 16 GB). Video-Modelle → vor Phase 4.
+- ~~ComfyUI: minimale Custom-Node-Menge~~ → ✅ PHASE_3_PLAN.md: genau
+  `city96/ComfyUI-GGUF` (Slice 3.2b), Rest bewusst später
+- `uv`-verwaltete venv-Strategie pro Runtime + „Repair"-Funktion → Detail in
+  Slice 3.2a
 
 ## Vor Phase 5 (Agents)
 - Hermes Agent auf der echten Windows-Maschine: `bash -l`-Abhängigkeit

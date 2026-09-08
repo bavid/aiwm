@@ -77,14 +77,16 @@ funktioniert weiter.
 
 ---
 
-## Phase 3 — Bild
+## Phase 3 — Bild *(geplant)*
 
-- ComfyUI als zweite Manage-first-Runtime (gepinnte Version, gekapselt)
-- Capabilities: Text→Image, Image→Image, Inpaint, Upscale, einfaches Enhancement
-- Feste Pipelines (TOML), Modell-Rollen-Auflösung
-- Einfache UI: Prompt, Style [Auto], Quality, Aspect Ratio, Model [Auto], „Generate"
-- Ausgabe-Galerie + Metadaten (Prompt/Seed/Modell) + Output-Ordner
-- Scheduler koordiniert LLM ↔ Diffusion um das VRAM-Budget
+**Scheibenplan + Research: [PHASE_3_PLAN.md](PHASE_3_PLAN.md).** MVP = Text→Bild
+über eine gekapselte ComfyUI-Runtime (gepinnter Tag, `uv`-venv, genau ein
+Custom Node). SDXL zuerst (`Auto`-Default), Flux.1-dev-GGUF als zweites Template.
+Feste Workflow-JSON-Pipelines, Modell-Rollen-Auflösung, echte Junctions in den
+ComfyUI-`models/`-Ordner (endlich der reale Konsument für `core::link`), Galerie
+mit Prompt/Seed/Modell, Scheduler koordiniert LLM ↔ Diffusion ums VRAM-Budget.
+
+Nach dem txt2img-MVP: Image→Image, Inpaint, Upscale, Enhancement (eigene Slices).
 
 ## Phase 4 — Video
 
