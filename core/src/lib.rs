@@ -37,8 +37,12 @@ pub use app::App;
 pub use config::Config;
 pub use db::Database;
 pub use error::{CoreError, Result};
+pub use orchestrator::{JobEngine, JobOutcome, JobState};
 pub use paths::AppPaths;
-pub use runtime::{Health, RuntimeAdapter, RuntimeKind, RuntimeSupervisor, SpawnSpec};
+pub use runtime::{
+    Health, RuntimeAdapter, RuntimeKind, RuntimeRegistry, RuntimeSupervisor, SpawnSpec,
+};
+pub use scheduler::{Decision, HybridScheduler, PlanRequest, Scheduler};
 
 /// Semantic version of the core crate, surfaced in the sidecar handshake and the
 /// API `about` endpoint.

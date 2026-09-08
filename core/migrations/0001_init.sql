@@ -56,14 +56,16 @@ CREATE TABLE model_links (
     PRIMARY KEY (model_id, runtime_id)
 ) STRICT;
 
+-- jobs is an append-only history: runtime_id / model_id are soft references
+-- (no FK) so removing a model or runtime never rewrites or blocks job history.
 CREATE TABLE jobs (
     id          TEXT PRIMARY KEY,           -- uuid v7
     type        TEXT NOT NULL,              -- 'chat' | 'noop' (Phase 1)
     capability  TEXT,
     state       TEXT NOT NULL,              -- queued | scheduled | preparing | running | post | completed | failed | blocked | cancelled
     params_json TEXT NOT NULL,
-    runtime_id  TEXT REFERENCES runtimes(id),
-    model_id    TEXT REFERENCES models(id),
+    runtime_id  TEXT,
+    model_id    TEXT,
     created_at  TEXT NOT NULL,
     started_at  TEXT,
     finished_at TEXT,

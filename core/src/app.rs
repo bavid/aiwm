@@ -50,6 +50,11 @@ impl App {
         db.settings()
             .set_if_absent("first_run_at", &now_rfc3339())
             .await?;
+
+        let recovered = db.jobs().recover_interrupted().await?;
+        if recovered > 0 {
+            tracing::warn!(count = recovered, "recovered interrupted jobs as failed");
+        }
         Ok(())
     }
 }

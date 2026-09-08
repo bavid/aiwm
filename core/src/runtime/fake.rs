@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 
-use super::{Health, RuntimeAdapter, RuntimeKind, SpawnSpec};
+use super::{Health, LoadedModel, RuntimeAdapter, RuntimeKind, SpawnSpec};
 use crate::{CoreError, Result};
 
 /// Knobs for [`FakeRuntimeAdapter`] behaviour in tests.
@@ -113,12 +113,14 @@ impl RuntimeAdapter for FakeRuntimeAdapter {
         Ok(())
     }
 
-    fn loaded_models(&self) -> Vec<String> {
-        self.loaded().keys().cloned().collect()
-    }
-
-    fn vram_used_mb(&self) -> u64 {
-        self.loaded().values().sum()
+    fn loaded_models(&self) -> Vec<LoadedModel> {
+        self.loaded()
+            .iter()
+            .map(|(model_id, &vram_mb)| LoadedModel {
+                model_id: model_id.clone(),
+                vram_mb,
+            })
+            .collect()
     }
 }
 
@@ -134,7 +136,12 @@ mod tests {
         fake.load_model("qwen-14b", 9_000).await.unwrap();
         fake.load_model("upscaler", 1_500).await.unwrap();
         assert_eq!(fake.vram_used_mb(), 10_500);
-        assert_eq!(fake.loaded_models(), ["qwen-14b", "upscaler"]);
+        let ids: Vec<_> = fake
+            .loaded_models()
+            .into_iter()
+            .map(|m| m.model_id)
+            .collect();
+        assert_eq!(ids, ["qwen-14b", "upscaler"]);
 
         fake.unload_model("qwen-14b").await.unwrap();
         assert_eq!(fake.vram_used_mb(), 1_500);

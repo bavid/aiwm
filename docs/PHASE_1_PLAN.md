@@ -321,8 +321,8 @@ Logik-Code (Scheduler, Job-Engine, Repos) — Gerüst/Tauri-Host ausgenommen.
 | **WP-3 ✅** | Telemetrie-Modul (NVML + sysinfo), 1-Hz-Sampler, `watch`-Channel, Graceful degradation | WP-1 | Mock-Test grün; reale 4080S-Werte auf der Maschine |
 | **WP-8** | Sidecar-Contract (JSON-RPC), `uv`-Projekt, `main.py` (handshake/ping), `SidecarClient` | WP-1 | Spawn + Handshake + `ping`-Roundtrip; Sidecar stirbt mit Core |
 | **WP-4 ✅** | `RuntimeAdapter`-Trait, `RuntimeSupervisor`, Windows Job Object, `FakeRuntimeAdapter` | WP-1 | Job-Object-Kill-Test grün; Contract-Tests gegen Fake |
-| **WP-5** | Job-Zustandsmaschine, `JobEngine`, `Scheduler`-Trait, `HybridScheduler`-Skelett, Szenariomatrix-Tests | WP-2, WP-4 | Übergangs- + Szenariomatrix-Tests grün; Persistenz + Crash-Replay |
-| **WP-6** | Core-API-Handler, Tauri-Commands, axum HTTP/WS (Loopback), Event-Streams | WP-2, WP-3, WP-5 | Beide Transporte liefern identisches JSON; Loopback-only nachgewiesen |
+| **WP-5 ✅** | Job-Zustandsmaschine, `JobEngine`, `Scheduler`-Trait, `HybridScheduler`-Skelett, Szenariomatrix-Tests | WP-2, WP-4 | Übergangs- + Szenariomatrix-Tests grün; Persistenz + Crash-Replay |
+| **WP-6** | Core-API-Handler, Tauri-Commands, axum HTTP/WS (Loopback), Event-Streams, `JobEngine`-Run-Loop im Daemon | WP-2, WP-3, WP-5 | Beide Transporte liefern identisches JSON; Loopback-only nachgewiesen |
 | **WP-7** | UI-Shell: Dashboard + Diagnostics, `ipc.ts`, Live-Telemetrie | WP-6 | `pnpm tauri dev` zeigt live echte Telemetrie |
 | **WP-9** | `check.ps1` + CI-Workflow + Pre-commit-Hook | WP-0 (dann laufend) | Pipeline auf sauberem Checkout grün |
 | **WP-10** | ADR-005/007/009 finalisieren; Stub-Docs `MODELS.md`, `RUNTIMES.md`, `SECURITY.md`, `BENCHMARKS.md`, `TODO.md` anlegen; Docs-Konsistenzcheck | alle | Docs konsistent; `TODO.md` mit zurückgestellten Punkten befüllt |
@@ -454,6 +454,35 @@ Der `core`-Crate hat jetzt **null `unsafe`** im Produktivcode.
 
 Offen für später: CREATE_SUSPENDED + Resume gegen das (winzige) Race-Fenster
 zwischen `CreateProcess` und `AssignProcessToJobObject` ([TODO.md](TODO.md)).
+
+### WP-5 — Ergebnis (abgeschlossen)
+
+- `orchestrator::state` — `JobState` (9 Zustände) + explizite Übergangstabelle
+  (`can_transition_to` / `ensure_transition`); alles nicht Gelistete ist
+  `CoreError::InvalidJobTransition`.
+- `db::jobs` — `JobRepo`: `insert` / `get` / `list(filter)` / `next_runnable`
+  (FIFO über queued+blocked) / `set_state` (validiert Übergang, schreibt Event) /
+  `append_event` / `events` / **`recover_interrupted`** (Crash-Replay: alles
+  mid-flight → failed).
+- `runtime::RuntimeRegistry` — geteilte Adapter-Map, VRAM-Summe,
+  `runtime_with_model`.
+- `scheduler` — `Scheduler`-Trait (`plan` + `pin`/`unpin`/`is_pinned`);
+  `HybridScheduler`: `frei = Budget − Treiber-Overhead − Headroom − Σ(geladen)`,
+  Decision `RunNow | LoadThenRun | EvictThenLoad{victim} | Blocked{reason}`,
+  gepinnte (Agent-)Modelle werden nie evakuiert. **Szenariomatrix**
+  (ADR-003) als Tabellen-Tests.
+- `orchestrator::engine` — `JobEngine`: `submit` / `run_next` (treibt einen Job
+  bis zum Ruhezustand) / `recover`. Job-Body ist in WP-5 ein No-op
+  (Fake-Adapter „lädt"). Agent-Sessions pinnen ihr Modell; `EvictThenLoad`
+  entlädt das Opfer real (über Registry) und lädt neu.
+
+Schema-Änderung: `jobs.runtime_id` / `jobs.model_id` sind **ohne FK-Constraint**
+(Job-Historie ist append-only und soll das Entfernen von Modellen/Runtimes
+überleben). Migration 0001 angepasst (noch keine Release-DB).
+
+`App::load` ruft jetzt `recover_interrupted()` beim Start.
+
+Tests: **75 Unit + 1 Integration**. Ganze `check.ps1` grün.
 
 ---
 

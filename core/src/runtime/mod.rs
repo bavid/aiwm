@@ -11,10 +11,12 @@
 
 mod fake;
 mod job;
+mod registry;
 mod supervisor;
 
 pub use fake::{FakeConfig, FakeRuntimeAdapter};
 pub use job::JobObject;
+pub use registry::RuntimeRegistry;
 pub use supervisor::{RuntimeSupervisor, SupervisorState};
 
 use std::path::PathBuf;
@@ -67,6 +69,13 @@ impl SpawnSpec {
     }
 }
 
+/// A model currently resident in a runtime.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct LoadedModel {
+    pub model_id: String,
+    pub vram_mb: u64,
+}
+
 /// A managed AI runtime. Implementations talk to one runtime's HTTP API; the
 /// core drives them through this trait only.
 #[async_trait]
@@ -88,9 +97,11 @@ pub trait RuntimeAdapter: Send + Sync + std::fmt::Debug {
     /// Unload `model_id`. A no-op if it is not loaded.
     async fn unload_model(&self, model_id: &str) -> Result<()>;
 
-    /// Model ids currently loaded in this runtime.
-    fn loaded_models(&self) -> Vec<String>;
+    /// Models currently loaded in this runtime, with their VRAM cost.
+    fn loaded_models(&self) -> Vec<LoadedModel>;
 
     /// Total VRAM (MB) attributed to this runtime's loaded models.
-    fn vram_used_mb(&self) -> u64;
+    fn vram_used_mb(&self) -> u64 {
+        self.loaded_models().iter().map(|m| m.vram_mb).sum()
+    }
 }

@@ -1,11 +1,13 @@
 //! SQLite persistence: connection pool, embedded migrations, and repositories.
 //!
 //! Schema v1 lives in `core/migrations/`. Repositories are added alongside their
-//! consumers (settings here; runtimes in WP-4, jobs in WP-5, models with the
-//! Phase-2 model importer) rather than all up front.
+//! consumers (settings, jobs; runtimes in WP-4, models with the Phase-2 model
+//! importer) rather than all up front.
 
+mod jobs;
 mod settings;
 
+pub use jobs::{EventLevel, Job, JobEvent, JobFilter, JobPatch, JobRepo, NewJob};
 pub use settings::SettingsRepo;
 
 use std::path::Path;
@@ -64,6 +66,10 @@ impl Database {
 
     pub fn settings(&self) -> SettingsRepo<'_> {
         SettingsRepo::new(&self.pool)
+    }
+
+    pub fn jobs(&self) -> JobRepo<'_> {
+        JobRepo::new(&self.pool)
     }
 
     /// Names of the application tables (excludes SQLite internals). Test helper.
