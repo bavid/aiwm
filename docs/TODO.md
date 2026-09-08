@@ -24,7 +24,16 @@ hierher, damit nichts verloren geht.
 - `LlamaCppAdapter`: Router-Mode evaluieren (ein Server, `/models` + `?autoload=`)
   als Alternative zum Prozess-pro-Modell — spart Modellwechsel-Latenz
 - `LlamaServerOptions` über die Settings-UI konfigurierbar machen (2.7):
-  `-ngl`, `-c`, `--flash-attn`, Load-Timeout
+  `-ngl`, `-c` (überschreibt `compat::effective_ctx`), `--flash-attn`,
+  Load-Timeout
+- `core::compat` (2.6): die 650-MB-Overhead-Konstante + die grobe KV-Reserve
+  (`160 MB / 1K ctx`) gegen echte `nvidia-smi`-Messungen kalibrieren (Phase 6,
+  [BENCHMARKS.md](BENCHMARKS.md)). Auch: KV-Cache-Quantisierung (`-ctk`/`-ctv`
+  q8/q4) senkt den Bedarf — als Option erwägen
+- Blockierte Jobs automatisch neu einreihen, wenn VRAM frei wird ohne dass ein
+  anderer Job evictet: Runtime-Stop, `unload_model` über die API, Agent-Session-
+  Ende. Aktuell ruht ein `blocked`-Job bis Cancel / anderer Job evictet; ein
+  `JobEngine::wake_blocked()` + Aufrufer an diesen Stellen wäre der saubere Weg
 - Chat: WebSocket/SSE-Token-Stream an die UI statt `jobs.result`-Polling
   (ADR-015 — MVP pollt); Multi-Turn-Verlauf, System-Prompt + Sampling-Parameter
 - Ein langer Chat-Job blockiert die Job-Schleife (Single-Slot-Prämisse ADR-003) —

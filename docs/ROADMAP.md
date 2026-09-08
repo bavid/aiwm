@@ -28,8 +28,9 @@ Loopback-API + Daemon-Run-Loop laufen. Keine echte Runtime, keine Inferenz.
 **Scheibenplan + Fortschritt: [PHASE_2_PLAN.md](PHASE_2_PLAN.md).** Fertig: 2.1
 (ModelRepo + GGUF-Import), 2.2a/b (`LlamaCppAdapter` + Installer), 2.3
 (Link-Manager `core::link`), 2.4a/b (Chat-Job — `Auto`-Wahl, gestreamt, Cancel),
-2.5 (Chat-UI). Chat läuft end-to-end von der Oberfläche bis zum `llama-server`.
-Offen: 2.6 (Kompat-Check), 2.7 (Settings-UI).
+2.5 (Chat-UI), 2.6 (VRAM-Kompat-Check `core::compat` — Gewichte + KV-Cache +
+Overhead vor dem Load, `blocked` mit Klartext statt OOM, ADR-016). Chat läuft
+end-to-end von der Oberfläche bis zum `llama-server`. Offen: 2.7 (Settings-UI).
 
 Umfang bewusst eng. **Nicht** enthalten: Online-Discovery-Suche, Download-Manager,
 Benchmarks, Quality-Scores, Plugin-System, Bild/Video, Agents.

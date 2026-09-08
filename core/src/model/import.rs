@@ -7,13 +7,9 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use super::{read_gguf_info, slugify, MIB};
+use crate::compat::{self, ModelDims};
 use crate::db::{Database, Model, NewModel};
 use crate::{CoreError, Result};
-
-/// Headroom added to the on-disk size for a first VRAM estimate. The real KV
-/// cache depends on the runtime and context length (refined by the compatibility
-/// engine later).
-const VRAM_HEADROOM_MB: i64 = 1024;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct ImportRequest {
@@ -87,7 +83,18 @@ pub async fn import_model(
         .await
         .map_err(|e| CoreError::Other(anyhow::anyhow!("copy worker panicked: {e}")))??;
 
-    let size_mb = i64::try_from(size_bytes / MIB).unwrap_or(i64::MAX);
+    let dims = ModelDims {
+        size_bytes,
+        ctx_max: gguf.context_length.and_then(|v| u32::try_from(v).ok()),
+        param_count: gguf.parameter_count,
+        n_layers: gguf.block_count.and_then(|v| u32::try_from(v).ok()),
+        n_embd: gguf.embedding_length.and_then(|v| u32::try_from(v).ok()),
+        n_heads: gguf.head_count.and_then(|v| u32::try_from(v).ok()),
+        n_kv_heads: gguf.head_count_kv.and_then(|v| u32::try_from(v).ok()),
+    };
+    // Estimate for the context a chat actually runs at, not the trained maximum.
+    let estimate = compat::estimate(&dims, compat::effective_ctx(dims.ctx_max));
+
     let new = NewModel {
         publisher: None,
         name,
@@ -100,10 +107,14 @@ pub async fn import_model(
         sha256: Some(sha256),
         size_bytes: i64::try_from(size_bytes).unwrap_or(i64::MAX),
         ctx_max: gguf.context_length.and_then(|v| i64::try_from(v).ok()),
-        vram_estimate_mb: Some(size_mb.saturating_add(VRAM_HEADROOM_MB)),
+        vram_estimate_mb: i64::try_from(estimate.total_mb).ok(),
         ram_estimate_mb: None,
         source: "manual".to_string(),
         source_revision: None,
+        n_layers: dims.n_layers.map(i64::from),
+        n_embd: dims.n_embd.map(i64::from),
+        n_heads: dims.n_heads.map(i64::from),
+        n_kv_heads: dims.n_kv_heads.map(i64::from),
         roles: req.roles,
     };
 
@@ -209,22 +220,30 @@ mod tests {
     use super::*;
     use crate::db::Database;
 
-    /// A tiny but valid GGUF v3 with one metadata string and two tensors.
+    /// A tiny but valid GGUF v3 with a few metadata keys and two tensors.
     fn gguf_bytes(name: &str) -> Vec<u8> {
         let mut kv = Vec::new();
         let gstr = |b: &mut Vec<u8>, s: &str| {
             b.extend_from_slice(&(s.len() as u64).to_le_bytes());
             b.extend_from_slice(s.as_bytes());
         };
-        gstr(&mut kv, "general.architecture");
-        kv.extend_from_slice(&8u32.to_le_bytes());
-        gstr(&mut kv, "llama");
-        gstr(&mut kv, "general.name");
-        kv.extend_from_slice(&8u32.to_le_bytes());
-        gstr(&mut kv, name);
-        gstr(&mut kv, "general.file_type");
-        kv.extend_from_slice(&4u32.to_le_bytes());
-        kv.extend_from_slice(&15u32.to_le_bytes()); // Q4_K_M
+        let kv_str = |b: &mut Vec<u8>, key: &str, val: &str| {
+            gstr(b, key);
+            b.extend_from_slice(&8u32.to_le_bytes());
+            gstr(b, val);
+        };
+        let kv_u32 = |b: &mut Vec<u8>, key: &str, val: u32| {
+            gstr(b, key);
+            b.extend_from_slice(&4u32.to_le_bytes());
+            b.extend_from_slice(&val.to_le_bytes());
+        };
+        kv_str(&mut kv, "general.architecture", "llama");
+        kv_str(&mut kv, "general.name", name);
+        kv_u32(&mut kv, "general.file_type", 15); // Q4_K_M
+        kv_u32(&mut kv, "llama.block_count", 2);
+        kv_u32(&mut kv, "llama.embedding_length", 64);
+        kv_u32(&mut kv, "llama.attention.head_count", 4);
+        kv_u32(&mut kv, "llama.attention.head_count_kv", 2);
 
         let mut tensors = Vec::new();
         for (n, dims) in [
@@ -244,7 +263,7 @@ mod tests {
         out.extend_from_slice(&0x4655_4747u32.to_le_bytes());
         out.extend_from_slice(&3u32.to_le_bytes());
         out.extend_from_slice(&2u64.to_le_bytes()); // tensor count
-        out.extend_from_slice(&3u64.to_le_bytes()); // kv count
+        out.extend_from_slice(&7u64.to_le_bytes()); // kv count
         out.extend_from_slice(&kv);
         out.extend_from_slice(&tensors);
         out
@@ -284,7 +303,17 @@ mod tests {
         assert_eq!(out.model.quant.as_deref(), Some("Q4_K_M"));
         assert_eq!(out.model.param_count, Some(64 * 100 + 64 * 64));
         assert_eq!(out.model.roles, ["coding"]);
-        assert!(out.model.vram_estimate_mb.unwrap() >= VRAM_HEADROOM_MB);
+
+        // Architecture dims came off the GGUF header and feed the estimate.
+        assert_eq!(out.model.n_layers, Some(2));
+        assert_eq!(out.model.n_kv_heads, Some(2));
+        let est = crate::compat::estimate(
+            &out.model.vram_dims(),
+            crate::compat::effective_ctx(out.model.ctx_max.and_then(|v| u32::try_from(v).ok())),
+        );
+        assert!(!est.kv_is_rough);
+        assert_eq!(out.model.vram_estimate_mb, i64::try_from(est.total_mb).ok());
+        assert!(out.model.vram_estimate_mb.unwrap() >= est.overhead_mb as i64);
 
         // A GGUF is registered as reachable by llama.cpp (passthrough — ADR-007).
         assert_eq!(out.model.runtimes, ["llamacpp"]);

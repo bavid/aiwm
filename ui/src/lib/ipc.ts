@@ -94,12 +94,18 @@ export interface Model {
   sha256: string | null;
   size_bytes: number;
   ctx_max: number | null;
+  /** Estimated VRAM to serve this model at the default chat context (weights + KV cache + overhead). */
   vram_estimate_mb: number | null;
   ram_estimate_mb: number | null;
   source: string;
   imported_at: string;
   last_used_at: string | null;
   use_count: number;
+  /** GGUF architecture dims (for the VRAM estimate); null when the header lacked them. */
+  n_layers: number | null;
+  n_embd: number | null;
+  n_heads: number | null;
+  n_kv_heads: number | null;
   roles: string[];
   /** Runtime ids that can use this model (from the link manager). */
   runtimes: string[];

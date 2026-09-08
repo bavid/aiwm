@@ -35,6 +35,7 @@ pub(super) fn build_spawn_spec(
     model_path: &Path,
     port: u16,
     opts: &LlamaServerOptions,
+    ctx: u32,
 ) -> SpawnSpec {
     let mut spec = SpawnSpec::new(bin)
         .arg("-m")
@@ -45,10 +46,9 @@ pub(super) fn build_spawn_spec(
         .arg(port.to_string())
         .arg("--no-webui")
         .arg("-ngl")
-        .arg(opts.gpu_layers.to_string());
-    if let Some(ctx) = opts.ctx_size {
-        spec = spec.arg("-c").arg(ctx.to_string());
-    }
+        .arg(opts.gpu_layers.to_string())
+        .arg("-c")
+        .arg(ctx.to_string());
     if opts.flash_attention {
         spec = spec.arg("--flash-attn").arg("on");
     }
@@ -122,6 +122,7 @@ mod tests {
             Path::new("E:\\AI\\models\\llm\\q\\q.gguf"),
             48213,
             &opts(),
+            8192,
         );
         assert_eq!(spec.program, PathBuf::from("C:\\bin\\llama-server.exe"));
         let joined = spec.args.join(" ");
@@ -130,23 +131,24 @@ mod tests {
         assert!(joined.contains("--port 48213"));
         assert!(joined.contains("--no-webui"));
         assert!(joined.contains("-ngl 999"));
+        assert!(joined.contains("-c 8192"));
         assert!(joined.contains("--flash-attn on"));
     }
 
     #[test]
-    fn build_spawn_spec_adds_ctx_when_set() {
+    fn build_spawn_spec_uses_the_given_ctx_and_can_drop_flash_attn() {
         let spec = build_spawn_spec(
             Path::new("s"),
             Path::new("m.gguf"),
             1,
             &LlamaServerOptions {
-                ctx_size: Some(8192),
                 flash_attention: false,
                 ..opts()
             },
+            4096,
         );
         let joined = spec.args.join(" ");
-        assert!(joined.contains("-c 8192"));
+        assert!(joined.contains("-c 4096"));
         assert!(!joined.contains("--flash-attn"));
     }
 

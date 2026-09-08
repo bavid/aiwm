@@ -31,7 +31,7 @@ noch keine echte AI-Capability (die kommt ab Phase 2).
 | WP-9 | CI-Workflow, Git-Hooks (pre-commit fmt, pre-push voller Gate) |
 | WP-10 | ADRs finalisiert, Stub-Docs (MODELS/RUNTIMES/SECURITY/BENCHMARKS) |
 
-**148 Rust-Unit + 12 Integrationstests + 5 pytest** grün · `scripts/check.ps1` grün ·
+**159 Rust-Unit + 12 Integrationstests + 5 pytest** grün · `scripts/check.ps1` grün ·
 **null `unsafe`** im Produktivcode.
 
 **Phase 2 (MVP) läuft.** Plan + Fortschritt: [docs/PHASE_2_PLAN.md](docs/PHASE_2_PLAN.md).
@@ -54,7 +54,12 @@ noch keine echte AI-Capability (die kommt ab Phase 2).
   (Passthrough/Junction/Hardlink/Copy), NTFS-Junction via `junction`-Crate,
   `model_links` live, Import verlinkt GGUF → llama.cpp (`passthrough`),
   Models-UI-Spalte „Runtimes".
-- **2.6** (nächste) Kompatibilitäts-Check vor dem Laden; dann 2.7 (Settings).
+- **2.6** ✅ **VRAM-Kompatibilitäts-Check** (`core::compat`): Gewichte + KV-Cache
+  (aus GGUF-Arch-Dims) + Overhead, geschätzt für den Chat-Kontext; der Scheduler
+  plant gegen diese Zahl statt der Dateigröße, `llama-server` bekommt ein
+  passendes `-c`. Passt es nicht → `blocked` mit Klartext-Aufschlüsselung
+  (kein OOM-Modell-Load), und der Job ruht statt die Schleife heiß zu drehen.
+- **2.7** (nächste) Settings-UI; Diagnostics erweitert.
 
 ## Zielhardware
 

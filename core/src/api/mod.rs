@@ -19,10 +19,15 @@ use std::time::Duration;
 
 use tokio::task::JoinHandle;
 
+use crate::orchestrator::JobOutcome;
 use crate::{App, CoreError, Result};
 
 /// Idle poll interval for the job loop when the queue is empty.
 const JOB_LOOP_IDLE: Duration = Duration::from_millis(250);
+/// Backoff after a job comes to rest `blocked` (needs a human or freed VRAM).
+/// It stays in the runnable set, so without this the loop would re-check it as
+/// fast as it can spin. A few seconds keeps it responsive without the churn.
+const JOB_LOOP_BLOCKED_BACKOFF: Duration = Duration::from_secs(3);
 
 /// A running HTTP/WS server. Bound address in [`ApiServer::addr`]; the task is
 /// aborted on drop.
@@ -92,6 +97,10 @@ pub async fn spawn_on(app: Arc<App>, api_addr: SocketAddr) -> Result<Services> {
 async fn run_job_loop(app: Arc<App>) {
     loop {
         match app.jobs.run_next().await {
+            Ok(Some(JobOutcome::Blocked { job_id, .. })) => {
+                tracing::debug!(%job_id, "job blocked — backing off");
+                tokio::time::sleep(JOB_LOOP_BLOCKED_BACKOFF).await;
+            }
             Ok(Some(outcome)) => tracing::info!(?outcome, "job finished"),
             Ok(None) => tokio::time::sleep(JOB_LOOP_IDLE).await,
             Err(e) => {

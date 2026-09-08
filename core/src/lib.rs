@@ -17,6 +17,7 @@
 //! - [`runtime`]      — `RuntimeAdapter` trait, supervisor, llama.cpp adapter (WP-4, 2.2)
 //! - [`orchestrator`] — job state machine + engine (WP-5)
 //! - [`capability`]   — capability-specific job bodies (chat, 2.4)
+//! - [`compat`]        — VRAM / KV-cache fit estimate before a model load (2.6)
 //! - [`link`]         — canonical model file ↔ runtime layout (junction/copy, 2.3)
 //! - [`scheduler`]    — `Scheduler` trait + hybrid scheduler skeleton (WP-5)
 //! - [`sidecar`]      — JSON-RPC client for the Python sidecar (WP-8)
@@ -25,6 +26,7 @@
 pub mod api;
 pub mod app;
 pub mod capability;
+pub mod compat;
 pub mod config;
 pub mod db;
 pub mod error;
@@ -40,6 +42,7 @@ pub mod telemetry;
 
 pub use api::{ApiServer, Services};
 pub use app::App;
+pub use compat::{estimate as estimate_vram, ModelDims, VramEstimate};
 pub use config::Config;
 pub use db::{Database, Model, ModelRepo, NewModel};
 pub use error::{CoreError, Result};

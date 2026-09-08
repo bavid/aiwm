@@ -48,7 +48,12 @@ export function Models() {
                   <td className="numeric">{params(m.param_count)}</td>
                   <td className="numeric">{gb(m.size_bytes / (1024 * 1024))}</td>
                   <td className="numeric">{ctx(m.ctx_max)}</td>
-                  <td className="numeric">{gb(m.vram_estimate_mb)}</td>
+                  <td
+                    className="numeric"
+                    title="Estimate at the default chat context — weights + KV cache + runtime overhead"
+                  >
+                    {gb(m.vram_estimate_mb)}
+                  </td>
                   <td className="muted">{m.roles.join(", ") || "—"}</td>
                   <td className="muted">{m.runtimes.join(", ") || "—"}</td>
                 </tr>

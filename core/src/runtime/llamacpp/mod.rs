@@ -56,7 +56,9 @@ pub(super) fn llama_err(msg: impl std::fmt::Display) -> CoreError {
 pub struct LlamaServerOptions {
     /// `-ngl` — transformer layers to offload to the GPU. `999` = "all".
     pub gpu_layers: u32,
-    /// `-c` — context window. `None` keeps the model's trained default.
+    /// `-c` — context window. `None` lets the adapter pick a sane cap from the
+    /// model's trained context ([`crate::compat::effective_ctx`]); `Some` forces
+    /// an explicit value (the Settings UI, slice 2.7).
     pub ctx_size: Option<u32>,
     /// Pass `--flash-attn on`.
     pub flash_attention: bool,
@@ -348,8 +350,8 @@ impl LlamaCppAdapter {
         Ok(())
     }
 
-    /// Resolve `model_id` to its on-disk file and display name.
-    async fn resolve_model(&self, model_id: &str) -> Result<(PathBuf, String)> {
+    /// Resolve `model_id` to its on-disk file, display name and trained context.
+    async fn resolve_model(&self, model_id: &str) -> Result<(PathBuf, String, Option<u32>)> {
         let model = self
             .db
             .models()
@@ -363,7 +365,8 @@ impl LlamaCppAdapter {
                 path.display()
             )));
         }
-        Ok((path, model.name))
+        let ctx_max = model.ctx_max.and_then(|v| u32::try_from(v).ok());
+        Ok((path, model.name, ctx_max))
     }
 
     /// Stop and clear the resident server if we manage it. Attached servers are
@@ -440,7 +443,11 @@ impl RuntimeAdapter for LlamaCppAdapter {
         let bin = self.server_bin().ok_or_else(|| {
             llama_err("llama-server is not installed — run llama.cpp setup first")
         })?;
-        let (model_path, label) = self.resolve_model(model_id).await?;
+        let (model_path, label, ctx_max) = self.resolve_model(model_id).await?;
+        let ctx = self
+            .opts
+            .ctx_size
+            .unwrap_or_else(|| crate::compat::effective_ctx(ctx_max));
         let port = free_loopback_port()?;
 
         // One server per model: loading a different model here means swapping the
@@ -451,7 +458,7 @@ impl RuntimeAdapter for LlamaCppAdapter {
             self.stop_current().await?;
         }
 
-        let spec = build_spawn_spec(&bin, &model_path, port, &self.opts);
+        let spec = build_spawn_spec(&bin, &model_path, port, &self.opts, ctx);
         let supervisor = RuntimeSupervisor::start(RUNTIME_ID, spec)?;
         *self.slot() = Slot::Loading {
             label: label.clone(),

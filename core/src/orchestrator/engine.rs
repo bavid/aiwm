@@ -14,6 +14,7 @@ use tokio::sync::watch;
 
 use super::JobState;
 use crate::capability::chat::{self, ChatOutcome};
+use crate::compat::{self, VramEstimate};
 use crate::db::{EventLevel, Job, JobPatch, NewJob};
 use crate::runtime::{LlamaCppAdapter, RuntimeRegistry};
 use crate::scheduler::{Decision, PlanRequest, Scheduler};
@@ -35,7 +36,13 @@ pub enum JobOutcome {
 struct Target {
     runtime_id: String,
     model_id: String,
+    /// Display name for messages; the id when the model isn't in the library.
+    model_name: String,
+    /// VRAM to plan against: the larger of the job's explicit ask and the
+    /// compatibility estimate.
     vram_mb: u64,
+    /// The fit estimate, when the model is in the library.
+    estimate: Option<VramEstimate>,
 }
 
 #[derive(Debug)]
@@ -165,15 +172,20 @@ impl JobEngine {
         }
     }
 
-    /// Resolve the job's `(runtime, model, vram)` — honouring an explicit model,
-    /// or picking one for a `chat` job that asked for `Auto`.
+    /// Resolve the job's target — honouring an explicit model, or picking one for
+    /// a `chat` job that asked for `Auto`. Computes a fresh VRAM fit estimate
+    /// (weights + KV cache at the effective context + overhead) so the scheduler
+    /// plans against a realistic number, not the on-disk size.
     async fn resolve_target(&self, job: &Job) -> Result<Target> {
         if let (Some(runtime_id), Some(model_id)) = (&job.runtime_id, &job.model_id) {
-            let est = self.model_vram_estimate(model_id).await;
+            let (name, estimate) = self.vram_estimate(model_id).await;
+            let need = estimate.as_ref().map_or(0, |e| e.total_mb);
             return Ok(Target {
                 runtime_id: runtime_id.clone(),
                 model_id: model_id.clone(),
-                vram_mb: job.vram_needed_mb().max(est),
+                model_name: name.unwrap_or_else(|| model_id.clone()),
+                vram_mb: job.vram_needed_mb().max(need),
+                estimate,
             });
         }
         if job.job_type == "chat" {
@@ -198,14 +210,16 @@ impl JobEngine {
                     &format!("auto-selected model \u{201c}{}\u{201d}", model.name),
                 )
                 .await?;
-            let est = model
-                .vram_estimate_mb
-                .and_then(|v| u64::try_from(v).ok())
-                .unwrap_or(0);
+            let estimate = compat::estimate(
+                &model.vram_dims(),
+                compat::effective_ctx(model.ctx_max.and_then(|v| u32::try_from(v).ok())),
+            );
             return Ok(Target {
                 runtime_id: "llamacpp".into(),
                 model_id: model.id,
-                vram_mb: job.vram_needed_mb().max(est),
+                model_name: model.name,
+                vram_mb: job.vram_needed_mb().max(estimate.total_mb),
+                estimate: Some(estimate),
             });
         }
         Err(CoreError::Runtime {
@@ -214,16 +228,19 @@ impl JobEngine {
         })
     }
 
-    async fn model_vram_estimate(&self, model_id: &str) -> u64 {
-        self.db
-            .models()
-            .get(model_id)
-            .await
-            .ok()
-            .flatten()
-            .and_then(|m| m.vram_estimate_mb)
-            .and_then(|v| u64::try_from(v).ok())
-            .unwrap_or(0)
+    /// `(display name, fit estimate)` for a library model; `(None, None)` when the
+    /// job names a model that was never imported (e.g. a synthetic test id).
+    async fn vram_estimate(&self, model_id: &str) -> (Option<String>, Option<VramEstimate>) {
+        match self.db.models().get(model_id).await.ok().flatten() {
+            Some(m) => {
+                let ctx = compat::effective_ctx(m.ctx_max.and_then(|v| u32::try_from(v).ok()));
+                (
+                    Some(m.name.clone()),
+                    Some(compat::estimate(&m.vram_dims(), ctx)),
+                )
+            }
+            None => (None, None),
+        }
     }
 
     async fn try_drive(
@@ -234,14 +251,10 @@ impl JobEngine {
         let Target {
             runtime_id,
             model_id,
+            model_name,
             vram_mb,
+            estimate,
         } = self.resolve_target(&job).await?;
-
-        self.to(&mut job, JobState::Scheduled, JobPatch::default())
-            .await?;
-        if let Some(o) = self.bail_if_cancelled(&mut job, &mut cancel).await? {
-            return Ok(o);
-        }
 
         let request = PlanRequest {
             job_id: job.id.clone(),
@@ -251,8 +264,32 @@ impl JobEngine {
             is_agent_session: job.is_agent_session(),
         };
 
+        // A job already resting in `blocked` is still in the runnable set, so the
+        // loop re-enters here on every tick. Re-check the plan silently and only
+        // move it (and log) once VRAM has actually freed up — otherwise it would
+        // churn `blocked -> scheduled -> blocked` and spam the event log.
+        if job.state == JobState::Blocked {
+            if let Decision::Blocked { .. } = self.scheduler.plan(&request).await {
+                return Ok(JobOutcome::Blocked {
+                    reason: job.error_text.clone().unwrap_or_default(),
+                    job_id: job.id,
+                });
+            }
+        }
+
+        self.to(&mut job, JobState::Scheduled, JobPatch::default())
+            .await?;
+        if let Some(o) = self.bail_if_cancelled(&mut job, &mut cancel).await? {
+            return Ok(o);
+        }
+
         match self.scheduler.plan(&request).await {
             Decision::Blocked { reason } => {
+                let reason = blocked_message(&model_name, estimate.as_ref(), &reason);
+                self.db
+                    .jobs()
+                    .append_event(&job.id, EventLevel::Warn, &reason)
+                    .await?;
                 self.to(
                     &mut job,
                     JobState::Blocked,
@@ -423,6 +460,23 @@ impl JobEngine {
     }
 }
 
+/// Turn the scheduler's terse `Blocked` reason into a plain-language sentence
+/// that names the model and breaks down where the VRAM goes.
+fn blocked_message(
+    model_name: &str,
+    estimate: Option<&VramEstimate>,
+    scheduler_reason: &str,
+) -> String {
+    match estimate {
+        Some(est) => format!(
+            "not enough VRAM for {model_name}: needs {} — {scheduler_reason}. \
+             Free VRAM by closing the resident model, or import a smaller quant / lower the context.",
+            est.describe(),
+        ),
+        None => format!("not enough VRAM for {model_name}: {scheduler_reason}"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -578,6 +632,64 @@ mod tests {
             JobOutcome::Completed { job_id } if job_id == b.id
         ));
         let _ = a;
+    }
+
+    #[tokio::test]
+    async fn blocked_reason_explains_the_vram_math() {
+        use crate::db::NewModel;
+
+        // 4000 MB usable after margins.
+        let fx = fixture(4_000 + 1024 + 512).await;
+        let model = fx
+            .db
+            .models()
+            .insert(NewModel {
+                name: "Big Model 14B".into(),
+                format: "gguf".into(),
+                file_path: "E:\\AI\\models\\llm\\big\\big.gguf".into(),
+                size_bytes: 6_000 * 1024 * 1024,
+                ctx_max: Some(8192),
+                n_layers: Some(32),
+                n_embd: Some(4096),
+                n_heads: Some(32),
+                n_kv_heads: Some(32),
+                source: "manual".into(),
+                ..NewModel::default()
+            })
+            .await
+            .unwrap();
+
+        let job = fx
+            .engine
+            .submit(NewJob::new("noop").on("llamacpp", &model.id, 0))
+            .await
+            .unwrap();
+        match fx.engine.run_next().await.unwrap().unwrap() {
+            JobOutcome::Blocked { job_id, reason } => {
+                assert_eq!(job_id, job.id);
+                assert!(reason.contains("Big Model 14B"), "{reason}");
+                assert!(reason.contains("weights"), "{reason}");
+                assert!(reason.contains("KV cache"), "{reason}");
+                assert!(reason.to_lowercase().contains("vram"), "{reason}");
+            }
+            other => panic!("expected Blocked, got {other:?}"),
+        }
+
+        let events = fx.db.jobs().events(&job.id).await.unwrap();
+        assert!(events.iter().any(|e| e.message.contains("weights")));
+
+        // Re-driving a job that is already `blocked` and still doesn't fit must
+        // be silent — no churn back through `scheduled`, no new events.
+        let before = fx.db.jobs().events(&job.id).await.unwrap().len();
+        assert!(matches!(
+            fx.engine.run_next().await.unwrap().unwrap(),
+            JobOutcome::Blocked { .. }
+        ));
+        assert_eq!(
+            fx.db.jobs().get(&job.id).await.unwrap().unwrap().state,
+            JobState::Blocked
+        );
+        assert_eq!(fx.db.jobs().events(&job.id).await.unwrap().len(), before);
     }
 
     #[tokio::test]

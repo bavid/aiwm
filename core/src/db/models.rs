@@ -39,9 +39,33 @@ pub struct Model {
     pub imported_at: String,
     pub last_used_at: Option<String>,
     pub use_count: i64,
+    /// Transformer layers (`block_count`) — for the VRAM / KV-cache estimate.
+    pub n_layers: Option<i64>,
+    /// Hidden size (`embedding_length`).
+    pub n_embd: Option<i64>,
+    /// Attention heads (`attention.head_count`).
+    pub n_heads: Option<i64>,
+    /// KV heads (`attention.head_count_kv`).
+    pub n_kv_heads: Option<i64>,
     pub roles: Vec<String>,
     /// Runtime ids that can use this model (from `model_links`).
     pub runtimes: Vec<String>,
+}
+
+impl Model {
+    /// Architecture facts for the VRAM fit estimate ([`crate::compat`]).
+    pub fn vram_dims(&self) -> crate::compat::ModelDims {
+        let as_u32 = |v: Option<i64>| v.and_then(|n| u32::try_from(n).ok());
+        crate::compat::ModelDims {
+            size_bytes: u64::try_from(self.size_bytes).unwrap_or(0),
+            ctx_max: as_u32(self.ctx_max),
+            param_count: self.param_count.and_then(|n| u64::try_from(n).ok()),
+            n_layers: as_u32(self.n_layers),
+            n_embd: as_u32(self.n_embd),
+            n_heads: as_u32(self.n_heads),
+            n_kv_heads: as_u32(self.n_kv_heads),
+        }
+    }
 }
 
 /// Fields supplied when registering a model. `id` and `imported_at` are set here.
@@ -62,6 +86,10 @@ pub struct NewModel {
     pub ram_estimate_mb: Option<i64>,
     pub source: String,
     pub source_revision: Option<String>,
+    pub n_layers: Option<i64>,
+    pub n_embd: Option<i64>,
+    pub n_heads: Option<i64>,
+    pub n_kv_heads: Option<i64>,
     pub roles: Vec<String>,
 }
 
@@ -91,6 +119,10 @@ struct ModelRow {
     imported_at: String,
     last_used_at: Option<String>,
     use_count: i64,
+    n_layers: Option<i64>,
+    n_embd: Option<i64>,
+    n_heads: Option<i64>,
+    n_kv_heads: Option<i64>,
 }
 
 impl ModelRow {
@@ -115,6 +147,10 @@ impl ModelRow {
             imported_at: self.imported_at,
             last_used_at: self.last_used_at,
             use_count: self.use_count,
+            n_layers: self.n_layers,
+            n_embd: self.n_embd,
+            n_heads: self.n_heads,
+            n_kv_heads: self.n_kv_heads,
             roles,
             runtimes,
         }
@@ -123,7 +159,7 @@ impl ModelRow {
 
 const COLS: &str = "id, publisher, name, family, format, quant, arch, param_count, file_path, \
      sha256, size_bytes, ctx_max, vram_estimate_mb, ram_estimate_mb, source, source_revision, \
-     imported_at, last_used_at, use_count";
+     imported_at, last_used_at, use_count, n_layers, n_embd, n_heads, n_kv_heads";
 
 impl<'a> ModelRepo<'a> {
     pub(super) fn new(pool: &'a SqlitePool) -> Self {
@@ -141,8 +177,8 @@ impl<'a> ModelRepo<'a> {
         sqlx::query(
             "INSERT INTO models (id, publisher, name, family, format, quant, arch, param_count,
                  file_path, sha256, size_bytes, ctx_max, vram_estimate_mb, ram_estimate_mb,
-                 source, source_revision, imported_at)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)",
+                 source, source_revision, imported_at, n_layers, n_embd, n_heads, n_kv_heads)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)",
         )
         .bind(&id)
         .bind(&new.publisher)
@@ -161,6 +197,10 @@ impl<'a> ModelRepo<'a> {
         .bind(&new.source)
         .bind(&new.source_revision)
         .bind(&now)
+        .bind(new.n_layers)
+        .bind(new.n_embd)
+        .bind(new.n_heads)
+        .bind(new.n_kv_heads)
         .execute(&mut *tx)
         .await?;
 
@@ -385,6 +425,10 @@ mod tests {
             ctx_max: Some(32768),
             vram_estimate_mb: Some(9_600),
             source: "manual".into(),
+            n_layers: Some(48),
+            n_embd: Some(5120),
+            n_heads: Some(40),
+            n_kv_heads: Some(8),
             roles: vec!["coding".into(), "chat".into(), "coding".into()],
             ..NewModel::default()
         }
@@ -410,6 +454,21 @@ mod tests {
         let all = db.models().list().await.unwrap();
         assert_eq!(all.len(), 1);
         assert_eq!(all[0].roles, ["chat", "coding"]);
+    }
+
+    #[tokio::test]
+    async fn arch_dims_round_trip_and_feed_the_estimate() {
+        let db = Database::connect_in_memory().await.unwrap();
+        let m = db.models().insert(gguf_model("q", "h")).await.unwrap();
+        assert_eq!(m.n_layers, Some(48));
+        assert_eq!(m.n_kv_heads, Some(8));
+
+        let dims = m.vram_dims();
+        assert_eq!(dims.n_layers, Some(48));
+        assert_eq!(dims.n_embd, Some(5120));
+        assert_eq!(dims.ctx_max, Some(32768));
+        // The estimate has real dims to work with (not the rough fallback).
+        assert!(!crate::compat::estimate(&dims, 8192).kv_is_rough);
     }
 
     #[tokio::test]

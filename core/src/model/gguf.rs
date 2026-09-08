@@ -26,6 +26,14 @@ pub struct GgufInfo {
     pub quantization: Option<String>,
     pub context_length: Option<u64>,
     pub parameter_count: Option<u64>,
+    /// Transformer layers (`<arch>.block_count`) — for the KV-cache estimate.
+    pub block_count: Option<u64>,
+    /// Hidden size (`<arch>.embedding_length`).
+    pub embedding_length: Option<u64>,
+    /// Attention heads (`<arch>.attention.head_count`).
+    pub head_count: Option<u64>,
+    /// KV heads (`<arch>.attention.head_count_kv`); `head_count` for plain MHA.
+    pub head_count_kv: Option<u64>,
     pub tensor_count: u64,
     pub metadata_count: u64,
 }
@@ -72,6 +80,18 @@ pub fn read_gguf_info(path: &Path) -> Result<GgufInfo> {
             "general.parameter_count" => info.parameter_count = value.as_u64(),
             k if k.ends_with(".context_length") && info.context_length.is_none() => {
                 info.context_length = value.as_u64();
+            }
+            k if k.ends_with(".block_count") && info.block_count.is_none() => {
+                info.block_count = value.as_u64();
+            }
+            k if k.ends_with(".embedding_length") && info.embedding_length.is_none() => {
+                info.embedding_length = value.as_u64();
+            }
+            k if k.ends_with(".attention.head_count") && info.head_count.is_none() => {
+                info.head_count = value.as_u64();
+            }
+            k if k.ends_with(".attention.head_count_kv") && info.head_count_kv.is_none() => {
+                info.head_count_kv = value.as_u64();
             }
             _ => {}
         }
@@ -377,6 +397,10 @@ mod tests {
             .kv_str("general.name", "Qwen2 7B Instruct")
             .kv_u32("general.file_type", 15) // Q4_K_M
             .kv_u64("qwen2.context_length", 32768)
+            .kv_u32("qwen2.block_count", 28)
+            .kv_u32("qwen2.embedding_length", 3584)
+            .kv_u32("qwen2.attention.head_count", 28)
+            .kv_u32("qwen2.attention.head_count_kv", 4)
             .kv_u64("general.parameter_count", 7_615_616_512)
             .kv_str_array("tokenizer.ggml.tokens", &["a", "bb", "ccc"]); // skipped
         let file = write_fixture(&b.finish());
@@ -386,8 +410,12 @@ mod tests {
         assert_eq!(info.name.as_deref(), Some("Qwen2 7B Instruct"));
         assert_eq!(info.quantization.as_deref(), Some("Q4_K_M"));
         assert_eq!(info.context_length, Some(32768));
+        assert_eq!(info.block_count, Some(28));
+        assert_eq!(info.embedding_length, Some(3584));
+        assert_eq!(info.head_count, Some(28));
+        assert_eq!(info.head_count_kv, Some(4));
         assert_eq!(info.parameter_count, Some(7_615_616_512));
-        assert_eq!(info.metadata_count, 6);
+        assert_eq!(info.metadata_count, 10);
     }
 
     #[test]

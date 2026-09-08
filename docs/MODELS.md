@@ -15,9 +15,11 @@ System schlägt passende Modelle/Pipelines vor.
 
 `models` — id (uuid v7), publisher, name, family, format, quant, arch,
 param_count, file_path (unique), sha256, size_bytes, ctx_max, vram_estimate_mb,
-ram_estimate_mb, source, source_revision, imported_at, last_used_at, use_count.
-`model_roles` (coding / chat / upscaler / base_diffusion / …), `model_links`
-(pro Runtime: junction | copy | import).
+ram_estimate_mb, source, source_revision, imported_at, last_used_at, use_count,
+`n_layers` / `n_embd` / `n_heads` / `n_kv_heads` (GGUF-Arch-Dims für die
+VRAM-Schätzung, Migration 0004 / 2.6). `model_roles` (coding / chat / upscaler /
+base_diffusion / …), `model_links` (pro Runtime: passthrough | junction |
+hardlink | copy).
 
 ## Status
 
@@ -28,9 +30,10 @@ ram_estimate_mb, source, source_revision, imported_at, last_used_at, use_count.
 | Manueller Modell-Import (GGUF wählen → Store) | ✅ 2.1 |
 | `Auto`-Modellwahl (Rolle → zuletzt/meist genutzt → Name) | ✅ 2.4a (ADR-015); benchmark-gestützt erst Phase 6 |
 | Kanonischer Store + Link-Manager | ✅ Store 2.1 · `core::link` 2.3 (Passthrough/Junction/Hardlink/Copy, `model_links`, ADR-007). GGUF → llama.cpp = `passthrough` |
+| VRAM-Fit-Schätzung vor dem Load (`core::compat`) | ✅ 2.6 (ADR-016): Gewichte + KV-Cache aus GGUF-Arch-Dims + flacher Overhead, geschätzt für `min(ctx_max, 8192)`; Scheduler plant dagegen; passt es nicht → `blocked` mit Klartext. Kalibrierung → Phase 6 |
 | Online-Discovery (HF Hub, Ollama-Library) | Phase 6 |
 | Download-Manager (Queue, Resume, Verify, Speicherplan) | Phase 6 |
-| Kompatibilitäts-Engine (🟢/🟡/🔴 vor Download) | Phase 6 |
+| Kompatibilitäts-Engine (🟢/🟡/🔴 vor Download) | Phase 6 (baut auf `core::compat` auf) |
 | Dedup-/Unused-/Versions-Reports | Phase 6 |
 | Benchmark-gestützte Auto-Auswahl | Phase 6 (braucht [BENCHMARKS.md](BENCHMARKS.md)) |
 

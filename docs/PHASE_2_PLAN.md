@@ -12,8 +12,8 @@ jede für sich testbar.
 | **2.4a** | Chat-Job: `job_type=chat`, Modell (explizit oder `Auto` über Rolle) → Scheduler → llama-server laden → `/v1/chat/completions` streamen → Antwort progressiv in `jobs.result`; `job_events` + Token-Stats | ✅ |
 | **2.4b** | Chat-Job **Cancel**: per-Job `watch`-Signal im `JobEngine`, `JobEngine::cancel` (Queued/Blocked direkt · laufender Job signalisiert), `POST /jobs/{id}/cancel`, „Cancel"-Knopf im Dashboard | ✅ |
 | **2.5** | UI: „Chat"-Tab + aktiver Capability-Button, Prompt/Antwort-Oberfläche, Antwort erscheint aus `jobs.result`-Polling, „Stop"-Knopf, Auto-Modell + Token-Stats aus dem Event-Stream | ✅ |
-| 2.6 | Kompatibilitäts-Check vor dem Laden (VRAM-Budget vs. `vram_estimate_mb` + KV-Cache-Schätzung), Klartext-Fehler | offen |
-| 2.7 | Settings-UI (Store-Pfad, Offline-Schalter, Theme), Diagnostics erweitert | offen |
+| **2.6** | `core::compat`: VRAM-Fit-Schätzung (Gewichte + KV-Cache aus GGUF-Arch-Dims + Overhead) für den effektiven Chat-Kontext; Scheduler plant dagegen, `llama-server` bekommt passendes `-c`; passt es nicht → `blocked` mit Klartext-Aufschlüsselung statt OOM-Load; Blocked-Job ruht (kein Heiß-Loop) | ✅ |
+| 2.7 | Settings-UI (Store-Pfad, Offline-Schalter, Theme, `LlamaServerOptions`), Diagnostics erweitert | offen |
 
 **Phase-2-DONE-Kriterium:** frisches Windows → App → llama.cpp wird eingerichtet
 → GGUF importieren → Chat-Job läuft → zweites Modell → Wechsel ohne manuelles
@@ -319,3 +319,55 @@ Bewusst **nicht** in 2.3: echtes Junctionen in einen Runtime-Ordner (kein
 Konsument in Phase 2 — llama.cpp liest den kanonischen Pfad direkt). Die Junction-/
 Copy-Pfade sind gebaut + getestet und stehen für ComfyUI (Phase 3) / LM Studio /
 Ollama bereit. Dedup-Report (Brief 10.x) → Phase 6.
+
+---
+
+## 2.6 — Ergebnis (abgeschlossen)
+
+- **`model::gguf`**: liest zusätzlich `<arch>.block_count`,
+  `<arch>.embedding_length`, `<arch>.attention.head_count[_kv]` aus dem Header.
+- **Migration `0004`**: vier nullbare Spalten auf `models` (`n_layers`, `n_embd`,
+  `n_heads`, `n_kv_heads`). `Model` / `NewModel` / `ModelRow` entsprechend;
+  `Model::vram_dims()` bündelt sie für die Schätzung.
+- **`core::compat`** (neues Modul): `estimate(&ModelDims, ctx) -> VramEstimate`
+  mit `{ weights_mb, kv_cache_mb, overhead_mb, total_mb, kv_is_rough }`.
+  - **Gewichte** = Dateigröße. **KV-Cache** (fp16, K+V):
+    `4 · n_layers · head_dim · n_kv_heads · ctx` Bytes
+    (`head_dim = n_embd / n_heads`; `n_kv_heads` fällt auf `n_heads` zurück =
+    dichtes MHA). Fehlen die Dims → grobe Reserve `160 MB / 1K ctx`, als
+    `kv_is_rough` markiert. **Overhead** = 650 MB (CUDA-Context/cuBLAS/Compute-
+    Graph, flach; Kalibrierung gegen echte Messungen → Phase 6).
+  - `effective_ctx(ctx_max)` = `min(ctx_max, DEFAULT_CHAT_CTX=8192)` — Chat läuft
+    nicht auf dem vollen trainierten Kontext (128K KV-Cache sprengt die Karte).
+  - `VramEstimate::describe()` → „~1.6 GB (weights 0.0 GB + KV cache 1.0 GB @ 8K
+    ctx + 0.6 GB overhead)".
+- **Import** schreibt `vram_estimate_mb = estimate(...).total_mb` beim effektiven
+  Kontext (statt der alten „Dateigröße + 1 GB").
+- **`orchestrator::engine`**: `resolve_target` rechnet die Schätzung frisch aus;
+  der Scheduler plant gegen `total_mb` statt der Dateigröße. Bei
+  `Decision::Blocked` fasst `blocked_message` das Klartext zusammen
+  („not enough VRAM for <Name>: needs … — <Scheduler-Grund>. Free VRAM by …") und
+  legt es als `error_text` + Warn-Event ab.
+- **`LlamaCppAdapter`**: `ctx_size = None` (Default) → der Adapter übergibt
+  `-c effective_ctx(model.ctx_max)`; `Some` erzwingt einen Wert (Settings-UI, 2.7).
+  Schätzung und tatsächliche `llama-server`-Allokation stimmen damit überein.
+- **Blocked ruht**: ein `blocked`-Job bleibt zwar „runnable", aber die Job-Schleife
+  wartet danach `JOB_LOOP_BLOCKED_BACKOFF` (3 s), und `try_drive` prüft einen
+  bereits blockierten Job still (kein `blocked → scheduled → blocked`-Zyklus,
+  keine Event-Flut) — er läuft erst weiter, wenn wirklich VRAM frei wird.
+
+Verifiziert:
+- 11 neue Unit-Tests (9 `compat`: KV-Formel gegen Qwen2.5-7B ≈ 448 MB / Llama-3-8B
+  GQA ≈ 1 GB @ 8K, lineare Ctx-Skalierung, MHA-Fallback, grobe Reserve,
+  `effective_ctx`-Deckelung, `describe`; 1 `ModelRepo` Dims-Roundtrip; 1 `engine`
+  Blocked-Aufschlüsselung + stilles Re-Block ohne Event-Zuwachs). `gguf` +
+  `import`-Tests um die Dims erweitert. `check.ps1` grün (159 Unit + 12 Integ.).
+- **Live** (`aiwm-cored`, 1500 MB Budget via `config.toml`): Mini-GGUF mit
+  Arch-Dims importiert → `vram_estimate_mb = 1674` (0 Gewichte + 1024 KV + 650);
+  Chat-Job → `queued → scheduled → blocked`, `error_text` mit voller
+  Aufschlüsselung, **kein** Modell-Load, danach ein `DEBUG`-Backoff/3 s statt
+  Heiß-Loop; Event-Log bleibt bei je einem Warn + Übergang.
+
+Bewusst **nicht** in 2.6: RAM-Schätzung, Kalibrierung der Formel gegen echte
+`nvidia-smi`-Messungen (→ Phase 6), Auto-Requeue blockierter Jobs bei Session-Ende
+(aktuell: manuell/Cancel oder wenn ein anderer Job evicted → [TODO.md](TODO.md)).

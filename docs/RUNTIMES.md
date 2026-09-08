@@ -43,8 +43,12 @@ genutzt.
   `<data_dir>/runtimes/llamacpp/` → `PATH`. Fehlt alles: `detail() = "not
   installed"`, `load_model` liefert einen Klartextfehler.
 - **Start:** `-m <datei> --host 127.0.0.1 --port <frei> --no-webui -ngl 999
-  --flash-attn on` (Defaults in `LlamaServerOptions`, später über Settings-UI).
-  Health-Gate: `GET /health` bis `200` oder Timeout/`GaveUp`.
+  -c <ctx> --flash-attn on` (Defaults in `LlamaServerOptions`, später über
+  Settings-UI). `-c` = `compat::effective_ctx(model.ctx_max)` =
+  `min(ctx_max, 8192)`, wenn `ctx_size` nicht explizit gesetzt ist — so allokiert
+  `llama-server` genau den Kontext, gegen den der Scheduler geplant hat (2.6),
+  statt den vollen trainierten (128K → OOM). Health-Gate: `GET /health` bis `200`
+  oder Timeout/`GaveUp`.
 - **Attach-Fallback (ADR-002):** `attach(port, model_id, vram)` probt `/health`,
   gleicht die Modelldatei über `/props` ab, adoptiert den Server **ohne** seine
   Lebensdauer zu übernehmen (`unload` tötet ihn nicht).
@@ -85,6 +89,17 @@ getestet für Phase 3.
 Das Tool installiert/versioniert die Runtimes selbst — aber mit **einer** fest
 kuratierten, getesteten Version pro Runtime und **einer** Installationsart. Kein
 frei konfigurierbares Python-Environment. „Repair"-Pfad baut die venv sauber neu.
+
+## Kompatibilitäts-Check vor dem Load (`core::compat`, ADR-016)
+
+`estimate(&ModelDims, ctx)` schätzt vor dem `load_model` den VRAM-Bedarf:
+Gewichte (= Datei) + KV-Cache (fp16, aus GGUF-Arch-Dims `n_layers` / `n_embd` /
+`n_heads` / `n_kv_heads`; grobe Reserve wenn die fehlen) + flacher Overhead
+(650 MB). Der `JobEngine` plant den Scheduler gegen `total_mb`; passt es nicht,
+geht der Job auf `blocked` mit Klartext-`error_text`
+(„not enough VRAM for … : weights … + KV cache … @ 8K ctx + … overhead — …"),
+**ohne** `llama-server` zu starten. Kalibrierung der Konstanten gegen echte
+`nvidia-smi`-Messungen → Phase 6.
 
 ## Zu untersuchen vor Phase 2/3
 

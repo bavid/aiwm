@@ -364,6 +364,59 @@ verlangt, dass das Tool die Runtime selbst beschafft.
 
 ---
 
+## ADR-016 — VRAM-Fit-Schätzung vor dem Modell-Load (`core::compat`)
+
+**Status:** Entschieden — umgesetzt (2.6).
+
+**Kontext:** Bis 2.5 plante der Scheduler gegen `vram_estimate_mb = Dateigröße +
+1 GB`. Das ignoriert den KV-Cache (wächst linear mit Kontext × Modell-Tiefe/
+-Breite) — und `llama-server` allokiert ohne `-c` den vollen trainierten Kontext
+(oft 128K), dessen KV-Cache allein die 16-GB-Karte sprengt. Ergebnis: der teure
+Modell-Load lief los und OOM-te erst dort, ohne Klartext.
+
+**Entscheidung:**
+1. **Eigene Schätzung, drei Teile:** `weights` (= Datei) + `kv_cache` + `overhead`.
+   - **KV-Cache** aus GGUF-Arch-Metadaten (`block_count`, `embedding_length`,
+     `attention.head_count[_kv]` — in 2.6 zu `models`-Spalten + Parser ergänzt):
+     `4 · n_layers · (n_embd/n_heads) · n_kv_heads · ctx` Bytes (fp16, K+V; GQA
+     über `n_kv_heads`). Fehlen die Dims → grobe Reserve `160 MB / 1K ctx`,
+     sichtbar als `kv_is_rough`.
+   - **Overhead** = **flache 650 MB** (CUDA-Context, cuBLAS, Compute-Graph). Keine
+     Kalibrierung gegen echte Messungen — das ist eine Phase-6-Aufgabe
+     ([BENCHMARKS.md](BENCHMARKS.md)).
+2. **Effektiver Kontext:** `min(ctx_max, 8192)`. Chat braucht selten den vollen
+   trainierten Kontext; die Schätzung *und* das `-c` von `llama-server` nutzen
+   denselben Wert, damit Schätzung = Allokation. Settings-UI überschreibt (2.7).
+3. **Bewusst konservativ:** lieber über-reservieren und einreihen als laden und
+   abstürzen.
+4. **`blocked` ist ein Ruhezustand:** passt es nicht, geht der Job mit
+   Klartext-`error_text` auf `blocked` — **kein** Modell-Load. Er bleibt
+   „runnable", aber die Schleife backt 3 s zurück und `try_drive` prüft einen
+   bereits blockierten Job still (kein Zustands-/Event-Churn). Weiter geht es erst,
+   wenn echt VRAM frei wird (anderer Job evicted, Runtime-Stop, Session-Ende).
+
+**Alternativen:**
+- *Fremd-Crate / llama.cpp fragen:* llama.cpp hat kein Vorab-„passt das?"-API
+  ohne Load. Ein Fremd-Parser für die Schätzung wäre mehr Abhängigkeit für eine
+  Heuristik, die ohnehin kalibriert werden muss.
+- *Einfach `llama-server` laden lassen und den OOM abfangen:* der Load kostet
+  Sekunden + reale VRAM-Allokation + evtl. Treiber-Reset; der Klartext-Grund fehlt.
+- *Kontext = `ctx_max`:* korrekt für „max", aber sprengt bei 128K-Modellen die
+  Karte für einen normalen Chat. Deckelung ist die pragmatische Wahl.
+
+**Konsequenzen:**
+- (+) Der Block-Fall ist *vor* dem teuren Load sichtbar, mit Aufschlüsselung
+  („weights 8.4 GB + KV cache 2.7 GB @ 8K ctx + 0.6 GB overhead").
+- (+) Zweites-Modell-Wechsel plant jetzt gegen realistische Zahlen.
+- (−) Die 650-MB-Konstante + die grobe KV-Reserve sind geschätzt, nicht gemessen —
+  bis zur Phase-6-Kalibrierung kann die Schätzung daneben liegen (bewusst eher zu
+  hoch).
+- (−) Blockierte Jobs werden noch nicht automatisch neu eingereiht, wenn eine
+  Runtime stoppt / eine Session endet — nur beim Evict durch einen anderen Job
+  oder manuell ([TODO.md](TODO.md)).
+
+---
+
 ## Offene Entscheidungen
 
 | # | Frage | Status |
