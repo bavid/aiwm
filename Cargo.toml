@@ -1,7 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["core"]
-# "src-tauri" is added in the next WP-0 step, once the Tauri CLI has scaffolded it.
+members = ["core", "src-tauri"]
 
 [workspace.package]
 version = "0.0.1"
@@ -25,6 +24,9 @@ time = { version = "0.3", features = ["formatting", "parsing", "macros"] }
 [workspace.lints.rust]
 unsafe_code = "warn"
 missing_debug_implementations = "warn"
+# MSVC prints an import-library creation note to stdout when linking the Tauri
+# cdylib; it is not actionable.
+linker_messages = "allow"
 
 [workspace.lints.clippy]
 all = { level = "warn", priority = -1 }

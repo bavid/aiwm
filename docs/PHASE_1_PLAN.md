@@ -312,7 +312,7 @@ Logik-Code (Scheduler, Job-Engine, Repos) — Gerüst/Tauri-Host ausgenommen.
 
 | WP | Inhalt | Hängt ab von | DoD |
 |---|---|---|---|
-| **WP-0** | Toolchain, Workspace-Skelett, `.gitignore`/fmt/clippy, `git init` + erster Commit | — | `cargo build`, `pnpm install`, `uv sync` laufen auf der Zielmaschine |
+| **WP-0 ✅** | Toolchain, Workspace-Skelett, `.gitignore`/fmt/clippy, `git init` + erster Commit | — | `cargo build`, `pnpm install`, `uv sync` laufen auf der Zielmaschine |
 | **WP-1** | Core-Bootstrap: tokio-main, `config.toml` laden/validieren, `tracing` → rotierende Datei, Datenordner (`%APPDATA%\AIWorkstationManager\`) anlegen, sauberer Ctrl-C-Shutdown | WP-0 | Core startet, schreibt Log, legt Ordner an, beendet sauber |
 | **WP-2** | `sqlx`-Pool, Migration-Runner, Schema v1, Repository-Traits + SQLite-Impls, Default-Settings | WP-1 | Frische DB aus Migration; Repo-Unit-Tests (in-memory) grün |
 | **WP-3** | Telemetrie-Modul (NVML + sysinfo), 1-Hz-Sampler, `watch`-Channel, Graceful degradation | WP-1 | Mock-Test grün; reale 4080S-Werte auf der Maschine |
@@ -326,6 +326,31 @@ Logik-Code (Scheduler, Job-Engine, Repos) — Gerüst/Tauri-Host ausgenommen.
 
 **Kritischer Pfad:** WP-0 → WP-1 → WP-2 → WP-4 → WP-5 → WP-6 → WP-7.
 **Parallelisierbar:** WP-3, WP-8 (nach WP-1); WP-9 durchgehend; WP-10 zum Schluss.
+
+### WP-0 — Ergebnis (abgeschlossen)
+
+Alles grün via `scripts/check.ps1` (läuft unter Windows PowerShell 5.1):
+`cargo fmt` · `cargo clippy -D warnings` · `cargo test --workspace` ·
+`ui typecheck` · `ui lint` · `ui build` · `sidecar ruff` · `sidecar pytest` (4).
+`tauri dev` startet Vite + Fenster (`aiwm-tauri.exe`).
+
+Abweichungen vom Plan (bewusst, dokumentiert):
+
+- **Core-Module flach** (`core/src/telemetry.rs` statt `telemetry/mod.rs`). Wird
+  zum Ordner promoted, sobald ein Modul eine zweite Datei bekommt.
+- **Node 24 LTS** (nicht 22) — winget liefert aktuell 24.19.0.
+- **pnpm via `npm i -g pnpm`** — corepack scheiterte an Schreibrechten in
+  `C:\Program Files\nodejs`.
+- **`tauri-plugin-opener`** ist als einziges Tauri-Plugin drin (Standard-Konvention);
+  Capabilities: `core:default`, `opener:default`.
+- **Kein VS-BuildTools-Install** nötig — MSVC-Linker war über die vorhandene
+  VS-2022-Installation bereits da.
+- **`ui/pnpm-workspace.yaml`** erlaubt gezielt den `esbuild`-Build-Skript;
+  `typescript-eslint` auf `8.69.0` gepinnt wegen pnpm-Supply-Chain-Policy.
+- **`icon.png`** ist ein generierter Platzhalter (`scripts/gen_icon.py`), echtes
+  Branding später ([TODO.md](TODO.md)).
+
+Toolchain-Details: [DEV_SETUP.md](DEV_SETUP.md).
 
 ---
 

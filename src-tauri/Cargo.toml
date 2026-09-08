@@ -1,0 +1,25 @@
+[package]
+name = "aiwm-tauri"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "AI Workstation Manager — Tauri desktop host (thin shell over aiwm-core)."
+publish = false
+
+[lib]
+name = "aiwm_tauri_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[lints]
+workspace = true
+
+[build-dependencies]
+tauri-build = { version = "2.6", features = [] }
+
+[dependencies]
+tauri = { version = "2.11", features = [] }
+tauri-plugin-opener = "2.5"
+serde.workspace = true
+serde_json.workspace = true
+aiwm-core = { path = "../core" }

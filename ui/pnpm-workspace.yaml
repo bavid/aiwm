@@ -1,0 +1,4 @@
+# pnpm scope for the UI package. `pnpm` blocks dependency build scripts by
+# default (pnpm 12); esbuild needs its postinstall to place the native binary.
+allowBuilds:
+  esbuild: true

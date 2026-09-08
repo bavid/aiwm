@@ -55,7 +55,20 @@ pwsh scripts/check.ps1
 Läuft fmt / clippy / test für Rust, typecheck / lint für die UI, ruff / pytest
 für den Sidecar. Schritte, deren Toolchain fehlt, werden übersprungen.
 
-## Bereits vorhanden auf dieser Maschine
+## Installierte Versionen (Stand WP-0)
 
-git 2.47 · Node v20.11 · corepack 0.23 · WebView2 · winget 1.29 · Python 3.10
-(Sidecar nutzt via uv ein separates 3.11).
+| Werkzeug | Version | Bezug |
+|---|---|---|
+| Rust (rustc/cargo) | 1.98.1 | `winget install Rustlang.Rustup`, gepinnt via `rust-toolchain.toml` |
+| MSVC C++ | vorhanden | war bereits über VS 2022 installiert (`cargo test` linkt) |
+| Node.js | 24.19.0 LTS | `winget install OpenJS.NodeJS.LTS` (löst UAC aus) |
+| pnpm | 12.3.4 | `npm install -g pnpm` (corepack scheiterte an Program-Files-Rechten) |
+| uv | 0.12.10 | `winget install astral-sh.uv`; Python 3.11.11 von uv verwaltet |
+| git / WebView2 / winget | 2.47 / vorhanden / 1.29 | vorinstalliert |
+
+Hinweise:
+- pnpm 12 blockt Dependency-Build-Skripte -> `ui/pnpm-workspace.yaml` erlaubt
+  gezielt `esbuild`.
+- pnpm 12 hat eine Supply-Chain-Policy (Mindest-Release-Alter). Sehr frische
+  Paketversionen ggf. um einen Tag zurücksetzen (z. B. `typescript-eslint` auf
+  8.69.0 gepinnt).

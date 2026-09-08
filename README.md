@@ -11,9 +11,11 @@ neu zu implementieren.
 
 ## Status
 
-**Phase 1 – Fundament (in Arbeit).** Architektur ist abgestimmt
-([docs/](docs/)). WP-0 (Repo-Skelett) läuft. Noch keine Features, keine echte
-AI-Runtime. Setup: [docs/DEV_SETUP.md](docs/DEV_SETUP.md).
+**Phase 1 – Fundament (in Arbeit).** Architektur abgestimmt ([docs/](docs/)).
+**WP-0 abgeschlossen**: Cargo-Workspace (`core` + `src-tauri`), React/Vite-UI,
+Python-Sidecar, `scripts/check.ps1` grün, `tauri dev` startet. Als Nächstes
+WP-1 (Core-Bootstrap). Noch keine Features, keine echte AI-Runtime.
+Setup: [docs/DEV_SETUP.md](docs/DEV_SETUP.md).
 
 **Lizenz:** Privates Projekt, keine kommerzielle Nutzung (siehe [DECISIONS.md](docs/DECISIONS.md) ADR-011).
 

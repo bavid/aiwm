@@ -9,6 +9,10 @@ dependencies = []
 [dependency-groups]
 dev = ["ruff>=0.6", "pytest>=8"]
 
+[tool.uv]
+# uv cache (C:) and project (E:) are on different volumes -> hardlinking fails.
+link-mode = "copy"
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
