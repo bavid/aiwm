@@ -318,7 +318,7 @@ Logik-Code (Scheduler, Job-Engine, Repos) — Gerüst/Tauri-Host ausgenommen.
 | **WP-0 ✅** | Toolchain, Workspace-Skelett, `.gitignore`/fmt/clippy, `git init` + erster Commit | — | `cargo build`, `pnpm install`, `uv sync` laufen auf der Zielmaschine |
 | **WP-1 ✅** | Core-Bootstrap: tokio-main, `config.toml` laden/validieren, `tracing` → rotierende Datei, Datenordner (`%APPDATA%\AIWorkstationManager\`) anlegen, sauberer Ctrl-C-Shutdown | WP-0 | Core startet, schreibt Log, legt Ordner an, beendet sauber |
 | **WP-2 ✅** | `sqlx`-Pool, Migration-Runner, Schema v1, Repository-Traits + SQLite-Impls, Default-Settings | WP-1 | Frische DB aus Migration; Repo-Unit-Tests (in-memory) grün |
-| **WP-3** | Telemetrie-Modul (NVML + sysinfo), 1-Hz-Sampler, `watch`-Channel, Graceful degradation | WP-1 | Mock-Test grün; reale 4080S-Werte auf der Maschine |
+| **WP-3 ✅** | Telemetrie-Modul (NVML + sysinfo), 1-Hz-Sampler, `watch`-Channel, Graceful degradation | WP-1 | Mock-Test grün; reale 4080S-Werte auf der Maschine |
 | **WP-8** | Sidecar-Contract (JSON-RPC), `uv`-Projekt, `main.py` (handshake/ping), `SidecarClient` | WP-1 | Spawn + Handshake + `ping`-Roundtrip; Sidecar stirbt mit Core |
 | **WP-4** | `RuntimeAdapter`-Trait, `RuntimeSupervisor`, Windows Job Object, `FakeRuntimeAdapter` | WP-1 | Job-Object-Kill-Test grün; Contract-Tests gegen Fake |
 | **WP-5** | Job-Zustandsmaschine, `JobEngine`, `Scheduler`-Trait, `HybridScheduler`-Skelett, Szenariomatrix-Tests | WP-2, WP-4 | Übergangs- + Szenariomatrix-Tests grün; Persistenz + Crash-Replay |
@@ -401,6 +401,31 @@ Kein compile-time Query-Checking (`sqlx::query!`) — Runtime-Queries, um den
 nachgezogen werden ([TODO.md](TODO.md)).
 
 Tests: **33 Unit + 1 Integration**. Ganze `check.ps1` grün.
+
+### WP-3 — Ergebnis (abgeschlossen)
+
+`core::telemetry` (Ordnermodul):
+
+- `SystemTelemetry` — Snapshot: `gpu: GpuStatus` (`Available(GpuInfo)` /
+  `Unavailable { reason }`, serde-tagged), `host: HostStatus` (RAM + CPU
+  gesamt/pro Kern), `captured_at_ms`.
+- `gpu.rs` — `GpuSource`-Trait; `NvmlSource` (Device 0: Name, VRAM, Util, Temp,
+  Top-VRAM-Prozesse pid+MB); `real_source()` fällt bei fehlendem NVML sauber auf
+  `NoGpu` zurück. Nicht-kritische Metriken (Util/Temp/Prozesse) → 0 statt Fehler.
+- `host.rs` — `HostSource`-Trait; `SysinfoHost` (RAM + CPU via sysinfo,
+  `system`-Feature only).
+- `Sampler` — Hintergrund-Task, 1 Hz, `watch<SystemTelemetry>`; `latest()` immer
+  verfügbar (erster Sample synchron vor dem Spawn), `subscribe()` für Streams,
+  Task wird bei Drop abgebrochen. Quellen injizierbar (`spawn_with`) → Mock-Tests.
+
+`App` hält `telemetry: Sampler` (in `App::load` gestartet). `aiwm-cored` druckt
+die erste Messung in den Ready-Banner.
+
+Verifiziert auf der Maschine:
+`NVIDIA GeForce RTX 4080 SUPER 1594/16376 MB VRAM, 39% util, 43°C |
+RAM 15577/31967 MB | CPU 5%` — deckt sich mit `nvidia-smi`.
+
+Tests: **40 Unit + 1 Integration**. Ganze `check.ps1` grün.
 
 ---
 

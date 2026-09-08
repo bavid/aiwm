@@ -3,7 +3,22 @@
 
 use std::process::ExitCode;
 
+use aiwm_core::telemetry::{GpuStatus, SystemTelemetry};
 use aiwm_core::{app, Result, CORE_VERSION};
+
+fn telemetry_line(t: &SystemTelemetry) -> String {
+    let gpu = match &t.gpu {
+        GpuStatus::Available(g) => format!(
+            "{} {}/{} MB VRAM, {}% util, {}°C",
+            g.name, g.vram_used_mb, g.vram_total_mb, g.utilization_pct, g.temperature_c
+        ),
+        GpuStatus::Unavailable { reason } => format!("GPU unavailable ({reason})"),
+    };
+    format!(
+        "{gpu}  |  RAM {}/{} MB  |  CPU {}%",
+        t.host.ram_used_mb, t.host.ram_total_mb, t.host.cpu_total_pct
+    )
+}
 
 #[tokio::main]
 async fn main() -> ExitCode {
@@ -24,10 +39,11 @@ async fn run() -> Result<()> {
     let shutdown = shutdown::Signals::install()?;
 
     println!(
-        "aiwm-core {CORE_VERSION} ready\n  data dir: {}\n  store:    {}\n  api port: {} (loopback)\nPress Ctrl-C to stop.",
+        "aiwm-core {CORE_VERSION} ready\n  data dir: {}\n  store:    {}\n  api port: {} (loopback)\n  {}\nPress Ctrl-C to stop.",
         app.paths.root().display(),
         app.config.store_path.display(),
         app.config.core_api_port,
+        telemetry_line(&app.telemetry.latest()),
     );
 
     let reason = shutdown.recv().await;

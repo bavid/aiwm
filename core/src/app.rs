@@ -1,37 +1,46 @@
-//! Application bootstrap: tie together paths, config, database and logging into a
-//! live [`App`] handle. Further services (telemetry, runtimes, scheduler) are
-//! attached in later work packages.
+//! Application bootstrap: tie together paths, config, database, telemetry and
+//! logging into a live [`App`] handle. Runtimes and the scheduler are attached
+//! in later work packages.
 
 use tracing_appender::non_blocking::WorkerGuard;
 
 use crate::config::Config;
 use crate::db::{now_rfc3339, Database};
 use crate::paths::AppPaths;
+use crate::telemetry::Sampler;
 use crate::Result;
 
 /// Settings seeded on first run. `config.toml` remains the source of truth for
 /// startup configuration; these are app-managed markers.
 const SCHEMA_VERSION: &str = "1";
 
-/// A bootstrapped core: resolved layout, effective configuration and an open
-/// database. Cloning is cheap (the pool is reference-counted).
-#[derive(Debug, Clone)]
+/// A bootstrapped core: resolved layout, effective configuration, an open
+/// database and a running telemetry sampler.
+#[derive(Debug)]
 pub struct App {
     pub paths: AppPaths,
     pub config: Config,
     pub db: Database,
+    pub telemetry: Sampler,
 }
 
 impl App {
-    /// Ensure directories exist, load configuration, open the database and seed
-    /// first-run settings. Does **not** install logging — that is a process
-    /// concern (see [`bootstrap_process`]). Safe to call repeatedly.
+    /// Ensure directories exist, load configuration, open the database, seed
+    /// first-run settings and start telemetry sampling. Does **not** install
+    /// logging — that is a process concern (see [`bootstrap_process`]). Requires
+    /// a Tokio runtime.
     pub async fn load(paths: AppPaths) -> Result<Self> {
         paths.ensure()?;
         let config = Config::load(&paths)?;
         let db = Database::connect(&paths.db_file()).await?;
         Self::seed(&db).await?;
-        Ok(Self { paths, config, db })
+        let telemetry = Sampler::spawn();
+        Ok(Self {
+            paths,
+            config,
+            db,
+            telemetry,
+        })
     }
 
     async fn seed(db: &Database) -> Result<()> {

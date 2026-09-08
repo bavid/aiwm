@@ -24,9 +24,10 @@ uuid.workspace = true
 time.workspace = true
 dirs.workspace = true
 sqlx.workspace = true
+nvml-wrapper.workspace = true
+sysinfo.workspace = true
 # Added in later WP steps as each module is implemented:
-#   nvml-wrapper + sysinfo (WP-3), win32job (WP-4),
-#   axum + tower (WP-6), reqwest (WP-2+, dormant until Phase 2)
+#   win32job (WP-4), axum + tower (WP-6), reqwest (dormant until Phase 2)
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }
