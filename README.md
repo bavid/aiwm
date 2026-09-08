@@ -31,12 +31,18 @@ noch keine echte AI-Capability (die kommt ab Phase 2).
 | WP-9 | CI-Workflow, Git-Hooks (pre-commit fmt, pre-push voller Gate) |
 | WP-10 | ADRs finalisiert, Stub-Docs (MODELS/RUNTIMES/SECURITY/BENCHMARKS) |
 
-**165 Rust-Unit + 13 Integrationstests + 5 pytest** grün · `scripts/check.ps1` grün ·
+**179 Rust-Unit + 17 Integrationstests + 5 pytest** grün · `scripts/check.ps1` grün ·
 **null `unsafe`** im Produktivcode.
 
 **Phase 2 (MVP) ✅ abgeschlossen** — Scheiben 2.1–2.7 + durchgehender
-Modell-Wechsel-Test (`core/tests/model_swap.rs`). Plan:
-[docs/PHASE_2_PLAN.md](docs/PHASE_2_PLAN.md). Als Nächstes: Phase 3 (ComfyUI / Bild).
+Modell-Wechsel-Test (`core/tests/model_swap.rs`).
+**Phase 3 (Bild / ComfyUI) läuft** — Plan + Research:
+[docs/PHASE_3_PLAN.md](docs/PHASE_3_PLAN.md).
+
+- **3.1** ✅ `ComfyUiAdapter` — ComfyUI als **ein** langlebiger, lazy gestarteter
+  Server (`RuntimeAdapter`): Spawn/Health (`/system_stats`) über
+  `RuntimeSupervisor`, Attach-Fallback, `unload` = `POST /free` (Server bleibt
+  oben), `aiwm-fake-comfy`-Fixture (ADR-018).
 
 - **2.1** ✅ `ModelRepo`, eigener bounded GGUF-Header-Reader, manueller Import in
   den kanonischen Store, UI-Tab „Models".

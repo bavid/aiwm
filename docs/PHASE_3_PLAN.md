@@ -12,7 +12,7 @@ manuelles Eingreifen → Netz trennen → das schon Installierte läuft weiter.
 
 | Scheibe | Inhalt | Status |
 |---|---|---|
-| 3.1 | `ComfyUiAdapter` (`RuntimeAdapter`): Prozess-Spawn (`python main.py --listen 127.0.0.1 --port … --base-directory … --disable-auto-launch`), Health über `GET /system_stats`, Attach-Fallback, `unload_model` → `POST /free`, VRAM-Buchhaltung aus `/system_stats`; `aiwm-fake-comfy`-Fixture | offen |
+| **3.1** | `ComfyUiAdapter` (`RuntimeAdapter`): **ein** langlebiger Server, lazy beim ersten `load_model` gestartet (`--listen 127.0.0.1 --port … --base-directory … --output-directory … --disable-auto-launch --dont-print-server`), Health über `GET /system_stats`, Attach-Fallback, `unload_model` → `POST /free` (Server bleibt oben), `load_model` = Server hoch + VRAM-Slot reservieren + alten via `/free` verdrängen; `aiwm-fake-comfy`-Fixture | ✅ |
 | 3.2a | ComfyUI-**Installer** (Teil 1): `uv`-verwaltete venv unter `<local_root>/runtimes/comfyui/<tag>/`, ComfyUI am gepinnten Git-Tag (Clone/Tarball + Verify), Torch-CUDA-Wheel + gepinnte `requirements`, `offline_mode`-Hard-Refusal, „Repair" = venv neu, Fortschritt in `detail()` | offen |
 | 3.2b | ComfyUI-Installer (Teil 2): gepinnter Custom-Node-Satz — **exakt einer**: `city96/ComfyUI-GGUF` (an einem Commit), für Flux-GGUF. SHA/Commit fest im Code. SDXL-txt2img braucht **keine** Custom Nodes | offen |
 | 3.3 | Link-Manager **echt**: neue Store-Struktur `E:\AI\models\image\{checkpoints,unet,vae,clip,loras}`; `core::link` junctioniert diese Ordner in ComfyUIs `models/…` (Directory-Junction, kein Admin — das, wofür 2.3 gebaut wurde); `import_model` nimmt `.safetensors`, routet per Rolle in den richtigen Unterordner; `model_links` = `comfyui`/`junction` | offen |
@@ -120,6 +120,65 @@ kanonische Ordner; `core::link` junctioniert sie nach
 Store `E:`, Runtime `C:` heißt: Junction zeigt von `C:` nach `E:`, das geht).
 `import_model` routet `.safetensors` per Rolle (`base_diffusion` → checkpoints,
 `vae` → vae, `lora` → loras …).
+
+---
+
+## 3.1 — Ergebnis (abgeschlossen)
+
+Entscheidung **A** bestätigt umgesetzt (ADR-018).
+
+- **`core::runtime::comfyui`** (neues Submodul, wie `llamacpp/`: `mod.rs` /
+  `client.rs` / `launch.rs`):
+  - **`ComfyUiAdapter`** implementiert `RuntimeAdapter`. Anders als llama-server
+    (ein Prozess pro Modell): **ein** ComfyUI-Server, lazy beim ersten
+    `load_model` gestartet, bleibt bis zum App-Ende oben (Python-Boot ist teuer).
+    `load_model` = Server hoch + VRAM-Slot (ADR-003) reservieren + vorheriges
+    Modell via `POST /free` verdrängen; **`unload_model` = `/free`, Server bleibt
+    laufen**. `Server`-Slot: `Down` / `Starting` / `Up { port, supervisor }`
+    (`supervisor: None` = attached).
+  - **Auflösung** (`launch::resolve_launch`): `AIWM_COMFYUI_PYTHON` (+ optional
+    `AIWM_COMFYUI_DIR` mit `main.py`), sonst
+    `<runtimes_dir>/comfyui/<ver>/main.py` + `.venv`-Python. `ComfyLaunch
+    { program, main: Option, extra_args }` — `main: None` = Fixture / Standalone-
+    Exe. `ComfyDirs { base, output }` (neue `AppPaths::comfyui_data_dir()` /
+    `outputs_dir()`, beide unter `local_root`).
+  - **Start:** `--listen 127.0.0.1 --port <frei> --base-directory <d>
+    --output-directory <o> --disable-auto-launch --dont-print-server` (+
+    `extra_args`). Health-Gate: `GET /system_stats` bis 200 oder Timeout (120 s)
+    / `SupervisorState::GaveUp`.
+  - **`ComfyClient`** (`client.rs`): `system_stats` (Version + erste CUDA-Device-
+    VRAM → `SystemStats`), `health` (200 → Healthy, sonst Unhealthy — ComfyUI
+    kennt kein „503 lädt noch", der Adapter trackt `Starting` selbst), `free`
+    (`{unload_models, free_memory}`), `interrupt` (Cancel-Hook für 3.4).
+  - **`attach(port)`** (ADR-002-Fallback): probt `/system_stats`, adoptiert ohne
+    Lebensdauer-Übernahme. `stop()` für expliziten Runtime-Neustart (Drop tut
+    dasselbe).
+  - `detail()`: „not installed" / „installed · idle" / „starting…" / „running on
+    :<port>" / „attached to :<port> · model reserved".
+- **Wiring:** `App::load` registriert `ComfyUiAdapter::discover` (erscheint in
+  `GET /runtimes` / Diagnostics als „comfyui — not installed").
+- **`free_loopback_port`** aus `llamacpp/launch.rs` nach `runtime/mod.rs`
+  hochgezogen (jetzt von beiden Adaptern genutzt).
+- **`aiwm-fake-comfy`** (`core/src/bin/`): minimaler ComfyUI-Ersatz
+  (`/system_stats`, `/free`, `/interrupt`, `--fake-ready-ms` für langsamen Boot).
+
+Verifiziert:
+- 15 neue Unit-Tests (`comfyui::client` 4, `comfyui::launch` 6, `comfyui`-Adapter
+  4, `free_loopback_port` 1) + **4 Integrationstests** `tests/comfyui_adapter.rs`
+  gegen den echten Fixture-Subprozess: lazy Start beim ersten Load → healthy →
+  `system_stats` → unload lässt den Server oben → zweites Modell tauscht den Slot
+  ohne Server-Neustart → langsamer Kaltstart wird ausgesessen → „not installed"-
+  Fehler klar. `check.ps1` grün (179 Unit + 17 Integ.).
+- **Live** (`aiwm-cored`): `GET /runtimes` → `comfyui: not installed`; mit
+  `AIWM_COMFYUI_PYTHON` → `installed · idle`; `noop`-Job auf `runtime=comfyui` →
+  Adapter startet den Fixture-Server auf einem freien Port, Job
+  `queued → … → completed`, `GET /runtimes` → `healthy · 6000 MB · running on
+  :62100`. Kein Orphan-Prozess nach cored-Shutdown (Job Object).
+
+Bewusst **nicht** in 3.1: Installer (→ 3.2), echtes `POST /prompt` / Bild-Job
+(→ 3.4), `runtimes`-Tabellen-Zustand (kommt mit dem Installer), reale VRAM aus
+`/system_stats` fürs Scheduler-Accounting (aktuell die deklarierte Zahl, wie bei
+llama.cpp).
 
 ---
 

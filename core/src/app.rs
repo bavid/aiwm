@@ -10,7 +10,7 @@ use crate::config::{Config, FALLBACK_VRAM_BUDGET_MB};
 use crate::db::{now_rfc3339, Database};
 use crate::orchestrator::JobEngine;
 use crate::paths::AppPaths;
-use crate::runtime::{LlamaCppAdapter, RuntimeRegistry};
+use crate::runtime::{ComfyDirs, ComfyUiAdapter, LlamaCppAdapter, RuntimeRegistry};
 use crate::scheduler::HybridScheduler;
 use crate::telemetry::{GpuStatus, Sampler};
 use crate::Result;
@@ -60,6 +60,14 @@ impl App {
                 .with_options(config.llama.to_options()),
         );
         runtimes.register(llama.clone());
+        runtimes.register(Arc::new(ComfyUiAdapter::discover(
+            db.clone(),
+            &paths.runtimes_dir(),
+            ComfyDirs {
+                base: paths.comfyui_data_dir(),
+                output: paths.outputs_dir(),
+            },
+        )));
         let budget = resolve_vram_budget(&config, &telemetry);
         let scheduler = Arc::new(HybridScheduler::new(runtimes.clone(), budget));
         let jobs = Arc::new(JobEngine::new(

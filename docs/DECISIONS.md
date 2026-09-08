@@ -463,6 +463,58 @@ braucht einen Ort, editierbare Felder und eine Aussage, wann eine Änderung grei
 
 ---
 
+## ADR-018 — ComfyUI-Integration: ein Server, viele Modelle, lazy + `/free`
+
+**Status:** Entschieden — Adapter umgesetzt (3.1); Installer folgt in 3.2.
+
+**Kontext:** ComfyUI ist die Bild-/Diffusion-Runtime (Phase 3). Anders als
+`llama-server` (ein Prozess bedient genau ein Modell) ist ComfyUI **ein
+langlebiger Server, der Modelle on-demand pro Workflow lädt und cacht**. Das
+Muster von ADR-014 („ein `llama-server` pro residentem Modell, Swap = Neustart")
+passt hier nicht.
+
+**Entscheidung:**
+1. **Ein überwachter Kindprozess + HTTP/WS-Client** (`ComfyUiAdapter`), wie bei
+   llama-server. ComfyUI hört per Default auf `127.0.0.1` (ADR-008). Start-Flags:
+   `--listen 127.0.0.1 --port <frei> --base-directory <d> --output-directory <o>
+   --disable-auto-launch --dont-print-server`.
+2. **Lazy Start, dauerhaft oben.** Der Server startet beim ersten `load_model`
+   (nicht bei Registrierung — Python + torch-Import kostet 10–30 s) und bleibt
+   bis zum App-Ende laufen. `unload_model` **stoppt ihn nicht** — es ruft nur
+   `POST /free` (Modelle entladen). Ein Neustart wäre pro Modellwechsel zu teuer.
+3. **`load_model`-Semantik:** Server sicherstellen + den einen VRAM-Slot (ADR-003)
+   reservieren + das vorherige Modell via `/free` verdrängen. Der eigentliche
+   Checkpoint wird von ComfyUI beim Workflow-Lauf geladen (`capability::image`,
+   3.4) — der Adapter bucht nur den Platz.
+4. **Health = `GET /system_stats`.** ComfyUI hat keinen `/health` und antwortet
+   während des Boots nicht mit `503` (es lauscht schlicht noch nicht) — der
+   Adapter trackt `Starting` selbst im `Server`-Slot.
+5. **Attach-Fallback** (ADR-002) über `/system_stats`. `stop()` für einen
+   expliziten Runtime-Neustart; Drop tut dasselbe (Job Object).
+6. **Cancel = `POST /interrupt`** (kommt in 3.4, analog `stream.abort()` beim Chat).
+7. **VRAM-Accounting** fürs Scheduling: die *deklarierte* Zahl aus `load_model`
+   (wie bei llama.cpp). `/system_stats` liefert die reale VRAM nur für
+   Diagnostics — sie enthält auch Fremdprozesse.
+
+**Alternativen:**
+- *Ein `llama-server`-artiges „ein Prozess pro Modell"*: ComfyUI unterstützt das
+  nicht und der Prozess ist zu schwer zum ständigen Neustarten. Verworfen.
+- *Server eager beim Start hochfahren*: zahlt den Python-Boot auch, wenn der
+  Nutzer nie ein Bild generiert. Lazy ist besser.
+- *`comfy-cli` als Laufzeit-Tool*: eigenes Pip-Tool, eigener Env-Zustand — wir
+  kontrollieren die venv selbst (3.2), wie bei llama.cpp die Binärdatei.
+
+**Konsequenzen:**
+- (+) Modellwechsel = ein `/free` + der nächste Workflow lädt neu — keine
+  Server-Neustart-Latenz.
+- (+) Derselbe Supervisor/Attach/Health-Baukasten wie Phase 2.
+- (−) Der ComfyUI-Prozess belegt Basis-RAM (~1–2 GB), solange die App läuft, auch
+  im Leerlauf nach dem ersten Bild. Akzeptiert; ein „Runtime stoppen" kommt in 3.7.
+- (−) Bis `capability::image` (3.4) reserviert `load_model` nur den Slot — die
+  Verdrängung eines echten Checkpoints ist erst dann sichtbar.
+
+---
+
 ## Offene Entscheidungen
 
 | # | Frage | Status |

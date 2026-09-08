@@ -27,7 +27,7 @@ genutzt.
 |---|---|---|
 | Fake | `FakeRuntimeAdapter` | ✅ vollständig (Tests) |
 | llama.cpp / llama-server | `LlamaCppAdapter` | ✅ Adapter (2.2a) + Installer (2.2b): Download/Verify/Entpacken des gepinnten CUDA-Builds |
-| ComfyUI | `ComfyUiAdapter` | geplant Phase 3 — Bild/Video, vollständig gekapselt |
+| ComfyUI | `ComfyUiAdapter` | ✅ Adapter (3.1): ein langlebiger Server, lazy gestartet, `/system_stats`-Health, Attach, `/free`. Installer + Bild-Job → 3.2/3.4 |
 | Ollama | `OllamaAdapter` | optional, Phase 3+ (Duplikate transparent, ADR-006) |
 | LM Studio | — | vorerst nicht (proprietär, GUI-zentriert) |
 

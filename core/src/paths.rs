@@ -87,6 +87,18 @@ impl AppPaths {
         self.local_root.join("runtimes")
     }
 
+    /// ComfyUI's `--base-directory`: its `models/` (junctioned to the canonical
+    /// store), `input/`, `temp/`. Machine-local, not roamed.
+    pub fn comfyui_data_dir(&self) -> PathBuf {
+        self.local_root.join("comfyui-data")
+    }
+
+    /// Where generated images / videos land (`jobs.output_path`). Local — this
+    /// grows; a user-configurable path comes later.
+    pub fn outputs_dir(&self) -> PathBuf {
+        self.local_root.join("outputs")
+    }
+
     /// Create the root and logs directories if missing. Idempotent.
     pub fn ensure(&self) -> Result<()> {
         for dir in [self.root.clone(), self.logs_dir()] {
@@ -109,6 +121,8 @@ mod tests {
         assert!(p.db_file().ends_with("aiwm.db"));
         assert!(p.logs_dir().ends_with("logs"));
         assert!(p.runtimes_dir().ends_with("runtimes"));
+        assert!(p.comfyui_data_dir().ends_with("comfyui-data"));
+        assert!(p.outputs_dir().ends_with("outputs"));
         assert!(p.config_file().starts_with(p.root()));
         // `rooted` collapses both roots, so runtimes still land under it.
         assert!(p.runtimes_dir().starts_with(p.root()));

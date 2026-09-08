@@ -27,9 +27,10 @@ pub use self::client::GenerationEvent;
 
 use self::client::LlamaClient;
 use self::install::InstallPhase;
-use self::launch::{build_spawn_spec, free_loopback_port, resolve_server_bin};
+use self::launch::{build_spawn_spec, resolve_server_bin};
 use super::{
-    Health, LoadedModel, RuntimeAdapter, RuntimeKind, RuntimeSupervisor, SpawnSpec, SupervisorState,
+    free_loopback_port, Health, LoadedModel, RuntimeAdapter, RuntimeKind, RuntimeSupervisor,
+    SpawnSpec, SupervisorState,
 };
 use crate::db::{runtime_state, Database};
 use crate::{CoreError, Result};

@@ -5,9 +5,8 @@ use std::ffi::OsString;
 use std::net::Ipv4Addr;
 use std::path::{Path, PathBuf};
 
-use super::{llama_err, LlamaServerOptions, RUNTIME_ID};
+use super::{LlamaServerOptions, RUNTIME_ID};
 use crate::runtime::SpawnSpec;
-use crate::Result;
 
 /// Environment override for the `llama-server` executable.
 pub(super) const BIN_ENV: &str = "AIWM_LLAMACPP_PATH";
@@ -17,18 +16,6 @@ const SERVER_EXE: &str = if cfg!(windows) {
 } else {
     "llama-server"
 };
-
-/// Reserve a free loopback port by binding `:0` and releasing it. A tiny race
-/// remains until `llama-server` binds; negligible on a single-user desktop.
-pub(super) fn free_loopback_port() -> Result<u16> {
-    let listener = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
-        .map_err(|e| llama_err(format!("could not reserve a local port: {e}")))?;
-    let port = listener
-        .local_addr()
-        .map_err(|e| llama_err(format!("could not read the reserved port: {e}")))?
-        .port();
-    Ok(port)
-}
 
 pub(super) fn build_spawn_spec(
     bin: &Path,
@@ -181,10 +168,5 @@ mod tests {
     fn resolve_is_none_when_nothing_is_installed() {
         let tmp = tempfile::tempdir().unwrap();
         assert_eq!(resolve_server_bin(tmp.path(), |_| None), None);
-    }
-
-    #[test]
-    fn free_loopback_port_returns_a_high_port() {
-        assert!(free_loopback_port().unwrap() >= 1024);
     }
 }

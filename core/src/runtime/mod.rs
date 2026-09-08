@@ -9,24 +9,43 @@
 //! WP-4 ships the trait, the supervisor and a [`FakeRuntimeAdapter`]. Real
 //! adapters (llama.cpp in Phase 2) implement the same trait.
 
+mod comfyui;
 mod fake;
 mod job;
 mod llamacpp;
 mod registry;
 mod supervisor;
 
+pub use comfyui::{ComfyDirs, ComfyLaunch, ComfyUiAdapter, SystemStats};
 pub use fake::{FakeConfig, FakeRuntimeAdapter};
 pub use job::JobObject;
 pub use llamacpp::{GenerationEvent, InstallState, LlamaCppAdapter, LlamaServerOptions};
 pub use registry::RuntimeRegistry;
 pub use supervisor::{RuntimeSupervisor, SupervisorState};
 
+use std::net::{Ipv4Addr, TcpListener};
 use std::path::PathBuf;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
-use crate::Result;
+use crate::{CoreError, Result};
+
+/// Reserve a free loopback port by binding `:0` and releasing it. A tiny race
+/// remains until the runtime process binds it; negligible on a single-user
+/// desktop. Shared by the llama.cpp and ComfyUI adapters.
+pub(crate) fn free_loopback_port() -> Result<u16> {
+    let port_err = |e: std::io::Error, what: &str| CoreError::Runtime {
+        runtime: "supervisor".into(),
+        message: format!("could not {what} a local port: {e}"),
+    };
+    let listener =
+        TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).map_err(|e| port_err(e, "reserve"))?;
+    listener
+        .local_addr()
+        .map(|a| a.port())
+        .map_err(|e| port_err(e, "read"))
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -112,5 +131,18 @@ pub trait RuntimeAdapter: Send + Sync + std::fmt::Debug {
     /// adapter has nothing useful to add beyond [`health`](Self::health).
     fn detail(&self) -> Option<String> {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn free_loopback_port_is_a_usable_high_port() {
+        let port = free_loopback_port().unwrap();
+        assert!(port >= 1024);
+        // The port is actually free right after: we can bind it ourselves.
+        assert!(std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, port)).is_ok());
     }
 }

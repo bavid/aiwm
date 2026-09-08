@@ -77,7 +77,7 @@ funktioniert weiter.
 
 ---
 
-## Phase 3 — Bild *(geplant)*
+## Phase 3 — Bild *(in Arbeit)*
 
 **Scheibenplan + Research: [PHASE_3_PLAN.md](PHASE_3_PLAN.md).** MVP = Text→Bild
 über eine gekapselte ComfyUI-Runtime (gepinnter Tag, `uv`-venv, genau ein
@@ -85,6 +85,15 @@ Custom Node). SDXL zuerst (`Auto`-Default), Flux.1-dev-GGUF als zweites Template
 Feste Workflow-JSON-Pipelines, Modell-Rollen-Auflösung, echte Junctions in den
 ComfyUI-`models/`-Ordner (endlich der reale Konsument für `core::link`), Galerie
 mit Prompt/Seed/Modell, Scheduler koordiniert LLM ↔ Diffusion ums VRAM-Budget.
+
+- [x] 3.1 `ComfyUiAdapter` — ein langlebiger, lazy gestarteter Server; Spawn/
+  Health/Attach/`/free`, `aiwm-fake-comfy`-Fixture (ADR-018)
+- [ ] 3.2 Installer (`uv`-venv, gepinnter Tag, ein Custom Node)
+- [ ] 3.3 echte Junctions in `<comfy>/models/`
+- [ ] 3.4 `capability::image` (feste Pipeline, `/prompt` → `/history` → `/view`)
+- [ ] 3.5 UI-Tab „Image" + Galerie
+- [ ] 3.6 Flux-Template + `IMAGE_MODELS.md`
+- [ ] 3.7 Politur (Settings, Diagnostics, Scheduler-Verprobung)
 
 Nach dem txt2img-MVP: Image→Image, Inpaint, Upscale, Enhancement (eigene Slices).
 

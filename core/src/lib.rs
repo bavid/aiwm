@@ -14,7 +14,7 @@
 //! - [`app`]          — bootstrap paths + config + logging into an [`app::App`] (WP-1)
 //! - [`telemetry`]    — NVML + sysinfo sampler, 1 Hz (WP-3)
 //! - [`db`]           — sqlx pool, migrations, repositories (WP-2)
-//! - [`runtime`]      — `RuntimeAdapter` trait, supervisor, llama.cpp adapter (WP-4, 2.2)
+//! - [`runtime`]      — `RuntimeAdapter` trait, supervisor, llama.cpp (2.2) + ComfyUI (3.1) adapters
 //! - [`orchestrator`] — job state machine + engine (WP-5)
 //! - [`capability`]   — capability-specific job bodies (chat, 2.4)
 //! - [`compat`]        — VRAM / KV-cache fit estimate before a model load (2.6)
@@ -51,8 +51,8 @@ pub use model::{import_model, GgufInfo, ImportOutcome, ImportRequest};
 pub use orchestrator::{JobEngine, JobOutcome, JobState};
 pub use paths::AppPaths;
 pub use runtime::{
-    Health, LlamaCppAdapter, LlamaServerOptions, RuntimeAdapter, RuntimeKind, RuntimeRegistry,
-    RuntimeSupervisor, SpawnSpec,
+    ComfyUiAdapter, Health, LlamaCppAdapter, LlamaServerOptions, RuntimeAdapter, RuntimeKind,
+    RuntimeRegistry, RuntimeSupervisor, SpawnSpec,
 };
 pub use scheduler::{Decision, HybridScheduler, PlanRequest, Scheduler};
 pub use sidecar::{Handshake, SidecarClient, SidecarSpec};
