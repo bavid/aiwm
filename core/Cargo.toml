@@ -26,8 +26,11 @@ dirs.workspace = true
 sqlx.workspace = true
 nvml-wrapper.workspace = true
 sysinfo.workspace = true
-# Added in later WP steps as each module is implemented:
-#   win32job (WP-4), axum + tower (WP-6), reqwest (dormant until Phase 2)
+async-trait.workspace = true
+# Added in later WP steps: axum + tower (WP-6), reqwest (dormant until Phase 2)
+
+[target.'cfg(windows)'.dependencies]
+win32job = "2"
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }

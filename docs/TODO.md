@@ -11,6 +11,9 @@ hierher, damit nichts verloren geht.
 - sqlx: optional compile-time Query-Checking (`sqlx::query!`) via
   `cargo sqlx prepare` + `.sqlx/` im Repo + CI-Schritt `--check` (aktuell
   Runtime-Queries)
+- RuntimeSupervisor: CREATE_SUSPENDED + Resume, um das Race-Fenster zwischen
+  `CreateProcess` und `AssignProcessToJobObject` zu schließen (aktuell: sofortige
+  Zuweisung, für llama-server/ComfyUI vernachlässigbar)
 
 ## Vor Phase 3/4
 - Dedizierte Modell-Research-Aufgabe (aktuelle Bild-/Video-Modelle, Quant, VRAM)

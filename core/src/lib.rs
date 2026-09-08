@@ -38,6 +38,7 @@ pub use config::Config;
 pub use db::Database;
 pub use error::{CoreError, Result};
 pub use paths::AppPaths;
+pub use runtime::{Health, RuntimeAdapter, RuntimeKind, RuntimeSupervisor, SpawnSpec};
 
 /// Semantic version of the core crate, surfaced in the sidecar handshake and the
 /// API `about` endpoint.

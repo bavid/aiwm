@@ -320,7 +320,7 @@ Logik-Code (Scheduler, Job-Engine, Repos) — Gerüst/Tauri-Host ausgenommen.
 | **WP-2 ✅** | `sqlx`-Pool, Migration-Runner, Schema v1, Repository-Traits + SQLite-Impls, Default-Settings | WP-1 | Frische DB aus Migration; Repo-Unit-Tests (in-memory) grün |
 | **WP-3 ✅** | Telemetrie-Modul (NVML + sysinfo), 1-Hz-Sampler, `watch`-Channel, Graceful degradation | WP-1 | Mock-Test grün; reale 4080S-Werte auf der Maschine |
 | **WP-8** | Sidecar-Contract (JSON-RPC), `uv`-Projekt, `main.py` (handshake/ping), `SidecarClient` | WP-1 | Spawn + Handshake + `ping`-Roundtrip; Sidecar stirbt mit Core |
-| **WP-4** | `RuntimeAdapter`-Trait, `RuntimeSupervisor`, Windows Job Object, `FakeRuntimeAdapter` | WP-1 | Job-Object-Kill-Test grün; Contract-Tests gegen Fake |
+| **WP-4 ✅** | `RuntimeAdapter`-Trait, `RuntimeSupervisor`, Windows Job Object, `FakeRuntimeAdapter` | WP-1 | Job-Object-Kill-Test grün; Contract-Tests gegen Fake |
 | **WP-5** | Job-Zustandsmaschine, `JobEngine`, `Scheduler`-Trait, `HybridScheduler`-Skelett, Szenariomatrix-Tests | WP-2, WP-4 | Übergangs- + Szenariomatrix-Tests grün; Persistenz + Crash-Replay |
 | **WP-6** | Core-API-Handler, Tauri-Commands, axum HTTP/WS (Loopback), Event-Streams | WP-2, WP-3, WP-5 | Beide Transporte liefern identisches JSON; Loopback-only nachgewiesen |
 | **WP-7** | UI-Shell: Dashboard + Diagnostics, `ipc.ts`, Live-Telemetrie | WP-6 | `pnpm tauri dev` zeigt live echte Telemetrie |
@@ -426,6 +426,34 @@ Verifiziert auf der Maschine:
 RAM 15577/31967 MB | CPU 5%` — deckt sich mit `nvidia-smi`.
 
 Tests: **40 Unit + 1 Integration**. Ganze `check.ps1` grün.
+
+### WP-4 — Ergebnis (abgeschlossen)
+
+`core::runtime` (Ordnermodul):
+
+- `RuntimeAdapter` (async-trait): `id`, `kind`, `spawn_spec`, `health`,
+  `load_model(model_id, vram_mb)`, `unload_model`, `loaded_models`,
+  `vram_used_mb`. Typen: `RuntimeKind`, `Health`, `SpawnSpec`.
+- `job.rs` — `JobObject`: RAII-Wrapper um ein Windows Job Object mit
+  `KILL_ON_JOB_CLOSE` (via `win32job`, **kein eigenes `unsafe`**). Non-Windows:
+  No-op.
+- `supervisor.rs` — `RuntimeSupervisor`: spawnt den Child (tokio, `kill_on_drop`)
+  ins Job Object, Monitor-Task per `tokio::select!` (Stop-Signal vs. `child.wait()`),
+  Auto-Restart mit gedeckelter Exponential-Backoff (`MAX_RESTARTS=10`,
+  200 ms … 30 s). `stop()` / Drop beenden den Prozessbaum zuverlässig.
+- `fake.rs` — `FakeRuntimeAdapter` + `FakeConfig`: kein echter Prozess,
+  konfigurierbar (Health, Load-Delay, Load-Fehler pro Modell); zählt Aufrufe.
+  Basis für die Scheduler-Tests in WP-5.
+
+Tests: **48 Unit + 1 Integration**. Die kritischen (Windows-only):
+`dropping_the_job_kills_assigned_processes`,
+`dropping_the_supervisor_kills_the_process`,
+`crashed_process_is_restarted_with_backoff` — alle grün.
+
+Der `core`-Crate hat jetzt **null `unsafe`** im Produktivcode.
+
+Offen für später: CREATE_SUSPENDED + Resume gegen das (winzige) Race-Fenster
+zwischen `CreateProcess` und `AssignProcessToJobObject` ([TODO.md](TODO.md)).
 
 ---
 
