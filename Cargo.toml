@@ -22,6 +22,7 @@ uuid = { version = "1", features = ["v7"] }
 time = { version = "0.3", features = ["formatting", "parsing", "macros"] }
 dirs = "7"
 tempfile = "3"
+sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "sqlite", "migrate", "macros", "derive", "time", "uuid"] }
 
 [workspace.lints.rust]
 unsafe_code = "warn"

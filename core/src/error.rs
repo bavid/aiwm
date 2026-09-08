@@ -14,6 +14,12 @@ pub enum CoreError {
     #[error("database error: {0}")]
     Db(String),
 
+    #[error("database error: {0}")]
+    Sqlx(#[from] sqlx::Error),
+
+    #[error("migration error: {0}")]
+    Migrate(#[from] sqlx::migrate::MigrateError),
+
     #[error("telemetry unavailable: {0}")]
     TelemetryUnavailable(String),
 

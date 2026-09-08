@@ -35,6 +35,7 @@ pub mod telemetry;
 
 pub use app::App;
 pub use config::Config;
+pub use db::Database;
 pub use error::{CoreError, Result};
 pub use paths::AppPaths;
 

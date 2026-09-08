@@ -6,6 +6,7 @@ use std::sync::Mutex;
 
 use aiwm_core::app::{self, App};
 use serde::Serialize;
+use tauri::Manager;
 use tracing_appender::non_blocking::WorkerGuard;
 
 /// Logging guard parked in Tauri state so it lives for the whole process and
@@ -44,14 +45,20 @@ pub fn run() {
 }
 
 fn try_run() -> anyhow::Result<()> {
-    let (core, log_guard) = app::bootstrap_process()?;
+    let (core, log_guard) = tauri::async_runtime::block_on(app::bootstrap_process())?;
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .manage(core)
         .manage(LogGuard(Mutex::new(log_guard)))
         .invoke_handler(tauri::generate_handler![about])
-        .run(tauri::generate_context!())?;
+        .build(tauri::generate_context!())?
+        .run(|handle, event| {
+            if let tauri::RunEvent::Exit = event {
+                let core = handle.state::<App>();
+                tauri::async_runtime::block_on(core.db.close());
+            }
+        });
 
     Ok(())
 }

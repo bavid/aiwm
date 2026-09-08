@@ -181,8 +181,11 @@ Historie ist append-only (`job_events`), Statusübergänge überschreiben nur
 `jobs.state`. `agents`, `benchmarks`, `downloads`, `collections` kommen als
 spätere Migrationen.
 
-**Default-Settings, die Phase 1 schreibt:** `schema_version`, `offline_mode=false`,
-`store_path=E:\AI\models`, `core_api_port`, `llamacpp_pinned_version`.
+**`settings`-Tabelle vs. `config.toml`:** `config.toml` ist die einzige Quelle
+für Startkonfiguration (`store_path`, `core_api_port`, `offline_mode`,
+`log_filter`). Die `settings`-Tabelle hält nur **app-verwaltete** Marker, die das
+Tool selbst schreibt. Phase 1 seedet: `schema_version=1`, `first_run_at`.
+`installed_llamacpp_version` u. Ä. kommen mit ihren Consumern.
 
 ---
 
@@ -314,7 +317,7 @@ Logik-Code (Scheduler, Job-Engine, Repos) — Gerüst/Tauri-Host ausgenommen.
 |---|---|---|---|
 | **WP-0 ✅** | Toolchain, Workspace-Skelett, `.gitignore`/fmt/clippy, `git init` + erster Commit | — | `cargo build`, `pnpm install`, `uv sync` laufen auf der Zielmaschine |
 | **WP-1 ✅** | Core-Bootstrap: tokio-main, `config.toml` laden/validieren, `tracing` → rotierende Datei, Datenordner (`%APPDATA%\AIWorkstationManager\`) anlegen, sauberer Ctrl-C-Shutdown | WP-0 | Core startet, schreibt Log, legt Ordner an, beendet sauber |
-| **WP-2** | `sqlx`-Pool, Migration-Runner, Schema v1, Repository-Traits + SQLite-Impls, Default-Settings | WP-1 | Frische DB aus Migration; Repo-Unit-Tests (in-memory) grün |
+| **WP-2 ✅** | `sqlx`-Pool, Migration-Runner, Schema v1, Repository-Traits + SQLite-Impls, Default-Settings | WP-1 | Frische DB aus Migration; Repo-Unit-Tests (in-memory) grün |
 | **WP-3** | Telemetrie-Modul (NVML + sysinfo), 1-Hz-Sampler, `watch`-Channel, Graceful degradation | WP-1 | Mock-Test grün; reale 4080S-Werte auf der Maschine |
 | **WP-8** | Sidecar-Contract (JSON-RPC), `uv`-Projekt, `main.py` (handshake/ping), `SidecarClient` | WP-1 | Spawn + Handshake + `ping`-Roundtrip; Sidecar stirbt mit Core |
 | **WP-4** | `RuntimeAdapter`-Trait, `RuntimeSupervisor`, Windows Job Object, `FakeRuntimeAdapter` | WP-1 | Job-Object-Kill-Test grün; Contract-Tests gegen Fake |
@@ -372,6 +375,32 @@ Artefakte). Ganze `check.ps1` grün.
 
 Zusatz zum Plan: `AIWM_DATA_DIR` überschreibt den Datenordner (portable Installs +
 Tests) — war nötig, damit der Integrationstest nicht das echte `%APPDATA%` anfasst.
+
+### WP-2 — Ergebnis (abgeschlossen)
+
+`core/migrations/0001_init.sql` = komplettes Schema v1 (7 Tabellen, `STRICT`,
+FK-Constraints). `core::db`:
+
+- `Database` — `sqlx`-Pool, `connect` (on-disk, WAL, `foreign_keys=ON`,
+  `create_if_missing`) + `connect_in_memory` (für Tests, 1 gepinnte Connection),
+  eingebettete Migrationen via `sqlx::migrate!`.
+- `SettingsRepo` — `get` / `set` (upsert) / `set_if_absent` (Seeding) / `all`.
+- Weitere Repos (`runtimes` → WP-4, `jobs` → WP-5, `models` → Phase-2-Importer)
+  landen mit ihrem Consumer, nicht spekulativ.
+
+`App` hält jetzt `db: Database`; `App::load` ist async, öffnet die DB und seedet
+`schema_version` + `first_run_at` idempotent. `aiwm-cored` und der Tauri-Host
+(`RunEvent::Exit`) schließen den Pool sauber — verifiziert: kein `-wal`/`-shm`
+nach sauberem Beenden.
+
+Entscheidung: `config.toml` bleibt einzige Quelle der Startkonfig; die
+`settings`-Tabelle nur für app-verwaltete Marker (siehe §4).
+
+Kein compile-time Query-Checking (`sqlx::query!`) — Runtime-Queries, um den
+`DATABASE_URL` / `cargo sqlx prepare`-Umweg zu sparen. Kann später via CI-Schritt
+nachgezogen werden ([TODO.md](TODO.md)).
+
+Tests: **33 Unit + 1 Integration**. Ganze `check.ps1` grün.
 
 ---
 

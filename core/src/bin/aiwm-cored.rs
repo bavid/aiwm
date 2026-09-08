@@ -17,7 +17,7 @@ async fn main() -> ExitCode {
 }
 
 async fn run() -> Result<()> {
-    let (app, _log_guard) = app::bootstrap_process()?;
+    let (app, _log_guard) = app::bootstrap_process().await?;
 
     // Register signal handlers before announcing readiness so a shutdown request
     // that races startup is never lost.
@@ -32,6 +32,7 @@ async fn run() -> Result<()> {
 
     let reason = shutdown.recv().await;
     tracing::info!(reason, "shutting down cleanly");
+    app.db.close().await;
     println!("\nshutdown complete ({reason})");
     Ok(())
 }

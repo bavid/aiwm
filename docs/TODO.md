@@ -8,6 +8,9 @@ hierher, damit nichts verloren geht.
   bewusst *nicht* Dark-Mode-by-default; siehe web/design-quality-Regeln
 - llama.cpp: gepinnte Version + Bezugsquelle des Windows-CUDA-Builds klären
 - Windows: Junction vs. Hardlink für Modell-Dateien testen (Rechte, Verhalten)
+- sqlx: optional compile-time Query-Checking (`sqlx::query!`) via
+  `cargo sqlx prepare` + `.sqlx/` im Repo + CI-Schritt `--check` (aktuell
+  Runtime-Queries)
 
 ## Vor Phase 3/4
 - Dedizierte Modell-Research-Aufgabe (aktuelle Bild-/Video-Modelle, Quant, VRAM)
