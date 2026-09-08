@@ -12,14 +12,16 @@ neu zu implementieren.
 ## Status
 
 **Phase 1 – Fundament (in Arbeit).** Architektur abgestimmt ([docs/](docs/)).
-**WP-0…WP-6 abgeschlossen**: Cargo-Workspace (`core` + `src-tauri`),
+**WP-0…WP-7 abgeschlossen**: Cargo-Workspace (`core` + `src-tauri`),
 React/Vite-UI, Python-Sidecar; Core-Bootstrap, headless `aiwm-cored`, SQLite
 (Schema v1 + `SettingsRepo` + `JobRepo`), Telemetrie (NVML + sysinfo),
 Runtime-Adapter + `RuntimeSupervisor` + `FakeRuntimeAdapter`, Job-Engine +
-`HybridScheduler` + Crash-Replay, **Core-API** (axum HTTP/WS auf `127.0.0.1` +
-identische Tauri-Commands) + JobEngine-Run-Loop im Daemon.
+`HybridScheduler` + Crash-Replay, Core-API (axum HTTP/WS auf `127.0.0.1` +
+identische Tauri-Commands) + Daemon-Run-Loop, **UI-Dashboard** (Live GPU/RAM/CPU,
+Jobs, Diagnostics, theme-aware).
 82 Tests grün, `scripts/check.ps1` grün, null `unsafe` im Produktivcode.
-Als Nächstes WP-7 (UI-Dashboard). Setup: [docs/DEV_SETUP.md](docs/DEV_SETUP.md).
+Als Nächstes WP-8 (Sidecar-Client) + WP-9/10. Setup:
+[docs/DEV_SETUP.md](docs/DEV_SETUP.md).
 
 **Lizenz:** Privates Projekt, keine kommerzielle Nutzung (siehe [DECISIONS.md](docs/DECISIONS.md) ADR-011).
 

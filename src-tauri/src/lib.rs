@@ -6,18 +6,18 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
-use aiwm_core::api::dto::AboutDto;
+use aiwm_core::api::dto::{AboutDto, RuntimeStatusDto};
 use aiwm_core::api::handlers;
 use aiwm_core::db::{Job, JobFilter};
 use aiwm_core::orchestrator::JobState;
 use aiwm_core::telemetry::SystemTelemetry;
 use aiwm_core::{api, app, App};
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 use tracing_appender::non_blocking::WorkerGuard;
 
 /// Logging guard + background services, parked in Tauri state for the process
 /// lifetime.
-struct Runtime {
+struct HostState {
     _log_guard: Mutex<WorkerGuard>,
     _services: api::Services,
 }
@@ -56,6 +56,19 @@ async fn list_jobs(
     to_ipc(handlers::list_jobs(&app, JobFilter { states, limit }).await)
 }
 
+#[tauri::command]
+async fn get_runtimes(app: tauri::State<'_, Arc<App>>) -> Result<Vec<RuntimeStatusDto>, String> {
+    Ok(handlers::runtimes(&app).await)
+}
+
+#[tauri::command]
+fn get_recent_logs(
+    app: tauri::State<'_, Arc<App>>,
+    lines: Option<usize>,
+) -> Result<Vec<String>, String> {
+    to_ipc(handlers::recent_logs(&app, lines.unwrap_or(200)))
+}
+
 pub fn run() {
     if let Err(err) = try_run() {
         eprintln!("aiwm-tauri: fatal: {err}");
@@ -70,15 +83,35 @@ fn try_run() -> anyhow::Result<()> {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .manage(core)
-        .manage(Runtime {
+        .manage(HostState {
             _log_guard: Mutex::new(log_guard),
             _services: services,
+        })
+        .setup(|app| {
+            // Push each telemetry reading to the webview as a `telemetry` event.
+            let handle = app.handle().clone();
+            let core = handle.state::<Arc<App>>().inner().clone();
+            tauri::async_runtime::spawn(async move {
+                let mut rx = core.telemetry.subscribe();
+                loop {
+                    let snapshot = rx.borrow_and_update().clone();
+                    if handle.emit("telemetry", snapshot).is_err() {
+                        break;
+                    }
+                    if rx.changed().await.is_err() {
+                        break;
+                    }
+                }
+            });
+            Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             about,
             get_telemetry,
             get_settings,
-            list_jobs
+            list_jobs,
+            get_runtimes,
+            get_recent_logs
         ])
         .build(tauri::generate_context!())?
         .run(|handle, event| {

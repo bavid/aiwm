@@ -323,7 +323,7 @@ Logik-Code (Scheduler, Job-Engine, Repos) — Gerüst/Tauri-Host ausgenommen.
 | **WP-4 ✅** | `RuntimeAdapter`-Trait, `RuntimeSupervisor`, Windows Job Object, `FakeRuntimeAdapter` | WP-1 | Job-Object-Kill-Test grün; Contract-Tests gegen Fake |
 | **WP-5 ✅** | Job-Zustandsmaschine, `JobEngine`, `Scheduler`-Trait, `HybridScheduler`-Skelett, Szenariomatrix-Tests | WP-2, WP-4 | Übergangs- + Szenariomatrix-Tests grün; Persistenz + Crash-Replay |
 | **WP-6 ✅** | Core-API-Handler, Tauri-Commands, axum HTTP/WS (Loopback), Event-Streams, `JobEngine`-Run-Loop im Daemon | WP-2, WP-3, WP-5 | Beide Transporte liefern identisches JSON; Loopback-only nachgewiesen |
-| **WP-7** | UI-Shell: Dashboard + Diagnostics, `ipc.ts`, Live-Telemetrie | WP-6 | `pnpm tauri dev` zeigt live echte Telemetrie |
+| **WP-7 ✅** | UI-Shell: Dashboard + Diagnostics, `ipc.ts`, Live-Telemetrie | WP-6 | `pnpm tauri dev` zeigt live echte Telemetrie |
 | **WP-9** | `check.ps1` + CI-Workflow + Pre-commit-Hook | WP-0 (dann laufend) | Pipeline auf sauberem Checkout grün |
 | **WP-10** | ADR-005/007/009 finalisieren; Stub-Docs `MODELS.md`, `RUNTIMES.md`, `SECURITY.md`, `BENCHMARKS.md`, `TODO.md` anlegen; Docs-Konsistenzcheck | alle | Docs konsistent; `TODO.md` mit zurückgestellten Punkten befüllt |
 
@@ -514,6 +514,34 @@ Verifiziert:
   `127.0.0.1:48160`, `vram_budget_mb=16376` (auto vom 4080S)
 
 Tests: **81 Unit + 1 Integration**. Ganze `check.ps1` grün.
+
+### WP-7 — Ergebnis (abgeschlossen)
+
+UI (`ui/src/`, organisiert nach Feature):
+
+- `lib/ipc.ts` — typisierte `invoke`-Wrapper + Typen (spiegeln die Core-DTOs).
+- `lib/hooks.ts` — `useTelemetry` (Seed via `get_telemetry`, dann `telemetry`-Event
+  vom Host, 1 Hz Push), `useJobs`/`useRuntimes`/`useLogs` (Polling), `useAbout`.
+- `components/Meter` — Balken mit last-abhängiger Farbe (ok/warn/crit),
+  compositor-freundlich (`transform: scaleX`).
+- `features/dashboard` — GPU-Karte (VRAM-Meter, Util, Temp, Budget), Host-Karte
+  (RAM/CPU), Job-Tabelle mit „No jobs yet"-Zustand, vier deaktivierte
+  Capability-Buttons.
+- `features/diagnostics` — Environment-Key/Value, Runtime-Tabelle,
+  Log-Tail (monospace, auto-scroll).
+- `styles/tokens.css` — Design-Tokens, hell **und** dunkel
+  (`prefers-color-scheme`, kein Dark-by-default-Zwang). Bewusst zurückhaltend;
+  visuelle Richtung wird zu Phase-2-Start geschärft.
+
+Host (`src-tauri`): neue Commands `get_runtimes` / `get_recent_logs`;
+`.setup()` pusht jede Telemetrie-Messung als `telemetry`-Event an die WebView.
+
+Verifiziert: `pnpm tauri dev` zeigt das Fenster mit **echten Live-Werten**
+(RTX 4080 SUPER 1.1/16.0 GB VRAM, 15 % Util, 42 °C; RAM 14.9/31.2 GB; CPU 10 %).
+`typecheck` / `lint` / `build` grün.
+
+Offen für später: `eslint-plugin-react-hooks` in die UI-Lint-Config
+([TODO.md](TODO.md)).
 
 ---
 

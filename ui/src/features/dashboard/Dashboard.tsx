@@ -1,0 +1,152 @@
+import { useAbout, useJobs, useTelemetry } from "../../lib/hooks";
+import { Meter } from "../../components/Meter";
+import type { Job } from "../../lib/ipc";
+import "./dashboard.css";
+
+const GB = 1024;
+const CAPABILITIES = [
+  { key: "code", label: "Coding", hint: "Phase 5" },
+  { key: "image", label: "Generate Image", hint: "Phase 3" },
+  { key: "video", label: "Generate Video", hint: "Phase 4" },
+  { key: "enhance", label: "Enhance Image", hint: "Phase 3" },
+];
+
+const gb = (mb: number) => (mb / GB).toFixed(1);
+
+export function Dashboard() {
+  const { telemetry, error } = useTelemetry();
+  const { data: jobs } = useJobs();
+  const about = useAbout();
+
+  const gpu = telemetry?.gpu;
+  const host = telemetry?.host;
+  const activeJob = jobs?.find((j) =>
+    ["preparing", "running", "post", "scheduled"].includes(j.state),
+  );
+  const queued = jobs?.filter((j) => j.state === "queued").length ?? 0;
+
+  return (
+    <div className="dash">
+      <section className="card card--gpu" aria-labelledby="gpu-h">
+        <header className="card__head">
+          <h2 id="gpu-h">GPU</h2>
+          {gpu?.state === "available" && <span className="card__sub">{gpu.name}</span>}
+        </header>
+
+        {gpu?.state === "available" ? (
+          <>
+            <Meter
+              label="VRAM"
+              value={gpu.vram_used_mb}
+              max={gpu.vram_total_mb}
+              unit="GB"
+              format={gb}
+            />
+            <div className="stat-row">
+              <Stat label="Utilization" value={`${gpu.utilization_pct}%`} />
+              <Stat label="Temperature" value={`${gpu.temperature_c}°C`} />
+              <Stat
+                label="Budget"
+                value={about ? `${gb(about.vram_budget_mb)} GB` : "…"}
+              />
+            </div>
+          </>
+        ) : (
+          <p className="muted">
+            {gpu?.state === "unavailable"
+              ? `GPU telemetry unavailable — ${gpu.reason}`
+              : error
+                ? "GPU telemetry unavailable"
+                : "Reading GPU…"}
+          </p>
+        )}
+      </section>
+
+      <section className="card" aria-labelledby="host-h">
+        <header className="card__head">
+          <h2 id="host-h">Host</h2>
+        </header>
+        {host ? (
+          <>
+            <Meter
+              label="RAM"
+              value={host.ram_used_mb}
+              max={host.ram_total_mb}
+              unit="GB"
+              format={gb}
+            />
+            <div style={{ height: "var(--space-4)" }} />
+            <Meter label="CPU" value={host.cpu_total_pct} max={100} format={(v) => `${v}%`} />
+          </>
+        ) : (
+          <p className="muted">Reading host…</p>
+        )}
+      </section>
+
+      <section className="card card--wide" aria-labelledby="jobs-h">
+        <header className="card__head">
+          <h2 id="jobs-h">Jobs</h2>
+          <span className="card__sub numeric">
+            {activeJob ? "1 running" : "idle"} · {queued} queued
+          </span>
+        </header>
+        <JobTable jobs={jobs} />
+      </section>
+
+      <section className="card card--wide" aria-labelledby="do-h">
+        <header className="card__head">
+          <h2 id="do-h">What do you want to do?</h2>
+        </header>
+        <div className="capabilities">
+          {CAPABILITIES.map((c) => (
+            <button key={c.key} className="capability" disabled title={`Available in ${c.hint}`}>
+              <span className="capability__label">{c.label}</span>
+              <span className="capability__hint">{c.hint}</span>
+            </button>
+          ))}
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function Stat({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="stat">
+      <span className="stat__label">{label}</span>
+      <span className="stat__value numeric">{value}</span>
+    </div>
+  );
+}
+
+function JobTable({ jobs }: { jobs: Job[] | null }) {
+  if (!jobs) return <p className="muted">Loading…</p>;
+  if (jobs.length === 0) return <p className="muted">No jobs yet.</p>;
+
+  return (
+    <table className="jobs">
+      <thead>
+        <tr>
+          <th>Type</th>
+          <th>Model</th>
+          <th>State</th>
+          <th>Created</th>
+        </tr>
+      </thead>
+      <tbody>
+        {jobs.slice(0, 12).map((j) => (
+          <tr key={j.id}>
+            <td>{j.job_type}</td>
+            <td className="muted">{j.model_id ?? "—"}</td>
+            <td>
+              <span className="job-state" data-state={j.state}>
+                {j.state}
+              </span>
+            </td>
+            <td className="muted numeric">{new Date(j.created_at).toLocaleTimeString()}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}

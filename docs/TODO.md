@@ -14,6 +14,8 @@ hierher, damit nichts verloren geht.
 - RuntimeSupervisor: CREATE_SUSPENDED + Resume, um das Race-Fenster zwischen
   `CreateProcess` und `AssignProcessToJobObject` zu schließen (aktuell: sofortige
   Zuweisung, für llama-server/ComfyUI vernachlässigbar)
+- UI-Lint: `eslint-plugin-react-hooks` (+ `-react-refresh`) in `ui/eslint.config.js`
+  aufnehmen (aktuell nur js + typescript-eslint recommended)
 
 ## Vor Phase 3/4
 - Dedizierte Modell-Research-Aufgabe (aktuelle Bild-/Video-Modelle, Quant, VRAM)

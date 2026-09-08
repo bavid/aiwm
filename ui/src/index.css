@@ -1,67 +1,116 @@
-:root {
-  color-scheme: light dark;
-  --bg: #f4f4f5;
-  --fg: #1c1c1f;
-  --muted: #6b6b74;
-  --accent: #4c6ef5;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #141417;
-    --fg: #ececf0;
-    --muted: #8a8a94;
-    --accent: #7c93f8;
-  }
-}
+@import "./styles/tokens.css";
 
 * {
   box-sizing: border-box;
 }
 
+html,
+body,
+#root {
+  height: 100%;
+}
+
 body {
   margin: 0;
-  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-family: var(--font-sans);
+  font-size: var(--text-md);
+  line-height: 1.5;
   background: var(--bg);
-  color: var(--fg);
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
 }
 
-.shell {
-  max-width: 640px;
-  margin: 12vh auto 0;
-  padding: 0 2rem;
-}
-
-h1 {
+h1,
+h2,
+h3 {
   margin: 0;
-  font-size: 1.6rem;
+  font-weight: 600;
   letter-spacing: -0.01em;
 }
 
-.phase {
-  margin: 0.25rem 0 2rem;
-  color: var(--accent);
-  font-weight: 600;
+button {
+  font: inherit;
+  color: inherit;
 }
 
-.facts {
-  display: grid;
-  grid-template-columns: 5rem 1fr;
-  gap: 0.35rem 1rem;
-  margin: 0;
+.numeric {
   font-variant-numeric: tabular-nums;
 }
 
-.facts dt {
-  color: var(--muted);
+/* --- app shell --- */
+
+.app {
+  display: grid;
+  grid-template-rows: auto 1fr;
+  height: 100%;
 }
 
-.facts dd {
-  margin: 0;
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-5);
+  padding: var(--space-3) var(--space-5);
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
 }
 
-.hint {
-  margin-top: 2.5rem;
+.topbar__brand {
+  font-size: var(--text-md);
+  font-weight: 600;
+}
+
+.topbar__brand span {
   color: var(--muted);
-  font-size: 0.9rem;
+  font-weight: 400;
+}
+
+.tabs {
+  display: flex;
+  gap: var(--space-1);
+  margin-left: auto;
+}
+
+.tab {
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transition: color var(--dur) var(--ease), background var(--dur) var(--ease);
+}
+
+.tab:hover {
+  color: var(--text);
+}
+
+.tab[aria-selected="true"] {
+  background: var(--surface-2);
+  border-color: var(--border);
+  color: var(--text);
+}
+
+.main {
+  overflow-y: auto;
+  padding: var(--space-5);
+}
+
+.status-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+.status-dot[data-state="ok"],
+.status-dot[data-state="healthy"] {
+  background: var(--load-ok);
+}
+.status-dot[data-state="warn"],
+.status-dot[data-state="starting"] {
+  background: var(--load-warn);
+}
+.status-dot[data-state="crit"],
+.status-dot[data-state="unhealthy"] {
+  background: var(--load-crit);
 }
