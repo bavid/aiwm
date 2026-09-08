@@ -22,9 +22,11 @@ tracing-appender.workspace = true
 toml.workspace = true
 uuid.workspace = true
 time.workspace = true
-# Added in later WP-0..WP-8 steps as each module is implemented:
+dirs.workspace = true
+# Added in later WP steps as each module is implemented:
 #   sqlx (WP-2), nvml-wrapper + sysinfo (WP-3), win32job (WP-4),
 #   axum + tower (WP-6), reqwest (WP-2+, dormant until Phase 2)
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }
+tempfile.workspace = true

@@ -46,14 +46,22 @@ uv sync --directory sidecar       # Sidecar-venv
 pnpm -C ui install                # sobald ui/ existiert (nächster WP-0-Schritt)
 ```
 
+## Ausführen
+
+```powershell
+cargo run -p aiwm-core --bin aiwm-cored   # headless core, Ctrl-C beendet
+pnpm -C ui exec tauri dev                 # Desktop-App (aus E:\AI ausführen)
+```
+
 ## Quality Gate
 
 ```powershell
-pwsh scripts/check.ps1
+powershell -ExecutionPolicy Bypass -File scripts/check.ps1
 ```
 
 Läuft fmt / clippy / test für Rust, typecheck / lint für die UI, ruff / pytest
 für den Sidecar. Schritte, deren Toolchain fehlt, werden übersprungen.
+(`pwsh` / PowerShell 7 ist nicht installiert — Windows PowerShell 5.1 genügt.)
 
 ## Installierte Versionen (Stand WP-0)
 

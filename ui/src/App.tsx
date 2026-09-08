@@ -11,6 +11,9 @@ export default function App() {
       .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));
   }, []);
 
+  const value = (v: string | number | boolean | undefined) =>
+    v === undefined ? (error ? "unavailable" : "…") : String(v);
+
   return (
     <main className="shell">
       <h1>AI Workstation Manager</h1>
@@ -18,9 +21,17 @@ export default function App() {
 
       <dl className="facts">
         <dt>core</dt>
-        <dd>{info?.core_version ?? (error ? "unavailable" : "…")}</dd>
+        <dd>{value(info?.core_version)}</dd>
         <dt>host</dt>
-        <dd>{info?.tauri_host_version ?? (error ? "unavailable" : "…")}</dd>
+        <dd>{value(info?.tauri_host_version)}</dd>
+        <dt>data dir</dt>
+        <dd>{value(info?.data_dir)}</dd>
+        <dt>store</dt>
+        <dd>{value(info?.store_path)}</dd>
+        <dt>api port</dt>
+        <dd>{value(info?.core_api_port)}</dd>
+        <dt>offline</dt>
+        <dd>{value(info?.offline_mode)}</dd>
       </dl>
 
       <p className="hint">

@@ -313,7 +313,7 @@ Logik-Code (Scheduler, Job-Engine, Repos) — Gerüst/Tauri-Host ausgenommen.
 | WP | Inhalt | Hängt ab von | DoD |
 |---|---|---|---|
 | **WP-0 ✅** | Toolchain, Workspace-Skelett, `.gitignore`/fmt/clippy, `git init` + erster Commit | — | `cargo build`, `pnpm install`, `uv sync` laufen auf der Zielmaschine |
-| **WP-1** | Core-Bootstrap: tokio-main, `config.toml` laden/validieren, `tracing` → rotierende Datei, Datenordner (`%APPDATA%\AIWorkstationManager\`) anlegen, sauberer Ctrl-C-Shutdown | WP-0 | Core startet, schreibt Log, legt Ordner an, beendet sauber |
+| **WP-1 ✅** | Core-Bootstrap: tokio-main, `config.toml` laden/validieren, `tracing` → rotierende Datei, Datenordner (`%APPDATA%\AIWorkstationManager\`) anlegen, sauberer Ctrl-C-Shutdown | WP-0 | Core startet, schreibt Log, legt Ordner an, beendet sauber |
 | **WP-2** | `sqlx`-Pool, Migration-Runner, Schema v1, Repository-Traits + SQLite-Impls, Default-Settings | WP-1 | Frische DB aus Migration; Repo-Unit-Tests (in-memory) grün |
 | **WP-3** | Telemetrie-Modul (NVML + sysinfo), 1-Hz-Sampler, `watch`-Channel, Graceful degradation | WP-1 | Mock-Test grün; reale 4080S-Werte auf der Maschine |
 | **WP-8** | Sidecar-Contract (JSON-RPC), `uv`-Projekt, `main.py` (handshake/ping), `SidecarClient` | WP-1 | Spawn + Handshake + `ping`-Roundtrip; Sidecar stirbt mit Core |
@@ -351,6 +351,27 @@ Abweichungen vom Plan (bewusst, dokumentiert):
   Branding später ([TODO.md](TODO.md)).
 
 Toolchain-Details: [DEV_SETUP.md](DEV_SETUP.md).
+
+### WP-1 — Ergebnis (abgeschlossen)
+
+`core`-Module: `paths` (Layout, `AIWM_DATA_DIR`-Override), `config` (`Config`
+laden/erzeugen/validieren, `AIWM_*`-Overrides über injizierte Lookup-Funktion —
+kein Prozess-Env in Tests), `logging` (rotierende Datei + stderr, Filter-Validierung),
+`app` (`App::load` = Ordner + Config; `bootstrap_process` = + Logging + Startlog).
+
+Neues Bin **`aiwm-cored`**: headless Core, installiert Shutdown-Handler
+(ctrl-c/break/close/shutdown auf Windows; SIGINT/SIGTERM sonst) **vor** dem
+Ready-Banner, wartet, beendet sauber.
+
+Tauri-Host ruft `bootstrap_process()` im Start, hält `App` + Log-Guard als State;
+`about`-Command liefert jetzt die Config-Zusammenfassung.
+
+Tests: **23 Unit + 1 Integration** (`daemon_shutdown.rs` startet `aiwm-cored`,
+schickt `CTRL_BREAK_EVENT`, prüft Exit 0 + „shutdown complete" + angelegte
+Artefakte). Ganze `check.ps1` grün.
+
+Zusatz zum Plan: `AIWM_DATA_DIR` überschreibt den Datenordner (portable Installs +
+Tests) — war nötig, damit der Integrationstest nicht das echte `%APPDATA%` anfasst.
 
 ---
 

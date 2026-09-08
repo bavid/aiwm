@@ -9,6 +9,10 @@ import { invoke } from "@tauri-apps/api/core";
 export interface AboutInfo {
   core_version: string;
   tauri_host_version: string;
+  data_dir: string;
+  store_path: string;
+  core_api_port: number;
+  offline_mode: boolean;
 }
 
 export function about(): Promise<AboutInfo> {

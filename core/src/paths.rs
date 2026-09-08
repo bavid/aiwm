@@ -1,0 +1,143 @@
+//! Application directory layout.
+//!
+//! Config, database and logs live under `%APPDATA%\AIWorkstationManager\` (or
+//! wherever `AIWM_DATA_DIR` points). The model store is configured separately
+//! ([`crate::config::Config::store_path`], default `E:\AI\models`) and is
+//! created lazily on first use, not here.
+
+use std::fs;
+use std::path::{Path, PathBuf};
+
+use crate::{CoreError, Result};
+
+const APP_DIR_NAME: &str = "AIWorkstationManager";
+/// Overrides the data-directory root (portable installs, tests).
+const DATA_DIR_ENV: &str = "AIWM_DATA_DIR";
+
+/// Resolved locations for this app's local state. Cheap to clone.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AppPaths {
+    root: PathBuf,
+}
+
+impl AppPaths {
+    /// The effective location: `AIWM_DATA_DIR` if set and non-empty, otherwise
+    /// `%APPDATA%\AIWorkstationManager\`.
+    pub fn for_app() -> Result<Self> {
+        Self::resolve(std::env::var_os(DATA_DIR_ENV), dirs::data_dir())
+    }
+
+    fn resolve(
+        env_override: Option<std::ffi::OsString>,
+        data_dir: Option<PathBuf>,
+    ) -> Result<Self> {
+        if let Some(dir) = env_override.filter(|d| !d.is_empty()) {
+            return Ok(Self::rooted(dir));
+        }
+        let base = data_dir
+            .ok_or_else(|| CoreError::Config("cannot resolve the user data directory".into()))?;
+        Ok(Self::rooted(base.join(APP_DIR_NAME)))
+    }
+
+    /// Root the layout at an arbitrary directory (tests, or a portable install).
+    pub fn rooted(root: impl Into<PathBuf>) -> Self {
+        Self { root: root.into() }
+    }
+
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
+    pub fn config_file(&self) -> PathBuf {
+        self.root.join("config.toml")
+    }
+
+    pub fn db_file(&self) -> PathBuf {
+        self.root.join("aiwm.db")
+    }
+
+    pub fn logs_dir(&self) -> PathBuf {
+        self.root.join("logs")
+    }
+
+    /// Create the root and logs directories if missing. Idempotent.
+    pub fn ensure(&self) -> Result<()> {
+        for dir in [self.root.clone(), self.logs_dir()] {
+            fs::create_dir_all(&dir)
+                .map_err(|e| CoreError::Config(format!("creating {}: {e}", dir.display())))?;
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn derived_paths_sit_under_root() {
+        let p = AppPaths::rooted("/data/aiwm");
+        assert_eq!(p.root(), Path::new("/data/aiwm"));
+        assert!(p.config_file().ends_with("config.toml"));
+        assert!(p.db_file().ends_with("aiwm.db"));
+        assert!(p.logs_dir().ends_with("logs"));
+        assert!(p.config_file().starts_with(p.root()));
+    }
+
+    #[test]
+    fn ensure_creates_root_and_logs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let p = AppPaths::rooted(tmp.path().join("nested").join("aiwm"));
+        assert!(!p.root().exists());
+
+        p.ensure().unwrap();
+
+        assert!(p.root().is_dir());
+        assert!(p.logs_dir().is_dir());
+    }
+
+    #[test]
+    fn ensure_is_idempotent() {
+        let tmp = tempfile::tempdir().unwrap();
+        let p = AppPaths::rooted(tmp.path());
+        p.ensure().unwrap();
+        p.ensure().unwrap();
+        assert!(p.logs_dir().is_dir());
+    }
+
+    #[test]
+    fn resolve_uses_appdata_when_no_override() {
+        let p =
+            AppPaths::resolve(None, Some(PathBuf::from("C:\\Users\\x\\AppData\\Roaming"))).unwrap();
+        assert!(p.root().ends_with(APP_DIR_NAME));
+        assert!(p.root().starts_with("C:\\Users\\x\\AppData\\Roaming"));
+    }
+
+    #[test]
+    fn resolve_prefers_env_override() {
+        let p = AppPaths::resolve(
+            Some("D:\\portable\\aiwm".into()),
+            Some(PathBuf::from("C:\\ignored")),
+        )
+        .unwrap();
+        assert_eq!(p.root(), Path::new("D:\\portable\\aiwm"));
+    }
+
+    #[test]
+    fn resolve_ignores_empty_override() {
+        let p =
+            AppPaths::resolve(Some(String::new().into()), Some(PathBuf::from("C:\\base"))).unwrap();
+        assert!(p.root().starts_with("C:\\base"));
+    }
+
+    #[test]
+    fn resolve_errors_without_any_base() {
+        assert!(AppPaths::resolve(None, None).is_err());
+    }
+
+    #[test]
+    fn for_app_resolves_a_directory() {
+        // Uses the real environment; just checks it produces something.
+        assert!(AppPaths::for_app().is_ok());
+    }
+}
