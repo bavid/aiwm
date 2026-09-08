@@ -6,10 +6,12 @@
 
 mod jobs;
 mod models;
+mod runtimes;
 mod settings;
 
 pub use jobs::{EventLevel, Job, JobEvent, JobFilter, JobPatch, JobRepo, NewJob};
 pub use models::{Model, ModelRepo, NewModel};
+pub use runtimes::{state as runtime_state, RuntimeRecord, RuntimeRepo};
 pub use settings::SettingsRepo;
 
 use std::path::Path;
@@ -76,6 +78,10 @@ impl Database {
 
     pub fn models(&self) -> ModelRepo<'_> {
         ModelRepo::new(&self.pool)
+    }
+
+    pub fn runtimes(&self) -> RuntimeRepo<'_> {
+        RuntimeRepo::new(&self.pool)
     }
 
     /// Names of the application tables (excludes SQLite internals). Test helper.

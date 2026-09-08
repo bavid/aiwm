@@ -26,7 +26,7 @@ genutzt.
 | Runtime | Adapter | Stand |
 |---|---|---|
 | Fake | `FakeRuntimeAdapter` | ✅ vollständig (Tests) |
-| llama.cpp / llama-server | `LlamaCppAdapter` | ✅ Adapter (2.2a): Start/Stop/Health/Attach/`complete`. Installer folgt (2.2b) |
+| llama.cpp / llama-server | `LlamaCppAdapter` | ✅ Adapter (2.2a) + Installer (2.2b): Download/Verify/Entpacken des gepinnten CUDA-Builds |
 | ComfyUI | `ComfyUiAdapter` | geplant Phase 3 — Bild/Video, vollständig gekapselt |
 | Ollama | `OllamaAdapter` | optional, Phase 3+ (Duplikate transparent, ADR-006) |
 | LM Studio | — | vorerst nicht (proprietär, GUI-zentriert) |
@@ -44,12 +44,17 @@ genutzt.
 - **Attach-Fallback (ADR-002):** `attach(port, model_id, vram)` probt `/health`,
   gleicht die Modelldatei über `/props` ab, adoptiert den Server **ohne** seine
   Lebensdauer zu übernehmen (`unload` tötet ihn nicht).
-- **Bezugsquelle des CUDA-Builds (für 2.2b):** Release-Assets von
-  `ggml-org/llama.cpp` — rollierende Build-Tags (`b#####`), Windows-CUDA-Assets
-  `llama-<build>-bin-win-cuda-12.4-x64.zip` + `cudart-llama-bin-win-cuda-12.4-x64.zip`.
-  Die GitHub-Releases-API liefert je Asset ein `digest: "sha256:…"` → Verify
-  ohne separate Prüfsummen-Datei. CUDA 12.4-Build gewählt (breite Treiber-
-  Kompatibilität, gebündelte Runtime-DLLs, kein System-CUDA nötig).
+- **Installer (2.2b):** `runtime::llamacpp::install`. Gepinnt: `b10855`, zwei
+  Assets von `ggml-org/llama.cpp` (`llama-…-bin-win-cuda-12.4-x64.zip` +
+  `cudart-…-12.4-x64.zip`), SHA-256 + Größe fest im Code (Werte aus dem
+  `digest`-Feld der Releases-API). Streaming-Download mit mitlaufendem Hash →
+  Mismatch = Abbruch; `zip`-Entpacken (flach) in
+  `%LOCALAPPDATA%\…\runtimes\llamacpp\b10855\`. `offline_mode` = Hard-Refusal.
+  Idempotent. `POST /runtimes/llamacpp/install` (202) startet es im Hintergrund;
+  Fortschritt in `GET /runtimes` → `detail`. `RuntimeRepo` hält Version + Zustand.
+- **Version-Bump:** Tag + beide Digests in `install::PINNED_ARCHIVES` ändern.
+  Digests holt man mit `gh api repos/ggml-org/llama.cpp/releases/tags/<tag> --jq
+  '.assets[] | select(.name|test("win-cuda-12.4-x64")) | {name, digest}'`.
 
 ## Manage-first (ADR-002)
 
@@ -60,7 +65,7 @@ frei konfigurierbares Python-Environment. „Repair"-Pfad baut die venv sauber n
 ## Zu untersuchen vor Phase 2/3
 
 - ~~llama.cpp: gepinnte Version + Bezugsquelle des Windows-CUDA-Builds~~ →
-  geklärt (siehe oben), Umsetzung in 2.2b
+  ✅ umgesetzt (2.2b, ADR-014)
 - ComfyUI: minimale getestete Custom-Node-Menge (Custom Nodes = beliebiger Code)
 - `uv`-verwaltete venv pro Runtime; gebündelte CUDA-Runtime statt System-CUDA
 - Health-Endpunkte + Modell-Load/Unload-APIs je Runtime — llama-server: `/health`,

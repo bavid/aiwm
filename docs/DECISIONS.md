@@ -251,17 +251,19 @@ liefert Unused-/Dedup-Reports.
 | Logging | `tracing` + `tracing-appender` | strukturiert, rotierende Datei |
 | Fehler | `thiserror` (Bibliothek), `anyhow` (Bin-Ränder) | ecc/rust-Regeln |
 | Sidecar-Runner | `uv run` | reproduzierbare venv; `resolve_uv()` findet uv auch ohne PATH |
-| HTTP-Client (Runtimes) | `reqwest` (`default-features = false`, `json`) | Loopback-only, **kein** TLS (ADR-008); ab Phase 2 reguläre Abhängigkeit (vorher dev-only) |
+| HTTP-Client | `reqwest` (`default-features = false`, `json` + `native-tls` + `http2`) | Loopback für Runtimes (ADR-008), **HTTPS** für den llama.cpp-Release-Download (ADR-014). `native-tls` = Schannel auf dem Windows-Target: kein OpenSSL, keine gebündelten CA-Roots, nutzt den OS-Trust-Store. Ab Phase 2 reguläre Abhängigkeit (vorher dev-only, ohne TLS). |
+| ZIP-Entpacken | `zip` 8 (`default-features = false`, `deflate`) | Runtime-Archive entpacken; `spawn_blocking`, `enclosed_name()` gegen Zip-Slip |
 
-**Verworfen:** `reqwest` **mit** TLS (Loopback braucht keins), compile-time
-`sqlx::query!` (Setup-Reibung, → TODO), Electron/Node-Backend (ADR-001),
-Postgres (ADR-005).
+**Verworfen:** `reqwest` mit `rustls` (0.13 kennt nur das Feature `rustls`, das
+einen Crypto-Provider mitzieht; `native-tls`/Schannel ist auf dem Windows-Target
+schlanker), compile-time `sqlx::query!` (Setup-Reibung, → TODO),
+Electron/Node-Backend (ADR-001), Postgres (ADR-005).
 
 ---
 
 ## ADR-014 — llama.cpp-Integration: ein Server pro Modell + verifizierter Pin-Download
 
-**Status:** Entschieden (Umsetzung: Adapter in 2.2a, Installer in 2.2b).
+**Status:** Entschieden — umgesetzt (Adapter 2.2a, Installer 2.2b).
 
 **Kontext:** `llama-server` bedient genau **ein** Modell pro Prozess. Der
 Hybrid-Scheduler (ADR-003) hält einen residenten LLM-Slot. Manage-first (ADR-002)
@@ -273,10 +275,18 @@ verlangt, dass das Tool die Runtime selbst beschafft.
    zum Scheduler-Slot; einfaches, robustes Lifecycle.
 2. **Attach-Fallback** adoptiert einen vom Nutzer gestarteten Server, ohne seine
    Lebensdauer zu übernehmen.
-3. **Pin-Quelle:** Release-Assets von `ggml-org/llama.cpp`. Verifikation über das
-   `digest`-Feld (`sha256:…`) der GitHub-Releases-API — keine eigene
-   Prüfsummen-Pflege. Gepinnt: **CUDA 12.4**-Windows-Build + zugehöriges
-   `cudart`-Zip (gebündelte CUDA-Runtime, kein System-CUDA).
+3. **Pin-Quelle:** Release-Assets von `ggml-org/llama.cpp`, Build-Tag +
+   SHA-256 + Größe **fest im Code** (`install::PINNED_ARCHIVES`). Die Digests
+   stammen aus dem `digest`-Feld der GitHub-Releases-API; im Code (nicht zur
+   Laufzeit geholt) sind sie MITM-fest und offline-deterministisch. Gepinnt:
+   **CUDA 12.4**-Windows-Build + `cudart`-Zip (gebündelte CUDA-Runtime, kein
+   System-CUDA). Beide entpacken flach in einen Ordner.
+
+**Installer (2.2b):** Streaming-Download mit mitlaufendem SHA-256, Größen-Check,
+`zip`-Entpacken in `spawn_blocking` (Zip-Slip-Schutz über `enclosed_name()`).
+`offline_mode` → Hard-Refusal. Idempotent. Fortschritt über `install_state()` →
+`detail()` in die UI. Ziel: `%LOCALAPPDATA%\…\runtimes\llamacpp\<build>\`
+(nicht Roaming — kann 1 GB+ sein).
 
 **Alternativen:**
 - *Router-Mode* (ein Server, dynamisches Laden mehrerer Modelle, neu in
@@ -287,10 +297,14 @@ verlangt, dass das Tool die Runtime selbst beschafft.
 - *Selbst kompilieren:* CUDA-Toolchain-Zwang auf der Nutzermaschine — verworfen.
 
 **Konsequenzen:**
-- (+) Kleiner, testbarer Adapter; Prozess-Isolation; deterministische Version.
+- (+) Kleiner, testbarer Adapter; Prozess-Isolation; deterministische Version;
+  verifizierter, reproduzierbarer Download (live: 645 MB, beide Digests OK,
+  `llama-server.exe --version` läuft = CUDA-DLLs laden).
 - (−) Sekunden Latenz beim Modellwechsel (im UI sichtbar machen). Der freie Port
   wird per Bind-and-Drop reserviert (winziges Race) — später ggf. aus dem
   `llama-server`-stdout lesen ([TODO.md](TODO.md)).
+- (−) Version-Bump = Code-Änderung (Tag + zwei Digests). Bewusst: ein kuratierter
+  Build (ADR-002), Digests im Code sind sicherer als API-geholte.
 
 ---
 

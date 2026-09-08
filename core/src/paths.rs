@@ -1,9 +1,10 @@
 //! Application directory layout.
 //!
-//! Config, database and logs live under `%APPDATA%\AIWorkstationManager\` (or
-//! wherever `AIWM_DATA_DIR` points). The model store is configured separately
-//! ([`crate::config::Config::store_path`], default `E:\AI\models`) and is
-//! created lazily on first use, not here.
+//! Config, database and logs live under `%APPDATA%\AIWorkstationManager\`;
+//! bulky managed-runtime installs live under `%LOCALAPPDATA%\…\runtimes\` so
+//! they never roam. `AIWM_DATA_DIR` collapses both onto one directory. The model
+//! store is configured separately ([`crate::config::Config::store_path`],
+//! default `E:\AI\models`) and is created lazily on first use, not here.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -15,33 +16,52 @@ const APP_DIR_NAME: &str = "AIWorkstationManager";
 const DATA_DIR_ENV: &str = "AIWM_DATA_DIR";
 
 /// Resolved locations for this app's local state. Cheap to clone.
+///
+/// `root` (roaming `%APPDATA%`) holds small config + the database; `local_root`
+/// (`%LOCALAPPDATA%`) holds bulky machine-specific data like the managed runtime
+/// installs, which have no business roaming.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AppPaths {
     root: PathBuf,
+    local_root: PathBuf,
 }
 
 impl AppPaths {
-    /// The effective location: `AIWM_DATA_DIR` if set and non-empty, otherwise
-    /// `%APPDATA%\AIWorkstationManager\`.
+    /// The effective location: `AIWM_DATA_DIR` if set and non-empty (both roots
+    /// collapse to it), otherwise `%APPDATA%` / `%LOCALAPPDATA%` +
+    /// `AIWorkstationManager`.
     pub fn for_app() -> Result<Self> {
-        Self::resolve(std::env::var_os(DATA_DIR_ENV), dirs::data_dir())
+        Self::resolve(
+            std::env::var_os(DATA_DIR_ENV),
+            dirs::data_dir(),
+            dirs::data_local_dir(),
+        )
     }
 
     fn resolve(
         env_override: Option<std::ffi::OsString>,
         data_dir: Option<PathBuf>,
+        data_local_dir: Option<PathBuf>,
     ) -> Result<Self> {
         if let Some(dir) = env_override.filter(|d| !d.is_empty()) {
             return Ok(Self::rooted(dir));
         }
         let base = data_dir
             .ok_or_else(|| CoreError::Config("cannot resolve the user data directory".into()))?;
-        Ok(Self::rooted(base.join(APP_DIR_NAME)))
+        let local = data_local_dir.unwrap_or_else(|| base.clone());
+        Ok(Self {
+            root: base.join(APP_DIR_NAME),
+            local_root: local.join(APP_DIR_NAME),
+        })
     }
 
-    /// Root the layout at an arbitrary directory (tests, or a portable install).
+    /// Root the whole layout at one directory (tests, or a portable install).
     pub fn rooted(root: impl Into<PathBuf>) -> Self {
-        Self { root: root.into() }
+        let root = root.into();
+        Self {
+            local_root: root.clone(),
+            root,
+        }
     }
 
     pub fn root(&self) -> &Path {
@@ -61,9 +81,10 @@ impl AppPaths {
     }
 
     /// Where the tool installs the runtimes it manages (llama.cpp, ComfyUI, …).
-    /// One curated version per runtime lives under `<root>/runtimes/<id>/`.
+    /// One curated version per runtime lives under `<local_root>/runtimes/<id>/`
+    /// — these can be gigabytes and must not roam.
     pub fn runtimes_dir(&self) -> PathBuf {
-        self.root.join("runtimes")
+        self.local_root.join("runtimes")
     }
 
     /// Create the root and logs directories if missing. Idempotent.
@@ -89,6 +110,23 @@ mod tests {
         assert!(p.logs_dir().ends_with("logs"));
         assert!(p.runtimes_dir().ends_with("runtimes"));
         assert!(p.config_file().starts_with(p.root()));
+        // `rooted` collapses both roots, so runtimes still land under it.
+        assert!(p.runtimes_dir().starts_with(p.root()));
+    }
+
+    #[test]
+    fn runtimes_dir_uses_localappdata_not_roaming() {
+        let p = AppPaths::resolve(
+            None,
+            Some(PathBuf::from("C:\\Users\\x\\AppData\\Roaming")),
+            Some(PathBuf::from("C:\\Users\\x\\AppData\\Local")),
+        )
+        .unwrap();
+        assert!(p
+            .config_file()
+            .starts_with("C:\\Users\\x\\AppData\\Roaming"));
+        assert!(p.runtimes_dir().starts_with("C:\\Users\\x\\AppData\\Local"));
+        assert!(p.runtimes_dir().ends_with("runtimes"));
     }
 
     #[test]
@@ -114,8 +152,12 @@ mod tests {
 
     #[test]
     fn resolve_uses_appdata_when_no_override() {
-        let p =
-            AppPaths::resolve(None, Some(PathBuf::from("C:\\Users\\x\\AppData\\Roaming"))).unwrap();
+        let p = AppPaths::resolve(
+            None,
+            Some(PathBuf::from("C:\\Users\\x\\AppData\\Roaming")),
+            Some(PathBuf::from("C:\\Users\\x\\AppData\\Local")),
+        )
+        .unwrap();
         assert!(p.root().ends_with(APP_DIR_NAME));
         assert!(p.root().starts_with("C:\\Users\\x\\AppData\\Roaming"));
     }
@@ -125,21 +167,33 @@ mod tests {
         let p = AppPaths::resolve(
             Some("D:\\portable\\aiwm".into()),
             Some(PathBuf::from("C:\\ignored")),
+            Some(PathBuf::from("C:\\ignored\\local")),
         )
         .unwrap();
         assert_eq!(p.root(), Path::new("D:\\portable\\aiwm"));
+        assert_eq!(p.runtimes_dir(), Path::new("D:\\portable\\aiwm\\runtimes"));
     }
 
     #[test]
     fn resolve_ignores_empty_override() {
-        let p =
-            AppPaths::resolve(Some(String::new().into()), Some(PathBuf::from("C:\\base"))).unwrap();
+        let p = AppPaths::resolve(
+            Some(String::new().into()),
+            Some(PathBuf::from("C:\\base")),
+            Some(PathBuf::from("C:\\base-local")),
+        )
+        .unwrap();
         assert!(p.root().starts_with("C:\\base"));
     }
 
     #[test]
     fn resolve_errors_without_any_base() {
-        assert!(AppPaths::resolve(None, None).is_err());
+        assert!(AppPaths::resolve(None, None, None).is_err());
+    }
+
+    #[test]
+    fn resolve_falls_back_to_roaming_when_no_local_dir() {
+        let p = AppPaths::resolve(None, Some(PathBuf::from("C:\\base")), None).unwrap();
+        assert!(p.runtimes_dir().starts_with("C:\\base"));
     }
 
     #[test]

@@ -26,7 +26,8 @@ Loopback-API + Daemon-Run-Loop laufen. Keine echte Runtime, keine Inferenz.
 ## Phase 2 — MVP: Plattform-Kern *(in Arbeit)*
 
 **Scheibenplan + Fortschritt: [PHASE_2_PLAN.md](PHASE_2_PLAN.md).** Fertig: 2.1
-(ModelRepo + GGUF-Import), 2.2a (`LlamaCppAdapter` — Start/Stop/Health/Attach).
+(ModelRepo + GGUF-Import), 2.2a (`LlamaCppAdapter` — Start/Stop/Health/Attach),
+2.2b (llama.cpp-Installer — verifizierter Download + Entpacken).
 
 Umfang bewusst eng. **Nicht** enthalten: Online-Discovery-Suche, Download-Manager,
 Benchmarks, Quality-Scores, Plugin-System, Bild/Video, Agents.

@@ -28,9 +28,13 @@ sysinfo = { version = "0.39", default-features = false, features = ["system"] }
 async-trait = "0.1"
 axum = { version = "0.8", features = ["ws"] }
 sha2 = "0.11"
-# Loopback-only HTTP client for managed runtimes (no TLS: ADR-008). Also used by
-# the API integration tests.
-reqwest = { version = "0.13", default-features = false, features = ["json"] }
+# HTTP client: loopback for managed runtimes (ADR-008), HTTPS for the llama.cpp
+# release download (ADR-014). `native-tls` = Schannel on our Windows target — no
+# OpenSSL, no bundled CA roots, uses the OS trust store. `json` for the API tests.
+reqwest = { version = "0.13", default-features = false, features = ["json", "native-tls", "http2"] }
+# Extracting downloaded runtime archives (llama.cpp CUDA build). `deflate` only —
+# no aes/bzip2/zstd/lzma; the flate2 zlib-rs backend keeps it pure-Rust.
+zip = { version = "8", default-features = false, features = ["deflate"] }
 
 [workspace.lints.rust]
 unsafe_code = "warn"

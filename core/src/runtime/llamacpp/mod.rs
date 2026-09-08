@@ -8,10 +8,11 @@
 //! can also *attach* to a `llama-server` the user started themselves (ADR-002
 //! fallback) — an attached server's lifetime is not ours to end.
 //!
-//! Installing the binary (pinned CUDA build, verified download) is a separate
-//! concern handled by the llama.cpp installer; this adapter only *resolves* it.
+//! Installing the pinned CUDA build (verified download + extraction) lives in
+//! [`install`]; [`LlamaCppAdapter::install`] drives it and tracks progress.
 
 mod client;
+pub mod install;
 mod launch;
 
 use std::path::{Path, PathBuf};
@@ -19,18 +20,22 @@ use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
+use serde::Serialize;
 use tokio::sync::Mutex as AsyncMutex;
 
 use self::client::LlamaClient;
+use self::install::InstallPhase;
 use self::launch::{build_spawn_spec, free_loopback_port, resolve_server_bin};
 use super::{
     Health, LoadedModel, RuntimeAdapter, RuntimeKind, RuntimeSupervisor, SpawnSpec, SupervisorState,
 };
-use crate::db::Database;
+use crate::db::{runtime_state, Database};
 use crate::{CoreError, Result};
 
 /// Adapter id — also the `runtimes` table key and the registry key.
 pub const RUNTIME_ID: &str = "llamacpp";
+/// `runtimes.kind` value (matches `RuntimeKind::LlamaCpp`'s serde name).
+const RUNTIME_KIND: &str = "llama_cpp";
 
 const HEALTH_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const DEFAULT_GPU_LAYERS: u32 = 999;
@@ -103,39 +108,69 @@ enum Resident {
     Other,
 }
 
+/// How the adapter finds `llama-server`.
+#[derive(Debug)]
+enum BinSource {
+    /// Exactly this path, or nothing (tests / an explicit config override).
+    Fixed(Option<PathBuf>),
+    /// Re-scan this managed dir + `AIWM_LLAMACPP_PATH` + `PATH` on every call, so
+    /// a fresh install is picked up without restarting.
+    Scan(PathBuf),
+}
+
+/// Progress of [`LlamaCppAdapter::install`].
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum InstallState {
+    Idle,
+    Running {
+        phase: InstallPhase,
+        done_bytes: u64,
+        total_bytes: u64,
+    },
+    Failed {
+        error: String,
+    },
+}
+
 #[derive(Debug)]
 pub struct LlamaCppAdapter {
-    server_bin: Option<PathBuf>,
+    bin: BinSource,
     db: Database,
     client: LlamaClient,
     opts: LlamaServerOptions,
     slot: Mutex<Slot>,
+    install: Mutex<InstallState>,
     /// Serialises whole `load` / `unload` / `attach` operations.
     op_lock: AsyncMutex<()>,
+    /// Held for the duration of an install.
+    install_lock: AsyncMutex<()>,
 }
 
 impl LlamaCppAdapter {
-    /// Resolve the `llama-server` binary from `AIWM_LLAMACPP_PATH`, then the
-    /// managed install under `runtimes_dir`, then `PATH`. The adapter registers
-    /// either way — an absent binary just means "not installed yet".
+    /// The adapter re-scans `AIWM_LLAMACPP_PATH`, the managed install under
+    /// `runtimes_dir`, then `PATH` on demand — a fresh install needs no restart.
+    /// It registers even when nothing is found ("not installed yet").
     pub fn discover(db: Database, runtimes_dir: &Path) -> Self {
-        let server_bin = resolve_server_bin(runtimes_dir, |k| std::env::var_os(k));
-        match &server_bin {
-            Some(bin) => tracing::info!(path = %bin.display(), "llama-server resolved"),
-            None => tracing::info!("no llama-server binary found — llama.cpp is not installed yet"),
-        }
-        Self::with_binary(db, server_bin)
+        Self::new(db, BinSource::Scan(runtimes_dir.to_path_buf()))
     }
 
-    /// Construct with an explicit (or absent) server binary.
+    /// Construct with an explicit (or absent) server binary — tests, or a config
+    /// override that pins the path.
     pub fn with_binary(db: Database, server_bin: Option<PathBuf>) -> Self {
+        Self::new(db, BinSource::Fixed(server_bin))
+    }
+
+    fn new(db: Database, bin: BinSource) -> Self {
         Self {
-            server_bin,
+            bin,
             db,
             client: LlamaClient::new(),
             opts: LlamaServerOptions::default(),
             slot: Mutex::new(Slot::Empty),
+            install: Mutex::new(InstallState::Idle),
             op_lock: AsyncMutex::new(()),
+            install_lock: AsyncMutex::new(()),
         }
     }
 
@@ -145,8 +180,90 @@ impl LlamaCppAdapter {
         self
     }
 
+    /// Resolve the `llama-server` executable now (may hit the filesystem).
+    fn server_bin(&self) -> Option<PathBuf> {
+        match &self.bin {
+            BinSource::Fixed(p) => p.clone(),
+            BinSource::Scan(dir) => resolve_server_bin(dir, |k| std::env::var_os(k)),
+        }
+    }
+
     pub fn is_installed(&self) -> bool {
-        self.server_bin.is_some()
+        self.server_bin().is_some()
+    }
+
+    /// Current install progress (drives the UI status line).
+    pub fn install_state(&self) -> InstallState {
+        self.install
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    fn set_install_state(&self, s: InstallState) {
+        *self.install.lock().unwrap_or_else(PoisonError::into_inner) = s;
+    }
+
+    /// Download, verify and extract the pinned llama.cpp CUDA build into the
+    /// managed runtimes dir, then record it in the `runtimes` table. Long-running
+    /// (~645 MB) — callers spawn it and poll [`install_state`](Self::install_state).
+    /// Errors immediately when the adapter was built with a fixed binary path.
+    pub async fn install(&self, offline: bool) -> Result<()> {
+        let BinSource::Scan(dir) = &self.bin else {
+            return Err(llama_err(
+                "this adapter uses a fixed binary path; nothing to install",
+            ));
+        };
+        let dir = dir.clone();
+        let Ok(_guard) = self.install_lock.try_lock() else {
+            return Err(llama_err("a llama.cpp install is already running"));
+        };
+
+        self.set_install_state(InstallState::Running {
+            phase: InstallPhase::Downloading,
+            done_bytes: 0,
+            total_bytes: install::TOTAL_DOWNLOAD_BYTES,
+        });
+        let _ = self
+            .db
+            .runtimes()
+            .set_state(RUNTIME_ID, RUNTIME_KIND, runtime_state::INSTALLING, None)
+            .await;
+
+        let result = install::install(&dir, offline, |phase, done_bytes, total_bytes| {
+            self.set_install_state(InstallState::Running {
+                phase,
+                done_bytes,
+                total_bytes,
+            });
+        })
+        .await;
+
+        match &result {
+            Ok(path) => {
+                self.set_install_state(InstallState::Idle);
+                let _ = self
+                    .db
+                    .runtimes()
+                    .record_install(
+                        RUNTIME_ID,
+                        RUNTIME_KIND,
+                        install::PINNED_BUILD,
+                        &path.to_string_lossy(),
+                    )
+                    .await;
+            }
+            Err(e) => {
+                let msg = e.to_string();
+                self.set_install_state(InstallState::Failed { error: msg.clone() });
+                let _ = self
+                    .db
+                    .runtimes()
+                    .set_state(RUNTIME_ID, RUNTIME_KIND, runtime_state::ERROR, Some(&msg))
+                    .await;
+            }
+        }
+        result.map(|_| ())
     }
 
     fn slot(&self) -> std::sync::MutexGuard<'_, Slot> {
@@ -302,7 +419,7 @@ impl RuntimeAdapter for LlamaCppAdapter {
             return Ok(());
         }
 
-        let bin = self.server_bin.clone().ok_or_else(|| {
+        let bin = self.server_bin().ok_or_else(|| {
             llama_err("llama-server is not installed — run llama.cpp setup first")
         })?;
         let (model_path, label) = self.resolve_model(model_id).await?;
@@ -360,8 +477,28 @@ impl RuntimeAdapter for LlamaCppAdapter {
     }
 
     fn detail(&self) -> Option<String> {
+        match self.install_state() {
+            InstallState::Running {
+                phase: InstallPhase::Downloading,
+                done_bytes,
+                total_bytes,
+            } => {
+                let pct = done_bytes
+                    .saturating_mul(100)
+                    .checked_div(total_bytes)
+                    .unwrap_or(0);
+                return Some(format!("downloading llama.cpp — {pct}%"));
+            }
+            InstallState::Running {
+                phase: InstallPhase::Extracting,
+                ..
+            } => return Some("extracting llama.cpp…".to_string()),
+            InstallState::Failed { error } => return Some(format!("setup failed: {error}")),
+            InstallState::Idle => {}
+        }
+
         Some(match &*self.slot() {
-            Slot::Empty if self.server_bin.is_none() => "not installed".to_string(),
+            Slot::Empty if !self.is_installed() => "not installed".to_string(),
             Slot::Empty => "installed · idle".to_string(),
             Slot::Loading { label } => format!("loading {label}…"),
             Slot::Loaded {

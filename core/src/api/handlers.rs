@@ -97,6 +97,38 @@ pub async fn runtimes(app: &App) -> Vec<RuntimeStatusDto> {
     out
 }
 
+/// Kick off the pinned llama.cpp download+install in the background. Returns
+/// immediately (`"started"`); progress shows up in [`runtimes`]'s `detail`.
+/// Returns `"already_installed"` when it is already there, and errors up front
+/// on offline mode or an in-flight install.
+pub fn install_llamacpp(app: &App) -> Result<&'static str> {
+    if app.config.offline_mode {
+        return Err(CoreError::Config(
+            "offline mode is on — cannot download llama.cpp".into(),
+        ));
+    }
+    if app.llama.is_installed() {
+        return Ok("already_installed");
+    }
+    if matches!(
+        app.llama.install_state(),
+        crate::runtime::InstallState::Running { .. }
+    ) {
+        return Err(CoreError::Config(
+            "a llama.cpp install is already running".into(),
+        ));
+    }
+
+    let llama = app.llama.clone();
+    let offline = app.config.offline_mode;
+    tokio::spawn(async move {
+        if let Err(e) = llama.install(offline).await {
+            tracing::error!(error = %e, "llama.cpp install failed");
+        }
+    });
+    Ok("started")
+}
+
 /// Tail of the current day's log file.
 pub fn recent_logs(app: &App, lines: usize) -> Result<Vec<String>> {
     let dir = app.paths.logs_dir();

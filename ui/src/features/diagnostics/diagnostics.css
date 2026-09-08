@@ -38,6 +38,15 @@
   border-bottom: 1px solid var(--surface-2);
 }
 
+.rt-setup {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  margin-top: var(--space-3);
+  font-size: var(--text-sm);
+}
+
 .log {
   margin: 0;
   max-height: 340px;

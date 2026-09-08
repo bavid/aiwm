@@ -1,5 +1,6 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useAbout, useLogs, useRuntimes } from "../../lib/hooks";
+import { installLlamacpp } from "../../lib/ipc";
 import "./diagnostics.css";
 
 export function Diagnostics() {
@@ -7,6 +8,7 @@ export function Diagnostics() {
   const { data: logs } = useLogs();
   const about = useAbout();
   const logRef = useRef<HTMLPreElement>(null);
+  const llamaDetail = runtimes?.find((r) => r.id === "llamacpp")?.detail ?? null;
 
   useEffect(() => {
     const el = logRef.current;
@@ -54,6 +56,7 @@ export function Diagnostics() {
         ) : (
           <p className="muted">No runtimes registered yet.</p>
         )}
+        <LlamaSetup detail={llamaDetail} />
       </section>
 
       <section className="card card--wide">
@@ -65,6 +68,45 @@ export function Diagnostics() {
           {logs?.join("\n") ?? "…"}
         </pre>
       </section>
+    </div>
+  );
+}
+
+const isInstalling = (d: string | null) =>
+  d != null && (d.startsWith("downloading") || d.startsWith("extracting"));
+
+function LlamaSetup({ detail }: { detail: string | null }) {
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+  const installing = isInstalling(detail);
+  const actionable = detail === "not installed" || detail?.startsWith("setup failed");
+
+  if (!installing && !actionable) return null;
+
+  const start = async () => {
+    setBusy(true);
+    setMessage(null);
+    try {
+      const status = await installLlamacpp();
+      setMessage(
+        status === "already_installed"
+          ? "Already installed."
+          : "Download started — about 645 MB, this runs in the background.",
+      );
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="rt-setup">
+      <button type="button" onClick={start} disabled={busy || installing}>
+        {installing ? "Setting up…" : busy ? "Starting…" : "Set up llama.cpp"}
+      </button>
+      {installing && <span className="muted">{detail}</span>}
+      {message && <span className="muted">{message}</span>}
     </div>
   );
 }

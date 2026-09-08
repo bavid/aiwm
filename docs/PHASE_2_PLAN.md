@@ -7,7 +7,7 @@ jede für sich testbar.
 |---|---|---|
 | **2.1** | `ModelRepo` (CRUD + Rollen) · GGUF-Header-Inspektion · manueller Import in den kanonischen Store · API + UI-Tab „Models" | ✅ |
 | **2.2a** | `LlamaCppAdapter`: Binär-Auflösung (Env / Managed-Ordner / PATH), ein `llama-server`-Prozess pro residentem Modell über `RuntimeSupervisor`, `/health`-Polling, `unload`, **Attach-Fallback** auf laufenden Port, nicht-streamendes `complete()` | ✅ |
-| 2.2b | llama.cpp-**Installer**: gepinnter CUDA-Build (`ggml-org/llama.cpp` Release-Assets, per-Asset-SHA256 aus der GitHub-API), Doppel-Zip-Entpacken, `offline_mode`-Hard-Refusal, `RuntimeRepo`, Install-API + UI-Knopf | offen |
+| **2.2b** | llama.cpp-**Installer**: gepinnter CUDA-Build (`ggml-org/llama.cpp` Release-Assets), SHA-256-verifizierter Download, Doppel-Zip-Entpacken, `offline_mode`-Hard-Refusal, `RuntimeRepo`, `POST /runtimes/llamacpp/install` + UI-Knopf mit Fortschritt | ✅ |
 | 2.3 | Link-Manager: kanonische Datei ↔ Runtime via NTFS-Junction (ADR-007); `model_links`-Tabelle | offen |
 | 2.4 | Chat-Job: `job_type=chat`, Modell (explizit oder `Auto`) → Scheduler → llama-server laden → Prompt → Antwort streamen; `job_events` + Cancel | offen |
 | 2.5 | UI: „Chat"-Capability-Button aktiv, einfache Prompt/Antwort-Oberfläche; Job-Fortschritt aus dem Event-Stream | offen |
@@ -111,3 +111,49 @@ Verifiziert:
 Bewusst **nicht** in 2.2a: der Download/Installer (→ 2.2b), Streaming (→ 2.4),
 Router-Mode (ein Server, mehrere Modelle — als spätere Optimierung notiert),
 Port-Ermittlung aus `llama-server`-stdout statt Bind-and-Drop (→ [TODO.md](TODO.md)).
+
+---
+
+## 2.2b — Ergebnis (abgeschlossen)
+
+- **`runtime::llamacpp::install`**: `install(runtimes_dir, offline, on_progress)`
+  → `install_from(base_url, archives, …)` (auf die Archivliste + URL
+  parametrisiert, damit End-to-End gegen einen lokalen Server testbar).
+  - Gepinnt: `PINNED_BUILD = "b10855"`, zwei Assets von `ggml-org/llama.cpp`
+    (`llama-…-bin-win-cuda-12.4-x64.zip` + `cudart-…-12.4-x64.zip`), **SHA-256 +
+    Größe fest im Code** (Werte aus dem `digest`-Feld der GitHub-Releases-API).
+  - Streaming-Download (`reqwest` + `.chunk()`), SHA-256 mitlaufend; Mismatch
+    oder falsche Größe → Datei gelöscht, Fehler. Entpacken (`zip`-Crate, in
+    `spawn_blocking`, `enclosed_name()` gegen Zip-Slip). Beide Zips **flach** in
+    `<runtimes_dir>/llamacpp/b10855/` → `llama-server.exe` neben seinen CUDA-DLLs.
+  - Idempotent (fertige Installation wird unverändert zurückgegeben);
+    `offline_mode` → Hard-Refusal (auch im Handler).
+- **`db::RuntimeRepo`** (`runtimes`-Tabelle, WP-4 nachgeholt): `get` / `all` /
+  `upsert` / `set_state(id,kind,state,err)` / `record_install` / `mark_health`.
+  Der Installer schreibt `installing` → `stopped`+Version bzw. `error`+Meldung.
+- **Adapter**: `BinSource::{Fixed, Scan}` — im Betrieb wird bei **jedem** Aufruf
+  neu aufgelöst, damit eine frische Installation ohne Neustart greift.
+  `install_state()` (`Idle` / `Running{phase,done,total}` / `Failed`), von
+  `detail()` als „downloading llama.cpp — 42%" / „extracting…" / „setup failed: …"
+  gerendert. `App` hält den Adapter zusätzlich typisiert (`app.llama`).
+- **API/UI**: `POST /runtimes/llamacpp/install` (202/200) + Tauri-Command
+  `install_llamacpp`. Diagnostics: „Set up llama.cpp"-Knopf, der bei „not
+  installed" / „setup failed" erscheint und den Live-Fortschritt zeigt.
+- **`AppPaths`**: `root` (Roaming `%APPDATA%`, Config+DB) vs. `local_root`
+  (`%LOCALAPPDATA%`, `runtimes_dir()`) getrennt — 1-GB-Runtime-Installs sollen
+  nicht roamen. `AIWM_DATA_DIR` kollabiert beide.
+- **`reqwest`** braucht jetzt TLS für den GitHub-Download → Feature `native-tls`
+  (Schannel auf Windows, kein OpenSSL, keine gebündelten CA-Roots). ADR-013 aktualisiert.
+
+Verifiziert:
+- 12 neue Tests (5 `RuntimeRepo`, 6 `install` inkl. Voll-Pipeline gegen lokalen
+  Server + Zip-Bau/-Entpacken + Hash-Reject + Offline-Refusal + Idempotenz,
+  2 API-Handler, +2 `AppPaths`). `check.ps1` grün.
+- **Live** (`aiwm-cored`, `POST /runtimes/llamacpp/install`): 645 MB in 22 s
+  heruntergeladen, beide SHA-256 verifiziert (kein Mismatch), 55 Dateien / 1,1 GB
+  flach entpackt; `detail` lief `14% → … → 94% → installed · idle`; die echte
+  `llama-server.exe --version` läuft (`build 10855`) — Binär **und** CUDA-DLLs
+  laden. Adapter erkennt die Installation ohne cored-Neustart.
+
+Offen für 2.2b+: freien Speicherplatz vor dem Download prüfen (Brief 10.16 →
+Phase 6 Download-Manager); Cleanup alter Build-Verzeichnisse beim Versions-Bump.

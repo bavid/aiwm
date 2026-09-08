@@ -27,6 +27,9 @@ pub struct App {
     pub db: Database,
     pub telemetry: Arc<Sampler>,
     pub runtimes: RuntimeRegistry,
+    /// The llama.cpp adapter, also registered in [`runtimes`](Self::runtimes).
+    /// Held typed so handlers can drive its installer.
+    pub llama: Arc<LlamaCppAdapter>,
     pub scheduler: Arc<HybridScheduler>,
     pub jobs: Arc<JobEngine>,
 }
@@ -44,10 +47,8 @@ impl App {
 
         let telemetry = Arc::new(Sampler::spawn());
         let runtimes = RuntimeRegistry::new();
-        runtimes.register(Arc::new(LlamaCppAdapter::discover(
-            db.clone(),
-            &paths.runtimes_dir(),
-        )));
+        let llama = Arc::new(LlamaCppAdapter::discover(db.clone(), &paths.runtimes_dir()));
+        runtimes.register(llama.clone());
         let budget = resolve_vram_budget(&config, &telemetry);
         let scheduler = Arc::new(HybridScheduler::new(runtimes.clone(), budget));
         let jobs = Arc::new(JobEngine::new(
@@ -62,6 +63,7 @@ impl App {
             db,
             telemetry,
             runtimes,
+            llama,
             scheduler,
             jobs,
         })

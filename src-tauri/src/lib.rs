@@ -63,6 +63,11 @@ async fn get_runtimes(app: tauri::State<'_, Arc<App>>) -> Result<Vec<RuntimeStat
 }
 
 #[tauri::command]
+async fn install_llamacpp(app: tauri::State<'_, Arc<App>>) -> Result<String, String> {
+    to_ipc(handlers::install_llamacpp(&app).map(str::to_string))
+}
+
+#[tauri::command]
 async fn list_models(app: tauri::State<'_, Arc<App>>) -> Result<Vec<Model>, String> {
     to_ipc(handlers::list_models(&app).await)
 }
@@ -127,7 +132,8 @@ fn try_run() -> anyhow::Result<()> {
             get_runtimes,
             get_recent_logs,
             list_models,
-            import_model
+            import_model,
+            install_llamacpp
         ])
         .build(tauri::generate_context!())?
         .run(|handle, event| {

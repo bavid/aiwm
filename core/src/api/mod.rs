@@ -118,6 +118,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn install_llamacpp_refuses_in_offline_mode() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = crate::AppPaths::rooted(tmp.path());
+        std::fs::create_dir_all(paths.root()).unwrap();
+        std::fs::write(paths.config_file(), "offline_mode = true\n").unwrap();
+        let app = Arc::new(App::load(paths).await.unwrap());
+
+        let err = handlers::install_llamacpp(&app).unwrap_err();
+        assert!(err.to_string().contains("offline mode"));
+    }
+
+    #[tokio::test]
+    async fn install_llamacpp_is_a_noop_when_already_installed() {
+        let (app, tmp) = test_app().await;
+        let dir = tmp.path().join("runtimes").join("llamacpp").join("b10855");
+        std::fs::create_dir_all(&dir).unwrap();
+        let exe = if cfg!(windows) {
+            "llama-server.exe"
+        } else {
+            "llama-server"
+        };
+        std::fs::write(dir.join(exe), b"present").unwrap();
+
+        assert_eq!(
+            handlers::install_llamacpp(&app).unwrap(),
+            "already_installed"
+        );
+    }
+
+    #[tokio::test]
     async fn server_binds_loopback_only() {
         let (app, _tmp) = test_app().await;
         let server = ApiServer::bind(app, SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))

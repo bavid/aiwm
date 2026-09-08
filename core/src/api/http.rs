@@ -7,7 +7,7 @@ use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, put};
+use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use serde::Deserialize;
 
@@ -29,6 +29,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/jobs/{id}", get(job_detail))
         .route("/models", get(list_models).post(import_model))
         .route("/runtimes", get(runtimes))
+        .route("/runtimes/llamacpp/install", post(install_llamacpp))
         .route("/logs", get(logs))
         .route("/ws", get(ws_upgrade))
         .with_state(app)
@@ -154,6 +155,18 @@ async fn import_model(
 
 async fn runtimes(State(app): AppState) -> Json<Vec<super::dto::RuntimeStatusDto>> {
     Json(handlers::runtimes(&app).await)
+}
+
+async fn install_llamacpp(
+    State(app): AppState,
+) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    let status = handlers::install_llamacpp(&app)?;
+    let code = if status == "started" {
+        StatusCode::ACCEPTED
+    } else {
+        StatusCode::OK
+    };
+    Ok((code, Json(serde_json::json!({ "status": status }))))
 }
 
 #[derive(Deserialize)]

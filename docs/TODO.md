@@ -7,7 +7,9 @@ hierher, damit nichts verloren geht.
 - Visuelle Designrichtung für die UI festlegen (Typo, Palette, Layout-Charakter) —
   bewusst *nicht* Dark-Mode-by-default; siehe web/design-quality-Regeln
 - ~~llama.cpp: gepinnte Version + Bezugsquelle des Windows-CUDA-Builds~~ →
-  geklärt (ADR-014); Download/Verify/Entpacken = Scheibe 2.2b
+  ✅ 2.2b (ADR-014). Offen: freien Speicherplatz vor dem Download prüfen
+  (Brief 10.16 → Phase-6-Download-Manager); alte `runtimes/llamacpp/<build>/`
+  beim Versions-Bump aufräumen
 - Windows: Junction vs. Hardlink für Modell-Dateien testen (Rechte, Verhalten)
 - sqlx: optional compile-time Query-Checking (`sqlx::query!`) via
   `cargo sqlx prepare` + `.sqlx/` im Repo + CI-Schritt `--check` (aktuell

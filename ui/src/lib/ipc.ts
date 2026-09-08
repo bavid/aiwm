@@ -110,6 +110,8 @@ export const about = () => invoke<AboutInfo>("about");
 export const getTelemetry = () => invoke<SystemTelemetry>("get_telemetry");
 export const getSettings = () => invoke<Record<string, string>>("get_settings");
 export const getRuntimes = () => invoke<RuntimeStatus[]>("get_runtimes");
+/** Start the pinned llama.cpp download+install (background). Returns "started" or "already_installed". */
+export const installLlamacpp = () => invoke<string>("install_llamacpp");
 export const getRecentLogs = (lines = 200) =>
   invoke<string[]>("get_recent_logs", { lines });
 export const listJobs = (opts?: { states?: JobState[]; limit?: number }) =>
