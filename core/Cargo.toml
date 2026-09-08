@@ -28,6 +28,7 @@ nvml-wrapper.workspace = true
 sysinfo.workspace = true
 async-trait.workspace = true
 axum.workspace = true
+sha2.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 win32job = "2"

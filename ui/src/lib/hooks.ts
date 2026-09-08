@@ -6,8 +6,10 @@ import {
   getRuntimes,
   getTelemetry,
   listJobs,
+  listModels,
   type AboutInfo,
   type Job,
+  type Model,
   type RuntimeStatus,
   type SystemTelemetry,
 } from "./ipc";
@@ -40,6 +42,7 @@ export function useAbout() {
 function usePolled<T>(key: string, fetcher: () => Promise<T>, intervalMs: number) {
   const [data, setData] = useState<T | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [nonce, setNonce] = useState(0);
 
   useEffect(() => {
     let alive = true;
@@ -59,11 +62,13 @@ function usePolled<T>(key: string, fetcher: () => Promise<T>, intervalMs: number
       clearInterval(id);
     };
     // `key` identifies the endpoint; `fetcher` is a stable closure per hook.
-  }, [key, intervalMs]);
+  }, [key, intervalMs, nonce]);
 
-  return { data, error };
+  const refetch = () => setNonce((n) => n + 1);
+  return { data, error, refetch };
 }
 
 export const useJobs = () => usePolled<Job[]>("jobs", () => listJobs({ limit: 50 }), 2000);
 export const useRuntimes = () => usePolled<RuntimeStatus[]>("runtimes", getRuntimes, 3000);
 export const useLogs = () => usePolled<string[]>("logs", () => getRecentLogs(300), 3000);
+export const useModels = () => usePolled<Model[]>("models", listModels, 3000);

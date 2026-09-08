@@ -31,11 +31,12 @@ noch keine echte AI-Capability (die kommt ab Phase 2).
 | WP-9 | CI-Workflow, Git-Hooks (pre-commit fmt, pre-push voller Gate) |
 | WP-10 | ADRs finalisiert, Stub-Docs (MODELS/RUNTIMES/SECURITY/BENCHMARKS) |
 
-**85 Rust-Unit + 1 Integrationstest + 5 pytest** grün · `scripts/check.ps1` grün ·
+**101 Rust-Unit + 1 Integrationstest + 5 pytest** grün · `scripts/check.ps1` grün ·
 **null `unsafe`** im Produktivcode.
 
-Nächster Meilenstein: **Phase 2** — erste echte Runtime (llama.cpp), Modell-Import,
-`Chat`-Capability.
+**Phase 2 (MVP) läuft** — Scheibe 2.1 fertig: `ModelRepo`, eigener bounded
+GGUF-Header-Reader, manueller Import in den kanonischen Store, UI-Tab „Models".
+Plan: [docs/PHASE_2_PLAN.md](docs/PHASE_2_PLAN.md). Als Nächstes: `LlamaCppAdapter`.
 
 ## Zielhardware
 
@@ -68,6 +69,7 @@ pnpm -C ui exec tauri dev                 # Desktop-App (aus E:\AI ausführen)
 | [docs/HARDWARE.md](docs/HARDWARE.md) | Realistische Modell-/Auflösungs-/Geschwindigkeitseinschätzung für die Hardware |
 | [docs/ROADMAP.md](docs/ROADMAP.md) | MVP-Definition und Phasenplan |
 | [docs/PHASE_1_PLAN.md](docs/PHASE_1_PLAN.md) | Detailplan + Ergebnisse aller Phase-1-Arbeitspakete |
+| [docs/PHASE_2_PLAN.md](docs/PHASE_2_PLAN.md) | Phase-2-Scheibenplan + Fortschritt |
 | [docs/DEV_SETUP.md](docs/DEV_SETUP.md) | Toolchain-Installation, Build-/Test-Befehle, Git-Hooks, CI |
 | [docs/DECISIONS.md](docs/DECISIONS.md) | Architecture Decision Records (ADRs) |
 | [docs/RISKS.md](docs/RISKS.md) | Risikoregister mit Gegenmaßnahmen |

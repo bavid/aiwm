@@ -1,9 +1,16 @@
 import { useState } from "react";
 import { Dashboard } from "./features/dashboard/Dashboard";
 import { Diagnostics } from "./features/diagnostics/Diagnostics";
+import { Models } from "./features/models/Models";
 import { useAbout } from "./lib/hooks";
 
-type Tab = "dashboard" | "diagnostics";
+type Tab = "dashboard" | "models" | "diagnostics";
+
+const TABS: { id: Tab; label: string }[] = [
+  { id: "dashboard", label: "Dashboard" },
+  { id: "models", label: "Models" },
+  { id: "diagnostics", label: "Diagnostics" },
+];
 
 export default function App() {
   const [tab, setTab] = useState<Tab>("dashboard");
@@ -17,26 +24,25 @@ export default function App() {
         </div>
         {about?.offline_mode && <span className="topbar__brand">· offline</span>}
         <nav className="tabs" role="tablist" aria-label="Views">
-          <button
-            className="tab"
-            role="tab"
-            aria-selected={tab === "dashboard"}
-            onClick={() => setTab("dashboard")}
-          >
-            Dashboard
-          </button>
-          <button
-            className="tab"
-            role="tab"
-            aria-selected={tab === "diagnostics"}
-            onClick={() => setTab("diagnostics")}
-          >
-            Diagnostics
-          </button>
+          {TABS.map((t) => (
+            <button
+              key={t.id}
+              className="tab"
+              role="tab"
+              aria-selected={tab === t.id}
+              onClick={() => setTab(t.id)}
+            >
+              {t.label}
+            </button>
+          ))}
         </nav>
       </header>
 
-      <main className="main">{tab === "dashboard" ? <Dashboard /> : <Diagnostics />}</main>
+      <main className="main">
+        {tab === "dashboard" && <Dashboard />}
+        {tab === "models" && <Models />}
+        {tab === "diagnostics" && <Diagnostics />}
+      </main>
     </div>
   );
 }

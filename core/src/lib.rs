@@ -26,6 +26,7 @@ pub mod config;
 pub mod db;
 pub mod error;
 pub mod logging;
+pub mod model;
 pub mod orchestrator;
 pub mod paths;
 pub mod runtime;
@@ -36,8 +37,9 @@ pub mod telemetry;
 pub use api::{ApiServer, Services};
 pub use app::App;
 pub use config::Config;
-pub use db::Database;
+pub use db::{Database, Model, ModelRepo, NewModel};
 pub use error::{CoreError, Result};
+pub use model::{import_model, GgufInfo, ImportOutcome, ImportRequest};
 pub use orchestrator::{JobEngine, JobOutcome, JobState};
 pub use paths::AppPaths;
 pub use runtime::{

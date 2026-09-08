@@ -5,9 +5,11 @@
 //! importer) rather than all up front.
 
 mod jobs;
+mod models;
 mod settings;
 
 pub use jobs::{EventLevel, Job, JobEvent, JobFilter, JobPatch, JobRepo, NewJob};
+pub use models::{Model, ModelRepo, NewModel};
 pub use settings::SettingsRepo;
 
 use std::path::Path;
@@ -70,6 +72,10 @@ impl Database {
 
     pub fn jobs(&self) -> JobRepo<'_> {
         JobRepo::new(&self.pool)
+    }
+
+    pub fn models(&self) -> ModelRepo<'_> {
+        ModelRepo::new(&self.pool)
     }
 
     /// Names of the application tables (excludes SQLite internals). Test helper.

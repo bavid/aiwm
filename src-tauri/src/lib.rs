@@ -8,7 +8,8 @@ use std::sync::{Arc, Mutex};
 
 use aiwm_core::api::dto::{AboutDto, RuntimeStatusDto};
 use aiwm_core::api::handlers;
-use aiwm_core::db::{Job, JobFilter};
+use aiwm_core::db::{Job, JobFilter, Model};
+use aiwm_core::model::{ImportOutcome, ImportRequest};
 use aiwm_core::orchestrator::JobState;
 use aiwm_core::telemetry::SystemTelemetry;
 use aiwm_core::{api, app, App};
@@ -62,6 +63,19 @@ async fn get_runtimes(app: tauri::State<'_, Arc<App>>) -> Result<Vec<RuntimeStat
 }
 
 #[tauri::command]
+async fn list_models(app: tauri::State<'_, Arc<App>>) -> Result<Vec<Model>, String> {
+    to_ipc(handlers::list_models(&app).await)
+}
+
+#[tauri::command]
+async fn import_model(
+    app: tauri::State<'_, Arc<App>>,
+    request: ImportRequest,
+) -> Result<ImportOutcome, String> {
+    to_ipc(handlers::import_model(&app, request).await)
+}
+
+#[tauri::command]
 fn get_recent_logs(
     app: tauri::State<'_, Arc<App>>,
     lines: Option<usize>,
@@ -111,7 +125,9 @@ fn try_run() -> anyhow::Result<()> {
             get_settings,
             list_jobs,
             get_runtimes,
-            get_recent_logs
+            get_recent_logs,
+            list_models,
+            import_model
         ])
         .build(tauri::generate_context!())?
         .run(|handle, event| {

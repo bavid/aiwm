@@ -27,6 +27,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/settings/{key}", put(set_setting))
         .route("/jobs", get(list_jobs).post(submit_job))
         .route("/jobs/{id}", get(job_detail))
+        .route("/models", get(list_models).post(import_model))
         .route("/runtimes", get(runtimes))
         .route("/logs", get(logs))
         .route("/ws", get(ws_upgrade))
@@ -132,6 +133,23 @@ async fn job_detail(State(app): AppState, Path(id): Path<String>) -> Result<Resp
         )
             .into_response()),
     }
+}
+
+async fn list_models(State(app): AppState) -> Result<Json<Vec<crate::db::Model>>, ApiError> {
+    Ok(Json(handlers::list_models(&app).await?))
+}
+
+async fn import_model(
+    State(app): AppState,
+    Json(req): Json<crate::model::ImportRequest>,
+) -> Result<(StatusCode, Json<crate::model::ImportOutcome>), ApiError> {
+    let outcome = handlers::import_model(&app, req).await?;
+    let code = if outcome.already_present {
+        StatusCode::OK
+    } else {
+        StatusCode::CREATED
+    };
+    Ok((code, Json(outcome)))
 }
 
 async fn runtimes(State(app): AppState) -> Json<Vec<super::dto::RuntimeStatusDto>> {

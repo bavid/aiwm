@@ -5,7 +5,8 @@
 use std::collections::BTreeMap;
 
 use super::dto::{AboutDto, RuntimeStatusDto, SubmitJobDto};
-use crate::db::{Job, JobEvent, JobFilter, NewJob};
+use crate::db::{Job, JobEvent, JobFilter, Model, NewJob};
+use crate::model::{ImportOutcome, ImportRequest};
 use crate::orchestrator::JobOutcome;
 use crate::telemetry::SystemTelemetry;
 use crate::{App, CoreError, Result};
@@ -72,6 +73,14 @@ pub async fn submit_job(app: &App, body: SubmitJobDto) -> Result<Job> {
 /// Run the next queued job now (used by tests and the daemon loop).
 pub async fn run_next_job(app: &App) -> Result<Option<JobOutcome>> {
     app.jobs.run_next().await
+}
+
+pub async fn list_models(app: &App) -> Result<Vec<Model>> {
+    app.db.models().list().await
+}
+
+pub async fn import_model(app: &App, req: ImportRequest) -> Result<ImportOutcome> {
+    crate::model::import_model(&app.db, &app.config.store_path, req).await
 }
 
 pub async fn runtimes(app: &App) -> Vec<RuntimeStatusDto> {

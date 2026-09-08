@@ -23,7 +23,10 @@ Loopback-API + Daemon-Run-Loop laufen. Keine echte Runtime, keine Inferenz.
 
 ---
 
-## Phase 2 — MVP: Plattform-Kern
+## Phase 2 — MVP: Plattform-Kern *(in Arbeit)*
+
+**Scheibenplan + Fortschritt: [PHASE_2_PLAN.md](PHASE_2_PLAN.md).** Scheibe 2.1
+(ModelRepo + GGUF-Import) ist fertig.
 
 Umfang bewusst eng. **Nicht** enthalten: Online-Discovery-Suche, Download-Manager,
 Benchmarks, Quality-Scores, Plugin-System, Bild/Video, Agents.

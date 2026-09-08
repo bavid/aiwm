@@ -77,6 +77,33 @@ export interface RuntimeStatus {
   vram_used_mb: number;
 }
 
+export interface Model {
+  id: string;
+  publisher: string | null;
+  name: string;
+  family: string | null;
+  format: string;
+  quant: string | null;
+  arch: string | null;
+  param_count: number | null;
+  file_path: string;
+  sha256: string | null;
+  size_bytes: number;
+  ctx_max: number | null;
+  vram_estimate_mb: number | null;
+  ram_estimate_mb: number | null;
+  source: string;
+  imported_at: string;
+  last_used_at: string | null;
+  use_count: number;
+  roles: string[];
+}
+
+export interface ImportOutcome {
+  model: Model;
+  already_present: boolean;
+}
+
 export const about = () => invoke<AboutInfo>("about");
 export const getTelemetry = () => invoke<SystemTelemetry>("get_telemetry");
 export const getSettings = () => invoke<Record<string, string>>("get_settings");
@@ -85,3 +112,9 @@ export const getRecentLogs = (lines = 200) =>
   invoke<string[]>("get_recent_logs", { lines });
 export const listJobs = (opts?: { states?: JobState[]; limit?: number }) =>
   invoke<Job[]>("list_jobs", { states: opts?.states ?? null, limit: opts?.limit ?? null });
+
+export const listModels = () => invoke<Model[]>("list_models");
+export const importModel = (sourcePath: string, roles: string[], keepOriginal: boolean) =>
+  invoke<ImportOutcome>("import_model", {
+    request: { source_path: sourcePath, roles, keep_original: keepOriginal },
+  });
