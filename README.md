@@ -31,11 +31,12 @@ noch keine echte AI-Capability (die kommt ab Phase 2).
 | WP-9 | CI-Workflow, Git-Hooks (pre-commit fmt, pre-push voller Gate) |
 | WP-10 | ADRs finalisiert, Stub-Docs (MODELS/RUNTIMES/SECURITY/BENCHMARKS) |
 
-**165 Rust-Unit + 12 Integrationstests + 5 pytest** grün · `scripts/check.ps1` grün ·
+**165 Rust-Unit + 13 Integrationstests + 5 pytest** grün · `scripts/check.ps1` grün ·
 **null `unsafe`** im Produktivcode.
 
-**Phase 2 (MVP) — Scheiben 2.1–2.7 fertig.** Plan + Fortschritt:
-[docs/PHASE_2_PLAN.md](docs/PHASE_2_PLAN.md).
+**Phase 2 (MVP) ✅ abgeschlossen** — Scheiben 2.1–2.7 + durchgehender
+Modell-Wechsel-Test (`core/tests/model_swap.rs`). Plan:
+[docs/PHASE_2_PLAN.md](docs/PHASE_2_PLAN.md). Als Nächstes: Phase 3 (ComfyUI / Bild).
 
 - **2.1** ✅ `ModelRepo`, eigener bounded GGUF-Header-Reader, manueller Import in
   den kanonischen Store, UI-Tab „Models".
@@ -64,6 +65,9 @@ noch keine echte AI-Capability (die kommt ab Phase 2).
   VRAM-Budget, **Offline-Schalter live** (`Arc<AtomicBool>`, kein Neustart),
   `[llama]`-Optionen; `GET`/`PUT /config`. Diagnostics erweitert: VRAM-Budget,
   GPU-Prozesse, „Copy" für Bug-Reports.
+- **Abschluss** ✅ `core/tests/model_swap.rs`: Chat auf Modell A → Chat auf
+  Modell B → die Engine evictet A und lädt B selbst („made room on the GPU"),
+  beide Jobs `Completed`. Phase-2-DONE-Kriterium durchgehend getestet.
 
 ## Zielhardware
 

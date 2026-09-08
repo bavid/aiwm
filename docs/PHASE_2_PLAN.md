@@ -1,7 +1,8 @@
-# Phase 2 — MVP: Plattform-Kern
+# Phase 2 — MVP: Plattform-Kern ✅
 
 Erste echte Capability: **Chat** über eine lokale llama.cpp-Runtime. In Scheiben,
-jede für sich testbar.
+jede für sich testbar. **Abgeschlossen** — alle Scheiben 2.1–2.7 + das
+durchgehende DONE-Kriterium (`core/tests/model_swap.rs`).
 
 | Scheibe | Inhalt | Status |
 |---|---|---|
@@ -19,11 +20,13 @@ jede für sich testbar.
 → GGUF importieren → Chat-Job läuft → zweites Modell → Wechsel ohne manuelles
 VRAM-Management → Netz trennen → läuft weiter.
 
-**Stand:** Alle Scheiben 2.1–2.7 ✅. Jeder Schritt der DONE-Kette ist einzeln
-verifiziert (Installer 2.2b · Import 2.1 · Chat live 2.4a/2.5 · Modell-Wechsel
-via Scheduler 2.2a/2.6 · `offline_mode` 2.7). Offen als *eine* durchgehende
-Prüfung: ein dedizierter End-to-End-Test „zweites Modell → Wechsel ohne
-manuelles VRAM-Management" (in [TODO.md](TODO.md) notiert) — dann Phase 2 zu.
+**Stand:** ✅ **Phase 2 abgeschlossen.** Alle Scheiben 2.1–2.7. Die DONE-Kette
+ist durchgehend getestet: `core/tests/model_swap.rs` importiert zwei Chat-Modelle,
+chattet auf A, chattet auf B → die Engine evictet A und lädt B **von selbst**
+(Event „made room on the GPU — unloaded …" auf dem Job-Trail), beide Jobs
+`Completed`, VRAM-Buchhaltung sauber, kein Mensch in der Schleife. Die
+einzelnen Kettenglieder waren schon vorher verifiziert (Installer 2.2b ·
+Import 2.1 · Chat live 2.4a/2.5 · `offline_mode` 2.7).
 
 ---
 
@@ -429,3 +432,22 @@ Verifiziert:
 Bewusst **nicht** in 2.7: Live-Reload von `store_path` / `vram_budget_mb` /
 `log_filter` (Neustart), `core_api_port` in der UI (Datei-only), i18n der
 Settings-Strings (Phase 6+).
+
+---
+
+## Phase-2-Abschluss — Modell-Wechsel-Test
+
+- **`core/tests/model_swap.rs`** (neuer Integrationstest, Windows): zwei
+  Chat-Modelle importiert, kleines VRAM-Budget (zwei ~2,5-GB-Modelle passen nicht
+  gleichzeitig). Chat auf A → A resident. Chat auf B → der `JobEngine` fährt
+  `Preparing → evict(A) → load(B) → Running` von selbst durch; danach ist **nur**
+  B resident, `vram_used_mb` = 2500, beide Jobs `Completed` mit echter Antwort.
+- **`orchestrator::engine`**: der `EvictThenLoad`-Zweig schreibt jetzt ein
+  Info-Event „made room on the GPU — unloaded „<Name>"" auf den Job (vorher war
+  die Verdrängung nur an der Adapter-`loaded_models()` sichtbar). `model_label()`
+  löst den Modellnamen auf, Fallback = id.
+
+Damit ist die DONE-Kette „frisches Windows → App → llama.cpp einrichten → GGUF
+importieren → Chat → zweites Modell → Wechsel ohne manuelles VRAM-Management →
+Netz trennen → läuft weiter" durchgehend abgedeckt. **Weiter mit Phase 3
+(ComfyUI / Bild).**

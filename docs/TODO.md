@@ -28,9 +28,8 @@ hierher, damit nichts verloren geht.
   live anwenden statt neustart-pflichtig (`Mutex<LlamaServerOptions>` +
   `set_options` auf dem Adapter); ebenso `store_path` / `vram_budget_mb` /
   `log_filter` (Letzteres braucht einen `tracing`-`reload::Handle`)
-- Phase-2-Abschluss: **ein** durchgehender End-to-End-Test „importiere zwei
-  Modelle → Chat auf A → Chat auf B → Scheduler tauscht A gegen B ohne manuelles
-  VRAM-Management" (die Einzelschritte sind getestet, die Kette noch nicht)
+- ~~Phase-2-Abschluss: durchgehender End-to-End-Test Modell-Wechsel~~ → ✅
+  `core/tests/model_swap.rs`
 - `core::compat` (2.6): die 650-MB-Overhead-Konstante + die grobe KV-Reserve
   (`160 MB / 1K ctx`) gegen echte `nvidia-smi`-Messungen kalibrieren (Phase 6,
   [BENCHMARKS.md](BENCHMARKS.md)). Auch: KV-Cache-Quantisierung (`-ctk`/`-ctv`

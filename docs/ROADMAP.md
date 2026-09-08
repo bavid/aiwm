@@ -23,20 +23,24 @@ Loopback-API + Daemon-Run-Loop laufen. Keine echte Runtime, keine Inferenz.
 
 ---
 
-## Phase 2 — MVP: Plattform-Kern *(Scheiben 2.1–2.7 fertig)*
+## Phase 2 — MVP: Plattform-Kern ✅
 
-**Scheibenplan + Fortschritt: [PHASE_2_PLAN.md](PHASE_2_PLAN.md).** Fertig: 2.1
-(ModelRepo + GGUF-Import), 2.2a/b (`LlamaCppAdapter` + Installer), 2.3
-(Link-Manager `core::link`), 2.4a/b (Chat-Job — `Auto`-Wahl, gestreamt, Cancel),
-2.5 (Chat-UI), 2.6 (VRAM-Kompat-Check `core::compat` — Gewichte + KV-Cache +
-Overhead vor dem Load, `blocked` mit Klartext statt OOM, ADR-016), 2.7
-(Settings-UI: Theme/Store/VRAM-Budget/Offline-live/`[llama]`, `GET`/`PUT /config`,
-Diagnostics erweitert, ADR-017). Chat läuft end-to-end von der Oberfläche bis zum
-`llama-server`. Offen für „Phase 2 zu": ein durchgehender End-to-End-Test des
-Modell-Wechsels (siehe [TODO.md](TODO.md)).
+**Abgeschlossen.** Scheibenplan + Ergebnisse: [PHASE_2_PLAN.md](PHASE_2_PLAN.md).
 
-Umfang bewusst eng. **Nicht** enthalten: Online-Discovery-Suche, Download-Manager,
-Benchmarks, Quality-Scores, Plugin-System, Bild/Video, Agents.
+- [x] 2.1 `ModelRepo` + eigener bounded GGUF-Header-Reader + manueller Import
+- [x] 2.2a/b `LlamaCppAdapter` (ein `llama-server` pro Modell) + verifizierter Installer (ADR-014)
+- [x] 2.3 Link-Manager `core::link` (Passthrough/Junction/Hardlink/Copy, ADR-007)
+- [x] 2.4a/b Chat-Job: `Auto`-Modellwahl, `/v1/chat/completions`-Stream, Cancel (ADR-015)
+- [x] 2.5 Chat-UI + aktiver Capability-Button
+- [x] 2.6 VRAM-Kompat-Check `core::compat` — Gewichte + KV-Cache + Overhead vor dem Load, `blocked` mit Klartext statt OOM (ADR-016)
+- [x] 2.7 Settings-UI (Theme/Store/VRAM-Budget/Offline-live/`[llama]`), `GET`/`PUT /config`, Diagnostics erweitert (ADR-017)
+- [x] DONE-Kriterium: `core/tests/model_swap.rs` — Chat A → Chat B → Engine tauscht selbst
+
+**Deliverable erreicht:** frisches Windows → App → llama.cpp einrichten → GGUF
+importieren → Chat end-to-end (UI bis `llama-server`) → zweites Modell → Wechsel
+ohne manuelles VRAM-Management → Offline-Modus. Umfang bewusst eng: **nicht**
+enthalten — Online-Discovery, Download-Manager, Benchmarks, Quality-Scores,
+Plugin-System, Bild/Video, Agents.
 
 1. **Dashboard**
    - GPU (VRAM, Auslastung, Temp), RAM, CPU — Live (1 Hz, NVML + sysinfo)

@@ -228,6 +228,18 @@ impl JobEngine {
         })
     }
 
+    /// A model's display name, falling back to its id when it isn't in the
+    /// library (or the lookup fails).
+    async fn model_label(&self, model_id: &str) -> String {
+        self.db
+            .models()
+            .get(model_id)
+            .await
+            .ok()
+            .flatten()
+            .map_or_else(|| model_id.to_string(), |m| m.name)
+    }
+
     /// `(display name, fit estimate)` for a library model; `(None, None)` when the
     /// job names a model that was never imported (e.g. a synthetic test id).
     async fn vram_estimate(&self, model_id: &str) -> (Option<String>, Option<VramEstimate>) {
@@ -323,6 +335,15 @@ impl JobEngine {
                 if let Some(o) = self.bail_if_cancelled(&mut job, &mut cancel).await? {
                     return Ok(o);
                 }
+                let victim = self.model_label(&victim_model).await;
+                self.db
+                    .jobs()
+                    .append_event(
+                        &job.id,
+                        EventLevel::Info,
+                        &format!("made room on the GPU — unloaded \u{201c}{victim}\u{201d}"),
+                    )
+                    .await?;
                 self.evict(&victim_model).await?;
                 self.load(&runtime_id, &model_id, request.vram_needed_mb)
                     .await?;
@@ -704,7 +725,8 @@ mod tests {
         fx.engine.run_next().await.unwrap();
         assert_eq!(fx.rt.vram_used_mb(), 10_000);
 
-        fx.engine
+        let small = fx
+            .engine
             .submit(NewJob::new("noop").on("llamacpp", "small", 6_000))
             .await
             .unwrap();
@@ -720,6 +742,15 @@ mod tests {
             .map(|m| m.model_id)
             .collect();
         assert_eq!(loaded, ["small"]);
+
+        // The eviction is on the job's event trail, not silent.
+        let events = fx.db.jobs().events(&small.id).await.unwrap();
+        assert!(
+            events
+                .iter()
+                .any(|e| e.message.contains("made room") && e.message.contains("big")),
+            "{events:?}"
+        );
     }
 
     #[tokio::test]
