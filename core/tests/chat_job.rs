@@ -27,12 +27,17 @@ fn chat_job(prompt: &str) -> NewJob {
 
 struct Harness {
     db: Database,
-    engine: JobEngine,
+    engine: Arc<JobEngine>,
     _tmp: tempfile::TempDir,
 }
 
-/// Engine wired to the fixture binary. `with_model` registers a `chat`-role model.
 async fn harness(with_model: bool) -> Harness {
+    harness_with(with_model, &[]).await
+}
+
+/// Engine wired to the fixture binary. `with_model` registers a `chat`-role
+/// model; `extra_args` are appended to the fake server's command line.
+async fn harness_with(with_model: bool, extra_args: &[&str]) -> Harness {
     let tmp = tempfile::tempdir().unwrap();
     let db = Database::connect_in_memory().await.unwrap();
 
@@ -59,13 +64,14 @@ async fn harness(with_model: bool) -> Harness {
         LlamaCppAdapter::with_binary(db.clone(), Some(fake_llama_bin())).with_options(
             LlamaServerOptions {
                 flash_attention: false,
+                extra_args: extra_args.iter().map(|s| s.to_string()).collect(),
                 ..LlamaServerOptions::default()
             },
         ),
     );
     registry.register(llama.clone());
     let scheduler = Arc::new(HybridScheduler::new(registry.clone(), 16_384));
-    let engine = JobEngine::new(db.clone(), registry, scheduler, llama);
+    let engine = Arc::new(JobEngine::new(db.clone(), registry, scheduler, llama));
 
     Harness {
         db,
@@ -159,4 +165,83 @@ async fn auto_chat_job_fails_cleanly_without_a_chat_model() {
         JobOutcome::Failed { error, .. } => assert!(error.contains("no chat model"), "{error}"),
         other => panic!("expected Failed, got {other:?}"),
     }
+}
+
+#[tokio::test]
+async fn cancel_stops_a_running_chat_job_mid_stream() {
+    // 40 tokens at 100 ms each = 4 s of streaming — lots of room to cancel.
+    let h = harness_with(true, &["--fake-token-ms", "100", "--fake-tokens", "40"]).await;
+    let job = h
+        .engine
+        .submit(chat_job("Tell me a long story"))
+        .await
+        .unwrap();
+
+    let engine = h.engine.clone();
+    let run = tokio::spawn(async move { engine.run_next().await.unwrap().unwrap() });
+
+    // Wait past the model "load" and a good number of streamed tokens, then cancel.
+    tokio::time::sleep(std::time::Duration::from_millis(2000)).await;
+    assert!(
+        h.engine.cancel(&job.id).await.unwrap(),
+        "cancel should apply"
+    );
+
+    let outcome = run.await.unwrap();
+    assert!(
+        matches!(&outcome, JobOutcome::Cancelled { job_id } if *job_id == job.id),
+        "got {outcome:?}"
+    );
+
+    let stored = h.db.jobs().get(&job.id).await.unwrap().unwrap();
+    assert_eq!(stored.state, JobState::Cancelled);
+    assert!(stored.finished_at.is_some());
+    let partial = stored.result.unwrap_or_default();
+    assert!(
+        !partial.is_empty(),
+        "some text should have streamed before cancel"
+    );
+    assert!(
+        partial.len() < 500,
+        "cancel should have cut it short, got {} chars",
+        partial.len()
+    );
+
+    let events: Vec<String> =
+        h.db.jobs()
+            .events(&job.id)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|e| e.message)
+            .collect();
+    assert!(
+        events.iter().any(|m| m.contains("cancelled after")),
+        "{events:?}"
+    );
+}
+
+#[tokio::test]
+async fn cancel_of_a_queued_job_marks_it_cancelled() {
+    let h = harness(true).await;
+    let job = h.engine.submit(chat_job("hi")).await.unwrap();
+
+    assert!(h.engine.cancel(&job.id).await.unwrap());
+    let stored = h.db.jobs().get(&job.id).await.unwrap().unwrap();
+    assert_eq!(stored.state, JobState::Cancelled);
+
+    // A cancelled job is not runnable.
+    assert!(h.engine.run_next().await.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn cancel_of_a_finished_job_is_a_noop() {
+    let h = harness(true).await;
+    let job = h.engine.submit(chat_job("hi")).await.unwrap();
+    h.engine.run_next().await.unwrap();
+    assert_eq!(
+        h.db.jobs().get(&job.id).await.unwrap().unwrap().state,
+        JobState::Completed
+    );
+    assert!(!h.engine.cancel(&job.id).await.unwrap());
 }

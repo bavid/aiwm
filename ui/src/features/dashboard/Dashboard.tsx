@@ -1,9 +1,11 @@
+import { useState } from "react";
 import { useAbout, useJobs, useTelemetry } from "../../lib/hooks";
 import { Meter } from "../../components/Meter";
-import type { Job } from "../../lib/ipc";
+import { cancelJob, type Job, type JobState } from "../../lib/ipc";
 import "./dashboard.css";
 
 const GB = 1024;
+const CANCELLABLE: JobState[] = ["queued", "scheduled", "blocked", "preparing", "running"];
 const CAPABILITIES = [
   { key: "code", label: "Coding", hint: "Phase 5" },
   { key: "image", label: "Generate Image", hint: "Phase 3" },
@@ -15,7 +17,7 @@ const gb = (mb: number) => (mb / GB).toFixed(1);
 
 export function Dashboard() {
   const { telemetry, error } = useTelemetry();
-  const { data: jobs } = useJobs();
+  const { data: jobs, refetch: refetchJobs } = useJobs();
   const about = useAbout();
 
   const gpu = telemetry?.gpu;
@@ -90,7 +92,7 @@ export function Dashboard() {
             {activeJob ? "1 running" : "idle"} · {queued} queued
           </span>
         </header>
-        <JobTable jobs={jobs} />
+        <JobTable jobs={jobs} onCancelled={refetchJobs} />
       </section>
 
       <section className="card card--wide" aria-labelledby="do-h">
@@ -119,7 +121,7 @@ function Stat({ label, value }: { label: string; value: string }) {
   );
 }
 
-function JobTable({ jobs }: { jobs: Job[] | null }) {
+function JobTable({ jobs, onCancelled }: { jobs: Job[] | null; onCancelled: () => void }) {
   if (!jobs) return <p className="muted">Loading…</p>;
   if (jobs.length === 0) return <p className="muted">No jobs yet.</p>;
 
@@ -131,6 +133,7 @@ function JobTable({ jobs }: { jobs: Job[] | null }) {
           <th>Model</th>
           <th>State</th>
           <th>Created</th>
+          <th />
         </tr>
       </thead>
       <tbody>
@@ -144,9 +147,32 @@ function JobTable({ jobs }: { jobs: Job[] | null }) {
               </span>
             </td>
             <td className="muted numeric">{new Date(j.created_at).toLocaleTimeString()}</td>
+            <td>
+              {CANCELLABLE.includes(j.state) && (
+                <CancelButton id={j.id} onDone={onCancelled} />
+              )}
+            </td>
           </tr>
         ))}
       </tbody>
     </table>
+  );
+}
+
+function CancelButton({ id, onDone }: { id: string; onDone: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const click = async () => {
+    setBusy(true);
+    try {
+      await cancelJob(id);
+    } finally {
+      setBusy(false);
+      onDone();
+    }
+  };
+  return (
+    <button type="button" className="job-cancel" onClick={click} disabled={busy}>
+      {busy ? "…" : "Cancel"}
+    </button>
   );
 }

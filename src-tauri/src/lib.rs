@@ -68,6 +68,11 @@ async fn install_llamacpp(app: tauri::State<'_, Arc<App>>) -> Result<String, Str
 }
 
 #[tauri::command]
+async fn cancel_job(app: tauri::State<'_, Arc<App>>, id: String) -> Result<Option<bool>, String> {
+    to_ipc(handlers::cancel_job(&app, &id).await)
+}
+
+#[tauri::command]
 async fn list_models(app: tauri::State<'_, Arc<App>>) -> Result<Vec<Model>, String> {
     to_ipc(handlers::list_models(&app).await)
 }
@@ -133,7 +138,8 @@ fn try_run() -> anyhow::Result<()> {
             get_recent_logs,
             list_models,
             import_model,
-            install_llamacpp
+            install_llamacpp,
+            cancel_job
         ])
         .build(tauri::generate_context!())?
         .run(|handle, event| {

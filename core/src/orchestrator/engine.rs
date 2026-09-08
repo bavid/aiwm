@@ -6,16 +6,20 @@
 //! `job_type == "chat"` runs a real body ([`crate::capability::chat`]); every
 //! other type is still a no-op placeholder.
 
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, PoisonError};
 
 use serde::Serialize;
+use tokio::sync::watch;
 
 use super::JobState;
-use crate::capability::chat;
+use crate::capability::chat::{self, ChatOutcome};
 use crate::db::{EventLevel, Job, JobPatch, NewJob};
 use crate::runtime::{LlamaCppAdapter, RuntimeRegistry};
 use crate::scheduler::{Decision, PlanRequest, Scheduler};
 use crate::{CoreError, Database, Result};
+
+const CANCEL_REASON: &str = "cancelled by user";
 
 /// How a job came to rest.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -23,6 +27,7 @@ use crate::{CoreError, Database, Result};
 pub enum JobOutcome {
     Completed { job_id: String },
     Blocked { job_id: String, reason: String },
+    Cancelled { job_id: String },
     Failed { job_id: String, error: String },
 }
 
@@ -39,6 +44,8 @@ pub struct JobEngine {
     registry: RuntimeRegistry,
     scheduler: Arc<dyn Scheduler>,
     llama: Arc<LlamaCppAdapter>,
+    /// Cancel signals for jobs the engine is actively driving right now.
+    cancels: Mutex<HashMap<String, watch::Sender<bool>>>,
 }
 
 impl JobEngine {
@@ -53,7 +60,50 @@ impl JobEngine {
             registry,
             scheduler,
             llama,
+            cancels: Mutex::new(HashMap::new()),
         }
+    }
+
+    fn cancels(&self) -> std::sync::MutexGuard<'_, HashMap<String, watch::Sender<bool>>> {
+        self.cancels.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Ask a job to stop. `Queued` / `Blocked` jobs are cancelled outright; a job
+    /// the engine is currently driving is signalled and unwinds itself. Returns
+    /// `false` when the job is already finished or in a transient step with no
+    /// cancel hook (the caller may retry once it is `running`).
+    pub async fn cancel(&self, job_id: &str) -> Result<bool> {
+        let job = self
+            .db
+            .jobs()
+            .get(job_id)
+            .await?
+            .ok_or_else(|| CoreError::Db(format!("no job {job_id}")))?;
+
+        if job.state.is_terminal() {
+            return Ok(false);
+        }
+        if let Some(tx) = self.cancels().get(job_id) {
+            let _ = tx.send(true);
+            return Ok(true);
+        }
+        // No live runner: only Queued / Blocked can be cancelled from the outside.
+        if matches!(job.state, JobState::Queued | JobState::Blocked) {
+            self.db
+                .jobs()
+                .set_state(
+                    job_id,
+                    JobState::Cancelled,
+                    JobPatch {
+                        error_text: Some(CANCEL_REASON.into()),
+                        set_finished_at: true,
+                        ..Default::default()
+                    },
+                )
+                .await?;
+            return Ok(true);
+        }
+        Ok(false)
     }
 
     /// Queue a job.
@@ -80,9 +130,22 @@ impl JobEngine {
 
     async fn drive(&self, job: Job) -> JobOutcome {
         let job_id = job.id.clone();
-        match self.try_drive(job).await {
+
+        let (cancel_tx, cancel_rx) = watch::channel(false);
+        self.cancels().insert(job_id.clone(), cancel_tx);
+        let result = self.try_drive(job, cancel_rx).await;
+        self.cancels().remove(&job_id);
+
+        match result {
             Ok(outcome) => outcome,
             Err(err) => {
+                // A cancel that raced the first transition surfaces here as an
+                // "invalid transition" error; report the real resting state.
+                if let Ok(Some(j)) = self.db.jobs().get(&job_id).await {
+                    if j.state == JobState::Cancelled {
+                        return JobOutcome::Cancelled { job_id };
+                    }
+                }
                 let error = err.to_string();
                 let _ = self
                     .db
@@ -163,7 +226,11 @@ impl JobEngine {
             .unwrap_or(0)
     }
 
-    async fn try_drive(&self, mut job: Job) -> Result<JobOutcome> {
+    async fn try_drive(
+        &self,
+        mut job: Job,
+        mut cancel: watch::Receiver<bool>,
+    ) -> Result<JobOutcome> {
         let Target {
             runtime_id,
             model_id,
@@ -172,6 +239,9 @@ impl JobEngine {
 
         self.to(&mut job, JobState::Scheduled, JobPatch::default())
             .await?;
+        if let Some(o) = self.bail_if_cancelled(&mut job, &mut cancel).await? {
+            return Ok(o);
+        }
 
         let request = PlanRequest {
             job_id: job.id.clone(),
@@ -204,18 +274,27 @@ impl JobEngine {
             Decision::LoadThenRun => {
                 self.to(&mut job, JobState::Preparing, JobPatch::default())
                     .await?;
+                if let Some(o) = self.bail_if_cancelled(&mut job, &mut cancel).await? {
+                    return Ok(o);
+                }
                 self.load(&runtime_id, &model_id, request.vram_needed_mb)
                     .await?;
             }
             Decision::EvictThenLoad { victim_model } => {
                 self.to(&mut job, JobState::Preparing, JobPatch::default())
                     .await?;
+                if let Some(o) = self.bail_if_cancelled(&mut job, &mut cancel).await? {
+                    return Ok(o);
+                }
                 self.evict(&victim_model).await?;
                 self.load(&runtime_id, &model_id, request.vram_needed_mb)
                     .await?;
             }
         }
 
+        if let Some(o) = self.bail_if_cancelled(&mut job, &mut cancel).await? {
+            return Ok(o);
+        }
         if request.is_agent_session {
             self.scheduler.pin(&model_id);
         }
@@ -239,19 +318,43 @@ impl JobEngine {
                 });
             }
             let req = chat::ChatRequest::from_params(&job.params)?;
-            let done = chat::run(&self.db, &self.llama, &job.id, req).await?;
-            let _ = self.db.models().mark_used(&model_id).await;
-            self.db
-                .jobs()
-                .append_event(
-                    &job.id,
-                    EventLevel::Info,
-                    &format!(
-                        "answered — {} tokens, {:.1} tok/s",
-                        done.tokens, done.tokens_per_second
-                    ),
-                )
-                .await?;
+            match chat::run(&self.db, &self.llama, &job.id, req, cancel).await? {
+                ChatOutcome::Done(done) => {
+                    let _ = self.db.models().mark_used(&model_id).await;
+                    self.db
+                        .jobs()
+                        .append_event(
+                            &job.id,
+                            EventLevel::Info,
+                            &format!(
+                                "answered — {} tokens, {:.1} tok/s",
+                                done.tokens, done.tokens_per_second
+                            ),
+                        )
+                        .await?;
+                }
+                ChatOutcome::Cancelled { partial } => {
+                    self.db
+                        .jobs()
+                        .append_event(
+                            &job.id,
+                            EventLevel::Warn,
+                            &format!("cancelled after {} chars", partial.chars().count()),
+                        )
+                        .await?;
+                    self.to(
+                        &mut job,
+                        JobState::Cancelled,
+                        JobPatch {
+                            error_text: Some(CANCEL_REASON.into()),
+                            set_finished_at: true,
+                            ..Default::default()
+                        },
+                    )
+                    .await?;
+                    return Ok(JobOutcome::Cancelled { job_id: job.id });
+                }
+            }
         }
 
         self.to(&mut job, JobState::Post, JobPatch::default())
@@ -267,6 +370,31 @@ impl JobEngine {
         .await?;
 
         Ok(JobOutcome::Completed { job_id: job.id })
+    }
+
+    /// If the cancel flag is set, move `job` to `Cancelled` and return the
+    /// outcome; otherwise `None` and carry on.
+    async fn bail_if_cancelled(
+        &self,
+        job: &mut Job,
+        cancel: &mut watch::Receiver<bool>,
+    ) -> Result<Option<JobOutcome>> {
+        if !*cancel.borrow_and_update() {
+            return Ok(None);
+        }
+        self.to(
+            job,
+            JobState::Cancelled,
+            JobPatch {
+                error_text: Some(CANCEL_REASON.into()),
+                set_finished_at: true,
+                ..Default::default()
+            },
+        )
+        .await?;
+        Ok(Some(JobOutcome::Cancelled {
+            job_id: job.id.clone(),
+        }))
     }
 
     async fn load(&self, runtime_id: &str, model_id: &str, vram_mb: u64) -> Result<()> {

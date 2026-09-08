@@ -310,7 +310,7 @@ verlangt, dass das Tool die Runtime selbst beschafft.
 
 ## ADR-015 — Chat-Capability: `/v1/chat/completions`-Streaming, `Auto` per Rolle, Ergebnis in der DB
 
-**Status:** Entschieden — umgesetzt in 2.4a (Cancel folgt 2.4b).
+**Status:** Entschieden — umgesetzt (Streaming/Auto 2.4a, Cancel 2.4b).
 
 **Entscheidung:**
 1. **Endpoint:** streamendes `POST /v1/chat/completions` (OpenAI-kompatibel), **nicht**
@@ -327,6 +327,11 @@ verlangt, dass das Tool die Runtime selbst beschafft.
    Zustandsmaschine + Scheduler; jede Capability besitzt ihren `Running`-Body.
    Der Engine hält dafür den typisierten `Arc<LlamaCppAdapter>` (wie
    `scheduler` / `jobs` in `App`) — kein Downcast von `dyn RuntimeAdapter`.
+5. **Cancel (2.4b):** per-Job `watch<bool>` im `JobEngine`, an Checkpoints
+   geprüft; im Stream ein `select!` — Cancel dropt die `reqwest`-Antwort, was den
+   Server ebenfalls stoppt. `Queued`/`Blocked` werden direkt auf `Cancelled`
+   gesetzt. Kein Abbruch mitten im Modell-Load (das wäre ein größerer Umbau am
+   `RuntimeSupervisor`) — nur an den Schritt-Grenzen.
 
 **Alternativen:**
 - *`/completion` mit rohem Prompt:* ohne Chat-Vorlage schlechte Antworten bei

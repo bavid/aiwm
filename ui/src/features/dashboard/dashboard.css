@@ -110,6 +110,23 @@
   color: var(--load-crit);
   border-color: color-mix(in oklab, var(--load-crit) 40%, var(--border));
 }
+.job-state[data-state="cancelled"] {
+  color: var(--muted);
+}
+
+.job-cancel {
+  padding: 1px var(--space-2);
+  font-size: var(--text-xs);
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.job-cancel:hover:not(:disabled) {
+  color: var(--load-crit);
+  border-color: color-mix(in oklab, var(--load-crit) 40%, var(--border));
+}
 
 /* capabilities */
 

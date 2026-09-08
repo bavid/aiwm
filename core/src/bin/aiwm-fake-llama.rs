@@ -27,12 +27,17 @@ use serde_json::{json, Value};
 struct Fixture {
     model_path: String,
     ready_at: Instant,
+    /// Chat stream shape — bumped in the cancel test so there is time to cancel.
+    token_ms: u64,
+    tokens: usize,
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let mut port = 8080u16;
     let mut model_path = String::new();
+    let mut token_ms = 10u64;
+    let mut tokens = 12usize;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -42,6 +47,12 @@ async fn main() -> anyhow::Result<()> {
                 }
             }
             "-m" | "--model" => model_path = args.next().unwrap_or_default(),
+            "--fake-token-ms" => {
+                token_ms = args.next().and_then(|v| v.parse().ok()).unwrap_or(token_ms);
+            }
+            "--fake-tokens" => {
+                tokens = args.next().and_then(|v| v.parse().ok()).unwrap_or(tokens);
+            }
             _ => {}
         }
     }
@@ -54,6 +65,8 @@ async fn main() -> anyhow::Result<()> {
     let state = Fixture {
         model_path,
         ready_at: Instant::now() + ready_delay,
+        token_ms,
+        tokens,
     };
 
     let app = Router::new()
@@ -97,7 +110,10 @@ async fn completion(body: Json<Value>) -> Json<Value> {
 /// Streaming OpenAI-compatible chat completion. Echoes a canned sentence one
 /// word per SSE event (with a small delay so the client sees real chunks), then
 /// a `finish_reason` chunk with stats and the `[DONE]` sentinel.
-async fn chat_completions(body: Json<Value>) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
+async fn chat_completions(
+    State(fx): State<Fixture>,
+    body: Json<Value>,
+) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
     let prompt = body
         .0
         .pointer("/messages/0/content")
@@ -106,12 +122,16 @@ async fn chat_completions(body: Json<Value>) -> Sse<impl Stream<Item = Result<Ev
         .chars()
         .take(30)
         .collect::<String>();
-    let reply = format!("fake-llama here — you said: {prompt} . done .");
-    let words: Vec<String> = reply.split_inclusive(' ').map(str::to_string).collect();
+    let base = format!("fake-llama here — you said: {prompt} .");
+    let mut words: Vec<String> = base.split_inclusive(' ').map(str::to_string).collect();
+    while words.len() < fx.tokens {
+        words.push(format!("word{} ", words.len()));
+    }
     let total = words.len() as u64;
+    let token_ms = fx.token_ms;
 
-    let tokens = stream::iter(words).then(|w| async move {
-        tokio::time::sleep(Duration::from_millis(10)).await;
+    let tokens = stream::iter(words).then(move |w| async move {
+        tokio::time::sleep(Duration::from_millis(token_ms)).await;
         Ok(Event::default().data(
             json!({ "choices": [{ "index": 0, "delta": { "content": w }, "finish_reason": null }] })
                 .to_string(),

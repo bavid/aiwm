@@ -10,7 +10,7 @@ jede für sich testbar.
 | **2.2b** | llama.cpp-**Installer**: gepinnter CUDA-Build (`ggml-org/llama.cpp` Release-Assets), SHA-256-verifizierter Download, Doppel-Zip-Entpacken, `offline_mode`-Hard-Refusal, `RuntimeRepo`, `POST /runtimes/llamacpp/install` + UI-Knopf mit Fortschritt | ✅ |
 | 2.3 | Link-Manager: kanonische Datei ↔ Runtime via NTFS-Junction (ADR-007); `model_links`-Tabelle | offen |
 | **2.4a** | Chat-Job: `job_type=chat`, Modell (explizit oder `Auto` über Rolle) → Scheduler → llama-server laden → `/v1/chat/completions` streamen → Antwort progressiv in `jobs.result`; `job_events` + Token-Stats | ✅ |
-| 2.4b | Chat-Job **Cancel** (Signal-Plumbing, `POST /jobs/{id}/cancel`, UI-Knopf) | offen |
+| **2.4b** | Chat-Job **Cancel**: per-Job `watch`-Signal im `JobEngine`, `JobEngine::cancel` (Queued/Blocked direkt · laufender Job signalisiert), `POST /jobs/{id}/cancel`, „Cancel"-Knopf im Dashboard | ✅ |
 | 2.5 | UI: „Chat"-Capability-Button aktiv, einfache Prompt/Antwort-Oberfläche; Job-Fortschritt aus dem Event-Stream | offen |
 | 2.6 | Kompatibilitäts-Check vor dem Laden (VRAM-Budget vs. `vram_estimate_mb` + KV-Cache-Schätzung), Klartext-Fehler | offen |
 | 2.7 | Settings-UI (Store-Pfad, Offline-Schalter, Theme), Diagnostics erweitert | offen |
@@ -204,3 +204,38 @@ Verifiziert:
 
 Bewusst **nicht** in 2.4a: Cancel (→ 2.4b), Chat-UI (→ 2.5), Multi-Turn-Verlauf,
 System-Prompt/Parameter (Temp etc.) — später.
+
+---
+
+## 2.4b — Ergebnis (abgeschlossen)
+
+- **`JobEngine`**: `cancels: Mutex<HashMap<job_id, watch::Sender<bool>>>` — für
+  jeden aktiv getriebenen Job. `JobEngine::cancel(id)`:
+  - fertig (terminal) → `false`;
+  - laufend getrieben → Signal senden → `true` (der Job wickelt sich selbst ab);
+  - sonst `Queued` / `Blocked` → direkt `Cancelled` setzen → `true`;
+  - transienter Schritt ohne Hook → `false` (Aufrufer kann erneut versuchen).
+  `try_drive` prüft das Signal an jedem Checkpoint (`bail_if_cancelled`: nach
+  `Scheduled`, vor/nach `load`, vor `Running`). `drive` fängt ein „ungültiger
+  Übergang" nach Race als `Cancelled` ab. `JobOutcome::Cancelled` neu.
+- **`capability::chat::run`**: `select!` über Stream-Events vs. Cancel-Signal.
+  Bei Cancel: `stream.abort()` (dropt die laufende `reqwest`-Antwort → der Server
+  bricht ebenfalls ab), Rest-Text nach `jobs.result` flushen, `ChatOutcome::
+  Cancelled { partial }`. Engine schreibt Event „cancelled after N chars" +
+  `running → cancelled`.
+- **API/UI**: `POST /jobs/{id}/cancel` (`{cancelled: bool}` / 404) + Tauri-Command
+  `cancel_job`. Dashboard-Job-Tabelle: „Cancel"-Knopf für abbrechbare Zustände.
+- **Fixture**: `aiwm-fake-llama` nimmt `--fake-token-ms` / `--fake-tokens`
+  (via `LlamaServerOptions::extra_args`), damit der Stream im Test lang genug für
+  ein Cancel-Fenster ist.
+
+Verifiziert:
+- 3 neue Integrationstests: Cancel **mitten im Stream** (Job `running` → Cancel →
+  `Cancelled`, Teiltext in `result`, Event); Cancel eines `Queued`-Jobs;
+  No-op bei fertigem Job. `check.ps1` grün.
+- **Live** (echter `llama-server`): Cancel während `preparing` →
+  `preparing → cancelled` (Modell-Load abgebrochen); Cancel nach Abschluss →
+  `{cancelled:false}`; `llama-server` bleibt resident. Ein **Mid-Stream**-Cancel
+  gegen das echte Modell war nicht reproduzierbar — SmolLM2-135M generiert mit
+  ~750 tok/s schneller als das Cancel-Roundtrip; der Mechanismus (`select!` +
+  `stream.abort()`) ist derselbe wie im Fixture-Test bewiesen.

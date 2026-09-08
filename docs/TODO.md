@@ -27,6 +27,9 @@ hierher, damit nichts verloren geht.
   (ADR-015 — MVP pollt); Multi-Turn-Verlauf, System-Prompt + Sampling-Parameter
 - Ein langer Chat-Job blockiert die Job-Schleife (Single-Slot-Prämisse ADR-003) —
   ok für den MVP; bei paralleler Bild+LLM-Nutzung neu bewerten
+- Cancel während des Modell-Loads: aktuell nur an Schritt-Grenzen (2.4b). Echtes
+  Abbrechen mitten im `load_model` bräuchte ein Signal in `RuntimeSupervisor` /
+  `await_healthy`
 - UI-Lint: `eslint-plugin-react-hooks` (+ `-react-refresh`) in `ui/eslint.config.js`
   aufnehmen (aktuell nur js + typescript-eslint recommended)
 

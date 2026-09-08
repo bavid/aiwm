@@ -70,6 +70,16 @@ pub async fn submit_job(app: &App, body: SubmitJobDto) -> Result<Job> {
     app.jobs.submit(new).await
 }
 
+/// Ask a job to stop. `Ok(Some(true))` = a cancel was applied or signalled,
+/// `Ok(Some(false))` = the job is already finished or in a step with no cancel
+/// hook, `Ok(None)` = no such job.
+pub async fn cancel_job(app: &App, id: &str) -> Result<Option<bool>> {
+    match app.db.jobs().get(id).await? {
+        Some(_) => Ok(Some(app.jobs.cancel(id).await?)),
+        None => Ok(None),
+    }
+}
+
 /// Run the next queued job now (used by tests and the daemon loop).
 pub async fn run_next_job(app: &App) -> Result<Option<JobOutcome>> {
     app.jobs.run_next().await

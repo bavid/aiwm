@@ -118,6 +118,8 @@ export const getRecentLogs = (lines = 200) =>
   invoke<string[]>("get_recent_logs", { lines });
 export const listJobs = (opts?: { states?: JobState[]; limit?: number }) =>
   invoke<Job[]>("list_jobs", { states: opts?.states ?? null, limit: opts?.limit ?? null });
+/** Ask a job to stop. `true` = applied/signalled, `false` = too late, `null` = no such job. */
+export const cancelJob = (id: string) => invoke<boolean | null>("cancel_job", { id });
 
 export const listModels = () => invoke<Model[]>("list_models");
 export const importModel = (sourcePath: string, roles: string[], keepOriginal: boolean) =>

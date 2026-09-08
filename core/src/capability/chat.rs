@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use serde_json::Value;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 
 use crate::db::{Database, EventLevel};
 use crate::runtime::{GenerationEvent, LlamaCppAdapter};
@@ -60,14 +60,26 @@ pub struct ChatDone {
     pub tokens_per_second: f64,
 }
 
-/// Stream the answer into `jobs.result`. Returns when generation finishes (or
-/// the stream errors). Cancel handling lands in a later slice.
+/// How the chat body came to rest.
+#[derive(Debug, Clone)]
+pub enum ChatOutcome {
+    Done(ChatDone),
+    /// The user cancelled mid-generation; `partial` is what had streamed so far.
+    Cancelled {
+        partial: String,
+    },
+}
+
+/// Stream the answer into `jobs.result`. Returns when generation finishes, the
+/// stream errors, or `cancel` flips to `true` (the in-flight HTTP request is
+/// dropped, which stops the server too).
 pub async fn run(
     db: &Database,
     llama: &Arc<LlamaCppAdapter>,
     job_id: &str,
     req: ChatRequest,
-) -> Result<ChatDone> {
+    mut cancel: watch::Receiver<bool>,
+) -> Result<ChatOutcome> {
     db.jobs()
         .append_event(
             job_id,
@@ -93,22 +105,28 @@ pub async fn run(
     let mut tokens_per_second = 0.0;
     let mut last_flush = Instant::now();
 
-    while let Some(event) = rx.recv().await {
-        match event {
-            GenerationEvent::Token(chunk) => {
-                answer.push_str(&chunk);
-                if last_flush.elapsed() >= FLUSH_INTERVAL {
-                    db.jobs().set_result(job_id, &answer).await?;
-                    last_flush = Instant::now();
+    loop {
+        tokio::select! {
+            biased;
+            () = wait_until_set(&mut cancel) => {
+                stream.abort();
+                let _ = db.jobs().set_result(job_id, &answer).await;
+                return Ok(ChatOutcome::Cancelled { partial: answer });
+            }
+            event = rx.recv() => match event {
+                Some(GenerationEvent::Token(chunk)) => {
+                    answer.push_str(&chunk);
+                    if last_flush.elapsed() >= FLUSH_INTERVAL {
+                        db.jobs().set_result(job_id, &answer).await?;
+                        last_flush = Instant::now();
+                    }
                 }
-            }
-            GenerationEvent::Done {
-                tokens: t,
-                tokens_per_second: tps,
-            } => {
-                tokens = t;
-                tokens_per_second = tps;
-            }
+                Some(GenerationEvent::Done { tokens: t, tokens_per_second: tps }) => {
+                    tokens = t;
+                    tokens_per_second = tps;
+                }
+                None => break,
+            },
         }
     }
 
@@ -118,11 +136,25 @@ pub async fn run(
         .map_err(|e| chat_err(format!("stream task panicked: {e}")))??;
 
     db.jobs().set_result(job_id, &answer).await?;
-    Ok(ChatDone {
+    Ok(ChatOutcome::Done(ChatDone {
         text: answer,
         tokens,
         tokens_per_second,
-    })
+    }))
+}
+
+/// Resolve once `rx` holds `true`. If the sender is dropped without setting it
+/// (should not happen — the engine keeps it alive), never resolve, so `select!`
+/// falls through to the stream instead of a false cancel.
+async fn wait_until_set(rx: &mut watch::Receiver<bool>) {
+    loop {
+        if *rx.borrow_and_update() {
+            return;
+        }
+        if rx.changed().await.is_err() {
+            std::future::pending::<()>().await;
+        }
+    }
 }
 
 #[cfg(test)]

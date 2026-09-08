@@ -27,6 +27,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/settings/{key}", put(set_setting))
         .route("/jobs", get(list_jobs).post(submit_job))
         .route("/jobs/{id}", get(job_detail))
+        .route("/jobs/{id}/cancel", post(cancel_job))
         .route("/models", get(list_models).post(import_model))
         .route("/runtimes", get(runtimes))
         .route("/runtimes/llamacpp/install", post(install_llamacpp))
@@ -128,6 +129,17 @@ async fn job_detail(State(app): AppState, Path(id): Path<String>) -> Result<Resp
         Some((job, events)) => {
             Ok(Json(serde_json::json!({ "job": job, "events": events })).into_response())
         }
+        None => Ok((
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "no such job" })),
+        )
+            .into_response()),
+    }
+}
+
+async fn cancel_job(State(app): AppState, Path(id): Path<String>) -> Result<Response, ApiError> {
+    match handlers::cancel_job(&app, &id).await? {
+        Some(applied) => Ok(Json(serde_json::json!({ "cancelled": applied })).into_response()),
         None => Ok((
             StatusCode::NOT_FOUND,
             Json(serde_json::json!({ "error": "no such job" })),
