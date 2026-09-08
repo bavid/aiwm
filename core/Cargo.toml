@@ -29,6 +29,7 @@ sysinfo.workspace = true
 async-trait.workspace = true
 axum.workspace = true
 sha2.workspace = true
+reqwest.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 win32job = "2"
@@ -36,6 +37,5 @@ win32job = "2"
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }
 tempfile.workspace = true
-reqwest = { version = "0.13", default-features = false, features = ["json"] }
 tokio-tungstenite = "0.30"
 futures-util = "0.3"

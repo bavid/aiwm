@@ -43,7 +43,8 @@ pub use model::{import_model, GgufInfo, ImportOutcome, ImportRequest};
 pub use orchestrator::{JobEngine, JobOutcome, JobState};
 pub use paths::AppPaths;
 pub use runtime::{
-    Health, RuntimeAdapter, RuntimeKind, RuntimeRegistry, RuntimeSupervisor, SpawnSpec,
+    Health, LlamaCppAdapter, LlamaServerOptions, RuntimeAdapter, RuntimeKind, RuntimeRegistry,
+    RuntimeSupervisor, SpawnSpec,
 };
 pub use scheduler::{Decision, HybridScheduler, PlanRequest, Scheduler};
 pub use sidecar::{Handshake, SidecarClient, SidecarSpec};

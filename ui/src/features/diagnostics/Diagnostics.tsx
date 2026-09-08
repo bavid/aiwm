@@ -45,7 +45,7 @@ export function Diagnostics() {
                   <td>
                     <span className="status-dot" data-state={r.health} /> {r.id}
                   </td>
-                  <td className="muted">{r.kind}</td>
+                  <td className="muted">{r.detail ?? r.kind}</td>
                   <td className="muted numeric">{r.vram_used_mb} MB</td>
                 </tr>
               ))}

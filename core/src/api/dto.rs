@@ -21,6 +21,9 @@ pub struct RuntimeStatusDto {
     pub kind: RuntimeKind,
     pub health: Health,
     pub vram_used_mb: u64,
+    /// One short status line for the UI (e.g. `"not installed"`,
+    /// `"serving qwen on :48213"`). `null` when there is nothing to add.
+    pub detail: Option<String>,
 }
 
 /// Body for `POST /jobs` / `submit_job`.

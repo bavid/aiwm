@@ -91,6 +91,7 @@ pub async fn runtimes(app: &App) -> Vec<RuntimeStatusDto> {
             kind: adapter.kind(),
             health: adapter.health().await,
             vram_used_mb: adapter.vram_used_mb(),
+            detail: adapter.detail(),
         });
     }
     out

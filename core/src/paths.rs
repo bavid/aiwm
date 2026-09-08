@@ -60,6 +60,12 @@ impl AppPaths {
         self.root.join("logs")
     }
 
+    /// Where the tool installs the runtimes it manages (llama.cpp, ComfyUI, …).
+    /// One curated version per runtime lives under `<root>/runtimes/<id>/`.
+    pub fn runtimes_dir(&self) -> PathBuf {
+        self.root.join("runtimes")
+    }
+
     /// Create the root and logs directories if missing. Idempotent.
     pub fn ensure(&self) -> Result<()> {
         for dir in [self.root.clone(), self.logs_dir()] {
@@ -81,6 +87,7 @@ mod tests {
         assert!(p.config_file().ends_with("config.toml"));
         assert!(p.db_file().ends_with("aiwm.db"));
         assert!(p.logs_dir().ends_with("logs"));
+        assert!(p.runtimes_dir().ends_with("runtimes"));
         assert!(p.config_file().starts_with(p.root()));
     }
 

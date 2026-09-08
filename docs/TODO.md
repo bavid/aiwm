@@ -6,7 +6,8 @@ hierher, damit nichts verloren geht.
 ## Vor Phase 2
 - Visuelle Designrichtung für die UI festlegen (Typo, Palette, Layout-Charakter) —
   bewusst *nicht* Dark-Mode-by-default; siehe web/design-quality-Regeln
-- llama.cpp: gepinnte Version + Bezugsquelle des Windows-CUDA-Builds klären
+- ~~llama.cpp: gepinnte Version + Bezugsquelle des Windows-CUDA-Builds~~ →
+  geklärt (ADR-014); Download/Verify/Entpacken = Scheibe 2.2b
 - Windows: Junction vs. Hardlink für Modell-Dateien testen (Rechte, Verhalten)
 - sqlx: optional compile-time Query-Checking (`sqlx::query!`) via
   `cargo sqlx prepare` + `.sqlx/` im Repo + CI-Schritt `--check` (aktuell
@@ -14,6 +15,12 @@ hierher, damit nichts verloren geht.
 - RuntimeSupervisor: CREATE_SUSPENDED + Resume, um das Race-Fenster zwischen
   `CreateProcess` und `AssignProcessToJobObject` zu schließen (aktuell: sofortige
   Zuweisung, für llama-server/ComfyUI vernachlässigbar)
+- `LlamaCppAdapter`: freien Port aus dem `llama-server`-stdout lesen statt
+  Bind-and-Drop (schließt das Port-Race); braucht stdout-Capture im Supervisor
+- `LlamaCppAdapter`: Router-Mode evaluieren (ein Server, `/models` + `?autoload=`)
+  als Alternative zum Prozess-pro-Modell — spart Modellwechsel-Latenz
+- `LlamaServerOptions` über die Settings-UI konfigurierbar machen (2.7):
+  `-ngl`, `-c`, `--flash-attn`, Load-Timeout
 - UI-Lint: `eslint-plugin-react-hooks` (+ `-react-refresh`) in `ui/eslint.config.js`
   aufnehmen (aktuell nur js + typescript-eslint recommended)
 

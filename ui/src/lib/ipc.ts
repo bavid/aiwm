@@ -75,6 +75,8 @@ export interface RuntimeStatus {
   kind: string;
   health: "unknown" | "starting" | "healthy" | "unhealthy";
   vram_used_mb: number;
+  /** Short human-readable status, e.g. "not installed" or "serving qwen on :48213". */
+  detail: string | null;
 }
 
 export interface Model {

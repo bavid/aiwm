@@ -9,7 +9,7 @@ use crate::config::{Config, FALLBACK_VRAM_BUDGET_MB};
 use crate::db::{now_rfc3339, Database};
 use crate::orchestrator::JobEngine;
 use crate::paths::AppPaths;
-use crate::runtime::RuntimeRegistry;
+use crate::runtime::{LlamaCppAdapter, RuntimeRegistry};
 use crate::scheduler::HybridScheduler;
 use crate::telemetry::{GpuStatus, Sampler};
 use crate::Result;
@@ -44,6 +44,10 @@ impl App {
 
         let telemetry = Arc::new(Sampler::spawn());
         let runtimes = RuntimeRegistry::new();
+        runtimes.register(Arc::new(LlamaCppAdapter::discover(
+            db.clone(),
+            &paths.runtimes_dir(),
+        )));
         let budget = resolve_vram_budget(&config, &telemetry);
         let scheduler = Arc::new(HybridScheduler::new(runtimes.clone(), budget));
         let jobs = Arc::new(JobEngine::new(

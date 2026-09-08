@@ -31,12 +31,18 @@ noch keine echte AI-Capability (die kommt ab Phase 2).
 | WP-9 | CI-Workflow, Git-Hooks (pre-commit fmt, pre-push voller Gate) |
 | WP-10 | ADRs finalisiert, Stub-Docs (MODELS/RUNTIMES/SECURITY/BENCHMARKS) |
 
-**101 Rust-Unit + 1 Integrationstest + 5 pytest** grün · `scripts/check.ps1` grün ·
+**119 Rust-Unit + 5 Integrationstests + 5 pytest** grün · `scripts/check.ps1` grün ·
 **null `unsafe`** im Produktivcode.
 
-**Phase 2 (MVP) läuft** — Scheibe 2.1 fertig: `ModelRepo`, eigener bounded
-GGUF-Header-Reader, manueller Import in den kanonischen Store, UI-Tab „Models".
-Plan: [docs/PHASE_2_PLAN.md](docs/PHASE_2_PLAN.md). Als Nächstes: `LlamaCppAdapter`.
+**Phase 2 (MVP) läuft.** Plan + Fortschritt: [docs/PHASE_2_PLAN.md](docs/PHASE_2_PLAN.md).
+
+- **2.1** ✅ `ModelRepo`, eigener bounded GGUF-Header-Reader, manueller Import in
+  den kanonischen Store, UI-Tab „Models".
+- **2.2a** ✅ `LlamaCppAdapter`: `llama-server` als Kindprozess pro residentem
+  Modell (Start/Stop/Health über `RuntimeSupervisor`), Binär-Auflösung
+  (Env/Managed/PATH), Attach-Fallback, nicht-streamendes `complete()`.
+- **2.2b** (nächste) llama.cpp-Installer: gepinnter CUDA-Build, verifizierter
+  Download, Entpacken.
 
 ## Zielhardware
 

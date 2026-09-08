@@ -26,10 +26,30 @@ genutzt.
 | Runtime | Adapter | Stand |
 |---|---|---|
 | Fake | `FakeRuntimeAdapter` | ✅ vollständig (Tests) |
-| llama.cpp / llama-server | `LlamaCppAdapter` | geplant Phase 2 — primäre LLM-Runtime (ADR-006) |
+| llama.cpp / llama-server | `LlamaCppAdapter` | ✅ Adapter (2.2a): Start/Stop/Health/Attach/`complete`. Installer folgt (2.2b) |
 | ComfyUI | `ComfyUiAdapter` | geplant Phase 3 — Bild/Video, vollständig gekapselt |
 | Ollama | `OllamaAdapter` | optional, Phase 3+ (Duplikate transparent, ADR-006) |
 | LM Studio | — | vorerst nicht (proprietär, GUI-zentriert) |
+
+### `LlamaCppAdapter` (Stand 2.2a)
+
+- **Ein `llama-server`-Prozess pro residentem Modell.** `llama-server` bedient
+  genau ein Modell; der Adapter startet/stoppt ihn passend zum Scheduler-Slot.
+- **Binär-Auflösung:** `AIWM_LLAMACPP_PATH` → Managed-Install unter
+  `<data_dir>/runtimes/llamacpp/` → `PATH`. Fehlt alles: `detail() = "not
+  installed"`, `load_model` liefert einen Klartextfehler.
+- **Start:** `-m <datei> --host 127.0.0.1 --port <frei> --no-webui -ngl 999
+  --flash-attn on` (Defaults in `LlamaServerOptions`, später über Settings-UI).
+  Health-Gate: `GET /health` bis `200` oder Timeout/`GaveUp`.
+- **Attach-Fallback (ADR-002):** `attach(port, model_id, vram)` probt `/health`,
+  gleicht die Modelldatei über `/props` ab, adoptiert den Server **ohne** seine
+  Lebensdauer zu übernehmen (`unload` tötet ihn nicht).
+- **Bezugsquelle des CUDA-Builds (für 2.2b):** Release-Assets von
+  `ggml-org/llama.cpp` — rollierende Build-Tags (`b#####`), Windows-CUDA-Assets
+  `llama-<build>-bin-win-cuda-12.4-x64.zip` + `cudart-llama-bin-win-cuda-12.4-x64.zip`.
+  Die GitHub-Releases-API liefert je Asset ein `digest: "sha256:…"` → Verify
+  ohne separate Prüfsummen-Datei. CUDA 12.4-Build gewählt (breite Treiber-
+  Kompatibilität, gebündelte Runtime-DLLs, kein System-CUDA nötig).
 
 ## Manage-first (ADR-002)
 
@@ -39,9 +59,12 @@ frei konfigurierbares Python-Environment. „Repair"-Pfad baut die venv sauber n
 
 ## Zu untersuchen vor Phase 2/3
 
-- llama.cpp: gepinnte Version + Bezugsquelle des Windows-CUDA-Builds
+- ~~llama.cpp: gepinnte Version + Bezugsquelle des Windows-CUDA-Builds~~ →
+  geklärt (siehe oben), Umsetzung in 2.2b
 - ComfyUI: minimale getestete Custom-Node-Menge (Custom Nodes = beliebiger Code)
 - `uv`-verwaltete venv pro Runtime; gebündelte CUDA-Runtime statt System-CUDA
-- Health-Endpunkte + Modell-Load/Unload-APIs je Runtime
+- Health-Endpunkte + Modell-Load/Unload-APIs je Runtime — llama-server: `/health`,
+  `/props`, `/completion`, `/v1/chat/completions`; **Router-Mode** (ein Server,
+  mehrere Modelle, `?autoload=`) neu — als spätere Optimierung notiert
 - Shared Model Cache: welche Runtimes können dieselbe Datei via Junction nutzen
   (llama.cpp/LM Studio/ComfyUI ja; Ollama nein — siehe [ANALYSIS.md](ANALYSIS.md) §1.3)

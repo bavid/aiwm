@@ -11,11 +11,13 @@
 
 mod fake;
 mod job;
+mod llamacpp;
 mod registry;
 mod supervisor;
 
 pub use fake::{FakeConfig, FakeRuntimeAdapter};
 pub use job::JobObject;
+pub use llamacpp::{LlamaCppAdapter, LlamaServerOptions};
 pub use registry::RuntimeRegistry;
 pub use supervisor::{RuntimeSupervisor, SupervisorState};
 
@@ -103,5 +105,12 @@ pub trait RuntimeAdapter: Send + Sync + std::fmt::Debug {
     /// Total VRAM (MB) attributed to this runtime's loaded models.
     fn vram_used_mb(&self) -> u64 {
         self.loaded_models().iter().map(|m| m.vram_mb).sum()
+    }
+
+    /// One short, human-readable status line for the UI, e.g.
+    /// `"not installed"` or `"serving qwen2.5-coder on :48213"`. `None` when the
+    /// adapter has nothing useful to add beyond [`health`](Self::health).
+    fn detail(&self) -> Option<String> {
+        None
     }
 }

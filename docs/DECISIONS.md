@@ -251,10 +251,46 @@ liefert Unused-/Dedup-Reports.
 | Logging | `tracing` + `tracing-appender` | strukturiert, rotierende Datei |
 | Fehler | `thiserror` (Bibliothek), `anyhow` (Bin-Ränder) | ecc/rust-Regeln |
 | Sidecar-Runner | `uv run` | reproduzierbare venv; `resolve_uv()` findet uv auch ohne PATH |
+| HTTP-Client (Runtimes) | `reqwest` (`default-features = false`, `json`) | Loopback-only, **kein** TLS (ADR-008); ab Phase 2 reguläre Abhängigkeit (vorher dev-only) |
 
-**Verworfen:** `reqwest` mit TLS (localhost braucht keins → dev-dep ohne TLS),
-compile-time `sqlx::query!` (Setup-Reibung, → TODO), Electron/Node-Backend (ADR-001),
+**Verworfen:** `reqwest` **mit** TLS (Loopback braucht keins), compile-time
+`sqlx::query!` (Setup-Reibung, → TODO), Electron/Node-Backend (ADR-001),
 Postgres (ADR-005).
+
+---
+
+## ADR-014 — llama.cpp-Integration: ein Server pro Modell + verifizierter Pin-Download
+
+**Status:** Entschieden (Umsetzung: Adapter in 2.2a, Installer in 2.2b).
+
+**Kontext:** `llama-server` bedient genau **ein** Modell pro Prozess. Der
+Hybrid-Scheduler (ADR-003) hält einen residenten LLM-Slot. Manage-first (ADR-002)
+verlangt, dass das Tool die Runtime selbst beschafft.
+
+**Entscheidung:**
+1. **Ein `llama-server`-Kindprozess pro residentem Modell**, verwaltet vom
+   `RuntimeSupervisor`. Modellwechsel = Prozess-Neustart (Sekunden). Passt 1:1
+   zum Scheduler-Slot; einfaches, robustes Lifecycle.
+2. **Attach-Fallback** adoptiert einen vom Nutzer gestarteten Server, ohne seine
+   Lebensdauer zu übernehmen.
+3. **Pin-Quelle:** Release-Assets von `ggml-org/llama.cpp`. Verifikation über das
+   `digest`-Feld (`sha256:…`) der GitHub-Releases-API — keine eigene
+   Prüfsummen-Pflege. Gepinnt: **CUDA 12.4**-Windows-Build + zugehöriges
+   `cudart`-Zip (gebündelte CUDA-Runtime, kein System-CUDA).
+
+**Alternativen:**
+- *Router-Mode* (ein Server, dynamisches Laden mehrerer Modelle, neu in
+  llama.cpp): spart Neustartzeit, aber jung/weniger erprobt und passt schlechter
+  zum residenten Ein-Slot-Modell. Als spätere Optimierung notiert.
+- *Drittanbieter-CUDA-Builds* (`ai-dock` u. a.): zusätzliche Vertrauensgrenze;
+  offizielle Assets sind inzwischen vollständig (inkl. CUDA), also verworfen.
+- *Selbst kompilieren:* CUDA-Toolchain-Zwang auf der Nutzermaschine — verworfen.
+
+**Konsequenzen:**
+- (+) Kleiner, testbarer Adapter; Prozess-Isolation; deterministische Version.
+- (−) Sekunden Latenz beim Modellwechsel (im UI sichtbar machen). Der freie Port
+  wird per Bind-and-Drop reserviert (winziges Race) — später ggf. aus dem
+  `llama-server`-stdout lesen ([TODO.md](TODO.md)).
 
 ---
 
@@ -270,6 +306,6 @@ Postgres (ADR-005).
 | F | Tool-Lizenz | ✅ privat, non-commercial (ADR-011) |
 | G | SSD-Kapazität / Store-Pfad | ✅ `E:\AI\models`, ~1,5 TB frei (ADR-012) |
 
-Keine blockierenden offenen Entscheidungen mehr für Phase 1. Vor Phase 2 zu
-klären: visuelle UI-Designrichtung, gepinnte llama.cpp-CUDA-Build-Quelle
+Keine blockierenden offenen Entscheidungen mehr für Phase 1. llama.cpp-Integration
++ CUDA-Build-Quelle: ✅ (ADR-014). Weiter offen: visuelle UI-Designrichtung
 (siehe [TODO.md](TODO.md)).
