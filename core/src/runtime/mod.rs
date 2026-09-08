@@ -22,11 +22,11 @@ pub use supervisor::{RuntimeSupervisor, SupervisorState};
 use std::path::PathBuf;
 
 use async_trait::async_trait;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::Result;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RuntimeKind {
     LlamaCpp,
@@ -35,7 +35,7 @@ pub enum RuntimeKind {
 }
 
 /// Result of probing a runtime.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Health {
     Unknown,

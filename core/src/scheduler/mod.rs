@@ -81,6 +81,11 @@ impl HybridScheduler {
         self
     }
 
+    /// Total VRAM (MB) the scheduler plans against.
+    pub fn budget_mb(&self) -> u64 {
+        self.budget_mb
+    }
+
     /// VRAM (MB) available for a new model right now.
     pub fn free_mb(&self) -> u64 {
         self.budget_mb

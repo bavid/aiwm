@@ -27,7 +27,7 @@ sqlx.workspace = true
 nvml-wrapper.workspace = true
 sysinfo.workspace = true
 async-trait.workspace = true
-# Added in later WP steps: axum + tower (WP-6), reqwest (dormant until Phase 2)
+axum.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 win32job = "2"
@@ -35,3 +35,6 @@ win32job = "2"
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }
 tempfile.workspace = true
+reqwest = { version = "0.13", default-features = false, features = ["json"] }
+tokio-tungstenite = "0.30"
+futures-util = "0.3"

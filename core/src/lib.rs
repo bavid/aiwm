@@ -33,6 +33,7 @@ pub mod scheduler;
 pub mod sidecar;
 pub mod telemetry;
 
+pub use api::{ApiServer, Services};
 pub use app::App;
 pub use config::Config;
 pub use db::Database;

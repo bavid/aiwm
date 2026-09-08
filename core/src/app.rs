@@ -1,45 +1,65 @@
-//! Application bootstrap: tie together paths, config, database, telemetry and
-//! logging into a live [`App`] handle. Runtimes and the scheduler are attached
-//! in later work packages.
+//! Application bootstrap: tie together paths, config, database, telemetry,
+//! runtimes, scheduler and the job engine into a live [`App`] handle.
+
+use std::sync::Arc;
 
 use tracing_appender::non_blocking::WorkerGuard;
 
-use crate::config::Config;
+use crate::config::{Config, FALLBACK_VRAM_BUDGET_MB};
 use crate::db::{now_rfc3339, Database};
+use crate::orchestrator::JobEngine;
 use crate::paths::AppPaths;
-use crate::telemetry::Sampler;
+use crate::runtime::RuntimeRegistry;
+use crate::scheduler::HybridScheduler;
+use crate::telemetry::{GpuStatus, Sampler};
 use crate::Result;
 
 /// Settings seeded on first run. `config.toml` remains the source of truth for
 /// startup configuration; these are app-managed markers.
 const SCHEMA_VERSION: &str = "1";
 
-/// A bootstrapped core: resolved layout, effective configuration, an open
-/// database and a running telemetry sampler.
+/// A bootstrapped core. Held behind an `Arc` by the host process and shared with
+/// the API server.
 #[derive(Debug)]
 pub struct App {
     pub paths: AppPaths,
     pub config: Config,
     pub db: Database,
-    pub telemetry: Sampler,
+    pub telemetry: Arc<Sampler>,
+    pub runtimes: RuntimeRegistry,
+    pub scheduler: Arc<HybridScheduler>,
+    pub jobs: Arc<JobEngine>,
 }
 
 impl App {
     /// Ensure directories exist, load configuration, open the database, seed
-    /// first-run settings and start telemetry sampling. Does **not** install
-    /// logging — that is a process concern (see [`bootstrap_process`]). Requires
-    /// a Tokio runtime.
+    /// first-run settings, start telemetry, and wire up the scheduler + job
+    /// engine. Does **not** install logging (see [`bootstrap_process`]).
+    /// Requires a Tokio runtime.
     pub async fn load(paths: AppPaths) -> Result<Self> {
         paths.ensure()?;
         let config = Config::load(&paths)?;
         let db = Database::connect(&paths.db_file()).await?;
         Self::seed(&db).await?;
-        let telemetry = Sampler::spawn();
+
+        let telemetry = Arc::new(Sampler::spawn());
+        let runtimes = RuntimeRegistry::new();
+        let budget = resolve_vram_budget(&config, &telemetry);
+        let scheduler = Arc::new(HybridScheduler::new(runtimes.clone(), budget));
+        let jobs = Arc::new(JobEngine::new(
+            db.clone(),
+            runtimes.clone(),
+            scheduler.clone(),
+        ));
+
         Ok(Self {
             paths,
             config,
             db,
             telemetry,
+            runtimes,
+            scheduler,
+            jobs,
         })
     }
 
@@ -59,17 +79,30 @@ impl App {
     }
 }
 
+/// Effective VRAM budget: the config value if set, else the detected GPU's total,
+/// else a conservative fallback.
+fn resolve_vram_budget(config: &Config, telemetry: &Sampler) -> u64 {
+    if config.vram_budget_mb > 0 {
+        return config.vram_budget_mb;
+    }
+    match telemetry.latest().gpu {
+        GpuStatus::Available(gpu) => gpu.vram_total_mb,
+        GpuStatus::Unavailable { .. } => FALLBACK_VRAM_BUDGET_MB,
+    }
+}
+
 /// Full process bootstrap for a binary: resolve `%APPDATA%`, load config, open
 /// the database, install logging, emit a startup line. Returns the [`App`] and
 /// the logging guard, which the caller must keep alive.
-pub async fn bootstrap_process() -> Result<(App, WorkerGuard)> {
-    let app = App::load(AppPaths::for_app()?).await?;
+pub async fn bootstrap_process() -> Result<(Arc<App>, WorkerGuard)> {
+    let app = Arc::new(App::load(AppPaths::for_app()?).await?);
     let guard = crate::logging::init(&app.config.log_filter, &app.paths.logs_dir())?;
     tracing::info!(
         version = crate::CORE_VERSION,
         data_dir = %app.paths.root().display(),
         store_path = %app.config.store_path.display(),
         core_api_port = app.config.core_api_port,
+        vram_budget_mb = app.scheduler.budget_mb(),
         offline_mode = app.config.offline_mode,
         "aiwm-core bootstrapped"
     );

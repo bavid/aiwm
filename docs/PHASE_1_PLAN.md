@@ -322,7 +322,7 @@ Logik-Code (Scheduler, Job-Engine, Repos) — Gerüst/Tauri-Host ausgenommen.
 | **WP-8** | Sidecar-Contract (JSON-RPC), `uv`-Projekt, `main.py` (handshake/ping), `SidecarClient` | WP-1 | Spawn + Handshake + `ping`-Roundtrip; Sidecar stirbt mit Core |
 | **WP-4 ✅** | `RuntimeAdapter`-Trait, `RuntimeSupervisor`, Windows Job Object, `FakeRuntimeAdapter` | WP-1 | Job-Object-Kill-Test grün; Contract-Tests gegen Fake |
 | **WP-5 ✅** | Job-Zustandsmaschine, `JobEngine`, `Scheduler`-Trait, `HybridScheduler`-Skelett, Szenariomatrix-Tests | WP-2, WP-4 | Übergangs- + Szenariomatrix-Tests grün; Persistenz + Crash-Replay |
-| **WP-6** | Core-API-Handler, Tauri-Commands, axum HTTP/WS (Loopback), Event-Streams, `JobEngine`-Run-Loop im Daemon | WP-2, WP-3, WP-5 | Beide Transporte liefern identisches JSON; Loopback-only nachgewiesen |
+| **WP-6 ✅** | Core-API-Handler, Tauri-Commands, axum HTTP/WS (Loopback), Event-Streams, `JobEngine`-Run-Loop im Daemon | WP-2, WP-3, WP-5 | Beide Transporte liefern identisches JSON; Loopback-only nachgewiesen |
 | **WP-7** | UI-Shell: Dashboard + Diagnostics, `ipc.ts`, Live-Telemetrie | WP-6 | `pnpm tauri dev` zeigt live echte Telemetrie |
 | **WP-9** | `check.ps1` + CI-Workflow + Pre-commit-Hook | WP-0 (dann laufend) | Pipeline auf sauberem Checkout grün |
 | **WP-10** | ADR-005/007/009 finalisieren; Stub-Docs `MODELS.md`, `RUNTIMES.md`, `SECURITY.md`, `BENCHMARKS.md`, `TODO.md` anlegen; Docs-Konsistenzcheck | alle | Docs konsistent; `TODO.md` mit zurückgestellten Punkten befüllt |
@@ -483,6 +483,37 @@ Schema-Änderung: `jobs.runtime_id` / `jobs.model_id` sind **ohne FK-Constraint*
 `App::load` ruft jetzt `recover_interrupted()` beim Start.
 
 Tests: **75 Unit + 1 Integration**. Ganze `check.ps1` grün.
+
+### WP-6 — Ergebnis (abgeschlossen)
+
+- `api::handlers` — transport-agnostische Funktionen (`about`, `telemetry`,
+  `settings` / `set_setting`, `list_jobs`, `job_events`, `submit_job`,
+  `runtimes`, `recent_logs`). Beide Transporte serialisieren **dieselben**
+  Funktions-Rückgaben.
+- `api::http` — axum-Router auf `127.0.0.1` (ADR-008): `GET /about /telemetry
+  /settings /jobs /jobs/{id} /runtimes /logs`, `PUT /settings/{key}`,
+  `POST /jobs`, `GET /ws` (Telemetrie-Stream, 1 Hz). `CoreError` →
+  400 (Config/Transition) / 500.
+- `api::{ApiServer, Services, spawn}` — bindet den Server + startet die
+  **JobEngine-Run-Loop** (`run_next` mit 250 ms Idle-Poll); `Services`-Drop
+  stoppt beides.
+- `App` hält jetzt `runtimes`, `scheduler` (VRAM-Budget = `config.vram_budget_mb`
+  > 0, sonst GPU-Total, sonst 8192), `jobs: JobEngine`. `bootstrap_process`
+  liefert `Arc<App>`.
+- `aiwm-cored` + Tauri-Host starten `api::spawn`; der Tauri-Host spiegelt
+  `about` / `get_telemetry` / `get_settings` / `list_jobs` als
+  `#[tauri::command]`s über dieselben `handlers`.
+- `Config.vram_budget_mb` (Default 0 = auto).
+
+Verifiziert:
+- `about_is_identical_over_the_handler_and_http` — Handler-Ausgabe ==
+  HTTP-Body (byte-identisch)
+- `server_binds_loopback_only`, WS-Stream liefert Telemetrie-Frames,
+  Job-Loop leert die Queue, 400 bei leerem Setting-Key
+- Live: `aiwm-cored` und Tauri-Host beantworten `GET /about` auf
+  `127.0.0.1:48160`, `vram_budget_mb=16376` (auto vom 4080S)
+
+Tests: **81 Unit + 1 Integration**. Ganze `check.ps1` grün.
 
 ---
 

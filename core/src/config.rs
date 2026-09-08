@@ -30,7 +30,13 @@ pub struct Config {
     pub offline_mode: bool,
     /// `tracing` env-filter directive string.
     pub log_filter: String,
+    /// VRAM budget (MB) for the scheduler. `0` = auto-detect from the GPU
+    /// (falling back to [`FALLBACK_VRAM_BUDGET_MB`] when no GPU is present).
+    pub vram_budget_mb: u64,
 }
+
+/// Used when `vram_budget_mb` is `0` and no NVIDIA GPU is detected.
+pub const FALLBACK_VRAM_BUDGET_MB: u64 = 8192;
 
 impl Default for Config {
     fn default() -> Self {
@@ -39,6 +45,7 @@ impl Default for Config {
             core_api_port: DEFAULT_API_PORT,
             offline_mode: false,
             log_filter: DEFAULT_LOG_FILTER.to_string(),
+            vram_budget_mb: 0,
         }
     }
 }

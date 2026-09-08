@@ -26,6 +26,7 @@ sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio",
 nvml-wrapper = "0.13"
 sysinfo = { version = "0.39", default-features = false, features = ["system"] }
 async-trait = "0.1"
+axum = { version = "0.8", features = ["ws"] }
 
 [workspace.lints.rust]
 unsafe_code = "warn"

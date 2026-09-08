@@ -1,10 +1,10 @@
-//! Headless core daemon. Boots paths + config + logging, then idles until a
-//! shutdown signal. From WP-6 on it also serves the loopback HTTP/WS API.
+//! Headless core daemon. Boots paths + config + logging, starts the loopback
+//! API and the job loop, then idles until a shutdown signal.
 
 use std::process::ExitCode;
 
 use aiwm_core::telemetry::{GpuStatus, SystemTelemetry};
-use aiwm_core::{app, Result, CORE_VERSION};
+use aiwm_core::{api, app, Result, CORE_VERSION};
 
 fn telemetry_line(t: &SystemTelemetry) -> String {
     let gpu = match &t.gpu {
@@ -38,16 +38,19 @@ async fn run() -> Result<()> {
     // that races startup is never lost.
     let shutdown = shutdown::Signals::install()?;
 
+    let services = api::spawn(app.clone()).await?;
+
     println!(
-        "aiwm-core {CORE_VERSION} ready\n  data dir: {}\n  store:    {}\n  api port: {} (loopback)\n  {}\nPress Ctrl-C to stop.",
+        "aiwm-core {CORE_VERSION} ready\n  data dir: {}\n  store:    {}\n  api:      http://{}\n  {}\nPress Ctrl-C to stop.",
         app.paths.root().display(),
         app.config.store_path.display(),
-        app.config.core_api_port,
+        services.api_addr(),
         telemetry_line(&app.telemetry.latest()),
     );
 
     let reason = shutdown.recv().await;
     tracing::info!(reason, "shutting down cleanly");
+    drop(services); // stops the API server + job loop
     app.db.close().await;
     println!("\nshutdown complete ({reason})");
     Ok(())
