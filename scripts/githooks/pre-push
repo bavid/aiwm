@@ -1,0 +1,13 @@
+#!/bin/sh
+# Full quality gate before pushing. Mirrors CI.
+set -e
+
+root=$(git rev-parse --show-toplevel)
+
+if command -v pwsh >/dev/null 2>&1; then
+    pwsh -NoProfile -File "$root/scripts/check.ps1"
+elif command -v powershell >/dev/null 2>&1; then
+    powershell -NoProfile -ExecutionPolicy Bypass -File "$root/scripts/check.ps1"
+else
+    echo "no PowerShell found; skipping full gate" >&2
+fi

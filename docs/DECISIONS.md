@@ -107,11 +107,14 @@ gleich aufsetzt.
 
 ## ADR-005 — Persistenz: SQLite + Dateisystem
 
-**Status:** Vorgeschlagen.
+**Status:** Entschieden — umgesetzt in WP-2 (`sqlx` + SQLite, Schema v1,
+`core/migrations/`).
 
-**Entscheidung:** Eine SQLite-DB an bekanntem Pfad für alle Metadaten (Modelle,
-Jobs, Agents, Settings). Große Binärdaten (Modelle, Outputs) im Dateisystem, DB
-hält nur Pfade + Hashes. Historie immutable (Events statt Überschreiben).
+**Entscheidung:** Eine SQLite-DB unter `%APPDATA%\AIWorkstationManager\aiwm.db`
+für alle Metadaten (Modelle, Jobs, Agents, Settings). WAL, `foreign_keys=ON`.
+Große Binärdaten (Modelle, Outputs) im Dateisystem, DB hält nur Pfade + Hashes.
+`job_events` ist append-only. Runtime-Queries (kein compile-time `sqlx::query!`),
+siehe [TODO.md](TODO.md).
 
 **Alternativen:** Postgres (Overkill, Server-Prozess), reine JSON-Dateien (keine
 Abfragen/Transaktionen). DuckDB später ergänzend für Benchmark-Analytik denkbar.
@@ -137,18 +140,20 @@ dem ohnehin geplanten kanonischen Store.
 
 ## ADR-007 — Modell-Storage: kanonischer Store + Runtime-Links
 
-**Status:** Vorgeschlagen.
+**Status:** Vorgeschlagen (Schema-Tabellen `models` / `model_links` existieren
+seit WP-2; der Link-Manager selbst kommt mit dem Phase-2-Modell-Importer).
 
-**Entscheidung:** Eine kanonische Datei pro Modell im Store. Ein Link-Manager
-verknüpft sie pro Runtime: NTFS-Junction (llama.cpp, LM Studio, ComfyUI) oder,
-wo unvermeidbar, Kopie/Import (Ollama). Duplikate durch Import werden im
-Dedup-Report ausgewiesen.
+**Entscheidung:** Eine kanonische Datei pro Modell im Store (`E:\AI\models\`).
+Ein Link-Manager verknüpft sie pro Runtime: NTFS-Junction (llama.cpp, LM Studio,
+ComfyUI) oder, wo unvermeidbar, Kopie/Import (Ollama). Duplikate durch Import
+werden im Dedup-Report ausgewiesen.
 
 ---
 
 ## ADR-008 — Netzwerk-Exposure: nur `127.0.0.1`
 
-**Status:** Vorgeschlagen (offene Entscheidung D — Default akzeptiert, kein Widerspruch).
+**Status:** Entschieden — umgesetzt in WP-6 (`api::spawn` bindet
+`SocketAddr::from((Ipv4Addr::LOCALHOST, port))`; Test `server_binds_loopback_only`).
 
 **Entscheidung:** Core-API und alle verwalteten Runtimes binden ausschließlich
 Loopback. Kein LAN-Listener, kein Remote-Zugriff im MVP. LAN/Remote frühestens
@@ -158,12 +163,15 @@ Phase 6, opt-in, mit Auth.
 
 ## ADR-009 — Offline-first als Querschnitts-Contract
 
-**Status:** Vorgeschlagen.
+**Status:** Entschieden (Querschnitts-Prinzip; teils umgesetzt: Telemetrie
+degradiert ohne GPU, `Config.offline_mode` existiert). Online-Cache-Fallbacks
+werden pro Feature ab Phase 6 fällig.
 
 **Entscheidung:** Jede Funktion, die Online-Daten nutzt, braucht einen lokalen
 Cache-Fallback und degradiert ohne Netz sauber (kein Fehler-Abbruch). Ein
-globaler Offline-Modus blockt jeden externen Call hart. Kein Cloud-Provider im
-Default-Pfad; Cloud ist pro Aktion zu bestätigen.
+globaler Offline-Modus (`offline_mode` in `config.toml`) blockt jeden externen
+Call hart. Kein Cloud-Provider im Default-Pfad; Cloud ist pro Aktion zu
+bestätigen.
 
 ---
 
@@ -227,6 +235,29 @@ liefert Unused-/Dedup-Reports.
 
 ---
 
+## ADR-013 — Phase-1-Bibliotheken
+
+**Status:** Entschieden — im Verlauf von WP-1…WP-8 gewählt, hier festgehalten.
+
+| Zweck | Wahl | Warum |
+|---|---|---|
+| Async-Runtime | `tokio` | Standard; `process` / `signal` / `sync` gebraucht |
+| DB | `sqlx` 0.9 (SQLite, bundled) | async, eingebettete Migrationen, kein System-SQLite; Runtime-Queries (kein `DATABASE_URL`) |
+| GPU-Telemetrie | `nvml-wrapper` | direkte NVML-Bindings statt `nvidia-smi`-Parsing |
+| Host-Telemetrie | `sysinfo` (`system`-Feature) | RAM/CPU, schmaler Feature-Satz |
+| Windows Job Object | `win32job` | sichere API, **kein** handgeschriebenes `unsafe` |
+| Async-Traits | `async-trait` | `dyn RuntimeAdapter` / `dyn Scheduler` |
+| HTTP/WS-Server | `axum` 0.8 (`ws`) | tokio-nativ, schlank; teilt Handler mit den Tauri-Commands |
+| Logging | `tracing` + `tracing-appender` | strukturiert, rotierende Datei |
+| Fehler | `thiserror` (Bibliothek), `anyhow` (Bin-Ränder) | ecc/rust-Regeln |
+| Sidecar-Runner | `uv run` | reproduzierbare venv; `resolve_uv()` findet uv auch ohne PATH |
+
+**Verworfen:** `reqwest` mit TLS (localhost braucht keins → dev-dep ohne TLS),
+compile-time `sqlx::query!` (Setup-Reibung, → TODO), Electron/Node-Backend (ADR-001),
+Postgres (ADR-005).
+
+---
+
 ## Offene Entscheidungen
 
 | # | Frage | Status |
@@ -239,4 +270,6 @@ liefert Unused-/Dedup-Reports.
 | F | Tool-Lizenz | ✅ privat, non-commercial (ADR-011) |
 | G | SSD-Kapazität / Store-Pfad | ✅ `E:\AI\models`, ~1,5 TB frei (ADR-012) |
 
-Keine blockierenden offenen Entscheidungen mehr für Phase 1.
+Keine blockierenden offenen Entscheidungen mehr für Phase 1. Vor Phase 2 zu
+klären: visuelle UI-Designrichtung, gepinnte llama.cpp-CUDA-Build-Quelle
+(siehe [TODO.md](TODO.md)).

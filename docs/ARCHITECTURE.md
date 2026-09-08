@@ -1,6 +1,10 @@
-# Architektur-Vorschlag (v0.1)
+# Architektur
 
-Erster Entwurf zur Diskussion. Noch nicht implementierungsverbindlich.
+Ursprünglich als Vorschlag entworfen; der Kern (Tauri-Host, Rust-Core,
+Runtime-Adapter, Job-Engine, Hybrid-Scheduler, SQLite, Loopback-API, Sidecar)
+ist in **Phase 1** umgesetzt — siehe [PHASE_1_PLAN.md](PHASE_1_PLAN.md) für den
+Ist-Stand pro Baustein. Dieses Dokument beschreibt das Gesamtbild inkl. der noch
+nicht gebauten Teile (Discovery, Pipelines, Agents).
 
 ---
 

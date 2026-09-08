@@ -1,5 +1,9 @@
 # Phase 1 — Detailplan: Architektur & Fundament
 
+> **Status: abgeschlossen.** WP-0…WP-10 fertig, `check.ps1` grün. Der
+> DONE-Bericht steht in §11. Die WP-Ergebnisse sind pro WP unter §10
+> dokumentiert.
+
 **Ziel:** Ein lauffähiges, getestetes Skelett. Kein Feature, keine echte Runtime,
 keine Inferenz. Am Ende startet die App, legt DB + Datenordner an, zeigt live
 GPU/VRAM/RAM/CPU, und alle Kern-Abstraktionen (Runtime-Adapter, Job-Zustands­
@@ -9,9 +13,6 @@ Adapter.
 **Nicht in Phase 1:** llama.cpp-Download/-Integration, Modell-Import, echte
 Inferenz, ComfyUI, Agents, Online-Discovery, Downloads, Benchmarks. Das ist
 Phase 2+.
-
-**Dauer-Schätzung:** ~10 Arbeitspakete, je 0,5–2 Tage. Reihenfolge und
-Abhängigkeiten unten.
 
 ---
 
@@ -324,8 +325,8 @@ Logik-Code (Scheduler, Job-Engine, Repos) — Gerüst/Tauri-Host ausgenommen.
 | **WP-5 ✅** | Job-Zustandsmaschine, `JobEngine`, `Scheduler`-Trait, `HybridScheduler`-Skelett, Szenariomatrix-Tests | WP-2, WP-4 | Übergangs- + Szenariomatrix-Tests grün; Persistenz + Crash-Replay |
 | **WP-6 ✅** | Core-API-Handler, Tauri-Commands, axum HTTP/WS (Loopback), Event-Streams, `JobEngine`-Run-Loop im Daemon | WP-2, WP-3, WP-5 | Beide Transporte liefern identisches JSON; Loopback-only nachgewiesen |
 | **WP-7 ✅** | UI-Shell: Dashboard + Diagnostics, `ipc.ts`, Live-Telemetrie | WP-6 | `pnpm tauri dev` zeigt live echte Telemetrie |
-| **WP-9** | `check.ps1` + CI-Workflow + Pre-commit-Hook | WP-0 (dann laufend) | Pipeline auf sauberem Checkout grün |
-| **WP-10** | ADR-005/007/009 finalisieren; Stub-Docs `MODELS.md`, `RUNTIMES.md`, `SECURITY.md`, `BENCHMARKS.md`, `TODO.md` anlegen; Docs-Konsistenzcheck | alle | Docs konsistent; `TODO.md` mit zurückgestellten Punkten befüllt |
+| **WP-9 ✅** | `check.ps1` + CI-Workflow + Pre-commit-Hook | WP-0 (dann laufend) | Pipeline auf sauberem Checkout grün |
+| **WP-10 ✅** | ADR-005/007/009 finalisieren; Stub-Docs `MODELS.md`, `RUNTIMES.md`, `SECURITY.md`, `BENCHMARKS.md`, `TODO.md` anlegen; Docs-Konsistenzcheck | alle | Docs konsistent; `TODO.md` mit zurückgestellten Punkten befüllt |
 
 **Kritischer Pfad:** WP-0 → WP-1 → WP-2 → WP-4 → WP-5 → WP-6 → WP-7.
 **Parallelisierbar:** WP-3, WP-8 (nach WP-1); WP-9 durchgehend; WP-10 zum Schluss.
@@ -563,31 +564,67 @@ Tests: **4** (`handshake_and_ping_roundtrip`, `unknown_method_is_an_error`,
 `planned_method_is_not_implemented_yet`, `sidecar_dies_when_client_is_dropped`),
 + 5 pytest im Sidecar. Insgesamt **85 Unit + 1 Integration**. `check.ps1` grün.
 
+### WP-9 — Ergebnis (abgeschlossen)
+
+- `.github/workflows/ci.yml` — `windows-latest`, derselbe Gate wie `check.ps1`
+  (Rust 1.98.1, Node 24, pnpm, uv). Greift nur bei GitHub-Remote.
+- `scripts/githooks/` + `git config core.hooksPath scripts/githooks`:
+  **pre-commit** = `cargo fmt --check` (instant), **pre-push** = voller
+  `check.ps1`. Für frische Clones muss `core.hooksPath` einmal gesetzt werden
+  ([DEV_SETUP.md](DEV_SETUP.md)).
+
+### WP-10 — Ergebnis (abgeschlossen)
+
+- ADR-005 (SQLite) / ADR-007 (Model-Storage) / ADR-008 (Loopback) / ADR-009
+  (Offline-first) auf *Entschieden* gesetzt; **ADR-013** (Phase-1-Bibliotheken)
+  neu.
+- Stub-Docs: [MODELS.md](MODELS.md), [RUNTIMES.md](RUNTIMES.md),
+  [SECURITY.md](SECURITY.md), [BENCHMARKS.md](BENCHMARKS.md) —
+  jeweils Stand + Plan, nicht leer.
+- README: WP-Tabelle, Bauen/Ausführen, kompletter Doc-Index. Konsistenzcheck der
+  Querverweise.
+
 ---
 
-## 11. Phase-1-Abschluss (DONE-Bericht-Vorlage)
+## 11. Phase-1-Abschluss — DONE
 
 ```
-DONE — Phase 1
+DONE — Phase 1 (Fundament)
 
-Implemented:
-- Repo-Skelett (Cargo-Workspace + UI + Sidecar), CI grün
-- Core: Config, Logging, Datenordner, SQLite-Schema v1 + Repos
-- Telemetrie: live GPU/VRAM/RAM/CPU via NVML/sysinfo
-- Runtime-Adapter-Trait + Supervisor + Job Object + FakeAdapter
-- Job-Zustandsmaschine + JobEngine + HybridScheduler-Skelett (Szenariomatrix getestet)
-- Sidecar-Handshake
-- Core-API (Tauri + Loopback-HTTP/WS), UI-Dashboard mit Live-Telemetrie
+Implemented (WP-0…WP-10):
+- Cargo-Workspace core + src-tauri, React/Vite-UI, uv-Sidecar; check.ps1 + CI + Git-Hooks
+- Core-Bootstrap: Config (+AIWM_*-Overrides), Logging (rotierend), Datenordner,
+  headless aiwm-cored mit sauberem Shutdown (ctrl-c/break/close/shutdown)
+- SQLite: Schema v1 (7 STRICT-Tabellen), Migrationen, SettingsRepo + JobRepo, Crash-Replay
+- Telemetrie: NVML + sysinfo, 1-Hz-Sampler, watch-Channel, graceful degradation
+- RuntimeAdapter-Trait + RuntimeSupervisor (Windows Job Object, Auto-Restart/Backoff)
+  + FakeRuntimeAdapter + RuntimeRegistry
+- Job-Zustandsmaschine (9 Zustände, explizite Tabelle) + JobEngine
+- HybridScheduler: VRAM-Budget, RunNow/LoadThenRun/EvictThenLoad/Blocked,
+  Session-Pinning, Szenariomatrix getestet
+- Core-API: axum HTTP/WS auf 127.0.0.1 + identische Tauri-Commands (ein Handler-Satz),
+  JobEngine-Run-Loop im Daemon
+- UI-Dashboard: Live GPU/RAM/CPU (Push-Events), Job-Tabelle, Diagnostics, theme-aware
+- SidecarClient: JSON-RPC über stdio, Handshake/Ping, stirbt mit dem Core
 
-Not implemented (kommt in Phase 2):
-- echte llama.cpp-Runtime, Modell-Import, echte Inferenz, „Chat"-Capability
+Verifiziert:
+- 85 Rust-Unit + 1 Integration + 5 pytest — alle grün
+- scripts/check.ps1 grün (fmt/clippy -D warnings/test, ui typecheck/lint/build,
+  sidecar ruff/pytest)
+- null unsafe im core-Produktivcode
+- Live: aiwm-cored + Tauri-Host beantworten GET /about auf 127.0.0.1:48160;
+  Dashboard zeigt echte 4080-SUPER-Werte
 
-Known issues:
-- <hier eintragen>
+Not implemented (Phase 2+):
+- echte llama.cpp-Runtime, Modell-Import + Link-Manager, echte Inferenz,
+  Chat-Capability, Online-Discovery, Benchmarks, Agents, Bild/Video
 
-Next decision:
-- Visuelle Designrichtung für die UI (Start Phase 2)
+Known issues: keine
+
+Next decisions (vor Phase 2):
+- visuelle UI-Designrichtung
 - llama.cpp: gepinnte Version + Windows-CUDA-Build-Bezugsquelle
+- ModelRepo + manueller GGUF-Import als erste Phase-2-Scheibe
 ```
 
 ---

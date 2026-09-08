@@ -9,18 +9,17 @@ MVP bewusst *ohne* echte AI-Capability — er beweist die Grundmechanik.
 
 ---
 
-## Phase 1 — Architektur & Fundament *(kein Feature-Code)*
+## Phase 1 — Architektur & Fundament ✅ *(kein Feature-Code)*
 
-**Detailplan: [PHASE_1_PLAN.md](PHASE_1_PLAN.md)** (Toolchain, Repo-Struktur,
-Schema-v1-DDL, Kern-Traits, 10 Arbeitspakete mit DoD).
+**Abgeschlossen.** Detailplan + Ergebnisse: [PHASE_1_PLAN.md](PHASE_1_PLAN.md).
 
-- [x] Offene Entscheidungen A–G geklärt (siehe [DECISIONS.md](DECISIONS.md))
-- [ ] Diese Dokumente reviewen und freigeben
-- [ ] WP-0…WP-10 gemäß Detailplan
+- [x] Offene Entscheidungen A–G geklärt ([DECISIONS.md](DECISIONS.md))
+- [x] WP-0…WP-10 — 85 Rust-Unit + 1 Integration + 5 pytest grün, `check.ps1` grün
 
-**Deliverable:** App startet, legt DB + Datenordner an, zeigt live GPU/VRAM/RAM/CPU;
-Runtime-Adapter, Job-Zustandsmaschine und Hybrid-Scheduler existieren als
-getestete Schnittstellen mit Fake-Adapter (keine echte Runtime, keine Inferenz).
+**Deliverable erreicht:** App startet, legt DB + Datenordner an, zeigt live
+GPU/VRAM/RAM/CPU im Dashboard; Runtime-Adapter, Job-Zustandsmaschine und
+Hybrid-Scheduler existieren als getestete Schnittstellen mit Fake-Adapter;
+Loopback-API + Daemon-Run-Loop laufen. Keine echte Runtime, keine Inferenz.
 
 ---
 

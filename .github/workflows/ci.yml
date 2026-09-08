@@ -1,0 +1,43 @@
+# Runs the same gate as `scripts/check.ps1`. Only active if this repo ever gets
+# a GitHub remote — the local pre-push hook is the day-to-day gate.
+name: ci
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust toolchain
+        uses: dtolnay/rust-toolchain@1.98.1
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: pnpm
+        run: |
+          corepack enable pnpm
+          corepack prepare pnpm@latest --activate
+
+      - name: uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Install UI deps
+        run: pnpm --dir ui install --frozen-lockfile
+
+      - name: Sync sidecar
+        run: uv sync --directory sidecar --frozen
+
+      - name: Quality gate
+        run: pwsh -File scripts/check.ps1

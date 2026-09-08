@@ -1,0 +1,11 @@
+#!/bin/sh
+# Fast pre-commit gate: formatting only (instant). The full gate
+# (scripts/check.ps1) runs on pre-push.
+set -e
+
+if command -v cargo >/dev/null 2>&1; then
+    cargo fmt --all -- --check || {
+        echo "cargo fmt found unformatted code. Run: cargo fmt --all" >&2
+        exit 1
+    }
+fi

@@ -41,17 +41,20 @@ node --version       # v20+ ok
 ## Bauen
 
 ```powershell
-cargo build                       # core + (später) src-tauri
+cargo build                       # core + src-tauri
 uv sync --directory sidecar       # Sidecar-venv
-pnpm -C ui install                # sobald ui/ existiert (nächster WP-0-Schritt)
+pnpm -C ui install                # UI-Abhängigkeiten
 ```
 
 ## Ausführen
 
 ```powershell
-cargo run -p aiwm-core --bin aiwm-cored   # headless core, Ctrl-C beendet
+cargo run -p aiwm-core --bin aiwm-cored   # headless core + Loopback-API, Ctrl-C beendet
 pnpm -C ui exec tauri dev                 # Desktop-App (aus E:\AI ausführen)
 ```
+
+Die Loopback-API läuft bei beiden auf `http://127.0.0.1:48160`
+(`GET /about /telemetry /jobs /runtimes /logs`, `GET /ws` Telemetrie-Stream).
 
 ## Quality Gate
 
@@ -62,6 +65,18 @@ powershell -ExecutionPolicy Bypass -File scripts/check.ps1
 Läuft fmt / clippy / test für Rust, typecheck / lint für die UI, ruff / pytest
 für den Sidecar. Schritte, deren Toolchain fehlt, werden übersprungen.
 (`pwsh` / PowerShell 7 ist nicht installiert — Windows PowerShell 5.1 genügt.)
+
+## Git-Hooks
+
+`git config core.hooksPath scripts/githooks` (einmalig; für frische Clones nötig).
+
+- **pre-commit** — `cargo fmt --check` (instant)
+- **pre-push** — vollständiges `scripts/check.ps1`
+
+## CI
+
+`.github/workflows/ci.yml` fährt denselben Gate auf `windows-latest` — greift nur,
+falls das Repo je ein GitHub-Remote bekommt.
 
 ## Installierte Versionen (Stand WP-0)
 
