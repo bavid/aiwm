@@ -8,6 +8,7 @@ const ROLES = ["chat", "coding", "reasoning", "embedding"];
 const gb = (mb: number | null) => (mb == null ? "—" : `${(mb / 1024).toFixed(1)} GB`);
 const params = (n: number | null) =>
   n == null ? "—" : n >= 1e9 ? `${(n / 1e9).toFixed(1)} B` : `${(n / 1e6).toFixed(0)} M`;
+const ctx = (n: number | null) => (n == null ? "—" : n >= 1024 ? `${Math.round(n / 1024)}K` : `${n}`);
 
 export function Models() {
   const { data: models, error, refetch } = useModels();
@@ -45,7 +46,7 @@ export function Models() {
                   <td>{m.quant ?? "—"}</td>
                   <td className="numeric">{params(m.param_count)}</td>
                   <td className="numeric">{gb(m.size_bytes / (1024 * 1024))}</td>
-                  <td className="numeric">{m.ctx_max?.toLocaleString() ?? "—"}</td>
+                  <td className="numeric">{ctx(m.ctx_max)}</td>
                   <td className="numeric">{gb(m.vram_estimate_mb)}</td>
                   <td className="muted">{m.roles.join(", ") || "—"}</td>
                 </tr>
