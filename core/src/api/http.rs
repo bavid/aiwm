@@ -23,6 +23,7 @@ pub fn router(app: Arc<App>) -> Router {
     Router::new()
         .route("/about", get(about))
         .route("/telemetry", get(telemetry))
+        .route("/config", get(config).put(save_config))
         .route("/settings", get(settings))
         .route("/settings/{key}", put(set_setting))
         .route("/jobs", get(list_jobs).post(submit_job))
@@ -71,6 +72,17 @@ async fn about(State(app): AppState) -> Json<super::dto::AboutDto> {
 
 async fn telemetry(State(app): AppState) -> Json<crate::telemetry::SystemTelemetry> {
     Json(handlers::telemetry(&app))
+}
+
+async fn config(State(app): AppState) -> Result<Json<crate::config::Config>, ApiError> {
+    Ok(Json(handlers::config(&app)?))
+}
+
+async fn save_config(
+    State(app): AppState,
+    Json(update): Json<super::dto::ConfigUpdate>,
+) -> Result<Json<crate::config::Config>, ApiError> {
+    Ok(Json(handlers::save_config(&app, update)?))
 }
 
 async fn settings(State(app): AppState) -> Result<Json<serde_json::Value>, ApiError> {

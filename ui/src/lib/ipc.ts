@@ -13,6 +13,35 @@ export interface AboutInfo {
   offline_mode: boolean;
 }
 
+/** `llama-server` launch options — the `[llama]` table in config.toml. */
+export interface LlamaConfig {
+  /** `-ngl` — layers offloaded to the GPU (999 = all). */
+  gpu_layers: number;
+  /** `-c` — context window; 0 lets the core cap the model's trained context. */
+  ctx_size: number;
+  flash_attention: boolean;
+  load_timeout_secs: number;
+}
+
+/** The full config.toml as the core sees it. */
+export interface AppConfig {
+  store_path: string;
+  core_api_port: number;
+  offline_mode: boolean;
+  log_filter: string;
+  /** VRAM budget (MB) for the scheduler; 0 = auto-detect from the GPU. */
+  vram_budget_mb: number;
+  llama: LlamaConfig;
+}
+
+/** The user-editable subset the Settings tab sends back. */
+export interface ConfigUpdate {
+  store_path: string;
+  offline_mode: boolean;
+  vram_budget_mb: number;
+  llama: LlamaConfig;
+}
+
 export interface GpuProcess {
   pid: number;
   vram_mb: number;
@@ -140,6 +169,11 @@ export interface SubmitJobBody {
 export const about = () => invoke<AboutInfo>("about");
 export const getTelemetry = () => invoke<SystemTelemetry>("get_telemetry");
 export const getSettings = () => invoke<Record<string, string>>("get_settings");
+export const getConfig = () => invoke<AppConfig>("get_config");
+/** Persist the editable config fields. Offline mode applies at once; the rest
+ *  need an app restart (the caller tells the user). Returns the saved config. */
+export const saveConfig = (update: ConfigUpdate) =>
+  invoke<AppConfig>("save_config", { update });
 export const getRuntimes = () => invoke<RuntimeStatus[]>("get_runtimes");
 /** Start the pinned llama.cpp download+install (background). Returns "started" or "already_installed". */
 export const installLlamacpp = () => invoke<string>("install_llamacpp");

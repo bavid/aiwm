@@ -31,10 +31,11 @@ noch keine echte AI-Capability (die kommt ab Phase 2).
 | WP-9 | CI-Workflow, Git-Hooks (pre-commit fmt, pre-push voller Gate) |
 | WP-10 | ADRs finalisiert, Stub-Docs (MODELS/RUNTIMES/SECURITY/BENCHMARKS) |
 
-**159 Rust-Unit + 12 Integrationstests + 5 pytest** grün · `scripts/check.ps1` grün ·
+**165 Rust-Unit + 12 Integrationstests + 5 pytest** grün · `scripts/check.ps1` grün ·
 **null `unsafe`** im Produktivcode.
 
-**Phase 2 (MVP) läuft.** Plan + Fortschritt: [docs/PHASE_2_PLAN.md](docs/PHASE_2_PLAN.md).
+**Phase 2 (MVP) — Scheiben 2.1–2.7 fertig.** Plan + Fortschritt:
+[docs/PHASE_2_PLAN.md](docs/PHASE_2_PLAN.md).
 
 - **2.1** ✅ `ModelRepo`, eigener bounded GGUF-Header-Reader, manueller Import in
   den kanonischen Store, UI-Tab „Models".
@@ -59,7 +60,10 @@ noch keine echte AI-Capability (die kommt ab Phase 2).
   plant gegen diese Zahl statt der Dateigröße, `llama-server` bekommt ein
   passendes `-c`. Passt es nicht → `blocked` mit Klartext-Aufschlüsselung
   (kein OOM-Modell-Load), und der Job ruht statt die Schleife heiß zu drehen.
-- **2.7** (nächste) Settings-UI; Diagnostics erweitert.
+- **2.7** ✅ **Settings-UI**: Theme (System/Hell/Dunkel, sofort), Store-Pfad,
+  VRAM-Budget, **Offline-Schalter live** (`Arc<AtomicBool>`, kein Neustart),
+  `[llama]`-Optionen; `GET`/`PUT /config`. Diagnostics erweitert: VRAM-Budget,
+  GPU-Prozesse, „Copy" für Bug-Reports.
 
 ## Zielhardware
 

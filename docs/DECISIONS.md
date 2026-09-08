@@ -417,6 +417,52 @@ Modell-Load lief los und OOM-te erst dort, ohne Klartext.
 
 ---
 
+## ADR-017 — Settings: `config.toml` bleibt die Wahrheit, Offline lebt
+
+**Status:** Entschieden — umgesetzt (2.7).
+
+**Kontext:** Bis 2.6 war `config.toml` reine Startkonfiguration ohne UI; die
+`settings`-Tabelle ist App-State (Schema-Version, First-Run). Die Settings-UI
+braucht einen Ort, editierbare Felder und eine Aussage, wann eine Änderung greift.
+
+**Entscheidung:**
+1. **Eine Quelle:** `config.toml` bleibt die Wahrheit für Startkonfiguration. Die
+   Settings-UI liest und schreibt genau diese Datei (`GET`/`PUT /config`), **nicht**
+   die `settings`-Tabelle. `AIWM_*`-Env-Overrides bleiben Vorrang beim Start, aber
+   der Settings-Lese-Pfad (`Config::read_from`) zeigt die Datei ohne Overlay — ein
+   Override verschluckt nie still einen gespeicherten Wert.
+2. **Neustart-pflichtig ist der Normalfall, und die UI sagt es.** `store_path`,
+   `vram_budget_mb`, `log_filter`, `core_api_port` und die `[llama]`-Optionen
+   werden beim Start gelesen; eine Änderung braucht einen App-Neustart. Jedes
+   Feld trägt das Label („restart to apply" / „applies on the next model load").
+3. **Ausnahme Offline:** `offline_mode` ist ein Sicherheits-Schalter (ADR-009) —
+   ein neustart-pflichtiger Sicherheitsschalter ist schlechte UX. `App` hält ein
+   `Arc<AtomicBool>` (`App::offline()`), aus der Config geseedet; die drei
+   Ausgangs-Call-Sites lesen die Live-Zahl. `PUT /config` flippt sie sofort
+   **und** persistiert.
+4. **Theme ist reine UI:** `localStorage` + `data-theme` auf `<html>`, nie an den
+   Core. „System" folgt `prefers-color-scheme`.
+5. **`core_api_port` / `log_filter` bleiben Datei-only** — Power-User-Territorium,
+   Port-Wechsel ist riskant (die App verbindet sich darauf), Log-Filter-Reload
+   bräuchte einen `tracing`-`reload::Handle`.
+
+**Alternativen:**
+- *Alles in die `settings`-Tabelle:* dann zwei Quellen für Startkonfiguration,
+  Migrations-Kopfschmerz, und die Datei (die der Nutzer auch von Hand editiert)
+  wäre nicht mehr autoritativ. Verworfen.
+- *Alles hot-reloadbar machen:* `Config` hinter `RwLock`, jeder `&App`-Handler
+  müsste neu lesen, `HybridScheduler`/`LlamaCppAdapter` bräuchten Interior
+  Mutability. Zu viel Umbau für Felder, die man einmal setzt. Nur Offline lohnt
+  den `AtomicBool`.
+
+**Konsequenzen:**
+- (+) Ein Ort, ein Format; die Datei bleibt von Hand editierbar.
+- (+) Offline schaltet ohne Neustart — der Schalter fühlt sich wie ein Schalter an.
+- (−) Für Store-Pfad / VRAM-Budget / llama-Optionen muss der Nutzer die App neu
+  starten. Für ein Desktop-Tool akzeptabel; die UI ist explizit.
+
+---
+
 ## Offene Entscheidungen
 
 | # | Frage | Status |

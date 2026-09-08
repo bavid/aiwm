@@ -4,7 +4,8 @@
 
 use std::collections::BTreeMap;
 
-use super::dto::{AboutDto, JobDetailDto, RuntimeStatusDto, SubmitJobDto};
+use super::dto::{AboutDto, ConfigUpdate, JobDetailDto, RuntimeStatusDto, SubmitJobDto};
+use crate::config::Config;
 use crate::db::{Job, JobFilter, Model, NewJob};
 use crate::model::{ImportOutcome, ImportRequest};
 use crate::orchestrator::JobOutcome;
@@ -18,8 +19,33 @@ pub fn about(app: &App) -> AboutDto {
         store_path: app.config.store_path.display().to_string(),
         core_api_port: app.config.core_api_port,
         vram_budget_mb: app.scheduler.budget_mb(),
-        offline_mode: app.config.offline_mode,
+        offline_mode: app.offline(),
     }
+}
+
+/// The current `config.toml` as it sits on disk, with the *live* offline flag
+/// overlaid (the Settings UI shows and rewrites this).
+pub fn config(app: &App) -> Result<Config> {
+    let mut cfg = Config::read_from(&app.paths)?;
+    cfg.offline_mode = app.offline();
+    Ok(cfg)
+}
+
+/// Apply the user-editable fields, persist `config.toml`, and flip the live
+/// offline switch. Everything else needs an app restart to take effect — the UI
+/// says so. Returns the full saved config.
+pub fn save_config(app: &App, update: ConfigUpdate) -> Result<Config> {
+    if update.store_path.trim().is_empty() {
+        return Err(CoreError::Config("store path must not be empty".into()));
+    }
+    let mut cfg = Config::read_from(&app.paths)?;
+    cfg.store_path = update.store_path.trim().into();
+    cfg.offline_mode = update.offline_mode;
+    cfg.vram_budget_mb = update.vram_budget_mb;
+    cfg.llama = update.llama;
+    cfg.save(&app.paths)?;
+    app.set_offline(cfg.offline_mode);
+    Ok(cfg)
 }
 
 pub fn telemetry(app: &App) -> SystemTelemetry {
@@ -112,7 +138,7 @@ pub async fn runtimes(app: &App) -> Vec<RuntimeStatusDto> {
 /// Returns `"already_installed"` when it is already there, and errors up front
 /// on offline mode or an in-flight install.
 pub fn install_llamacpp(app: &App) -> Result<&'static str> {
-    if app.config.offline_mode {
+    if app.offline() {
         return Err(CoreError::Config(
             "offline mode is on — cannot download llama.cpp".into(),
         ));
@@ -130,7 +156,7 @@ pub fn install_llamacpp(app: &App) -> Result<&'static str> {
     }
 
     let llama = app.llama.clone();
-    let offline = app.config.offline_mode;
+    let offline = app.offline();
     tokio::spawn(async move {
         if let Err(e) = llama.install(offline).await {
             tracing::error!(error = %e, "llama.cpp install failed");

@@ -23,14 +23,17 @@ Loopback-API + Daemon-Run-Loop laufen. Keine echte Runtime, keine Inferenz.
 
 ---
 
-## Phase 2 — MVP: Plattform-Kern *(in Arbeit)*
+## Phase 2 — MVP: Plattform-Kern *(Scheiben 2.1–2.7 fertig)*
 
 **Scheibenplan + Fortschritt: [PHASE_2_PLAN.md](PHASE_2_PLAN.md).** Fertig: 2.1
 (ModelRepo + GGUF-Import), 2.2a/b (`LlamaCppAdapter` + Installer), 2.3
 (Link-Manager `core::link`), 2.4a/b (Chat-Job — `Auto`-Wahl, gestreamt, Cancel),
 2.5 (Chat-UI), 2.6 (VRAM-Kompat-Check `core::compat` — Gewichte + KV-Cache +
-Overhead vor dem Load, `blocked` mit Klartext statt OOM, ADR-016). Chat läuft
-end-to-end von der Oberfläche bis zum `llama-server`. Offen: 2.7 (Settings-UI).
+Overhead vor dem Load, `blocked` mit Klartext statt OOM, ADR-016), 2.7
+(Settings-UI: Theme/Store/VRAM-Budget/Offline-live/`[llama]`, `GET`/`PUT /config`,
+Diagnostics erweitert, ADR-017). Chat läuft end-to-end von der Oberfläche bis zum
+`llama-server`. Offen für „Phase 2 zu": ein durchgehender End-to-End-Test des
+Modell-Wechsels (siehe [TODO.md](TODO.md)).
 
 Umfang bewusst eng. **Nicht** enthalten: Online-Discovery-Suche, Download-Manager,
 Benchmarks, Quality-Scores, Plugin-System, Bild/Video, Agents.

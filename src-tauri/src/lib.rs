@@ -6,8 +6,9 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
-use aiwm_core::api::dto::{AboutDto, JobDetailDto, RuntimeStatusDto, SubmitJobDto};
+use aiwm_core::api::dto::{AboutDto, ConfigUpdate, JobDetailDto, RuntimeStatusDto, SubmitJobDto};
 use aiwm_core::api::handlers;
+use aiwm_core::config::Config;
 use aiwm_core::db::{Job, JobFilter, Model};
 use aiwm_core::model::{ImportOutcome, ImportRequest};
 use aiwm_core::orchestrator::JobState;
@@ -40,6 +41,19 @@ fn get_telemetry(app: tauri::State<'_, Arc<App>>) -> SystemTelemetry {
 #[tauri::command]
 async fn get_settings(app: tauri::State<'_, Arc<App>>) -> Result<BTreeMap<String, String>, String> {
     to_ipc(handlers::settings(&app).await)
+}
+
+#[tauri::command]
+async fn get_config(app: tauri::State<'_, Arc<App>>) -> Result<Config, String> {
+    to_ipc(handlers::config(&app))
+}
+
+#[tauri::command]
+async fn save_config(
+    app: tauri::State<'_, Arc<App>>,
+    update: ConfigUpdate,
+) -> Result<Config, String> {
+    to_ipc(handlers::save_config(&app, update))
 }
 
 #[tauri::command]
@@ -146,6 +160,8 @@ fn try_run() -> anyhow::Result<()> {
             about,
             get_telemetry,
             get_settings,
+            get_config,
+            save_config,
             list_jobs,
             get_runtimes,
             get_recent_logs,

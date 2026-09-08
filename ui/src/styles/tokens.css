@@ -1,5 +1,8 @@
-/* Design tokens. Phase-1 shell: a restrained instrument-panel palette,
-   theme-aware. The visual direction is revisited at the start of Phase 2. */
+/* Design tokens. Phase-1 shell: a restrained instrument-panel palette.
+   Theme-aware: the light palette is the bare :root default; dark applies either
+   from the OS ("system" theme — no data-theme attribute) or from an explicit
+   data-theme="dark" the Settings tab writes onto <html>. The two dark blocks
+   below are identical and must stay in sync. */
 
 :root {
   --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
@@ -39,10 +42,13 @@
   --load-warn: #d97706;
   --load-crit: #dc2626;
   --track: #ececeb;
+
+  color-scheme: light;
 }
 
+/* "system" theme (no explicit override) follows the OS. */
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme]) {
     --bg: #0f1115;
     --surface: #171a21;
     --surface-2: #1c2029;
@@ -56,5 +62,26 @@
     --load-warn: #fbbf24;
     --load-crit: #f87171;
     --track: #23272f;
+
+    color-scheme: dark;
   }
+}
+
+/* Explicit dark, regardless of OS setting. Keep in sync with the block above. */
+:root[data-theme="dark"] {
+  --bg: #0f1115;
+  --surface: #171a21;
+  --surface-2: #1c2029;
+  --border: #262b35;
+  --text: #e8e9ec;
+  --muted: #8b909c;
+  --accent: #7c8cff;
+  --accent-fg: #10121a;
+
+  --load-ok: #34d399;
+  --load-warn: #fbbf24;
+  --load-crit: #f87171;
+  --track: #23272f;
+
+  color-scheme: dark;
 }

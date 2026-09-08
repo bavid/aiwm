@@ -3,6 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::config::LlamaConfig;
 use crate::db::{Job, JobEvent};
 use crate::runtime::{Health, RuntimeKind};
 
@@ -14,6 +15,17 @@ pub struct AboutDto {
     pub core_api_port: u16,
     pub vram_budget_mb: u64,
     pub offline_mode: bool,
+}
+
+/// The user-editable slice of `config.toml` — `GET`/`PUT /config`, the Settings
+/// UI. `core_api_port` and `log_filter` stay file-only (power-user territory).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConfigUpdate {
+    pub store_path: String,
+    pub offline_mode: bool,
+    /// `0` = auto-detect from the GPU.
+    pub vram_budget_mb: u64,
+    pub llama: LlamaConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

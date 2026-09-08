@@ -278,6 +278,74 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn config_round_trips_over_http_and_offline_applies_live() {
+        let (app, _tmp) = test_app().await;
+        assert!(!app.offline());
+        let server = ApiServer::bind(app.clone(), SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
+            .await
+            .unwrap();
+        let base = format!("http://{}", server.addr);
+
+        let current: serde_json::Value = reqwest::get(format!("{base}/config"))
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(current["offline_mode"], false);
+        assert_eq!(current["llama"]["gpu_layers"], 999);
+
+        let saved: serde_json::Value = reqwest::Client::new()
+            .put(format!("{base}/config"))
+            .json(&serde_json::json!({
+                "store_path": "E:\\models\\here",
+                "offline_mode": true,
+                "vram_budget_mb": 12000,
+                "llama": { "gpu_layers": 32, "ctx_size": 4096, "flash_attention": false, "load_timeout_secs": 120 }
+            }))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(saved["vram_budget_mb"], 12000);
+        assert_eq!(saved["llama"]["ctx_size"], 4096);
+
+        // Offline flipped without a restart; the file kept the change.
+        assert!(app.offline());
+        let reread: serde_json::Value = reqwest::get(format!("{base}/config"))
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(reread["store_path"], "E:\\models\\here");
+        assert_eq!(reread["offline_mode"], true);
+    }
+
+    #[tokio::test]
+    async fn save_config_rejects_an_invalid_ctx_size_with_400() {
+        let (app, _tmp) = test_app().await;
+        let server = ApiServer::bind(app, SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
+            .await
+            .unwrap();
+
+        let resp = reqwest::Client::new()
+            .put(format!("http://{}/config", server.addr))
+            .json(&serde_json::json!({
+                "store_path": "E:\\m",
+                "offline_mode": false,
+                "vram_budget_mb": 0,
+                "llama": { "gpu_layers": 999, "ctx_size": 64, "flash_attention": true, "load_timeout_secs": 180 }
+            }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 400);
+    }
+
+    #[tokio::test]
     async fn job_loop_drains_the_queue() {
         let (app, _tmp) = test_app().await;
         app.runtimes

@@ -212,7 +212,9 @@ agents(id, name, agent_runtime, model_id, ctx_size, tools_json,
        workspace_path, allowed_paths_json, memory_enabled, autostart)
 agent_sessions(id, agent_id, started_at, ended_at, status, checkpoint_path)
 benchmarks(model_id, ts, tokens_per_sec, load_ms, vram_peak_mb, ...)  -- Phase 6
-settings(key, value)                              -- inkl. offline_mode, cloud_optin
+settings(key, value)                              -- App-State (schema_version, first_run_at, cloud_optin);
+                                                  -- Startkonfig (store_path, offline_mode, vram_budget_mb,
+                                                  -- [llama]) lebt in config.toml (ADR-017)
 downloads(id, model_ref, url, state, bytes_done, bytes_total, sha256_expected)  -- v2
 ```
 

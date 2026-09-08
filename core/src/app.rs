@@ -1,6 +1,7 @@
 //! Application bootstrap: tie together paths, config, database, telemetry,
 //! runtimes, scheduler and the job engine into a live [`App`] handle.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use tracing_appender::non_blocking::WorkerGuard;
@@ -23,6 +24,9 @@ const SCHEMA_VERSION: &str = "1";
 #[derive(Debug)]
 pub struct App {
     pub paths: AppPaths,
+    /// Startup configuration snapshot. Fields the Settings UI can change are
+    /// written straight to `config.toml` (a restart re-reads them); the live
+    /// exception is offline mode — [`offline`](Self::offline).
     pub config: Config,
     pub db: Database,
     pub telemetry: Arc<Sampler>,
@@ -32,6 +36,10 @@ pub struct App {
     pub llama: Arc<LlamaCppAdapter>,
     pub scheduler: Arc<HybridScheduler>,
     pub jobs: Arc<JobEngine>,
+    /// Live offline switch (ADR-009). Seeded from `config.offline_mode`; the
+    /// Settings UI flips it without a restart, and every outbound-call site
+    /// checks [`offline`](Self::offline) rather than `config.offline_mode`.
+    offline: Arc<AtomicBool>,
 }
 
 impl App {
@@ -47,7 +55,10 @@ impl App {
 
         let telemetry = Arc::new(Sampler::spawn());
         let runtimes = RuntimeRegistry::new();
-        let llama = Arc::new(LlamaCppAdapter::discover(db.clone(), &paths.runtimes_dir()));
+        let llama = Arc::new(
+            LlamaCppAdapter::discover(db.clone(), &paths.runtimes_dir())
+                .with_options(config.llama.to_options()),
+        );
         runtimes.register(llama.clone());
         let budget = resolve_vram_budget(&config, &telemetry);
         let scheduler = Arc::new(HybridScheduler::new(runtimes.clone(), budget));
@@ -57,6 +68,7 @@ impl App {
             scheduler.clone(),
             llama.clone(),
         ));
+        let offline = Arc::new(AtomicBool::new(config.offline_mode));
 
         Ok(Self {
             paths,
@@ -67,7 +79,20 @@ impl App {
             llama,
             scheduler,
             jobs,
+            offline,
         })
+    }
+
+    /// Whether outbound network calls are currently forbidden (ADR-009). This is
+    /// the live value — the Settings UI can change it mid-session.
+    pub fn offline(&self) -> bool {
+        self.offline.load(Ordering::Relaxed)
+    }
+
+    /// Flip the live offline switch. The caller persists the new value to
+    /// `config.toml` so it survives a restart.
+    pub fn set_offline(&self, offline: bool) {
+        self.offline.store(offline, Ordering::Relaxed);
     }
 
     async fn seed(db: &Database) -> Result<()> {
@@ -110,7 +135,7 @@ pub async fn bootstrap_process() -> Result<(Arc<App>, WorkerGuard)> {
         store_path = %app.config.store_path.display(),
         core_api_port = app.config.core_api_port,
         vram_budget_mb = app.scheduler.budget_mb(),
-        offline_mode = app.config.offline_mode,
+        offline_mode = app.offline(),
         "aiwm-core bootstrapped"
     );
     Ok((app, guard))

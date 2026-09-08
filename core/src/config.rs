@@ -18,6 +18,13 @@ pub const DEFAULT_API_PORT: u16 = 48160;
 pub const DEFAULT_LOG_FILTER: &str = "info,aiwm_core=debug,aiwm_cored=info";
 /// Ports below this are rejected (privileged / collision-prone).
 const MIN_API_PORT: u16 = 1024;
+/// Smallest non-auto `vram_budget_mb` the scheduler is allowed to plan against.
+const MIN_VRAM_BUDGET_MB: u64 = 1024;
+/// Bounds for `[llama] ctx_size` when it is not `0` (auto).
+const MIN_CTX_SIZE: u32 = 512;
+/// Bounds for `[llama] load_timeout_secs`.
+const MIN_LOAD_TIMEOUT_SECS: u64 = 10;
+const MAX_LOAD_TIMEOUT_SECS: u64 = 3600;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -33,6 +40,48 @@ pub struct Config {
     /// VRAM budget (MB) for the scheduler. `0` = auto-detect from the GPU
     /// (falling back to [`FALLBACK_VRAM_BUDGET_MB`] when no GPU is present).
     pub vram_budget_mb: u64,
+    /// `llama-server` launch options (see [`crate::runtime::LlamaServerOptions`]).
+    pub llama: LlamaConfig,
+}
+
+/// The subset of `LlamaServerOptions` a user configures via `[llama]` in
+/// `config.toml` / the Settings UI. Applied at startup; a change needs a restart.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct LlamaConfig {
+    /// `-ngl` — layers offloaded to the GPU. `999` = all.
+    pub gpu_layers: u32,
+    /// `-c` — context window. `0` = let the adapter cap the model's trained
+    /// context ([`crate::compat::effective_ctx`]).
+    pub ctx_size: u32,
+    /// Pass `--flash-attn on`.
+    pub flash_attention: bool,
+    /// Seconds a freshly started server has to answer `/health`.
+    pub load_timeout_secs: u64,
+}
+
+impl Default for LlamaConfig {
+    fn default() -> Self {
+        Self {
+            gpu_layers: 999,
+            ctx_size: 0,
+            flash_attention: true,
+            load_timeout_secs: 180,
+        }
+    }
+}
+
+impl LlamaConfig {
+    /// Build the runtime options the adapter actually launches with.
+    pub fn to_options(&self) -> crate::runtime::LlamaServerOptions {
+        crate::runtime::LlamaServerOptions {
+            gpu_layers: self.gpu_layers,
+            ctx_size: (self.ctx_size > 0).then_some(self.ctx_size),
+            flash_attention: self.flash_attention,
+            load_timeout: std::time::Duration::from_secs(self.load_timeout_secs),
+            extra_args: Vec::new(),
+        }
+    }
 }
 
 /// Used when `vram_budget_mb` is `0` and no NVIDIA GPU is detected.
@@ -46,6 +95,7 @@ impl Default for Config {
             offline_mode: false,
             log_filter: DEFAULT_LOG_FILTER.to_string(),
             vram_budget_mb: 0,
+            llama: LlamaConfig::default(),
         }
     }
 }
@@ -58,6 +108,20 @@ impl Config {
         cfg.apply_overrides(|key| std::env::var(key).ok())?;
         cfg.validate()?;
         Ok(cfg)
+    }
+
+    /// Read `config.toml` as it sits on disk — no `AIWM_*` overlay — creating it
+    /// with defaults if absent. The Settings UI shows and rewrites *this*, so an
+    /// env override never silently swallows a user's saved value.
+    pub fn read_from(paths: &AppPaths) -> Result<Self> {
+        Self::read_or_create(&paths.config_file())
+    }
+
+    /// Validate, then write `config.toml`. Startup config — the caller tells the
+    /// user a restart is needed for most fields to take effect.
+    pub fn save(&self, paths: &AppPaths) -> Result<()> {
+        self.validate()?;
+        self.write(&paths.config_file())
     }
 
     fn read_or_create(file: &Path) -> Result<Self> {
@@ -121,6 +185,28 @@ impl Config {
         }
         if self.log_filter.trim().is_empty() {
             return Err(CoreError::Config("log_filter must not be empty".into()));
+        }
+        if self.vram_budget_mb != 0 && self.vram_budget_mb < MIN_VRAM_BUDGET_MB {
+            return Err(CoreError::Config(format!(
+                "vram_budget_mb must be 0 (auto) or at least {MIN_VRAM_BUDGET_MB}"
+            )));
+        }
+        self.llama.validate()?;
+        Ok(())
+    }
+}
+
+impl LlamaConfig {
+    fn validate(&self) -> Result<()> {
+        if self.ctx_size != 0 && self.ctx_size < MIN_CTX_SIZE {
+            return Err(CoreError::Config(format!(
+                "llama.ctx_size must be 0 (auto) or at least {MIN_CTX_SIZE}"
+            )));
+        }
+        if !(MIN_LOAD_TIMEOUT_SECS..=MAX_LOAD_TIMEOUT_SECS).contains(&self.load_timeout_secs) {
+            return Err(CoreError::Config(format!(
+                "llama.load_timeout_secs must be between {MIN_LOAD_TIMEOUT_SECS} and {MAX_LOAD_TIMEOUT_SECS}"
+            )));
         }
         Ok(())
     }
@@ -283,5 +369,78 @@ mod tests {
             ..Config::default()
         };
         assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn llama_defaults_map_to_runtime_options() {
+        let opts = LlamaConfig::default().to_options();
+        assert_eq!(opts.gpu_layers, 999);
+        assert_eq!(opts.ctx_size, None); // 0 => auto
+        assert!(opts.flash_attention);
+        assert_eq!(opts.load_timeout.as_secs(), 180);
+
+        let opts = LlamaConfig {
+            ctx_size: 4096,
+            ..LlamaConfig::default()
+        }
+        .to_options();
+        assert_eq!(opts.ctx_size, Some(4096));
+    }
+
+    #[test]
+    fn save_then_read_from_round_trips_including_llama() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = AppPaths::rooted(tmp.path());
+        let cfg = Config {
+            vram_budget_mb: 12_000,
+            llama: LlamaConfig {
+                gpu_layers: 20,
+                ctx_size: 16_384,
+                flash_attention: false,
+                load_timeout_secs: 90,
+            },
+            ..Config::default()
+        };
+
+        cfg.save(&paths).unwrap();
+        assert_eq!(Config::read_from(&paths).unwrap(), cfg);
+    }
+
+    #[test]
+    fn config_without_a_llama_table_still_loads() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = AppPaths::rooted(tmp.path());
+        std::fs::write(paths.config_file(), "vram_budget_mb = 8000\n").unwrap();
+
+        let cfg = Config::load(&paths).unwrap();
+        assert_eq!(cfg.vram_budget_mb, 8000);
+        assert_eq!(cfg.llama, LlamaConfig::default());
+    }
+
+    #[test]
+    fn invalid_llama_and_budget_values_are_rejected() {
+        let bad_ctx = Config {
+            llama: LlamaConfig {
+                ctx_size: 100,
+                ..LlamaConfig::default()
+            },
+            ..Config::default()
+        };
+        assert!(bad_ctx.validate().is_err());
+
+        let bad_timeout = Config {
+            llama: LlamaConfig {
+                load_timeout_secs: 5,
+                ..LlamaConfig::default()
+            },
+            ..Config::default()
+        };
+        assert!(bad_timeout.validate().is_err());
+
+        let bad_budget = Config {
+            vram_budget_mb: 200,
+            ..Config::default()
+        };
+        assert!(bad_budget.validate().is_err());
     }
 }

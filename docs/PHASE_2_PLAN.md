@@ -13,11 +13,17 @@ jede für sich testbar.
 | **2.4b** | Chat-Job **Cancel**: per-Job `watch`-Signal im `JobEngine`, `JobEngine::cancel` (Queued/Blocked direkt · laufender Job signalisiert), `POST /jobs/{id}/cancel`, „Cancel"-Knopf im Dashboard | ✅ |
 | **2.5** | UI: „Chat"-Tab + aktiver Capability-Button, Prompt/Antwort-Oberfläche, Antwort erscheint aus `jobs.result`-Polling, „Stop"-Knopf, Auto-Modell + Token-Stats aus dem Event-Stream | ✅ |
 | **2.6** | `core::compat`: VRAM-Fit-Schätzung (Gewichte + KV-Cache aus GGUF-Arch-Dims + Overhead) für den effektiven Chat-Kontext; Scheduler plant dagegen, `llama-server` bekommt passendes `-c`; passt es nicht → `blocked` mit Klartext-Aufschlüsselung statt OOM-Load; Blocked-Job ruht (kein Heiß-Loop) | ✅ |
-| 2.7 | Settings-UI (Store-Pfad, Offline-Schalter, Theme, `LlamaServerOptions`), Diagnostics erweitert | offen |
+| **2.7** | Settings-UI: Theme (System/Hell/Dunkel, sofort), Store-Pfad, VRAM-Budget, **Offline-Schalter live**, `[llama]`-Optionen (`-ngl`/`-c`/Flash-Attn/Timeout); `GET`/`PUT /config`; Diagnostics erweitert (VRAM-Budget, GPU-Prozesse, Copy) | ✅ |
 
 **Phase-2-DONE-Kriterium:** frisches Windows → App → llama.cpp wird eingerichtet
 → GGUF importieren → Chat-Job läuft → zweites Modell → Wechsel ohne manuelles
 VRAM-Management → Netz trennen → läuft weiter.
+
+**Stand:** Alle Scheiben 2.1–2.7 ✅. Jeder Schritt der DONE-Kette ist einzeln
+verifiziert (Installer 2.2b · Import 2.1 · Chat live 2.4a/2.5 · Modell-Wechsel
+via Scheduler 2.2a/2.6 · `offline_mode` 2.7). Offen als *eine* durchgehende
+Prüfung: ein dedizierter End-to-End-Test „zweites Modell → Wechsel ohne
+manuelles VRAM-Management" (in [TODO.md](TODO.md) notiert) — dann Phase 2 zu.
 
 ---
 
@@ -371,3 +377,55 @@ Verifiziert:
 Bewusst **nicht** in 2.6: RAM-Schätzung, Kalibrierung der Formel gegen echte
 `nvidia-smi`-Messungen (→ Phase 6), Auto-Requeue blockierter Jobs bei Session-Ende
 (aktuell: manuell/Cancel oder wenn ein anderer Job evicted → [TODO.md](TODO.md)).
+
+---
+
+## 2.7 — Ergebnis (abgeschlossen)
+
+- **`config.toml` bleibt die Wahrheit für Startkonfiguration** (ADR-017). Neu:
+  `[llama]`-Tabelle (`gpu_layers` / `ctx_size` / `flash_attention` /
+  `load_timeout_secs`) → `LlamaConfig::to_options()`; `App::load` startet den
+  Adapter mit diesen Optionen (`.with_options`). `Config::read_from` /
+  `Config::save` (lesen/schreiben ohne `AIWM_*`-Overlay). Validierung erweitert
+  (`vram_budget_mb` 0 oder ≥ 1024; `ctx_size` 0 oder ≥ 512;
+  `load_timeout_secs` 10–3600).
+- **Offline-Schalter live:** `App` hält ein `Arc<AtomicBool>` (`App::offline()` /
+  `set_offline()`), aus `config.offline_mode` geseedet. Alle Ausgangs-Call-Sites
+  (`install_llamacpp`, `about`) lesen die Live-Zahl. Der Rest bleibt
+  Neustart-pflichtig — die UI sagt das pro Feld.
+- **API:** `GET /config` (Datei-Stand + Live-Offline überlagert) · `PUT /config`
+  (`ConfigUpdate` = nur die editierbaren Felder; `core_api_port` / `log_filter`
+  bleiben Datei-only) → validiert, schreibt, flippt Offline, gibt die volle
+  `Config` zurück. Tauri-Commands `get_config` / `save_config`.
+- **UI: neuer Tab „Settings"** (`ui/src/features/settings/`):
+  - **Appearance** — Theme System/Hell/Dunkel als Segmented Control, **sofort**
+    (`lib/theme.ts`: `localStorage["aiwm.theme"]` → `data-theme` auf `<html>`,
+    vor dem ersten Paint in `main.tsx` gesetzt). `tokens.css` umgebaut:
+    Hell = blankes `:root`, Dunkel per `@media` (System) *und*
+    `:root[data-theme="dark"]` (explizit).
+  - **Model store / Scheduler / llama.cpp** — Formularfelder mit „restart to
+    apply" bzw. „applies on the next model load"; **Network** — Offline-Toggle
+    „applies instantly". Sticky Save-Bar, Dirty-Tracking, Klartext-Fehler vom
+    Backend (400).
+- **Diagnostics erweitert:** VRAM-Budget + aktives Theme in „Environment" + ein
+  **Copy**-Knopf (Klartext-Block für Bug-Reports); neue Karte **GPU processes**
+  (PID → MB aus der Telemetrie — zeigt, was die Karte belegt).
+
+Verifiziert:
+- 6 neue Rust-Tests (4 `config`: `to_options`, Save/Read-Roundtrip inkl.
+  `[llama]`, fehlende `[llama]`-Tabelle lädt, ungültige Werte abgewiesen;
+  2 `api`: `/config`-Roundtrip über HTTP + Offline live, `PUT` mit ungültiger
+  `ctx_size` → 400). `check.ps1` grün (165 Unit + 12 Integ., UI typecheck + lint).
+- **Live** (`aiwm-cored`): `GET /config` → Default inkl. `[llama]`;
+  `PUT /config` mit `offline_mode:true` → `GET /about` zeigt **sofort**
+  `offline_mode:true`, `POST …/install` → 400 „offline mode is on";
+  `config.toml` auf der Platte trägt die `[llama]`-Sektion; `ctx_size:64` → 400.
+- **Visuell** (Vite-Dev + In-App-Browser, gemockte IPC): Settings-Tab rendert
+  sauber, Theme-Wechsel schaltet die ganze App sofort um (`data-theme` +
+  `localStorage` gesetzt), Save zeigt die grüne „Saved. Offline mode applies
+  now …"-Zeile, Diagnostics zeigt GPU-Prozesse + VRAM-Budget; kein horizontaler
+  Overflow, Hell und Dunkel beide sauber.
+
+Bewusst **nicht** in 2.7: Live-Reload von `store_path` / `vram_budget_mb` /
+`log_filter` (Neustart), `core_api_port` in der UI (Datei-only), i18n der
+Settings-Strings (Phase 6+).

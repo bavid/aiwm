@@ -36,3 +36,7 @@ Thumbs.db
 .env
 .env.*
 !.env.example
+
+# Claude Code local workspace config (launch.json etc.)
+.claude/
+/.smoke*/
