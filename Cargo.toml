@@ -36,6 +36,9 @@ reqwest = { version = "0.13", default-features = false, features = ["json", "nat
 # Extracting downloaded runtime archives (llama.cpp CUDA build). `deflate` only —
 # no aes/bzip2/zstd/lzma; the flate2 zlib-rs backend keeps it pure-Rust.
 zip = { version = "8", default-features = false, features = ["deflate"] }
+# NTFS directory junctions for the model link manager (ADR-007). Safe API over
+# the reparse-point IOCTL — no admin, no hand-written unsafe.
+junction = "2"
 
 [workspace.lints.rust]
 unsafe_code = "warn"

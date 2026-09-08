@@ -10,7 +10,9 @@ hierher, damit nichts verloren geht.
   ✅ 2.2b (ADR-014). Offen: freien Speicherplatz vor dem Download prüfen
   (Brief 10.16 → Phase-6-Download-Manager); alte `runtimes/llamacpp/<build>/`
   beim Versions-Bump aufräumen
-- Windows: Junction vs. Hardlink für Modell-Dateien testen (Rechte, Verhalten)
+- ~~Windows: Junction vs. Hardlink für Modell-Dateien testen~~ → ✅ 2.3
+  (`core::link`, ADR-007). Offen: echtes Junctionen in einen Runtime-Ordner
+  gegen einen realen Konsumenten (ComfyUI, Phase 3)
 - sqlx: optional compile-time Query-Checking (`sqlx::query!`) via
   `cargo sqlx prepare` + `.sqlx/` im Repo + CI-Schritt `--check` (aktuell
   Runtime-Queries)

@@ -1,5 +1,5 @@
-//! Model registry persistence: the `models` table plus `model_roles`.
-//! `model_links` (per-runtime junctions) arrives with the link manager.
+//! Model registry persistence: the `models` table, `model_roles`, and
+//! `model_links` (which runtimes can reach the file, and how — ADR-007).
 
 use std::collections::BTreeMap;
 
@@ -9,7 +9,15 @@ use sqlx::SqlitePool;
 use super::now_rfc3339;
 use crate::{CoreError, Result};
 
-/// A model as stored, with its roles attached.
+/// How one runtime reaches a model's canonical file.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, sqlx::FromRow)]
+pub struct ModelLink {
+    pub runtime_id: String,
+    pub strategy: String,
+    pub link_path: String,
+}
+
+/// A model as stored, with its roles + runtime links attached.
 #[derive(Debug, Clone, Serialize)]
 pub struct Model {
     pub id: String,
@@ -32,6 +40,8 @@ pub struct Model {
     pub last_used_at: Option<String>,
     pub use_count: i64,
     pub roles: Vec<String>,
+    /// Runtime ids that can use this model (from `model_links`).
+    pub runtimes: Vec<String>,
 }
 
 /// Fields supplied when registering a model. `id` and `imported_at` are set here.
@@ -84,7 +94,7 @@ struct ModelRow {
 }
 
 impl ModelRow {
-    fn into_model(self, roles: Vec<String>) -> Model {
+    fn into_model(self, roles: Vec<String>, runtimes: Vec<String>) -> Model {
         Model {
             id: self.id,
             publisher: self.publisher,
@@ -106,6 +116,7 @@ impl ModelRow {
             last_used_at: self.last_used_at,
             use_count: self.use_count,
             roles,
+            runtimes,
         }
     }
 }
@@ -175,7 +186,15 @@ impl<'a> ModelRepo<'a> {
         .fetch_optional(self.pool)
         .await?;
         match row {
-            Some(r) => Ok(Some(r.into_model(self.roles(id).await?))),
+            Some(r) => {
+                let runtimes = self
+                    .links(id)
+                    .await?
+                    .into_iter()
+                    .map(|l| l.runtime_id)
+                    .collect();
+                Ok(Some(r.into_model(self.roles(id).await?, runtimes)))
+            }
             None => Ok(None),
         }
     }
@@ -188,11 +207,13 @@ impl<'a> ModelRepo<'a> {
         .await?;
 
         let roles = self.all_roles().await?;
+        let runtimes = self.all_link_runtimes().await?;
         Ok(rows
             .into_iter()
             .map(|r| {
                 let rs = roles.get(&r.id).cloned().unwrap_or_default();
-                r.into_model(rs)
+                let rt = runtimes.get(&r.id).cloned().unwrap_or_default();
+                r.into_model(rs, rt)
             })
             .collect())
     }
@@ -275,6 +296,63 @@ impl<'a> ModelRepo<'a> {
         let mut map: BTreeMap<String, Vec<String>> = BTreeMap::new();
         for (id, role) in rows {
             map.entry(id).or_default().push(role);
+        }
+        Ok(map)
+    }
+
+    // --- links (model_links) -------------------------------------------------
+
+    /// Record how `runtime_id` reaches this model's file (ADR-007). Upsert.
+    pub async fn link_runtime(
+        &self,
+        model_id: &str,
+        runtime_id: &str,
+        strategy: &str,
+        link_path: &str,
+    ) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO model_links (model_id, runtime_id, strategy, link_path)
+             VALUES ($1, $2, $3, $4)
+             ON CONFLICT(model_id, runtime_id)
+             DO UPDATE SET strategy = excluded.strategy, link_path = excluded.link_path",
+        )
+        .bind(model_id)
+        .bind(runtime_id)
+        .bind(strategy)
+        .bind(link_path)
+        .execute(self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn unlink_runtime(&self, model_id: &str, runtime_id: &str) -> Result<bool> {
+        let res = sqlx::query("DELETE FROM model_links WHERE model_id = $1 AND runtime_id = $2")
+            .bind(model_id)
+            .bind(runtime_id)
+            .execute(self.pool)
+            .await?;
+        Ok(res.rows_affected() > 0)
+    }
+
+    pub async fn links(&self, model_id: &str) -> Result<Vec<ModelLink>> {
+        let rows = sqlx::query_as::<_, ModelLink>(
+            "SELECT runtime_id, strategy, link_path FROM model_links
+             WHERE model_id = $1 ORDER BY runtime_id",
+        )
+        .bind(model_id)
+        .fetch_all(self.pool)
+        .await?;
+        Ok(rows)
+    }
+
+    async fn all_link_runtimes(&self) -> Result<BTreeMap<String, Vec<String>>> {
+        let rows: Vec<(String, String)> =
+            sqlx::query_as("SELECT model_id, runtime_id FROM model_links ORDER BY runtime_id")
+                .fetch_all(self.pool)
+                .await?;
+        let mut map: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        for (id, runtime_id) in rows {
+            map.entry(id).or_default().push(runtime_id);
         }
         Ok(map)
     }
@@ -375,13 +453,54 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn delete_cascades_roles() {
+    async fn delete_cascades_roles_and_links() {
         let db = Database::connect_in_memory().await.unwrap();
         let m = db.models().insert(gguf_model("m", "h")).await.unwrap();
+        db.models()
+            .link_runtime(&m.id, "llamacpp", "passthrough", &m.file_path)
+            .await
+            .unwrap();
 
         assert!(db.models().delete(&m.id).await.unwrap());
         assert!(db.models().get(&m.id).await.unwrap().is_none());
         assert!(db.models().roles(&m.id).await.unwrap().is_empty());
+        assert!(db.models().links(&m.id).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn link_runtime_upserts_and_shows_on_the_model() {
+        let db = Database::connect_in_memory().await.unwrap();
+        let m = db.models().insert(gguf_model("q", "h")).await.unwrap();
+        assert!(m.runtimes.is_empty());
+
+        db.models()
+            .link_runtime(&m.id, "llamacpp", "passthrough", "E:\\c\\q.gguf")
+            .await
+            .unwrap();
+        db.models()
+            .link_runtime(&m.id, "llamacpp", "junction", "C:\\rt\\q") // upsert
+            .await
+            .unwrap();
+
+        let got = db.models().get(&m.id).await.unwrap().unwrap();
+        assert_eq!(got.runtimes, ["llamacpp"]);
+        let links = db.models().links(&m.id).await.unwrap();
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].strategy, "junction");
+        assert_eq!(links[0].link_path, "C:\\rt\\q");
+
+        // Shows in `list` too.
+        assert_eq!(db.models().list().await.unwrap()[0].runtimes, ["llamacpp"]);
+
+        assert!(db.models().unlink_runtime(&m.id, "llamacpp").await.unwrap());
+        assert!(db
+            .models()
+            .get(&m.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .runtimes
+            .is_empty());
     }
 
     #[tokio::test]

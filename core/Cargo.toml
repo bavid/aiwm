@@ -35,6 +35,7 @@ zip.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 win32job = "2"
+junction.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }

@@ -8,7 +8,7 @@ jede für sich testbar.
 | **2.1** | `ModelRepo` (CRUD + Rollen) · GGUF-Header-Inspektion · manueller Import in den kanonischen Store · API + UI-Tab „Models" | ✅ |
 | **2.2a** | `LlamaCppAdapter`: Binär-Auflösung (Env / Managed-Ordner / PATH), ein `llama-server`-Prozess pro residentem Modell über `RuntimeSupervisor`, `/health`-Polling, `unload`, **Attach-Fallback** auf laufenden Port, nicht-streamendes `complete()` | ✅ |
 | **2.2b** | llama.cpp-**Installer**: gepinnter CUDA-Build (`ggml-org/llama.cpp` Release-Assets), SHA-256-verifizierter Download, Doppel-Zip-Entpacken, `offline_mode`-Hard-Refusal, `RuntimeRepo`, `POST /runtimes/llamacpp/install` + UI-Knopf mit Fortschritt | ✅ |
-| 2.3 | Link-Manager: kanonische Datei ↔ Runtime via NTFS-Junction (ADR-007); `model_links`-Tabelle | offen |
+| **2.3** | Link-Manager (`core::link`): `LinkStrategy` (Passthrough/Junction/Hardlink/Copy), NTFS-Junction via `junction`-Crate, `model_links`-Tabelle live (`ModelRepo`-CRUD), Import registriert `passthrough`→llama.cpp, Models-UI zeigt „Runtimes" | ✅ |
 | **2.4a** | Chat-Job: `job_type=chat`, Modell (explizit oder `Auto` über Rolle) → Scheduler → llama-server laden → `/v1/chat/completions` streamen → Antwort progressiv in `jobs.result`; `job_events` + Token-Stats | ✅ |
 | **2.4b** | Chat-Job **Cancel**: per-Job `watch`-Signal im `JobEngine`, `JobEngine::cancel` (Queued/Blocked direkt · laufender Job signalisiert), `POST /jobs/{id}/cancel`, „Cancel"-Knopf im Dashboard | ✅ |
 | **2.5** | UI: „Chat"-Tab + aktiver Capability-Button, Prompt/Antwort-Oberfläche, Antwort erscheint aus `jobs.result`-Polling, „Stop"-Knopf, Auto-Modell + Token-Stats aus dem Event-Stream | ✅ |
@@ -278,3 +278,44 @@ Verifiziert:
 Bewusst **nicht** in 2.5: Multi-Turn-Kontext (jeder Prompt = ein eigener Job),
 System-Prompt / Sampling-Parameter, Modell-Picker (Capability-first), Verlaufs-
 Persistenz über Reload (die Jobs bleiben in der DB, im Dashboard sichtbar).
+
+---
+
+## 2.3 — Ergebnis (abgeschlossen)
+
+- **`core::link`** (neues Modul): `LinkStrategy { Passthrough, Junction, Hardlink,
+  Copy }` (+ `as_str` / `parse`), `strategy_for(runtime_id, format)` (llamacpp →
+  Passthrough, ollama → Copy, sonst → Junction).
+  - `materialize(canonical_file, dest, strategy) -> PathBuf` — gibt den Pfad
+    zurück, den die Runtime ihrem Loader übergibt. **Junction**: NTFS-Directory-
+    Reparse-Point über das `junction`-Crate (kein Admin, gleiche Volume, kein
+    hand-geschriebenes `unsafe`) — verlinkt den *Ordner* der kanonischen Datei;
+    idempotent (falsches Ziel → ersetzen). **Hardlink**: `std::fs::hard_link`,
+    Cross-Volume-Fehler mit Klartext. **Copy**: `std::fs::copy`. Alle idempotent.
+  - `dematerialize(dest, strategy)` — hebt den Link auf, fasst die kanonische
+    Datei nie an (`junction::delete` + leeres Verzeichnis entfernen).
+- **`model_links`** live: Migration `0003` entfernt die `runtimes`-FK
+  (Soft-Ref wie `jobs.runtime_id` — ein Modell kann verlinkt sein, bevor die
+  Runtime installiert ist; `models`-FK mit Cascade bleibt). `ModelRepo`:
+  `link_runtime` (Upsert) / `unlink_runtime` / `links` / `all_link_runtimes`.
+  `Model` bekommt `runtimes: Vec<String>` (gejoined wie `roles`).
+- **Import**: `import_model` registriert nach dem Insert einen Link
+  `strategy_for("llamacpp", "gguf") = passthrough`, `link_path = <kanonisch>` —
+  jedes GGUF ist damit als „von llama.cpp nutzbar" in der DB verzeichnet.
+- **UI**: Models-Tabelle mit Spalte „Runtimes".
+
+Verifiziert:
+- 8 neue Tests: `link` (Strategy-Roundtrip, Policy, Passthrough, Copy inkl.
+  idempotent + dematerialize, Hardlink, **echte Junction** unter Windows: Datei
+  durch den Link lesbar, Re-Link no-op, Entfernen lässt den Store unberührt,
+  fehlende Datei abgewiesen); `ModelRepo` (`link_runtime` Upsert + `runtimes` in
+  `get`/`list`, `unlink`, Cascade beim Model-Delete); Import-Test um den
+  passthrough-Link erweitert. `check.ps1` grün, null `unsafe` im Kern.
+- **Live** (`aiwm-cored`, Mini-GGUF): Import → `GET /models` liefert
+  `runtimes: ["llamacpp"]`; Migration `0003` läuft sauber gegen eine frische
+  persistente DB.
+
+Bewusst **nicht** in 2.3: echtes Junctionen in einen Runtime-Ordner (kein
+Konsument in Phase 2 — llama.cpp liest den kanonischen Pfad direkt). Die Junction-/
+Copy-Pfade sind gebaut + getestet und stehen für ComfyUI (Phase 3) / LM Studio /
+Ollama bereit. Dedup-Report (Brief 10.x) → Phase 6.

@@ -27,7 +27,7 @@ ram_estimate_mb, source, source_revision, imported_at, last_used_at, use_count.
 | `ModelRepo` (CRUD, Rollen, `find_by_*`, `pick_for_role`) | ✅ 2.1 / 2.4a |
 | Manueller Modell-Import (GGUF wählen → Store) | ✅ 2.1 |
 | `Auto`-Modellwahl (Rolle → zuletzt/meist genutzt → Name) | ✅ 2.4a (ADR-015); benchmark-gestützt erst Phase 6 |
-| Kanonischer Store + Link-Manager | Store ✅ 2.1 · Junction-Link-Manager offen (2.3, ADR-007) |
+| Kanonischer Store + Link-Manager | ✅ Store 2.1 · `core::link` 2.3 (Passthrough/Junction/Hardlink/Copy, `model_links`, ADR-007). GGUF → llama.cpp = `passthrough` |
 | Online-Discovery (HF Hub, Ollama-Library) | Phase 6 |
 | Download-Manager (Queue, Resume, Verify, Speicherplan) | Phase 6 |
 | Kompatibilitäts-Engine (🟢/🟡/🔴 vor Download) | Phase 6 |

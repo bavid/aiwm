@@ -17,6 +17,7 @@
 //! - [`runtime`]      — `RuntimeAdapter` trait, supervisor, llama.cpp adapter (WP-4, 2.2)
 //! - [`orchestrator`] — job state machine + engine (WP-5)
 //! - [`capability`]   — capability-specific job bodies (chat, 2.4)
+//! - [`link`]         — canonical model file ↔ runtime layout (junction/copy, 2.3)
 //! - [`scheduler`]    — `Scheduler` trait + hybrid scheduler skeleton (WP-5)
 //! - [`sidecar`]      — JSON-RPC client for the Python sidecar (WP-8)
 //! - [`api`]          — handlers shared by Tauri IPC and the loopback HTTP/WS API (WP-6)
@@ -27,6 +28,7 @@ pub mod capability;
 pub mod config;
 pub mod db;
 pub mod error;
+pub mod link;
 pub mod logging;
 pub mod model;
 pub mod orchestrator;
@@ -41,6 +43,7 @@ pub use app::App;
 pub use config::Config;
 pub use db::{Database, Model, ModelRepo, NewModel};
 pub use error::{CoreError, Result};
+pub use link::LinkStrategy;
 pub use model::{import_model, GgufInfo, ImportOutcome, ImportRequest};
 pub use orchestrator::{JobEngine, JobOutcome, JobState};
 pub use paths::AppPaths;

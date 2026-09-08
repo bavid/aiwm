@@ -108,6 +108,18 @@ pub async fn import_model(
     };
 
     let model = db.models().insert(new).await?;
+
+    // A GGUF is served to llama.cpp straight from the canonical path (ADR-007).
+    let strategy = crate::link::strategy_for("llamacpp", &model.format);
+    db.models()
+        .link_runtime(&model.id, "llamacpp", strategy.as_str(), &model.file_path)
+        .await?;
+    let model = db
+        .models()
+        .get(&model.id)
+        .await?
+        .ok_or_else(|| CoreError::Db("model vanished right after import".into()))?;
+
     tracing::info!(id = %model.id, name = %model.name, path = %model.file_path, "model imported");
     Ok(ImportOutcome {
         model,
@@ -273,6 +285,12 @@ mod tests {
         assert_eq!(out.model.param_count, Some(64 * 100 + 64 * 64));
         assert_eq!(out.model.roles, ["coding"]);
         assert!(out.model.vram_estimate_mb.unwrap() >= VRAM_HEADROOM_MB);
+
+        // A GGUF is registered as reachable by llama.cpp (passthrough — ADR-007).
+        assert_eq!(out.model.runtimes, ["llamacpp"]);
+        let links = db.models().links(&out.model.id).await.unwrap();
+        assert_eq!(links[0].strategy, "passthrough");
+        assert_eq!(links[0].link_path, out.model.file_path);
 
         assert!(!src.exists(), "source should have been moved");
         assert!(Path::new(&out.model.file_path).is_file());

@@ -140,13 +140,26 @@ dem ohnehin geplanten kanonischen Store.
 
 ## ADR-007 — Modell-Storage: kanonischer Store + Runtime-Links
 
-**Status:** Vorgeschlagen (Schema-Tabellen `models` / `model_links` existieren
-seit WP-2; der Link-Manager selbst kommt mit dem Phase-2-Modell-Importer).
+**Status:** Entschieden — `core::link` umgesetzt in 2.3. `models` / `model_roles`
+seit WP-2; `model_links` seit 2.3 live (Migration `0003` machte `runtime_id` zur
+Soft-Ref).
 
 **Entscheidung:** Eine kanonische Datei pro Modell im Store (`E:\AI\models\`).
-Ein Link-Manager verknüpft sie pro Runtime: NTFS-Junction (llama.cpp, LM Studio,
-ComfyUI) oder, wo unvermeidbar, Kopie/Import (Ollama). Duplikate durch Import
-werden im Dedup-Report ausgewiesen.
+`core::link::materialize` verknüpft sie pro Runtime nach `LinkStrategy`:
+- **`Passthrough`** — die Runtime nimmt einen absoluten Pfad (llama.cpp). Nichts
+  im Dateisystem, nur ein `model_links`-Eintrag als „nutzbar von".
+- **`Junction`** — NTFS-Directory-Reparse-Point (`junction`-Crate, kein Admin,
+  gleiche Volume) für Runtimes, die einen Ordnerbaum scannen (ComfyUI, LM Studio).
+- **`Hardlink`** — Datei-Hardlink, nur gleiche Volume.
+- **`Copy`** — echte Kopie; unvermeidbar für Ollamas content-addressed Store.
+
+`strategy_for(runtime_id, format)` wählt: `llamacpp` → Passthrough, `ollama` →
+Copy, sonst → Junction. Duplikate durch `Copy` weist der Dedup-Report (Phase 6)
+aus.
+
+**Konsequenz Phase 2:** nur `Passthrough` ist aktiv (llama.cpp). Junction/Copy
+sind gebaut + getestet (inkl. echter Junction-Roundtrip unter Windows) und
+stehen für Phase 3 bereit — kein spekulativer ungetesteter Code.
 
 ---
 

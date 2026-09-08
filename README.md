@@ -31,7 +31,7 @@ noch keine echte AI-Capability (die kommt ab Phase 2).
 | WP-9 | CI-Workflow, Git-Hooks (pre-commit fmt, pre-push voller Gate) |
 | WP-10 | ADRs finalisiert, Stub-Docs (MODELS/RUNTIMES/SECURITY/BENCHMARKS) |
 
-**140 Rust-Unit + 12 Integrationstests + 5 pytest** grün · `scripts/check.ps1` grün ·
+**148 Rust-Unit + 12 Integrationstests + 5 pytest** grün · `scripts/check.ps1` grün ·
 **null `unsafe`** im Produktivcode.
 
 **Phase 2 (MVP) läuft.** Plan + Fortschritt: [docs/PHASE_2_PLAN.md](docs/PHASE_2_PLAN.md).
@@ -50,7 +50,11 @@ noch keine echte AI-Capability (die kommt ab Phase 2).
 - **2.5** ✅ **Chat-UI**: eigener Tab, Prompt/Antwort, Antwort erscheint live aus
   `jobs.result`-Polling, „Stop"-Knopf, Auto-Modell + tok/s aus dem Event-Stream;
   „Chat"-Capability-Button auf dem Dashboard aktiv.
-- **2.3** (nächste) Junction-Link-Manager; dann 2.6 (Kompat-Check), 2.7 (Settings).
+- **2.3** ✅ **Link-Manager** (`core::link`): `LinkStrategy`
+  (Passthrough/Junction/Hardlink/Copy), NTFS-Junction via `junction`-Crate,
+  `model_links` live, Import verlinkt GGUF → llama.cpp (`passthrough`),
+  Models-UI-Spalte „Runtimes".
+- **2.6** (nächste) Kompatibilitäts-Check vor dem Laden; dann 2.7 (Settings).
 
 ## Zielhardware
 

@@ -10,7 +10,7 @@ mod runtimes;
 mod settings;
 
 pub use jobs::{EventLevel, Job, JobEvent, JobFilter, JobPatch, JobRepo, NewJob};
-pub use models::{Model, ModelRepo, NewModel};
+pub use models::{Model, ModelLink, ModelRepo, NewModel};
 pub use runtimes::{state as runtime_state, RuntimeRecord, RuntimeRepo};
 pub use settings::SettingsRepo;
 

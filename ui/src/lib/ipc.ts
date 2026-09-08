@@ -101,6 +101,8 @@ export interface Model {
   last_used_at: string | null;
   use_count: number;
   roles: string[];
+  /** Runtime ids that can use this model (from the link manager). */
+  runtimes: string[];
 }
 
 export interface ImportOutcome {

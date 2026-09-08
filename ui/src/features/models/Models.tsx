@@ -36,6 +36,7 @@ export function Models() {
                 <th>Ctx</th>
                 <th>VRAM est.</th>
                 <th>Roles</th>
+                <th>Runtimes</th>
               </tr>
             </thead>
             <tbody>
@@ -49,6 +50,7 @@ export function Models() {
                   <td className="numeric">{ctx(m.ctx_max)}</td>
                   <td className="numeric">{gb(m.vram_estimate_mb)}</td>
                   <td className="muted">{m.roles.join(", ") || "—"}</td>
+                  <td className="muted">{m.runtimes.join(", ") || "—"}</td>
                 </tr>
               ))}
             </tbody>

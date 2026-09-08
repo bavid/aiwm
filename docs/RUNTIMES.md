@@ -59,6 +59,26 @@ genutzt.
 - **Version-Bump:** Tag + beide Digests in `install::PINNED_ARCHIVES` ändern.
   Digests holt man mit `gh api repos/ggml-org/llama.cpp/releases/tags/<tag> --jq
   '.assets[] | select(.name|test("win-cuda-12.4-x64")) | {name, digest}'`.
+- **Modell-Zugriff (ADR-007, 2.3):** `core::link::strategy_for("llamacpp", …)` =
+  `Passthrough` — llama-server liest die kanonische Store-Datei direkt (`-m`).
+  Kein Junction/Kopie nötig; der Import verzeichnet den Zusammenhang in
+  `model_links` (`GET /models` → `runtimes: ["llamacpp"]`).
+
+## Link-Manager (`core::link`, ADR-007)
+
+`materialize(canonical_file, dest, strategy) -> PathBuf` macht die kanonische
+Datei für eine Runtime erreichbar und gibt den zu ladenden Pfad zurück:
+
+| Strategy | Wie | Für |
+|---|---|---|
+| `Passthrough` | nichts (kanonischer Pfad) | llama.cpp |
+| `Junction` | NTFS-Directory-Reparse-Point (`junction`-Crate, kein Admin, gleiche Volume) | ComfyUI, LM Studio |
+| `Hardlink` | `std::fs::hard_link`, nur gleiche Volume | Sonderfälle |
+| `Copy` | echte Kopie | Ollama (content-addressed Store) |
+
+`dematerialize` hebt den Link auf, ohne die Store-Datei zu berühren. Alle
+Operationen idempotent. In Phase 2 nur `Passthrough` aktiv; der Rest ist gebaut +
+getestet für Phase 3.
 
 ## Manage-first (ADR-002)
 
