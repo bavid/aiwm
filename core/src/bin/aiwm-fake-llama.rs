@@ -1,22 +1,26 @@
 //! Test fixture: a minimal `llama-server` stand-in.
 //!
-//! Speaks just enough of the real HTTP API for [`LlamaCppAdapter`] integration
-//! tests — `GET /health`, `GET /props`, `POST /completion` — and parses `--port`
-//! / `-m` from the command line the way the real server does, ignoring every
-//! other flag. Not part of the shipped product; it only exists so the adapter's
-//! spawn/health/serve/stop cycle can be exercised without a 600 MB download.
+//! Speaks just enough of the real HTTP API for the runtime + chat-job tests —
+//! `GET /health`, `GET /props`, `POST /completion`, and streaming
+//! `POST /v1/chat/completions` (SSE) — and parses `--port` / `-m` from the
+//! command line the way the real server does, ignoring every other flag. Not
+//! part of the shipped product; it exists so the spawn / health / serve / stream
+//! / stop cycle can be exercised without a 600 MB download.
 //!
 //! `AIWM_FAKE_LLAMA_READY_MS=<n>` makes `/health` return `503` for the first `n`
 //! milliseconds, simulating a slow model load.
 
+use std::convert::Infallible;
 use std::net::Ipv4Addr;
 use std::time::{Duration, Instant};
 
 use axum::extract::State;
 use axum::http::StatusCode;
+use axum::response::sse::{Event, Sse};
 use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use futures_util::stream::{self, Stream, StreamExt};
 use serde_json::{json, Value};
 
 #[derive(Clone)]
@@ -56,6 +60,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/health", get(health))
         .route("/props", get(props))
         .route("/completion", post(completion))
+        .route("/v1/chat/completions", post(chat_completions))
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, port)).await?;
@@ -87,4 +92,42 @@ async fn completion(body: Json<Value>) -> Json<Value> {
         "stop_type": "eos",
         "tokens_predicted": 5,
     }))
+}
+
+/// Streaming OpenAI-compatible chat completion. Echoes a canned sentence one
+/// word per SSE event (with a small delay so the client sees real chunks), then
+/// a `finish_reason` chunk with stats and the `[DONE]` sentinel.
+async fn chat_completions(body: Json<Value>) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
+    let prompt = body
+        .0
+        .pointer("/messages/0/content")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .chars()
+        .take(30)
+        .collect::<String>();
+    let reply = format!("fake-llama here — you said: {prompt} . done .");
+    let words: Vec<String> = reply.split_inclusive(' ').map(str::to_string).collect();
+    let total = words.len() as u64;
+
+    let tokens = stream::iter(words).then(|w| async move {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        Ok(Event::default().data(
+            json!({ "choices": [{ "index": 0, "delta": { "content": w }, "finish_reason": null }] })
+                .to_string(),
+        ))
+    });
+    let finish = stream::once(async move {
+        Ok(Event::default().data(
+            json!({
+                "choices": [{ "index": 0, "delta": {}, "finish_reason": "stop" }],
+                "usage": { "completion_tokens": total },
+                "timings": { "predicted_n": total, "predicted_per_second": 42.0 }
+            })
+            .to_string(),
+        ))
+    });
+    let done = stream::once(async { Ok(Event::default().data("[DONE]")) });
+
+    Sse::new(tokens.chain(finish).chain(done))
 }

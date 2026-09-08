@@ -55,6 +55,7 @@ impl App {
             db.clone(),
             runtimes.clone(),
             scheduler.clone(),
+            llama.clone(),
         ));
 
         Ok(Self {

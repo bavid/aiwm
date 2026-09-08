@@ -308,6 +308,43 @@ verlangt, dass das Tool die Runtime selbst beschafft.
 
 ---
 
+## ADR-015 — Chat-Capability: `/v1/chat/completions`-Streaming, `Auto` per Rolle, Ergebnis in der DB
+
+**Status:** Entschieden — umgesetzt in 2.4a (Cancel folgt 2.4b).
+
+**Entscheidung:**
+1. **Endpoint:** streamendes `POST /v1/chat/completions` (OpenAI-kompatibel), **nicht**
+   `/completion`. llama-server wendet die im GGUF hinterlegte Chat-Vorlage an —
+   kein manuelles Prompt-Templating pro Modellfamilie.
+2. **`Auto`-Modellwahl:** ein Job ohne explizites Modell nimmt das beste Modell
+   mit passender Rolle (`chat`) — Heuristik: zuletzt genutzt → meist genutzt →
+   Name. Kein Benchmark/Quality-Score (Phase 6). Kein Modell mit Rolle ⇒
+   Klartext-Fehler „import a .gguf first".
+3. **Streaming-Transport zur UI:** die Antwort wird progressiv in `jobs.result`
+   geschrieben (Flush ~200 ms); die UI pollt `GET /jobs/{id}` (wie alles andere
+   im MVP). **Kein** WebSocket-Token-Stream — später als Verfeinerung.
+4. **Job-Body-Ort:** `capability::chat` (neues Modul). Der `orchestrator` treibt
+   Zustandsmaschine + Scheduler; jede Capability besitzt ihren `Running`-Body.
+   Der Engine hält dafür den typisierten `Arc<LlamaCppAdapter>` (wie
+   `scheduler` / `jobs` in `App`) — kein Downcast von `dyn RuntimeAdapter`.
+
+**Alternativen:**
+- *`/completion` mit rohem Prompt:* ohne Chat-Vorlage schlechte Antworten bei
+  Instruct-Modellen; `--jinja` + manuelles Templating ist fragil. Verworfen.
+- *WS/SSE-Stream an die UI:* echtes Token-für-Token, aber neue Transport-
+  Infrastruktur. `jobs.result`-Polling reicht für den MVP und ist persistent
+  (Reload-fest). Verfeinerung notiert ([TODO.md](TODO.md)).
+- *`generate_text` auf dem `RuntimeAdapter`-Trait:* verfrühte Abstraktion für
+  genau eine Text-Runtime. Kommt, wenn eine zweite existiert.
+
+**Konsequenzen:**
+- (+) Erste echte Capability, end-to-end getestet (Fixture + echtes SmolLM2).
+- (−) Ein langer Chat-Job blockiert die Job-Schleife (Single-Slot-Prämisse,
+  ADR-003 — akzeptiert). Token-Zähler kommt aus `timings.predicted_n`
+  (llama.cpp-Erweiterung), Fallback `usage.completion_tokens`.
+
+---
+
 ## Offene Entscheidungen
 
 | # | Frage | Status |

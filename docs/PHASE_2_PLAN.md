@@ -9,7 +9,8 @@ jede für sich testbar.
 | **2.2a** | `LlamaCppAdapter`: Binär-Auflösung (Env / Managed-Ordner / PATH), ein `llama-server`-Prozess pro residentem Modell über `RuntimeSupervisor`, `/health`-Polling, `unload`, **Attach-Fallback** auf laufenden Port, nicht-streamendes `complete()` | ✅ |
 | **2.2b** | llama.cpp-**Installer**: gepinnter CUDA-Build (`ggml-org/llama.cpp` Release-Assets), SHA-256-verifizierter Download, Doppel-Zip-Entpacken, `offline_mode`-Hard-Refusal, `RuntimeRepo`, `POST /runtimes/llamacpp/install` + UI-Knopf mit Fortschritt | ✅ |
 | 2.3 | Link-Manager: kanonische Datei ↔ Runtime via NTFS-Junction (ADR-007); `model_links`-Tabelle | offen |
-| 2.4 | Chat-Job: `job_type=chat`, Modell (explizit oder `Auto`) → Scheduler → llama-server laden → Prompt → Antwort streamen; `job_events` + Cancel | offen |
+| **2.4a** | Chat-Job: `job_type=chat`, Modell (explizit oder `Auto` über Rolle) → Scheduler → llama-server laden → `/v1/chat/completions` streamen → Antwort progressiv in `jobs.result`; `job_events` + Token-Stats | ✅ |
+| 2.4b | Chat-Job **Cancel** (Signal-Plumbing, `POST /jobs/{id}/cancel`, UI-Knopf) | offen |
 | 2.5 | UI: „Chat"-Capability-Button aktiv, einfache Prompt/Antwort-Oberfläche; Job-Fortschritt aus dem Event-Stream | offen |
 | 2.6 | Kompatibilitäts-Check vor dem Laden (VRAM-Budget vs. `vram_estimate_mb` + KV-Cache-Schätzung), Klartext-Fehler | offen |
 | 2.7 | Settings-UI (Store-Pfad, Offline-Schalter, Theme), Diagnostics erweitert | offen |
@@ -157,3 +158,49 @@ Verifiziert:
 
 Offen für 2.2b+: freien Speicherplatz vor dem Download prüfen (Brief 10.16 →
 Phase 6 Download-Manager); Cleanup alter Build-Verzeichnisse beim Versions-Bump.
+
+---
+
+## 2.4a — Ergebnis (abgeschlossen)
+
+Erste echte AI-Capability: ein `job_type=chat`-Job liefert eine echte Antwort.
+
+- **`db`**: Migration `0002` → Spalte `jobs.result` (progressiv beschriebener
+  Antworttext). `JobRepo::assign` (Runtime+Modell nachträglich binden) /
+  `set_result`. `ModelRepo::pick_for_role(role)` — bester Kandidat für `Auto`:
+  zuletzt genutzt → meist genutzt → Name.
+- **`runtime::llamacpp`**: `GenerationEvent { Token(String) | Done{tokens,tps} }`.
+  `LlamaClient::complete_stream` — streamendes `POST /v1/chat/completions` (SSE,
+  llama-server wendet die Chat-Vorlage des Modells an), Zeilen-Parser
+  (`data: {…}` → Token / `finish_reason` → Done mit `timings.predicted_n` +
+  `predicted_per_second`, `[DONE]`-Sentinel). Bricht sauber ab, wenn der
+  Empfänger wegfällt (so wird Cancel in 2.4b abgewickelt).
+  `LlamaCppAdapter::stream_completion(prompt, max_tokens, tx)`.
+- **`capability::chat`** (neues Modul): `ChatRequest::from_params` (Prompt +
+  optional `max_tokens`), `run(db, llama, job_id, req)` — spawnt den Stream,
+  akkumuliert die Tokens, flusht alle 200 ms nach `jobs.result`, gibt
+  `ChatDone { text, tokens, tokens_per_second }` zurück.
+- **`orchestrator::engine`**: `resolve_target` (explizites Modell **oder** `Auto`
+  über die `chat`-Rolle; VRAM aus `model.vram_estimate_mb`, Job wird per `assign`
+  gebunden). Nach `Running` läuft für `job_type=="chat"` der Body; danach
+  `mark_used(model)` + Event „answered — N tokens, X tok/s". `JobEngine::new`
+  bekommt den typisierten `Arc<LlamaCppAdapter>`.
+- Bestehende Engine-/API-Tests, die „chat" nur als generischen Typ nutzten, auf
+  `"noop"` umbenannt (der Body läuft jetzt wirklich).
+- `aiwm-fake-llama`: streamt `/v1/chat/completions` (ein Wort pro SSE-Event,
+  10 ms Takt) für die Integrationstests.
+
+Verifiziert:
+- 6 neue Unit-Tests (SSE-Parser inkl. beider Token-Zähl-Pfade + Stream-Roundtrip
+  + Receiver-Drop, `pick_for_role`, `ChatRequest`), **4 Integrationstests**
+  `tests/chat_job.rs` gegen den Fixture-Subprozess: Auto-Job → streamt →
+  Completed (Antwort in `result`, `use_count` erhöht, Events); explizites Modell;
+  fehlender Prompt = Failed; kein `chat`-Modell = Failed. `check.ps1` grün.
+- **Live** (echte Kette): `POST install` → `POST /models` (SmolLM2-135M-Instruct
+  Q8_0, GGUF geparst: `llama` / `Q8_0` / 134 M params / ctx 8192) → Auto-Chat-Job
+  → echter `llama-server` auf Port geladen → `/v1/chat/completions` streamt →
+  `result` = „A llama is a large, gray, four-legged mammal …"; Job
+  `queued → … → completed`, Event „answered — 38 tokens, 687.6 tok/s".
+
+Bewusst **nicht** in 2.4a: Cancel (→ 2.4b), Chat-UI (→ 2.5), Multi-Turn-Verlauf,
+System-Prompt/Parameter (Temp etc.) — später.

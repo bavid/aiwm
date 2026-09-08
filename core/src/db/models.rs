@@ -229,6 +229,26 @@ impl<'a> ModelRepo<'a> {
         Ok(res.rows_affected() > 0)
     }
 
+    /// The best candidate model for `role` when the caller asked for `Auto`:
+    /// most-recently-used first, then most-used, then by name. `None` when no
+    /// model carries that role.
+    pub async fn pick_for_role(&self, role: &str) -> Result<Option<Model>> {
+        let row: Option<(String,)> = sqlx::query_as(
+            "SELECT m.id FROM models m
+             JOIN model_roles r ON r.model_id = m.id
+             WHERE r.role = $1
+             ORDER BY m.last_used_at DESC, m.use_count DESC, m.name COLLATE NOCASE
+             LIMIT 1",
+        )
+        .bind(role)
+        .fetch_optional(self.pool)
+        .await?;
+        match row {
+            Some((id,)) => self.get(&id).await,
+            None => Ok(None),
+        }
+    }
+
     pub async fn mark_used(&self, id: &str) -> Result<()> {
         sqlx::query("UPDATE models SET use_count = use_count + 1, last_used_at = $1 WHERE id = $2")
             .bind(now_rfc3339())
@@ -382,5 +402,55 @@ mod tests {
         let mut bad = gguf_model("x", "h");
         bad.name = "  ".into();
         assert!(db.models().insert(bad).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn pick_for_role_prefers_most_recently_used() {
+        let db = Database::connect_in_memory().await.unwrap();
+        assert!(db.models().pick_for_role("chat").await.unwrap().is_none());
+
+        let mut a = gguf_model("alpha", "ha");
+        a.roles = vec!["chat".into()];
+        let mut b = gguf_model("bravo", "hb");
+        b.roles = vec!["chat".into()];
+        let mut c = gguf_model("charlie", "hc");
+        c.roles = vec!["coding".into()];
+        let a = db.models().insert(a).await.unwrap();
+        db.models().insert(b).await.unwrap();
+        db.models().insert(c).await.unwrap();
+
+        // No usage yet → alphabetical.
+        assert_eq!(
+            db.models()
+                .pick_for_role("chat")
+                .await
+                .unwrap()
+                .unwrap()
+                .name,
+            "alpha"
+        );
+        // Use bravo → it wins next time.
+        let b_id = db.models().find_by_sha256("hb").await.unwrap().unwrap().id;
+        db.models().mark_used(&b_id).await.unwrap();
+        assert_eq!(
+            db.models()
+                .pick_for_role("chat")
+                .await
+                .unwrap()
+                .unwrap()
+                .name,
+            "bravo"
+        );
+        // A "coding" request never returns the chat-only models.
+        assert_eq!(
+            db.models()
+                .pick_for_role("coding")
+                .await
+                .unwrap()
+                .unwrap()
+                .name,
+            "charlie"
+        );
+        let _ = a;
     }
 }

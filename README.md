@@ -31,7 +31,7 @@ noch keine echte AI-Capability (die kommt ab Phase 2).
 | WP-9 | CI-Workflow, Git-Hooks (pre-commit fmt, pre-push voller Gate) |
 | WP-10 | ADRs finalisiert, Stub-Docs (MODELS/RUNTIMES/SECURITY/BENCHMARKS) |
 
-**134 Rust-Unit + 5 Integrationstests + 5 pytest** grün · `scripts/check.ps1` grün ·
+**140 Rust-Unit + 9 Integrationstests + 5 pytest** grün · `scripts/check.ps1` grün ·
 **null `unsafe`** im Produktivcode.
 
 **Phase 2 (MVP) läuft.** Plan + Fortschritt: [docs/PHASE_2_PLAN.md](docs/PHASE_2_PLAN.md).
@@ -44,7 +44,10 @@ noch keine echte AI-Capability (die kommt ab Phase 2).
 - **2.2b** ✅ llama.cpp-Installer: SHA-256-verifizierter Download des gepinnten
   CUDA-Builds + Entpacken, `POST /runtimes/llamacpp/install`, „Set up"-Knopf mit
   Fortschritt, `RuntimeRepo`.
-- **2.3** (nächste) Link-Manager (Store ↔ Runtime via NTFS-Junction).
+- **2.4a** ✅ Chat-Job: `job_type=chat` (`Auto`-Modellwahl über Rolle) → Scheduler
+  → `llama-server` → `/v1/chat/completions` gestreamt → Antwort progressiv in
+  `jobs.result`. Erste echte AI-Capability.
+- **2.4b** (nächste) Chat-Cancel; dann **2.5** Chat-UI.
 
 ## Zielhardware
 

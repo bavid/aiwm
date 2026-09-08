@@ -23,6 +23,10 @@ hierher, damit nichts verloren geht.
   als Alternative zum Prozess-pro-Modell — spart Modellwechsel-Latenz
 - `LlamaServerOptions` über die Settings-UI konfigurierbar machen (2.7):
   `-ngl`, `-c`, `--flash-attn`, Load-Timeout
+- Chat: WebSocket/SSE-Token-Stream an die UI statt `jobs.result`-Polling
+  (ADR-015 — MVP pollt); Multi-Turn-Verlauf, System-Prompt + Sampling-Parameter
+- Ein langer Chat-Job blockiert die Job-Schleife (Single-Slot-Prämisse ADR-003) —
+  ok für den MVP; bei paralleler Bild+LLM-Nutzung neu bewerten
 - UI-Lint: `eslint-plugin-react-hooks` (+ `-react-refresh`) in `ui/eslint.config.js`
   aufnehmen (aktuell nur js + typescript-eslint recommended)
 

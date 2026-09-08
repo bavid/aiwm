@@ -28,6 +28,7 @@ nvml-wrapper.workspace = true
 sysinfo.workspace = true
 async-trait.workspace = true
 axum.workspace = true
+futures-util.workspace = true
 sha2.workspace = true
 reqwest.workspace = true
 zip.workspace = true
@@ -39,4 +40,3 @@ win32job = "2"
 tokio = { workspace = true, features = ["test-util"] }
 tempfile.workspace = true
 tokio-tungstenite = "0.30"
-futures-util = "0.3"

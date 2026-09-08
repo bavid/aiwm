@@ -68,6 +68,8 @@ export interface Job {
   finished_at: string | null;
   error_text: string | null;
   output_path: string | null;
+  /** Progressively-updated generated text for chat/completion jobs. */
+  result: string | null;
 }
 
 export interface RuntimeStatus {

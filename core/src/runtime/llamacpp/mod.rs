@@ -23,6 +23,8 @@ use async_trait::async_trait;
 use serde::Serialize;
 use tokio::sync::Mutex as AsyncMutex;
 
+pub use self::client::GenerationEvent;
+
 use self::client::LlamaClient;
 use self::install::InstallPhase;
 use self::launch::{build_spawn_spec, free_loopback_port, resolve_server_bin};
@@ -285,13 +287,29 @@ impl LlamaCppAdapter {
         }
     }
 
-    /// Generate a completion from the resident model (non-streaming). Streaming
-    /// and chat-template handling arrive with the chat job (slice 2.4).
+    /// Generate a completion from the resident model (non-streaming).
     pub async fn complete(&self, prompt: &str, max_tokens: i32) -> Result<String> {
         let port = self
             .loaded_port()
             .ok_or_else(|| llama_err("no model is loaded"))?;
         self.client.complete(port, prompt, max_tokens).await
+    }
+
+    /// Stream a completion from the resident model: a [`GenerationEvent`] per
+    /// token chunk, then a final `Done`. Returns early if `tx`'s receiver is
+    /// dropped (that is how the chat job cancels).
+    pub async fn stream_completion(
+        &self,
+        prompt: &str,
+        max_tokens: i32,
+        tx: tokio::sync::mpsc::Sender<GenerationEvent>,
+    ) -> Result<()> {
+        let port = self
+            .loaded_port()
+            .ok_or_else(|| llama_err("no model is loaded"))?;
+        self.client
+            .complete_stream(port, prompt, max_tokens, tx)
+            .await
     }
 
     /// Adopt a `llama-server` the user already started on `port`. Probes

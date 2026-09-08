@@ -1,17 +1,19 @@
-//! The job engine: pull a runnable job, ask the scheduler where its model goes,
-//! act on that decision, and drive the job through the state machine — recording
-//! every transition and event.
+//! The job engine: pull a runnable job, resolve its target model (explicit or
+//! `Auto`), ask the scheduler where that model goes, act on the decision, and
+//! drive the job through the state machine — recording every transition and
+//! event.
 //!
-//! WP-5 executes jobs as no-ops (the fake runtime does the "load"); real work
-//! lands with the capability work packages.
+//! `job_type == "chat"` runs a real body ([`crate::capability::chat`]); every
+//! other type is still a no-op placeholder.
 
 use std::sync::Arc;
 
 use serde::Serialize;
 
 use super::JobState;
-use crate::db::{Job, JobPatch, NewJob};
-use crate::runtime::RuntimeRegistry;
+use crate::capability::chat;
+use crate::db::{EventLevel, Job, JobPatch, NewJob};
+use crate::runtime::{LlamaCppAdapter, RuntimeRegistry};
 use crate::scheduler::{Decision, PlanRequest, Scheduler};
 use crate::{CoreError, Database, Result};
 
@@ -24,19 +26,33 @@ pub enum JobOutcome {
     Failed { job_id: String, error: String },
 }
 
+/// Where a job's model should run, after `Auto` resolution.
+struct Target {
+    runtime_id: String,
+    model_id: String,
+    vram_mb: u64,
+}
+
 #[derive(Debug)]
 pub struct JobEngine {
     db: Database,
     registry: RuntimeRegistry,
     scheduler: Arc<dyn Scheduler>,
+    llama: Arc<LlamaCppAdapter>,
 }
 
 impl JobEngine {
-    pub fn new(db: Database, registry: RuntimeRegistry, scheduler: Arc<dyn Scheduler>) -> Self {
+    pub fn new(
+        db: Database,
+        registry: RuntimeRegistry,
+        scheduler: Arc<dyn Scheduler>,
+        llama: Arc<LlamaCppAdapter>,
+    ) -> Self {
         Self {
             db,
             registry,
             scheduler,
+            llama,
         }
     }
 
@@ -86,15 +102,73 @@ impl JobEngine {
         }
     }
 
-    async fn try_drive(&self, mut job: Job) -> Result<JobOutcome> {
-        let runtime_id = job.runtime_id.clone().ok_or_else(|| CoreError::Runtime {
+    /// Resolve the job's `(runtime, model, vram)` — honouring an explicit model,
+    /// or picking one for a `chat` job that asked for `Auto`.
+    async fn resolve_target(&self, job: &Job) -> Result<Target> {
+        if let (Some(runtime_id), Some(model_id)) = (&job.runtime_id, &job.model_id) {
+            let est = self.model_vram_estimate(model_id).await;
+            return Ok(Target {
+                runtime_id: runtime_id.clone(),
+                model_id: model_id.clone(),
+                vram_mb: job.vram_needed_mb().max(est),
+            });
+        }
+        if job.job_type == "chat" {
+            let model = self
+                .db
+                .models()
+                .pick_for_role("chat")
+                .await?
+                .ok_or_else(|| CoreError::Runtime {
+                    runtime: "llamacpp".into(),
+                    message: "no chat model in the library — import a .gguf first".into(),
+                })?;
+            self.db
+                .jobs()
+                .assign(&job.id, "llamacpp", &model.id)
+                .await?;
+            self.db
+                .jobs()
+                .append_event(
+                    &job.id,
+                    EventLevel::Info,
+                    &format!("auto-selected model \u{201c}{}\u{201d}", model.name),
+                )
+                .await?;
+            let est = model
+                .vram_estimate_mb
+                .and_then(|v| u64::try_from(v).ok())
+                .unwrap_or(0);
+            return Ok(Target {
+                runtime_id: "llamacpp".into(),
+                model_id: model.id,
+                vram_mb: job.vram_needed_mb().max(est),
+            });
+        }
+        Err(CoreError::Runtime {
             runtime: "?".into(),
-            message: format!("job {} has no runtime", job.id),
-        })?;
-        let model_id = job.model_id.clone().ok_or_else(|| CoreError::Runtime {
-            runtime: runtime_id.clone(),
-            message: format!("job {} has no model", job.id),
-        })?;
+            message: format!("job {} has no runtime or model to run on", job.id),
+        })
+    }
+
+    async fn model_vram_estimate(&self, model_id: &str) -> u64 {
+        self.db
+            .models()
+            .get(model_id)
+            .await
+            .ok()
+            .flatten()
+            .and_then(|m| m.vram_estimate_mb)
+            .and_then(|v| u64::try_from(v).ok())
+            .unwrap_or(0)
+    }
+
+    async fn try_drive(&self, mut job: Job) -> Result<JobOutcome> {
+        let Target {
+            runtime_id,
+            model_id,
+            vram_mb,
+        } = self.resolve_target(&job).await?;
 
         self.to(&mut job, JobState::Scheduled, JobPatch::default())
             .await?;
@@ -103,7 +177,7 @@ impl JobEngine {
             job_id: job.id.clone(),
             runtime_id: runtime_id.clone(),
             model_id: model_id.clone(),
-            vram_needed_mb: job.vram_needed_mb(),
+            vram_needed_mb: vram_mb,
             is_agent_session: job.is_agent_session(),
         };
 
@@ -156,7 +230,29 @@ impl JobEngine {
         )
         .await?;
 
-        // --- job body: no-op in WP-5 ---
+        // --- job body ---
+        if job.job_type == "chat" {
+            if runtime_id != "llamacpp" {
+                return Err(CoreError::Runtime {
+                    runtime: runtime_id.clone(),
+                    message: "chat jobs run on llama.cpp".into(),
+                });
+            }
+            let req = chat::ChatRequest::from_params(&job.params)?;
+            let done = chat::run(&self.db, &self.llama, &job.id, req).await?;
+            let _ = self.db.models().mark_used(&model_id).await;
+            self.db
+                .jobs()
+                .append_event(
+                    &job.id,
+                    EventLevel::Info,
+                    &format!(
+                        "answered — {} tokens, {:.1} tok/s",
+                        done.tokens, done.tokens_per_second
+                    ),
+                )
+                .await?;
+        }
 
         self.to(&mut job, JobState::Post, JobPatch::default())
             .await?;
@@ -214,13 +310,17 @@ mod tests {
         scheduler: Arc<HybridScheduler>,
     }
 
+    fn test_llama(db: &Database) -> Arc<LlamaCppAdapter> {
+        Arc::new(LlamaCppAdapter::with_binary(db.clone(), None))
+    }
+
     async fn fixture(budget_mb: u64) -> Fixture {
         let db = Database::connect_in_memory().await.unwrap();
         let registry = RuntimeRegistry::new();
         let rt = Arc::new(FakeRuntimeAdapter::healthy("llamacpp"));
         registry.register(rt.clone());
         let scheduler = Arc::new(HybridScheduler::new(registry.clone(), budget_mb));
-        let engine = JobEngine::new(db.clone(), registry, scheduler.clone());
+        let engine = JobEngine::new(db.clone(), registry, scheduler.clone(), test_llama(&db));
         Fixture {
             engine,
             db,
@@ -234,7 +334,7 @@ mod tests {
         let fx = fixture(16_384).await;
         let job = fx
             .engine
-            .submit(NewJob::new("chat").on("llamacpp", "qwen-14b", 9_000))
+            .submit(NewJob::new("noop").on("llamacpp", "qwen-14b", 9_000))
             .await
             .unwrap();
 
@@ -269,7 +369,7 @@ mod tests {
     #[tokio::test]
     async fn job_without_runtime_fails_cleanly() {
         let fx = fixture(16_384).await;
-        let job = fx.engine.submit(NewJob::new("chat")).await.unwrap();
+        let job = fx.engine.submit(NewJob::new("noop")).await.unwrap();
 
         let outcome = fx.engine.run_next().await.unwrap().unwrap();
         assert!(matches!(outcome, JobOutcome::Failed { .. }));
@@ -288,10 +388,10 @@ mod tests {
         }));
         registry.register(rt.clone());
         let scheduler = Arc::new(HybridScheduler::new(registry.clone(), 16_384));
-        let engine = JobEngine::new(db.clone(), registry, scheduler);
+        let engine = JobEngine::new(db.clone(), registry, scheduler, test_llama(&db));
 
         let job = engine
-            .submit(NewJob::new("chat").on("fake", "broken", 100))
+            .submit(NewJob::new("noop").on("fake", "broken", 100))
             .await
             .unwrap();
         let outcome = engine.run_next().await.unwrap().unwrap();
@@ -326,7 +426,7 @@ mod tests {
 
         let b = fx
             .engine
-            .submit(NewJob::new("chat").on("llamacpp", "other-model", 1_500))
+            .submit(NewJob::new("noop").on("llamacpp", "other-model", 1_500))
             .await
             .unwrap();
         let outcome = fx.engine.run_next().await.unwrap().unwrap();
@@ -358,14 +458,14 @@ mod tests {
         let fx = fixture(16_384).await;
 
         fx.engine
-            .submit(NewJob::new("chat").on("llamacpp", "big", 10_000))
+            .submit(NewJob::new("noop").on("llamacpp", "big", 10_000))
             .await
             .unwrap();
         fx.engine.run_next().await.unwrap();
         assert_eq!(fx.rt.vram_used_mb(), 10_000);
 
         fx.engine
-            .submit(NewJob::new("chat").on("llamacpp", "small", 6_000))
+            .submit(NewJob::new("noop").on("llamacpp", "small", 6_000))
             .await
             .unwrap();
         assert!(matches!(
@@ -387,7 +487,7 @@ mod tests {
         let fx = fixture(16_384).await;
         let job = fx
             .engine
-            .submit(NewJob::new("chat").on("llamacpp", "m", 1_000))
+            .submit(NewJob::new("noop").on("llamacpp", "m", 1_000))
             .await
             .unwrap();
         // Simulate a crash mid-run.

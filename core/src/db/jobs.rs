@@ -42,6 +42,8 @@ pub struct Job {
     pub finished_at: Option<String>,
     pub error_text: Option<String>,
     pub output_path: Option<String>,
+    /// Progressively-updated generated text for chat/completion jobs.
+    pub result: Option<String>,
 }
 
 /// Fields a caller supplies when queueing a job.
@@ -144,13 +146,14 @@ struct JobRow {
     finished_at: Option<String>,
     error_text: Option<String>,
     output_path: Option<String>,
+    result: Option<String>,
 }
 
 // The `SELECT` statements below interpolate only this compile-time constant,
 // `$N` bind placeholders, and integer limits — never caller data (always bound).
 // `AssertSqlSafe` documents that we have checked this.
 const SELECT_COLS: &str = "id, type AS job_type, capability, state, params_json, \
-     runtime_id, model_id, created_at, started_at, finished_at, error_text, output_path";
+     runtime_id, model_id, created_at, started_at, finished_at, error_text, output_path, result";
 
 impl TryFrom<JobRow> for Job {
     type Error = CoreError;
@@ -170,6 +173,7 @@ impl TryFrom<JobRow> for Job {
             finished_at: r.finished_at,
             error_text: r.error_text,
             output_path: r.output_path,
+            result: r.result,
         })
     }
 }
@@ -295,6 +299,28 @@ impl<'a> JobRepo<'a> {
             None => format!("{} -> {}", current.state.as_str(), next.as_str()),
         };
         self.append_event(id, level, &msg).await
+    }
+
+    /// Bind a resolved runtime + model to a job (used after `Auto` selection).
+    pub async fn assign(&self, id: &str, runtime_id: &str, model_id: &str) -> Result<()> {
+        sqlx::query("UPDATE jobs SET runtime_id = $1, model_id = $2 WHERE id = $3")
+            .bind(runtime_id)
+            .bind(model_id)
+            .bind(id)
+            .execute(self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// Overwrite a job's generated text. Called repeatedly as tokens stream in,
+    /// so it stays a plain `UPDATE` — no transition, no event.
+    pub async fn set_result(&self, id: &str, text: &str) -> Result<()> {
+        sqlx::query("UPDATE jobs SET result = $1 WHERE id = $2")
+            .bind(text)
+            .bind(id)
+            .execute(self.pool)
+            .await?;
+        Ok(())
     }
 
     pub async fn append_event(&self, id: &str, level: EventLevel, message: &str) -> Result<()> {

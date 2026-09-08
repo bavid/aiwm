@@ -23,10 +23,11 @@ ram_estimate_mb, source, source_revision, imported_at, last_used_at, use_count.
 
 | Feature | Stand |
 |---|---|
-| Schema + Tabellen | ✅ WP-2 |
-| `ModelRepo` (CRUD, Rollen, Links) | Phase 2 (mit dem Importer) |
-| Manueller Modell-Import (GGUF wählen → Store) | Phase 2 |
-| Kanonischer Store + Link-Manager | Phase 2 (ADR-007) |
+| Schema + Tabellen | ✅ WP-2 (+ `jobs.result`, Migration 0002, 2.4a) |
+| `ModelRepo` (CRUD, Rollen, `find_by_*`, `pick_for_role`) | ✅ 2.1 / 2.4a |
+| Manueller Modell-Import (GGUF wählen → Store) | ✅ 2.1 |
+| `Auto`-Modellwahl (Rolle → zuletzt/meist genutzt → Name) | ✅ 2.4a (ADR-015); benchmark-gestützt erst Phase 6 |
+| Kanonischer Store + Link-Manager | Store ✅ 2.1 · Junction-Link-Manager offen (2.3, ADR-007) |
 | Online-Discovery (HF Hub, Ollama-Library) | Phase 6 |
 | Download-Manager (Queue, Resume, Verify, Speicherplan) | Phase 6 |
 | Kompatibilitäts-Engine (🟢/🟡/🔴 vor Download) | Phase 6 |

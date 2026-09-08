@@ -31,10 +31,14 @@ genutzt.
 | Ollama | `OllamaAdapter` | optional, Phase 3+ (Duplikate transparent, ADR-006) |
 | LM Studio | — | vorerst nicht (proprietär, GUI-zentriert) |
 
-### `LlamaCppAdapter` (Stand 2.2a)
+### `LlamaCppAdapter` (Stand 2.4a)
 
 - **Ein `llama-server`-Prozess pro residentem Modell.** `llama-server` bedient
   genau ein Modell; der Adapter startet/stoppt ihn passend zum Scheduler-Slot.
+- **Inferenz:** `complete()` (nicht-streamend, `/completion`) und
+  `stream_completion(prompt, max_tokens, tx)` (streamend, `/v1/chat/completions`
+  — Chat-Vorlage vom Modell). Der Chat-Job (`capability::chat`) nutzt den Stream
+  und schreibt die Antwort progressiv in `jobs.result`.
 - **Binär-Auflösung:** `AIWM_LLAMACPP_PATH` → Managed-Install unter
   `<data_dir>/runtimes/llamacpp/` → `PATH`. Fehlt alles: `detail() = "not
   installed"`, `load_model` liefert einen Klartextfehler.

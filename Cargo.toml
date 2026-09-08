@@ -27,6 +27,7 @@ nvml-wrapper = "0.13"
 sysinfo = { version = "0.39", default-features = false, features = ["system"] }
 async-trait = "0.1"
 axum = { version = "0.8", features = ["ws"] }
+futures-util = "0.3"
 sha2 = "0.11"
 # HTTP client: loopback for managed runtimes (ADR-008), HTTPS for the llama.cpp
 # release download (ADR-014). `native-tls` = Schannel on our Windows target — no

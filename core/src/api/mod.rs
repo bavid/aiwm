@@ -256,7 +256,7 @@ mod tests {
             .unwrap();
 
         app.jobs
-            .submit(crate::db::NewJob::new("chat").on("llamacpp", "m", 1_000))
+            .submit(crate::db::NewJob::new("noop").on("llamacpp", "m", 1_000))
             .await
             .unwrap();
 

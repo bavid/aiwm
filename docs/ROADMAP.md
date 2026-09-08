@@ -26,8 +26,9 @@ Loopback-API + Daemon-Run-Loop laufen. Keine echte Runtime, keine Inferenz.
 ## Phase 2 — MVP: Plattform-Kern *(in Arbeit)*
 
 **Scheibenplan + Fortschritt: [PHASE_2_PLAN.md](PHASE_2_PLAN.md).** Fertig: 2.1
-(ModelRepo + GGUF-Import), 2.2a (`LlamaCppAdapter` — Start/Stop/Health/Attach),
-2.2b (llama.cpp-Installer — verifizierter Download + Entpacken).
+(ModelRepo + GGUF-Import), 2.2a/b (`LlamaCppAdapter` + Installer), 2.4a
+(Chat-Job — `Auto`-Modellwahl, `/v1/chat/completions` gestreamt in `jobs.result`).
+Erste echte AI-Capability steht.
 
 Umfang bewusst eng. **Nicht** enthalten: Online-Discovery-Suche, Download-Manager,
 Benchmarks, Quality-Scores, Plugin-System, Bild/Video, Agents.

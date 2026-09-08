@@ -17,7 +17,7 @@ mod supervisor;
 
 pub use fake::{FakeConfig, FakeRuntimeAdapter};
 pub use job::JobObject;
-pub use llamacpp::{InstallState, LlamaCppAdapter, LlamaServerOptions};
+pub use llamacpp::{GenerationEvent, InstallState, LlamaCppAdapter, LlamaServerOptions};
 pub use registry::RuntimeRegistry;
 pub use supervisor::{RuntimeSupervisor, SupervisorState};
 
