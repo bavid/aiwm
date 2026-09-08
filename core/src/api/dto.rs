@@ -3,6 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::db::{Job, JobEvent};
 use crate::runtime::{Health, RuntimeKind};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -24,6 +25,13 @@ pub struct RuntimeStatusDto {
     /// One short status line for the UI (e.g. `"not installed"`,
     /// `"serving qwen on :48213"`). `null` when there is nothing to add.
     pub detail: Option<String>,
+}
+
+/// A job plus its event trail — `GET /jobs/{id}` / `job_detail`.
+#[derive(Debug, Clone, Serialize)]
+pub struct JobDetailDto {
+    pub job: Job,
+    pub events: Vec<JobEvent>,
 }
 
 /// Body for `POST /jobs` / `submit_job`.

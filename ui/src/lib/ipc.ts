@@ -108,6 +108,27 @@ export interface ImportOutcome {
   already_present: boolean;
 }
 
+export interface JobEvent {
+  ts: string;
+  level: "info" | "warn" | "error";
+  message: string;
+}
+
+export interface JobDetail {
+  job: Job;
+  events: JobEvent[];
+}
+
+export interface SubmitJobBody {
+  job_type: string;
+  capability?: string;
+  runtime_id?: string;
+  model_id?: string;
+  vram_needed_mb?: number;
+  agent_session?: boolean;
+  params?: unknown;
+}
+
 export const about = () => invoke<AboutInfo>("about");
 export const getTelemetry = () => invoke<SystemTelemetry>("get_telemetry");
 export const getSettings = () => invoke<Record<string, string>>("get_settings");
@@ -120,6 +141,8 @@ export const listJobs = (opts?: { states?: JobState[]; limit?: number }) =>
   invoke<Job[]>("list_jobs", { states: opts?.states ?? null, limit: opts?.limit ?? null });
 /** Ask a job to stop. `true` = applied/signalled, `false` = too late, `null` = no such job. */
 export const cancelJob = (id: string) => invoke<boolean | null>("cancel_job", { id });
+export const submitJob = (body: SubmitJobBody) => invoke<Job>("submit_job", { body });
+export const jobDetail = (id: string) => invoke<JobDetail | null>("job_detail", { id });
 
 export const listModels = () => invoke<Model[]>("list_models");
 export const importModel = (sourcePath: string, roles: string[], keepOriginal: boolean) =>

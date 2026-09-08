@@ -337,8 +337,9 @@ verlangt, dass das Tool die Runtime selbst beschafft.
 - *`/completion` mit rohem Prompt:* ohne Chat-Vorlage schlechte Antworten bei
   Instruct-Modellen; `--jinja` + manuelles Templating ist fragil. Verworfen.
 - *WS/SSE-Stream an die UI:* echtes Token-für-Token, aber neue Transport-
-  Infrastruktur. `jobs.result`-Polling reicht für den MVP und ist persistent
-  (Reload-fest). Verfeinerung notiert ([TODO.md](TODO.md)).
+  Infrastruktur. Die Chat-UI (2.5) pollt `GET /jobs/{id}` alle 350 ms und zeigt
+  `job.result` wachsen — reicht für den MVP, ist persistent (Reload-fest) und
+  nutzt denselben Weg wie alles andere. Verfeinerung notiert ([TODO.md](TODO.md)).
 - *`generate_text` auf dem `RuntimeAdapter`-Trait:* verfrühte Abstraktion für
   genau eine Text-Runtime. Kommt, wenn eine zweite existiert.
 

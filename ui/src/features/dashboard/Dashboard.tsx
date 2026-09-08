@@ -6,16 +6,16 @@ import "./dashboard.css";
 
 const GB = 1024;
 const CANCELLABLE: JobState[] = ["queued", "scheduled", "blocked", "preparing", "running"];
-const CAPABILITIES = [
+const CAPABILITIES: { key: string; label: string; hint: string; active?: boolean }[] = [
+  { key: "chat", label: "Chat", hint: "ready", active: true },
   { key: "code", label: "Coding", hint: "Phase 5" },
   { key: "image", label: "Generate Image", hint: "Phase 3" },
   { key: "video", label: "Generate Video", hint: "Phase 4" },
-  { key: "enhance", label: "Enhance Image", hint: "Phase 3" },
 ];
 
 const gb = (mb: number) => (mb / GB).toFixed(1);
 
-export function Dashboard() {
+export function Dashboard({ onOpenChat }: { onOpenChat: () => void }) {
   const { telemetry, error } = useTelemetry();
   const { data: jobs, refetch: refetchJobs } = useJobs();
   const about = useAbout();
@@ -101,7 +101,13 @@ export function Dashboard() {
         </header>
         <div className="capabilities">
           {CAPABILITIES.map((c) => (
-            <button key={c.key} className="capability" disabled title={`Available in ${c.hint}`}>
+            <button
+              key={c.key}
+              className="capability"
+              disabled={!c.active}
+              onClick={c.active ? onOpenChat : undefined}
+              title={c.active ? "Open chat" : `Available in ${c.hint}`}
+            >
               <span className="capability__label">{c.label}</span>
               <span className="capability__hint">{c.hint}</span>
             </button>

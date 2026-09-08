@@ -125,10 +125,8 @@ async fn submit_job(
 }
 
 async fn job_detail(State(app): AppState, Path(id): Path<String>) -> Result<Response, ApiError> {
-    match handlers::job_events(&app, &id).await? {
-        Some((job, events)) => {
-            Ok(Json(serde_json::json!({ "job": job, "events": events })).into_response())
-        }
+    match handlers::job_detail(&app, &id).await? {
+        Some(detail) => Ok(Json(detail).into_response()),
         None => Ok((
             StatusCode::NOT_FOUND,
             Json(serde_json::json!({ "error": "no such job" })),

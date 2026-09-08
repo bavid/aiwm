@@ -11,7 +11,7 @@ jede für sich testbar.
 | 2.3 | Link-Manager: kanonische Datei ↔ Runtime via NTFS-Junction (ADR-007); `model_links`-Tabelle | offen |
 | **2.4a** | Chat-Job: `job_type=chat`, Modell (explizit oder `Auto` über Rolle) → Scheduler → llama-server laden → `/v1/chat/completions` streamen → Antwort progressiv in `jobs.result`; `job_events` + Token-Stats | ✅ |
 | **2.4b** | Chat-Job **Cancel**: per-Job `watch`-Signal im `JobEngine`, `JobEngine::cancel` (Queued/Blocked direkt · laufender Job signalisiert), `POST /jobs/{id}/cancel`, „Cancel"-Knopf im Dashboard | ✅ |
-| 2.5 | UI: „Chat"-Capability-Button aktiv, einfache Prompt/Antwort-Oberfläche; Job-Fortschritt aus dem Event-Stream | offen |
+| **2.5** | UI: „Chat"-Tab + aktiver Capability-Button, Prompt/Antwort-Oberfläche, Antwort erscheint aus `jobs.result`-Polling, „Stop"-Knopf, Auto-Modell + Token-Stats aus dem Event-Stream | ✅ |
 | 2.6 | Kompatibilitäts-Check vor dem Laden (VRAM-Budget vs. `vram_estimate_mb` + KV-Cache-Schätzung), Klartext-Fehler | offen |
 | 2.7 | Settings-UI (Store-Pfad, Offline-Schalter, Theme), Diagnostics erweitert | offen |
 
@@ -239,3 +239,42 @@ Verifiziert:
   gegen das echte Modell war nicht reproduzierbar — SmolLM2-135M generiert mit
   ~750 tok/s schneller als das Cancel-Roundtrip; der Mechanismus (`select!` +
   `stream.abort()`) ist derselbe wie im Fixture-Test bewiesen.
+
+---
+
+## 2.5 — Ergebnis (abgeschlossen)
+
+- **`api::dto::JobDetailDto { job, events }`** — eine Form für `GET /jobs/{id}`
+  über beide Transporte. `handlers::job_events` → `handlers::job_detail`.
+- **Tauri-Commands** `submit_job` / `job_detail` (dünne Wrapper über die
+  bestehenden Handler; `cancel_job` kam schon in 2.4b).
+- **UI: neuer Tab „Chat"** (`ui/src/features/chat/`):
+  - Composer unten (Textarea, Enter = senden, Shift+Enter = Zeilenumbruch),
+    Log-Bereich scrollt.
+  - Senden → `submit_job({ job_type: "chat", params: { prompt } })` (kein
+    Modell → `Auto`), dann `job_detail`-Polling alle 350 ms.
+  - Antwort erscheint progressiv aus `job.result`; Blink-Cursor solange `running`.
+    Meta-Zeile: Auto-Modellname + „N tokens · X tok/s" (aus den `job_events`
+    geparst). „Stop"-Knopf ruft `cancel_job`.
+  - Leerzustand mit Hinweis, falls llama.cpp fehlt / kein `chat`-Modell da ist
+    (aus `list_models` / `get_runtimes`).
+- **Dashboard**: die vier Capability-Buttons — „Chat" aktiv (öffnet den Tab),
+  Coding/Image/Video weiterhin „bald".
+
+Verifiziert:
+- `check.ps1` grün (ui typecheck + lint, Rust). API-Test erweitert:
+  `GET /jobs/{id}` liefert `{job, events}` inkl. `result`-Feld, 404 bei
+  unbekannter id.
+- **Live** (`aiwm-cored`, echtes SmolLM2): `POST /jobs` (chat, Auto) → poll
+  `GET /jobs/{id}` → `{job:{state, result, model_id}, events:[…]}`; Antwort
+  „The three primary colors are red, blue, and yellow …", Event „answered — 91
+  tokens, 715.0 tok/s".
+- **Visuell** (Vite-Dev + In-App-Browser, gemockte IPC): Chat-Tab rendert sauber
+  — User-Bubble rechts (Akzent), Antwort-Bubble links mit Umbruch, Meta-Zeile
+  „SmolLM2 135M Instruct · 91 tokens · 715.0 tok/s", Composer unten fixiert;
+  kein horizontaler Overflow (`scrollWidth == innerWidth`). Dashboard zeigt den
+  aktiven „Chat"-Button.
+
+Bewusst **nicht** in 2.5: Multi-Turn-Kontext (jeder Prompt = ein eigener Job),
+System-Prompt / Sampling-Parameter, Modell-Picker (Capability-first), Verlaufs-
+Persistenz über Reload (die Jobs bleiben in der DB, im Dashboard sichtbar).

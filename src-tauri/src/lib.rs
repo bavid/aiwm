@@ -6,7 +6,7 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
-use aiwm_core::api::dto::{AboutDto, RuntimeStatusDto};
+use aiwm_core::api::dto::{AboutDto, JobDetailDto, RuntimeStatusDto, SubmitJobDto};
 use aiwm_core::api::handlers;
 use aiwm_core::db::{Job, JobFilter, Model};
 use aiwm_core::model::{ImportOutcome, ImportRequest};
@@ -70,6 +70,19 @@ async fn install_llamacpp(app: tauri::State<'_, Arc<App>>) -> Result<String, Str
 #[tauri::command]
 async fn cancel_job(app: tauri::State<'_, Arc<App>>, id: String) -> Result<Option<bool>, String> {
     to_ipc(handlers::cancel_job(&app, &id).await)
+}
+
+#[tauri::command]
+async fn submit_job(app: tauri::State<'_, Arc<App>>, body: SubmitJobDto) -> Result<Job, String> {
+    to_ipc(handlers::submit_job(&app, body).await)
+}
+
+#[tauri::command]
+async fn job_detail(
+    app: tauri::State<'_, Arc<App>>,
+    id: String,
+) -> Result<Option<JobDetailDto>, String> {
+    to_ipc(handlers::job_detail(&app, &id).await)
 }
 
 #[tauri::command]
@@ -139,7 +152,9 @@ fn try_run() -> anyhow::Result<()> {
             list_models,
             import_model,
             install_llamacpp,
-            cancel_job
+            cancel_job,
+            submit_job,
+            job_detail
         ])
         .build(tauri::generate_context!())?
         .run(|handle, event| {

@@ -4,8 +4,8 @@
 
 use std::collections::BTreeMap;
 
-use super::dto::{AboutDto, RuntimeStatusDto, SubmitJobDto};
-use crate::db::{Job, JobEvent, JobFilter, Model, NewJob};
+use super::dto::{AboutDto, JobDetailDto, RuntimeStatusDto, SubmitJobDto};
+use crate::db::{Job, JobFilter, Model, NewJob};
 use crate::model::{ImportOutcome, ImportRequest};
 use crate::orchestrator::JobOutcome;
 use crate::telemetry::SystemTelemetry;
@@ -41,11 +41,11 @@ pub async fn list_jobs(app: &App, filter: JobFilter) -> Result<Vec<Job>> {
     app.db.jobs().list(&filter).await
 }
 
-pub async fn job_events(app: &App, id: &str) -> Result<Option<(Job, Vec<JobEvent>)>> {
+pub async fn job_detail(app: &App, id: &str) -> Result<Option<JobDetailDto>> {
     match app.db.jobs().get(id).await? {
         Some(job) => {
             let events = app.db.jobs().events(id).await?;
-            Ok(Some((job, events)))
+            Ok(Some(JobDetailDto { job, events }))
         }
         None => Ok(None),
     }

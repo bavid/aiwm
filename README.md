@@ -47,8 +47,10 @@ noch keine echte AI-Capability (die kommt ab Phase 2).
 - **2.4a/b** ✅ Chat-Job: `job_type=chat` (`Auto`-Modellwahl über Rolle) →
   Scheduler → `llama-server` → `/v1/chat/completions` gestreamt → Antwort
   progressiv in `jobs.result`; **Cancel** (`POST /jobs/{id}/cancel` + Knopf).
-  Erste echte AI-Capability.
-- **2.5** (nächste) Chat-UI; dann 2.3 (Junction-Link-Manager), 2.6, 2.7.
+- **2.5** ✅ **Chat-UI**: eigener Tab, Prompt/Antwort, Antwort erscheint live aus
+  `jobs.result`-Polling, „Stop"-Knopf, Auto-Modell + tok/s aus dem Event-Stream;
+  „Chat"-Capability-Button auf dem Dashboard aktiv.
+- **2.3** (nächste) Junction-Link-Manager; dann 2.6 (Kompat-Check), 2.7 (Settings).
 
 ## Zielhardware
 

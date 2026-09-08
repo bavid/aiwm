@@ -208,6 +208,28 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(jobs.as_array().unwrap().len(), 1);
+
+        // `GET /jobs/{id}` returns `{ job, events }` — the shape the chat UI polls.
+        let id = created["id"].as_str().unwrap();
+        let detail: serde_json::Value = reqwest::get(format!("{base}/jobs/{id}"))
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(detail["job"]["id"], created["id"]);
+        assert!(
+            detail["job"].get("result").is_some(),
+            "result field present"
+        );
+        assert!(detail["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e["message"] == "job queued"));
+
+        let missing = reqwest::get(format!("{base}/jobs/nope")).await.unwrap();
+        assert_eq!(missing.status(), 404);
     }
 
     #[tokio::test]

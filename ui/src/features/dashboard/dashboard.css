@@ -147,6 +147,18 @@
   text-align: left;
   cursor: not-allowed;
   opacity: 0.6;
+  transition: border-color var(--dur) var(--ease), background var(--dur) var(--ease);
+}
+
+.capability:not(:disabled) {
+  cursor: pointer;
+  opacity: 1;
+  border-color: color-mix(in oklab, var(--accent) 35%, var(--border));
+}
+
+.capability:not(:disabled):hover {
+  background: var(--surface);
+  border-color: var(--accent);
 }
 
 .capability__label {
@@ -156,6 +168,10 @@
 .capability__hint {
   font-size: var(--text-xs);
   color: var(--muted);
+}
+
+.capability:not(:disabled) .capability__hint {
+  color: var(--accent);
 }
 
 @media (max-width: 720px) {
