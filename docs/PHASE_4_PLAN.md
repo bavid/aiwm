@@ -21,7 +21,7 @@ schon Installierte läuft weiter.
 | Scheibe | Inhalt | Status |
 |---|---|---|
 | **4.0** | **Die echte ComfyUI verproben** (Phase-3-Rest): auf der echten Maschine installieren, cu130-torch-CUDA-Laufzeit prüfen, SDXL- **und** Flux-GGUF-Pipeline aus Phase 3 real durchrendern, `DualCLIPLoaderGGUF`/`UnetLoaderGGUF`-Ordner-Key-Auflösung gegen `extra_model_paths.yaml` bestätigen, `av`/`SaveVideo` verfügbar. Fällt cu130 aus → cu128/cu126-Pin. Ergebnis + etwaige Fixes dokumentieren. **Voraussetzung für alles Weitere.** | offen |
-| 4.1 | `capability::video`: `job_type=video`, Params (prompt, negative, w/h, length in Frames, fps, steps, cfg, seed, model\|Auto über Rolle `base_video`); **feste Pipeline** `wan_ti2v` (`core::pipeline`) = `WanImageToVideo` (ohne `start_image` = T2V) → `KSampler` → `VAEDecode` → `CreateVideo` → `SaveVideo` (mp4/h264). `generate_image` → `generate_media` verallgemeinern (VIDEO-Output-Key in `/history`, `/view` für `.mp4`). `ModelKind::VideoModel` + Familie `wan`. Output nach `<outputs>/<job_id>.mp4` → `jobs.output_path`. VRAM-Schätzung pro Familie. Cancel via `/interrupt` | offen |
+| 4.1 | `capability::video`: `job_type=video`, Params (prompt, negative, w/h, length in Frames, fps, steps, cfg, seed, model\|Auto über Rolle `base_video`); **feste Pipeline** `wan_ti2v` (`core::pipeline`) = `WanImageToVideo` (ohne `start_image` = T2V) → `KSampler` → `VAEDecode` → `CreateVideo` → `SaveVideo` (mp4/h264). `generate_image` → `generate_media` verallgemeinern (VIDEO-Output-Key in `/history`, `/view` für `.mp4`). `ModelKind::VideoModel` + Familie `wan`. Output nach `<outputs>/<job_id>.mp4` → `jobs.output_path`. VRAM-Schätzung pro Familie. Cancel via `/interrupt` | ✅ |
 | 4.2 | **Bild→Video**: `init_image`-Param (Pfad oder Job-ID eines fertigen Bildes); der Startframe wird nach `<comfyui-data>/input/<job_id>.<ext>` kopiert und als `LoadImage` → `WanImageToVideo.start_image` verdrahtet. Ein Bild-Job-Output aus der Galerie als Quelle | offen |
 | 4.3 | UI-Tab „Video" — Prompt/Negativ, Auflösung/Länge/fps/Steps/CFG/Seed, Model [Auto], optional „Start from image" (Galerie-Pick oder Pfad), „Generate"; **Erwartungssteuerung** (geschätzte Dauer + „das dauert Minuten", Fortschritt); `<video>`-Player auf `GET /jobs/{id}/output` (CSP `media-src`); Galerie der Video-Jobs (Poster = erstes Frame). Dashboard-Button „Generate Video" aktiv | offen |
 | 4.4 | Zweites Template **LTX-2 / LTX 2.3 (GGUF)** über `ComfyUI-GGUF` (Node schon installiert); `docs/VIDEO_MODELS.md` (kuratierte Modelle: SHA256, HF-Quelle, Lizenz, Settings); Katalog-Einträge (`core::model::catalog`) | offen |
@@ -139,6 +139,82 @@ eine Fake-ComfyUI sinnvoll bauen — die Node-Namen, der `/history`-Output-Key
 und die Zeit/VRAM-Realität müssen an der echten Runtime stimmen. **4.0 zuerst**,
 notfalls an deiner echten Maschine (Installation + ein SDXL-Render + ein
 Flux-Render + `SaveVideo`-Verfügbarkeit). Fixes aus 4.0 fließen in Phase 3 zurück.
+
+---
+
+## 4.1 — Ergebnis (abgeschlossen)
+
+Dritte Capability steht — **Text→Video** durch dieselbe gekapselte ComfyUI wie
+Bild. Gebaut gegen `aiwm-fake-comfy` + die recherchierten Node-Namen (Variante 1);
+die Verprobung gegen die echte ComfyUI bleibt 4.0.
+
+- **`capability::video`** (neu): `VideoRequest::from_params` — nur `prompt` ist
+  Pflicht; `width`/`height` runden auf 16 und klemmen `[128, 1280]`, `length`
+  snappt auf Wans `4k + 1`-Raster (`round_video_length`, `[5, 121]`), `fps`
+  `[8, 30]`, `steps` `[1, 60]`, `cfg` `[1.0, 15.0]`, `seed` explizit `≥ 0` sonst
+  zufällig. `apply_to` schreibt die aufgelösten Werte über `job.params` zurück
+  (Seed wird reproduzierbar, Galerie hat konkrete Zahlen). `run()` baut den
+  Wan-Workflow, ruft `generate_media`, schreibt `<outputs>/<job_id>.mp4`.
+  `VideoOutcome { Done(VideoDone) | Cancelled }`.
+- **`capability::media`** (neu): gemeinsame Helfer, damit `image` und `video`
+  sich nicht doppeln — `comfy_err`, `file_name`, `str_param`, `round_to`,
+  `random_seed`/`resolve_seed` (`SEED_CEILING = 1 << 53`), `write_output`
+  (async, `create_dir_all` + `write`). `capability::image` darauf umgestellt,
+  sein lokaler Seed-/Datei-Kram entfällt.
+- **`core::pipeline::wan_ti2v`** (neu): fester Graph `UNETLoader` +
+  `CLIPLoader type="wan"` + `VAELoader` → `CLIPTextEncode`×2 →
+  `ModelSamplingSD3` (Shift 8) → `WanImageToVideo` (ohne `start_image` = T2V) →
+  `KSampler` (`uni_pc` / `simple`, denoise 1) → `VAEDecode` → `CreateVideo`
+  (fps) → `SaveVideo` (mp4). `start_image` (4.2) hängt optional ein `LoadImage`
+  ein. `VideoInputs` / `WanModels` als Eingabe-Structs.
+- **`ComfyUiAdapter`**: `generate_image` → **`generate_media(workflow, cancel,
+  timeout)`** verallgemeinert — `GeneratedImage` → `GeneratedMedia { bytes,
+  extension }`, Timeout als Parameter (Bild 600 s, Video 1800 s), Extension aus
+  dem Dateinamen (`rsplit_once('.')`, Default `png`). `ComfyClient`: `ImageRef`
+  → `MediaRef`, `collect_media` prüft `outputs.<node>.{images,videos,gifs}`,
+  `PromptOutcome::Done(Vec<MediaRef>)`.
+- **`ModelKind::VideoModel`** (neu): Rolle `base_video`, Store-Unterordner
+  `video/diffusion_models/`, `comfy_folder()` → `diffusion_models`.
+  `import`: `media_family` erkennt `wan` / `ltx` (Familie + `HEAVY`-Headroom),
+  `model_type: "video"` routet in den Video-Store. `extra_model_paths.yaml`
+  bekommt einen zweiten Block `aiwm_video:` (`base_path: <store>/video`).
+- **`JobEngine`**: `resolve_comfyui_target` (war `resolve_image_target`) bedient
+  `image` **und** `video` — für Video `("base_video", "no video model in the
+  library — import Wan 2.2 5B …")`, VRAM-Fallback `VIDEO_VRAM_FALLBACK_MB =
+  11 264` für Familie `wan`/`ltx`. `try_drive`-Zweig `job_type == "video"`:
+  Params auflösen → `set_params` (Seed pinnen) → `video::run` → bei `Done`
+  `output_path` + Event „video ready — …", bei `Cancelled` → `Cancelled`-State.
+- **`GET /jobs/{id}/output`**: Content-Type-Map um `mp4` → `video/mp4`,
+  `webm` → `video/webm` erweitert.
+- **`aiwm-fake-comfy`**: scannt den Prompt-Graphen nach `SaveVideo` / `SaveImage`,
+  meldet `videos` (mp4) bzw. `images` (png) im `/history`, `/view` liefert
+  `TINY_MP4` (32-Byte ftyp-Stub) für `.mp4`. Neue Flags unverändert.
+
+Verifiziert:
+- **+14 Unit-Tests** (`video` 7, `media` 3, `pipeline` 2 — Wan-Graph T2V + I2V,
+  `kind`/`import` je 1) → **239 Lib-Tests** grün. **+3 Integrationstests**
+  `tests/video_job.rs` (`#[cfg(windows)]`): Auto-Video-Job rendert eine `.mp4`
+  und schreibt die Datei; Video-Job ohne Encoder → `Failed` mit „umt5" +
+  „Models tab"; Auto-Video ohne Video-Modell → „no video model" → **29
+  Integrationstests**. `check.ps1` grün (Clippy `-D warnings`, `tsc`, `eslint`,
+  `ruff`, `pytest`).
+- **Live** (`aiwm-cored` + Fake-ComfyUI, `smoke_41.sh`): Wan-Stack importiert
+  (`family=wan`, `roles=[base_video]` nach `models/video/diffusion_models/`;
+  umt5 → `text_encoder`, `wan2.2_vae` → `vae`). Video-Job (`length: 40`) →
+  `auto-selected` → Events „rendering 512×288 video, 41 frames @ 24 fps
+  (~1.7s) …" + „Wan — encoder … VAE … this takes several minutes" + „video
+  ready" → `completed`; `params.length == 41` (auf `4k+1` gesnappt), `seed`
+  gepinnt. `GET /jobs/<id>/output` → `content-type: video/mp4`, ftyp-Bytes.
+  `aiwm-model-paths.yaml` trägt den `aiwm_video:`-Block. Video-Job ohne Encoder
+  → `failed`: „Wan needs the umt5 text encoder — import umt5_xxl_… as „Text
+  encoder / CLIP" on the Models tab".
+
+Bewusst **nicht** in 4.1: Bild→Video / `start_image` (4.2), Video-UI-Tab (4.3),
+LTX-Template + Katalog-Einträge (4.4), Streaming großer Clips (`generate_media`
+puffert noch komplett im RAM — TODO), die echte ComfyUI (4.0 — `SaveVideo`,
+`av`, der reale `/history`-Output-Key, Zeit/VRAM-Kalibrierung). Wans VAE + umt5
+liegen weiterhin unter `<store>/image/{vae,text_encoders}/` (ComfyUI findet sie
+per Dateiname über den gemergten Ordner-Key) — kosmetisch, TODO.
 
 ---
 

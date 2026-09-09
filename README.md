@@ -31,7 +31,7 @@ noch keine echte AI-Capability (die kommt ab Phase 2).
 | WP-9 | CI-Workflow, Git-Hooks (pre-commit fmt, pre-push voller Gate) |
 | WP-10 | ADRs finalisiert, Stub-Docs (MODELS/RUNTIMES/SECURITY/BENCHMARKS) |
 
-**225 Rust-Unit + 26 Integrationstests + 5 pytest** grün · `scripts/check.ps1` grün ·
+**239 Rust-Unit + 29 Integrationstests + 5 pytest** grün · `scripts/check.ps1` grün ·
 **null `unsafe`** im Produktivcode.
 
 **Phase 2 (MVP) ✅ abgeschlossen** — Scheiben 2.1–2.7 + durchgehender
@@ -40,6 +40,19 @@ Modell-Wechsel-Test (`core/tests/model_swap.rs`).
 Wechsel-Test (`core/tests/llm_diffusion_swap.rs`). Plan + Research:
 [docs/PHASE_3_PLAN.md](docs/PHASE_3_PLAN.md). Offen: cu130-Treiber-Check auf der
 echten 4080 (alle Smokes fuhren gegen die Fake-ComfyUI).
+**Phase 4 (Video / ComfyUI) — in Arbeit.** Plan + Research:
+[docs/PHASE_4_PLAN.md](docs/PHASE_4_PLAN.md).
+
+- **4.1** ✅ **`capability::video`**: `job_type=video` → feste `wan_ti2v`-Pipeline
+  (`WanImageToVideo` → `KSampler` → `VAEDecode` → `CreateVideo` → `SaveVideo`,
+  mp4) → `<outputs>/<job_id>.mp4`. `generate_image` → **`generate_media`**
+  (Bild + Video, Timeout-Param, `.mp4`-Output-Key). `ModelKind::VideoModel`
+  (Rolle `base_video`, `<store>/video/diffusion_models/`, zweiter
+  `aiwm_video:`-Block in `extra_model_paths.yaml`), Familie `wan`. `capability::
+  media` bündelt Seed-/Datei-Helfer für Bild + Video. Auto wählt das
+  `base_video`-Modell, umt5-Encoder + Wan-VAE per Rolle/Namen aufgelöst.
+  `GET /jobs/{id}/output` liefert `video/mp4`. (Gegen `aiwm-fake-comfy`; echte
+  ComfyUI = 4.0.)
 
 - **3.1** ✅ `ComfyUiAdapter` — ComfyUI als **ein** langlebiger, lazy gestarteter
   Server (`RuntimeAdapter`): Spawn/Health (`/system_stats`) über

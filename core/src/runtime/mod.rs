@@ -18,7 +18,7 @@ mod registry;
 mod supervisor;
 
 pub use comfyui::{
-    ComfyDirs, ComfyLaunch, ComfyOptions, ComfyUiAdapter, GeneratedImage, SystemStats, VramMode,
+    ComfyDirs, ComfyLaunch, ComfyOptions, ComfyUiAdapter, GeneratedMedia, SystemStats, VramMode,
 };
 pub use fake::{FakeConfig, FakeRuntimeAdapter};
 pub use job::JobObject;

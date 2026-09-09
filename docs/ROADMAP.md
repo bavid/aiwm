@@ -122,8 +122,8 @@ Video-Upscale danach als eigene Slices.
 
 - [ ] 4.0 **die echte ComfyUI verproben** (Phase-3-Rest: cu130, Flux-GGUF-Graph,
   `SaveVideo`) — Voraussetzung
-- [ ] 4.1 `capability::video` — `job_type=video`, feste `wan_ti2v`-Pipeline,
-  `generate_image` → `generate_media`
+- [x] 4.1 `capability::video` — `job_type=video`, feste `wan_ti2v`-Pipeline,
+  `generate_image` → `generate_media`, `ModelKind::VideoModel` (gegen Fake-ComfyUI)
 - [ ] 4.2 Bild→Video (`start_image` aus einem Bild-Job / Pfad)
 - [ ] 4.3 UI-Tab „Video" + Erwartungssteuerung (Dauer!) + `<video>`-Player + Galerie
 - [ ] 4.4 LTX-2-GGUF als zweites Template + `docs/VIDEO_MODELS.md` + Katalog

@@ -104,7 +104,7 @@ pub async fn import_model(
 
     let mut new = match &gguf {
         Some(g) => gguf_new_model(g, &name, &dest, sha256.clone(), size_bytes, req.roles),
-        None => image_new_model(kind, &name, &dest, &ext, sha256.clone(), size_bytes),
+        None => media_new_model(kind, &name, &dest, &ext, sha256.clone(), size_bytes),
     };
     if let Some(known) = catalog::find_by_sha256(&sha256) {
         // A verified match to the curated list: take its authoritative metadata.
@@ -197,10 +197,10 @@ fn gguf_new_model(
     }
 }
 
-/// A `.safetensors` image model. No header parse yet (deferred), so the family
-/// and VRAM headroom are guessed from the file name; the role comes from the
-/// typed [`ModelKind`] so `Auto` image selection can find it.
-fn image_new_model(
+/// A `.safetensors`/`.gguf` image or video model. No header parse yet
+/// (deferred), so the family and VRAM headroom are guessed from the file name;
+/// the role comes from the typed [`ModelKind`] so `Auto` selection can find it.
+fn media_new_model(
     kind: ModelKind,
     name: &str,
     dest: &Path,
@@ -208,7 +208,7 @@ fn image_new_model(
     sha256: String,
     size_bytes: u64,
 ) -> NewModel {
-    let (family, headroom_mb) = image_family(name);
+    let (family, headroom_mb) = media_family(name);
     let size_mb = i64::try_from(size_bytes / MIB).unwrap_or(i64::MAX);
     NewModel {
         name: name.to_string(),
@@ -228,14 +228,19 @@ fn image_new_model(
     }
 }
 
-/// Guess `(family, VRAM headroom)` from an image model's file name. Flux / SD3
-/// need extra room for their T5 text encoder; SDXL and SD1.5 are lighter.
-fn image_family(name: &str) -> (Option<String>, i64) {
+/// Guess `(family, VRAM headroom over the file size)` from a model's file name.
+/// Flux / SD3 / Wan / LTX carry a large T5/umt5 encoder — extra room; SDXL and
+/// SD1.5 are lighter. A real answer waits for `.safetensors` header inspection.
+fn media_family(name: &str) -> (Option<String>, i64) {
     let n = name.to_ascii_lowercase();
     if n.contains("flux") {
         (Some("flux".to_string()), HEAVY_IMAGE_HEADROOM_MB)
     } else if n.contains("sd3") || n.contains("sd35") {
         (Some("sd3".to_string()), HEAVY_IMAGE_HEADROOM_MB)
+    } else if n.contains("wan") {
+        (Some("wan".to_string()), HEAVY_IMAGE_HEADROOM_MB)
+    } else if n.contains("ltx") {
+        (Some("ltx".to_string()), HEAVY_IMAGE_HEADROOM_MB)
     } else if n.contains("xl") {
         (Some("sdxl".to_string()), IMAGE_HEADROOM_MB)
     } else {
@@ -588,6 +593,40 @@ mod tests {
         assert!(out.model.vram_estimate_mb.unwrap() >= HEAVY_IMAGE_HEADROOM_MB);
         let p = out.model.file_path.replace('\\', "/");
         assert!(p.contains("/image/diffusion_models/"), "{p}");
+    }
+
+    #[tokio::test]
+    async fn a_wan_video_model_routes_to_the_video_store_with_base_video_role() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = tmp.path().join("store");
+        let db = Database::connect_in_memory().await.unwrap();
+        let src = write_safetensors(
+            tmp.path(),
+            "wan2.2_ti2v_5B_fp16.safetensors",
+            &vec![0u8; 1_000_000],
+        );
+
+        let out = import_model(
+            &db,
+            &store,
+            ImportRequest {
+                model_type: Some("video".into()),
+                ..req(&src)
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(out.model.family.as_deref(), Some("wan"));
+        assert_eq!(out.model.roles, ["base_video"]);
+        assert_eq!(out.model.runtimes, ["comfyui"]);
+        let p = out.model.file_path.replace('\\', "/");
+        assert!(p.contains("/video/diffusion_models/"), "{p}");
+        let links = db.models().links(&out.model.id).await.unwrap();
+        assert!(links[0]
+            .link_path
+            .replace('\\', "/")
+            .ends_with("video/diffusion_models"));
     }
 
     #[tokio::test]

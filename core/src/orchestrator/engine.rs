@@ -4,8 +4,9 @@
 //! event.
 //!
 //! `job_type == "chat"` streams from llama.cpp ([`crate::capability::chat`]);
-//! `job_type == "image"` runs a fixed workflow on ComfyUI
-//! ([`crate::capability::image`]); every other type is still a no-op placeholder.
+//! `job_type == "image"` / `"video"` run a fixed workflow on ComfyUI
+//! ([`crate::capability::image`] / [`crate::capability::video`]); every other
+//! type is still a no-op placeholder.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -17,6 +18,7 @@ use tokio::sync::watch;
 use super::JobState;
 use crate::capability::chat::{self, ChatOutcome};
 use crate::capability::image::{self, ImageOutcome};
+use crate::capability::video::{self, VideoOutcome};
 use crate::compat::{self, VramEstimate};
 use crate::db::{EventLevel, Job, JobPatch, Model, NewJob};
 use crate::runtime::{ComfyUiAdapter, LlamaCppAdapter, RuntimeRegistry};
@@ -27,9 +29,11 @@ const CANCEL_REASON: &str = "cancelled by user";
 /// Runtime ids the engine wires capability bodies to.
 const LLAMACPP: &str = "llamacpp";
 const COMFYUI: &str = "comfyui";
-/// Fallback VRAM reservation for an image checkpoint whose import estimate is
+/// Fallback VRAM reservation for a ComfyUI model whose import estimate is
 /// missing — enough for SDXL on a 16 GB card.
 const IMAGE_VRAM_FALLBACK_MB: u64 = 8192;
+/// Same, for a video model (Wan 2.2 5B is ~10 GB of weights).
+const VIDEO_VRAM_FALLBACK_MB: u64 = 11_264;
 
 /// How a job came to rest.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -193,10 +197,10 @@ impl JobEngine {
     /// (weights + KV cache at the effective context + overhead) so the scheduler
     /// plans against a realistic number, not the on-disk size.
     async fn resolve_target(&self, job: &Job) -> Result<Target> {
-        // Image jobs always run on ComfyUI; the VRAM math is different (no KV
+        // Image / video jobs run on ComfyUI; the VRAM math is different (no KV
         // cache), so resolve them on their own path — explicit model or `Auto`.
-        if job.job_type == "image" {
-            return self.resolve_image_target(job).await;
+        if job.job_type == "image" || job.job_type == "video" {
+            return self.resolve_comfyui_target(job).await;
         }
         if let (Some(runtime_id), Some(model_id)) = (&job.runtime_id, &job.model_id) {
             let (name, estimate) = self.vram_estimate(model_id).await;
@@ -249,11 +253,23 @@ impl JobEngine {
         })
     }
 
-    /// Resolve an `image` job onto ComfyUI: an explicit checkpoint, or `Auto`
-    /// (the `base_diffusion`-role model, most-recently-used first). The VRAM
-    /// reservation is the checkpoint's import estimate (weights + a headroom for
-    /// activations / the VAE) — there is no KV cache to size.
-    async fn resolve_image_target(&self, job: &Job) -> Result<Target> {
+    /// Resolve an `image` / `video` job onto ComfyUI: an explicit model, or
+    /// `Auto` (the `base_diffusion` / `base_video`-role model, most-recently-used
+    /// first). The VRAM reservation is the model's import estimate (weights + a
+    /// headroom for activations / the VAE) — there is no KV cache to size.
+    async fn resolve_comfyui_target(&self, job: &Job) -> Result<Target> {
+        let (role, missing) = if job.job_type == "video" {
+            (
+                "base_video",
+                "no video model in the library — import Wan 2.2 5B (Video model) first",
+            )
+        } else {
+            (
+                "base_diffusion",
+                "no image model in the library — import an SDXL .safetensors first",
+            )
+        };
+
         let model = match &job.model_id {
             Some(id) => self
                 .db
@@ -262,20 +278,15 @@ impl JobEngine {
                 .await?
                 .ok_or_else(|| CoreError::Runtime {
                     runtime: COMFYUI.into(),
-                    message: format!("image model {id} is not in the library"),
+                    message: format!("model {id} is not in the library"),
                 })?,
             None => {
-                let picked = self
-                    .db
-                    .models()
-                    .pick_for_role("base_diffusion")
-                    .await?
-                    .ok_or_else(|| CoreError::Runtime {
+                let picked = self.db.models().pick_for_role(role).await?.ok_or_else(|| {
+                    CoreError::Runtime {
                         runtime: COMFYUI.into(),
-                        message:
-                            "no image model in the library — import an SDXL .safetensors first"
-                                .into(),
-                    })?;
+                        message: missing.into(),
+                    }
+                })?;
                 self.db
                     .jobs()
                     .append_event(
@@ -293,7 +304,7 @@ impl JobEngine {
             runtime_id: COMFYUI.into(),
             model_id: model.id.clone(),
             model_name: model.name.clone(),
-            vram_mb: job.vram_needed_mb().max(image_vram_mb(&model)),
+            vram_mb: job.vram_needed_mb().max(media_vram_mb(&model)),
             estimate: None,
         })
     }
@@ -542,6 +553,63 @@ impl JobEngine {
                     return Ok(JobOutcome::Cancelled { job_id: job.id });
                 }
             }
+        } else if job.job_type == "video" {
+            if runtime_id != COMFYUI {
+                return Err(CoreError::Runtime {
+                    runtime: runtime_id.clone(),
+                    message: "video jobs run on ComfyUI".into(),
+                });
+            }
+            let model = self.require_model(&model_id).await?;
+            let req = video::VideoRequest::from_params(&job.params)?;
+            let mut params = job.params.clone();
+            req.apply_to(&mut params);
+            self.db.jobs().set_params(&job.id, &params).await?;
+
+            match video::run(
+                &self.db,
+                &self.comfyui,
+                &self.outputs_dir,
+                &job.id,
+                &model,
+                req,
+                cancel,
+            )
+            .await?
+            {
+                VideoOutcome::Done(done) => {
+                    let _ = self.db.models().mark_used(&model_id).await;
+                    self.db
+                        .jobs()
+                        .append_event(
+                            &job.id,
+                            EventLevel::Info,
+                            &format!(
+                                "video ready — {}×{}, {} frames @ {} fps, seed {}",
+                                done.width, done.height, done.length, done.fps, done.seed
+                            ),
+                        )
+                        .await?;
+                    output_path = Some(done.output_path.to_string_lossy().into_owned());
+                }
+                VideoOutcome::Cancelled => {
+                    self.db
+                        .jobs()
+                        .append_event(&job.id, EventLevel::Warn, "cancelled while rendering")
+                        .await?;
+                    self.to(
+                        &mut job,
+                        JobState::Cancelled,
+                        JobPatch {
+                            error_text: Some(CANCEL_REASON.into()),
+                            set_finished_at: true,
+                            ..Default::default()
+                        },
+                    )
+                    .await?;
+                    return Ok(JobOutcome::Cancelled { job_id: job.id });
+                }
+            }
         }
 
         self.to(&mut job, JobState::Post, JobPatch::default())
@@ -624,15 +692,19 @@ impl JobEngine {
     }
 }
 
-/// VRAM (MB) to reserve for an image checkpoint. Uses the estimate `import`
-/// computed (on-disk size + a family-shaped headroom); falls back to a value
-/// that fits SDXL when an older import left it unset.
-fn image_vram_mb(model: &Model) -> u64 {
+/// VRAM (MB) to reserve for a ComfyUI model. Uses the estimate `import`
+/// computed (on-disk size + a family-shaped headroom); falls back to a
+/// family-aware default when an older import left it unset.
+fn media_vram_mb(model: &Model) -> u64 {
+    let fallback = match model.family.as_deref() {
+        Some("wan" | "ltx") => VIDEO_VRAM_FALLBACK_MB,
+        _ => IMAGE_VRAM_FALLBACK_MB,
+    };
     model
         .vram_estimate_mb
         .and_then(|mb| u64::try_from(mb).ok())
         .filter(|mb| *mb > 0)
-        .unwrap_or(IMAGE_VRAM_FALLBACK_MB)
+        .unwrap_or(fallback)
 }
 
 /// Turn the scheduler's terse `Blocked` reason into a plain-language sentence

@@ -40,12 +40,13 @@ pub struct SystemStats {
     pub vram_free_mb: u64,
 }
 
-/// One rendered image referenced by `GET /history` — the args `GET /view` wants.
+/// One output file referenced by `GET /history` — the args `GET /view` wants.
+/// Covers images and videos (`SaveImage` / `SaveVideo`).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct ImageRef {
+pub(super) struct MediaRef {
     pub filename: String,
     pub subfolder: String,
-    /// `"output"` (a saved image) or `"temp"` (a preview).
+    /// `"output"` (a saved file) or `"temp"` (a preview).
     pub kind: String,
 }
 
@@ -54,8 +55,8 @@ pub(super) struct ImageRef {
 pub(super) enum PromptOutcome {
     /// Not in the history yet, or still executing.
     Pending,
-    /// Finished; these are the images it produced (`SaveImage` outputs first).
-    Done(Vec<ImageRef>),
+    /// Finished; these are the files it produced (`output` type first).
+    Done(Vec<MediaRef>),
     /// ComfyUI reported an execution error.
     Failed(String),
 }
@@ -220,25 +221,25 @@ impl ComfyClient {
             return Ok(PromptOutcome::Failed(history_error(entry)));
         }
 
-        let images = collect_images(entry);
+        let media = collect_media(entry);
         let completed = entry
             .pointer("/status/completed")
             .and_then(Value::as_bool)
             .unwrap_or(false);
-        if completed || !images.is_empty() {
-            return Ok(PromptOutcome::Done(images));
+        if completed || !media.is_empty() {
+            return Ok(PromptOutcome::Done(media));
         }
         Ok(PromptOutcome::Pending)
     }
 
-    /// `GET /view` — download one image the history referenced.
-    pub(super) async fn view(&self, port: u16, image: &ImageRef) -> Result<Vec<u8>> {
+    /// `GET /view` — download one output file the history referenced.
+    pub(super) async fn view(&self, port: u16, media: &MediaRef) -> Result<Vec<u8>> {
         let url = reqwest::Url::parse_with_params(
             &format!("{}/view", self.base(port)),
             &[
-                ("filename", image.filename.as_str()),
-                ("subfolder", image.subfolder.as_str()),
-                ("type", image.kind.as_str()),
+                ("filename", media.filename.as_str()),
+                ("subfolder", media.subfolder.as_str()),
+                ("type", media.kind.as_str()),
             ],
         )
         .map_err(|e| comfy_err(format!("building the /view url failed: {e}")))?;
@@ -253,7 +254,7 @@ impl ComfyClient {
             .map_err(|e| comfy_err(format!("/view returned an error: {e}")))?
             .bytes()
             .await
-            .map_err(|e| comfy_err(format!("reading the image failed: {e}")))?;
+            .map_err(|e| comfy_err(format!("reading the output failed: {e}")))?;
         Ok(bytes.to_vec())
     }
 }
@@ -293,25 +294,31 @@ fn history_error(entry: &Value) -> String {
         .to_string()
 }
 
-/// Pull every image the output nodes produced. `SaveImage` outputs (`type =
-/// "output"`) come before previews.
-fn collect_images(entry: &Value) -> Vec<ImageRef> {
+/// Pull every output file the nodes produced. `SaveImage` reports under
+/// `images`; `SaveVideo` / animated saves under `videos` or `gifs` — the exact
+/// key is still to be confirmed against a real ComfyUI (Phase 4.0), so all
+/// three are checked. `output`-type entries sort before previews.
+fn collect_media(entry: &Value) -> Vec<MediaRef> {
     let Some(outputs) = entry.get("outputs").and_then(Value::as_object) else {
         return Vec::new();
     };
-    let mut refs: Vec<ImageRef> = outputs
+    let mut refs: Vec<MediaRef> = outputs
         .values()
-        .filter_map(|node| node.get("images").and_then(Value::as_array))
-        .flatten()
-        .filter_map(|img| {
-            Some(ImageRef {
-                filename: img.get("filename").and_then(Value::as_str)?.to_string(),
-                subfolder: img
+        .flat_map(|node| {
+            ["images", "videos", "gifs"]
+                .iter()
+                .filter_map(|k| node.get(*k).and_then(Value::as_array))
+                .flatten()
+        })
+        .filter_map(|f| {
+            Some(MediaRef {
+                filename: f.get("filename").and_then(Value::as_str)?.to_string(),
+                subfolder: f
                     .get("subfolder")
                     .and_then(Value::as_str)
                     .unwrap_or("")
                     .to_string(),
-                kind: img
+                kind: f
                     .get("type")
                     .and_then(Value::as_str)
                     .unwrap_or("output")
@@ -503,7 +510,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn view_downloads_the_image_bytes() {
+    async fn view_downloads_the_output_bytes() {
         let port = serve(Router::new().route(
             "/view",
             get(|| async { [0x89u8, 0x50, 0x4e, 0x47].to_vec() }),
@@ -512,7 +519,7 @@ mod tests {
         let bytes = ComfyClient::new()
             .view(
                 port,
-                &ImageRef {
+                &MediaRef {
                     filename: "x.png".into(),
                     subfolder: String::new(),
                     kind: "output".into(),
@@ -521,5 +528,30 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(bytes, [0x89, 0x50, 0x4e, 0x47]);
+    }
+
+    #[tokio::test]
+    async fn history_finds_a_saved_video_under_the_videos_key() {
+        let port = serve(Router::new().route(
+            "/history/{id}",
+            get(|| async {
+                Json(serde_json::json!({
+                    "p-1": {
+                        "status": { "status_str": "success", "completed": true },
+                        "outputs": { "59": { "videos": [
+                            { "filename": "job-abc.mp4", "subfolder": "", "type": "output" }
+                        ]}}
+                    }
+                }))
+            }),
+        ))
+        .await;
+        match ComfyClient::new().history(port, "p-1").await.unwrap() {
+            PromptOutcome::Done(m) => {
+                assert_eq!(m.len(), 1);
+                assert_eq!(m[0].filename, "job-abc.mp4");
+            }
+            other => panic!("expected Done, got {other:?}"),
+        }
     }
 }

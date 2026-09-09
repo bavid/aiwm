@@ -441,6 +441,34 @@ mod tests {
         assert_eq!(ok.status(), 200);
         assert_eq!(ok.headers()["content-type"].to_str().unwrap(), "image/png");
         assert_eq!(ok.bytes().await.unwrap().as_ref(), png);
+
+        // A video job's `.mp4` is served as `video/mp4`.
+        let vid = app.jobs.submit(NewJob::new("video")).await.unwrap();
+        let mp4 = app.paths.outputs_dir().join(format!("{}.mp4", vid.id));
+        std::fs::write(&mp4, b"\0\0\0\x18ftypisom").unwrap();
+        for st in [
+            JobState::Scheduled,
+            JobState::Preparing,
+            JobState::Running,
+            JobState::Post,
+        ] {
+            r.set_state(&vid.id, st, JobPatch::default()).await.unwrap();
+        }
+        r.set_state(
+            &vid.id,
+            JobState::Completed,
+            JobPatch {
+                output_path: Some(mp4.to_string_lossy().into_owned()),
+                set_finished_at: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let v = reqwest::get(format!("{base}/jobs/{}/output", vid.id))
+            .await
+            .unwrap();
+        assert_eq!(v.headers()["content-type"].to_str().unwrap(), "video/mp4");
     }
 
     #[tokio::test]

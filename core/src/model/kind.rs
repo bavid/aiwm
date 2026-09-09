@@ -21,8 +21,11 @@ pub enum ModelKind {
     Vae,
     /// A LoRA adapter.
     Lora,
-    /// A text encoder (CLIP, T5).
+    /// A text encoder (CLIP, T5, umt5).
     TextEncoder,
+    /// A video diffusion model (Wan 2.2, LTX-2). Its encoder + VAE are imported
+    /// separately as [`TextEncoder`](Self::TextEncoder) / [`Vae`](Self::Vae).
+    VideoModel,
 }
 
 impl ModelKind {
@@ -35,6 +38,7 @@ impl ModelKind {
             "vae" => Self::Vae,
             "lora" | "loras" => Self::Lora,
             "text_encoder" | "text_encoders" | "clip" => Self::TextEncoder,
+            "video_model" | "video_models" | "video" => Self::VideoModel,
             _ => return None,
         })
     }
@@ -53,8 +57,10 @@ impl ModelKind {
         let ext = ext.to_ascii_lowercase();
         match self {
             Self::Chat => ext == "gguf",
-            // Flux is shipped both ways.
-            Self::DiffusionModel | Self::TextEncoder => ext == "safetensors" || ext == "gguf",
+            // Flux / Wan / LTX ship both ways.
+            Self::DiffusionModel | Self::TextEncoder | Self::VideoModel => {
+                ext == "safetensors" || ext == "gguf"
+            }
             Self::Checkpoint | Self::Vae | Self::Lora => ext == "safetensors",
         }
     }
@@ -70,7 +76,9 @@ impl ModelKind {
         match self {
             // The checkpoint / diffusion transformer a text-to-image job needs.
             Self::Checkpoint | Self::DiffusionModel => Some("base_diffusion"),
-            // Flux companions, resolved by role in `capability::image`.
+            // The video diffusion model a text-to-video job needs.
+            Self::VideoModel => Some("base_video"),
+            // Flux / Wan companions, resolved by role in the capability body.
             Self::Vae => Some("vae"),
             Self::TextEncoder => Some("text_encoder"),
             Self::Chat | Self::Lora => None,
@@ -86,6 +94,7 @@ impl ModelKind {
             Self::Vae => "image/vae",
             Self::Lora => "image/loras",
             Self::TextEncoder => "image/text_encoders",
+            Self::VideoModel => "video/diffusion_models",
         }
     }
 
@@ -95,7 +104,7 @@ impl ModelKind {
         Some(match self {
             Self::Chat => return None,
             Self::Checkpoint => "checkpoints",
-            Self::DiffusionModel => "diffusion_models",
+            Self::DiffusionModel | Self::VideoModel => "diffusion_models",
             Self::Vae => "vae",
             Self::Lora => "loras",
             Self::TextEncoder => "text_encoders",
@@ -110,10 +119,12 @@ impl ModelKind {
             Self::Vae => "vae",
             Self::Lora => "lora",
             Self::TextEncoder => "text_encoder",
+            Self::VideoModel => "video_model",
         }
     }
 
-    /// Every image kind — for building the ComfyUI model-paths config.
+    /// Image kinds that live under `<store>/image/` — for the ComfyUI
+    /// model-paths config.
     pub const IMAGE_KINDS: [Self; 5] = [
         Self::Checkpoint,
         Self::DiffusionModel,
@@ -121,6 +132,9 @@ impl ModelKind {
         Self::Lora,
         Self::TextEncoder,
     ];
+
+    /// Kinds that live under `<store>/video/`.
+    pub const VIDEO_KINDS: [Self; 1] = [Self::VideoModel];
 }
 
 #[cfg(test)]
@@ -172,15 +186,31 @@ mod tests {
     }
 
     #[test]
-    fn image_kinds_carry_a_role_for_auto_and_companion_resolution() {
+    fn kinds_carry_a_role_for_auto_and_companion_resolution() {
         assert_eq!(ModelKind::Checkpoint.default_role(), Some("base_diffusion"));
         assert_eq!(
             ModelKind::DiffusionModel.default_role(),
             Some("base_diffusion")
         );
+        assert_eq!(ModelKind::VideoModel.default_role(), Some("base_video"));
         assert_eq!(ModelKind::Vae.default_role(), Some("vae"));
         assert_eq!(ModelKind::TextEncoder.default_role(), Some("text_encoder"));
         assert_eq!(ModelKind::Lora.default_role(), None);
         assert_eq!(ModelKind::Chat.default_role(), None);
+    }
+
+    #[test]
+    fn video_model_routes_to_the_video_store_and_diffusion_folder() {
+        assert_eq!(ModelKind::from_hint("video"), Some(ModelKind::VideoModel));
+        assert_eq!(
+            ModelKind::VideoModel.store_subdir(),
+            "video/diffusion_models"
+        );
+        assert_eq!(
+            ModelKind::VideoModel.comfy_folder(),
+            Some("diffusion_models")
+        );
+        assert!(ModelKind::VideoModel.accepts_ext("safetensors"));
+        assert!(ModelKind::VideoModel.accepts_ext("gguf"));
     }
 }

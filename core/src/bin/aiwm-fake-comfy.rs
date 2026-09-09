@@ -7,6 +7,9 @@
 //! it exists so the spawn / health / render / cancel cycle can be exercised
 //! without a multi-GB Python install.
 //!
+//! A `SaveImage` node → a 1×1 PNG under the `images` key; a `SaveVideo` node → a
+//! tiny MP4 blob under the `videos` key.
+//!
 //! Fixture-only flags:
 //! - `--fake-ready-ms <n>`  — delay the socket bind by `n` ms (slow cold start).
 //! - `--fake-render-ms <n>` — `/history` reports "pending" until `n` ms after
@@ -24,13 +27,20 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde_json::{json, Value};
 
-/// A 1×1 transparent PNG — what `/view` hands back.
+/// A 1×1 transparent PNG — what `/view` hands back for an image.
 const TINY_PNG: &[u8] = &[
     0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
     0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4,
     0x89, 0x00, 0x00, 0x00, 0x0a, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9c, 0x63, 0x00, 0x01, 0x00, 0x00,
     0x05, 0x00, 0x01, 0x0d, 0x0a, 0x2d, 0xb4, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae,
     0x42, 0x60, 0x82,
+];
+
+/// A minimal MP4: a 24-byte `ftyp` box + a stub `mdat` box. Not playable — just
+/// enough that a caller can recognize it (`bytes[4..8] == b"ftyp"`).
+const TINY_MP4: &[u8] = &[
+    0x00, 0x00, 0x00, 0x18, 0x66, 0x74, 0x79, 0x70, 0x69, 0x73, 0x6f, 0x6d, 0x00, 0x00, 0x02, 0x00,
+    0x69, 0x73, 0x6f, 0x6d, 0x69, 0x73, 0x6f, 0x32, 0x00, 0x00, 0x00, 0x08, 0x6d, 0x64, 0x61, 0x74,
 ];
 
 #[derive(Clone)]
@@ -43,6 +53,7 @@ struct Fixture {
 struct Prompt {
     submitted_at: Instant,
     filename_prefix: String,
+    is_video: bool,
 }
 
 #[tokio::main]
@@ -117,11 +128,24 @@ async fn ok() -> impl IntoResponse {
 }
 
 async fn submit_prompt(State(fx): State<Fixture>, Json(body): Json<Value>) -> Json<Value> {
-    let prefix = body
-        .pointer("/prompt/9/inputs/filename_prefix")
-        .and_then(Value::as_str)
-        .unwrap_or("fake")
-        .to_string();
+    // Find the SaveImage / SaveVideo node and its filename_prefix.
+    let mut prefix = "fake".to_string();
+    let mut is_video = false;
+    if let Some(nodes) = body.get("prompt").and_then(Value::as_object) {
+        for node in nodes.values() {
+            match node.get("class_type").and_then(Value::as_str) {
+                Some("SaveVideo") => is_video = true,
+                Some("SaveImage") => {}
+                _ => continue,
+            }
+            if let Some(p) = node
+                .pointer("/inputs/filename_prefix")
+                .and_then(Value::as_str)
+            {
+                prefix = p.to_string();
+            }
+        }
+    }
     let id = format!("p-{}", fx.prompts.lock().map(|m| m.len()).unwrap_or(0) + 1);
     if let Ok(mut prompts) = fx.prompts.lock() {
         prompts.insert(
@@ -129,6 +153,7 @@ async fn submit_prompt(State(fx): State<Fixture>, Json(body): Json<Value>) -> Js
             Prompt {
                 submitted_at: Instant::now(),
                 filename_prefix: prefix,
+                is_video,
             },
         );
     }
@@ -156,6 +181,16 @@ async fn history(State(fx): State<Fixture>, Path(id): Path<String>) -> Json<Valu
                 ]
             }
         })
+    } else if prompt.is_video {
+        json!({
+            "status": { "status_str": "success", "completed": true, "messages": [] },
+            "outputs": {
+                "59": { "videos": [
+                    { "filename": format!("{}.mp4", prompt.filename_prefix),
+                      "subfolder": "", "type": "output" }
+                ]}
+            }
+        })
     } else {
         json!({
             "status": { "status_str": "success", "completed": true, "messages": [] },
@@ -172,6 +207,13 @@ async fn history(State(fx): State<Fixture>, Path(id): Path<String>) -> Json<Valu
     Json(Value::Object(out))
 }
 
-async fn view(Query(_q): Query<HashMap<String, String>>) -> impl IntoResponse {
-    ([(axum::http::header::CONTENT_TYPE, "image/png")], TINY_PNG)
+async fn view(Query(q): Query<HashMap<String, String>>) -> impl IntoResponse {
+    let is_mp4 = q
+        .get("filename")
+        .is_some_and(|f| f.to_ascii_lowercase().ends_with(".mp4"));
+    if is_mp4 {
+        ([(axum::http::header::CONTENT_TYPE, "video/mp4")], TINY_MP4)
+    } else {
+        ([(axum::http::header::CONTENT_TYPE, "image/png")], TINY_PNG)
+    }
 }

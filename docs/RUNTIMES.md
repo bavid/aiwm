@@ -27,7 +27,7 @@ genutzt.
 |---|---|---|
 | Fake | `FakeRuntimeAdapter` | ✅ vollständig (Tests) |
 | llama.cpp / llama-server | `LlamaCppAdapter` | ✅ Adapter (2.2a) + Installer (2.2b): Download/Verify/Entpacken des gepinnten CUDA-Builds |
-| ComfyUI | `ComfyUiAdapter` | ✅ Adapter (3.1) + Installer (3.2) + getypter Store via `extra_model_paths.yaml` (3.3) + Bild-Job (3.4) + UI/Galerie (3.5) + Flux-Template über `ComfyUI-GGUF` (3.6). Offen: Politur (3.7) |
+| ComfyUI | `ComfyUiAdapter` | ✅ Adapter (3.1) + Installer (3.2) + getypter Store via `extra_model_paths.yaml` (3.3) + Bild-Job (3.4) + UI/Galerie (3.5) + Flux-Template (3.6) + Politur (3.7) + **Video-Job** (`wan_ti2v`, `generate_media`, 4.1). Offen: echte ComfyUI verproben (4.0), Video-UI (4.3) |
 | Ollama | `OllamaAdapter` | optional, Phase 3+ (Duplikate transparent, ADR-006) |
 | LM Studio | — | vorerst nicht (proprietär, GUI-zentriert); wenn doch, `strategy_for` → `Junction` |
 
@@ -92,19 +92,33 @@ genutzt.
   + `main.py` + `<node>/__init__.py`).
 - **Bild-Job (3.4):** `ComfyClient` bekam `submit_prompt` (`POST /prompt`),
   `history` (`GET /history/{id}`), `view` (`GET /view`); `interrupt` ist der
-  Cancel-Hook. `generate_image(workflow, cancel)` reiht die API-Format-Graph
-  ein, pollt `/history` alle 750 ms, holt das Bild via `/view` — spiegelt
+  Cancel-Hook. `generate_media(workflow, cancel, timeout)` (bis 4.1
+  `generate_image`) reiht die API-Format-Graph ein, pollt `/history` alle
+  750 ms, holt die Ausgabe via `/view` — spiegelt
   `LlamaCppAdapter::stream_completion`. Der `JobEngine`-Body (`job_type=image`)
   schreibt sie nach `<outputs>/<job_id>.png` und setzt `jobs.output_path`;
-  `Auto` wählt das `base_diffusion`-Modell. Die 600-s-Deckelung lässt einen Job
-  eher fehlschlagen als hängen. Die UI holt das Bild über
+  `Auto` wählt das `base_diffusion`-Modell. Die 600-s-Deckelung (Bild) lässt
+  einen Job eher fehlschlagen als hängen. Die UI holt das Bild über
   `GET /jobs/{id}/output` (3.5).
-- **Templates (`core::pipeline`, 3.4/3.6):** `Recipe::for_family` wählt
+- **Video-Job (4.1):** derselbe Weg. `generate_media` ist über `image` **und**
+  `video` verallgemeinert — `GeneratedMedia { bytes, extension }`, Timeout als
+  Parameter (Video 1800 s), `collect_media` prüft `outputs.<node>.{images,
+  videos,gifs}`, Extension aus dem Dateinamen. Der `JobEngine`-Body
+  (`job_type=video`) baut `pipeline::wan_ti2v`, schreibt `<outputs>/<job_id>.mp4`,
+  Event „video ready — …". `Auto` wählt das `base_video`-Modell,
+  `capability::video` löst umt5-Encoder + Wan-VAE über Rolle + Namen auf. Cancel
+  = `POST /interrupt`. `capability::media` bündelt die Seed-/Datei-Helfer für
+  Bild + Video.
+- **Templates (`core::pipeline`, 3.4/3.6/4.1):** `Recipe::for_family` wählt
   `checkpoint_txt2img` (SDXL & Co, Core-Nodes) oder `flux_txt2img`
   (`UnetLoaderGGUF` + `DualCLIPLoaderGGUF` + `VAELoader` + `FluxGuidance`,
   SD3-Latent, Sampler bei CFG 1). Für Flux löst `capability::image` die drei
   Begleiter (T5 / CLIP-L / VAE) über Rolle + Namen auf; fehlt einer → Klartext-
-  Fehler. Feste Templates, keine user-editierbare Registry (PHASE_3_PLAN §C).
+  Fehler. **Video:** `wan_ti2v` = `UNETLoader` + `CLIPLoader type="wan"` +
+  `VAELoader` → `ModelSamplingSD3` (Shift 8) → `WanImageToVideo` (ohne
+  `start_image` = T2V) → `KSampler` (`uni_pc`/`simple`) → `VAEDecode` →
+  `CreateVideo` → `SaveVideo` (mp4). Feste Templates, keine user-editierbare
+  Registry (PHASE_3_PLAN §C).
 - **Optionen (`[comfyui]`, 3.7):** `ComfyOptions { vram_mode, extra_args }` —
   `vram_mode` (`auto` / `highvram` / `normalvram` / `lowvram` / `novram`) wird
   zum `--<mode>vram`-Flag beim Spawn. Settings-UI, `config.toml`,

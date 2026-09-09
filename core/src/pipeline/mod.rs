@@ -1,4 +1,4 @@
-//! Fixed image-generation pipelines: a workflow-JSON template plus parameter
+//! Fixed generation pipelines: a workflow-JSON template plus parameter
 //! substitution into known node slots.
 //!
 //! The MVP ships **fixed** pipelines only (PHASE_3_PLAN decision C): no graph
@@ -7,11 +7,11 @@
 //! (`{ "<node id>": { "class_type", "inputs" } }`, links are
 //! `["<node id>", <output slot>]`) ready for `POST /prompt`.
 //!
-//! Two templates: [`checkpoint_txt2img`] (SDXL and any single-file SD
-//! checkpoint — core nodes only) and [`flux_txt2img`] (FLUX.1-dev as a GGUF
-//! diffusion model + separate dual CLIP + VAE, via the pinned `ComfyUI-GGUF`
-//! node). [`Recipe::for_family`] picks between them. A TOML pipeline *registry*
-//! (user-editable definitions) stays out of the MVP.
+//! Image: [`checkpoint_txt2img`] (SDXL and any single-file SD checkpoint — core
+//! nodes) and [`flux_txt2img`] (FLUX.1-dev GGUF + dual CLIP + VAE, via
+//! `ComfyUI-GGUF`); [`Recipe::for_family`] picks. Video:
+//! [`wan_ti2v`] (Wan 2.2 TI2V — text→video, and image→video when a start frame
+//! is given; core video nodes). A TOML pipeline *registry* stays out of the MVP.
 
 use serde_json::{json, Value};
 
@@ -175,6 +175,120 @@ pub fn flux_txt2img(i: &Txt2ImgInputs, m: &FluxModels) -> Value {
     })
 }
 
+// --- video --------------------------------------------------------------------
+
+/// A resolved text/image-to-video request. `start_image` is the bare file name
+/// of a frame already placed in ComfyUI's `input/` folder (`None` → text→video).
+#[derive(Debug, Clone, Copy)]
+pub struct VideoInputs<'a> {
+    pub positive: &'a str,
+    pub negative: &'a str,
+    pub width: u32,
+    pub height: u32,
+    /// Frames. Wan wants `(length - 1) % 4 == 0`.
+    pub length: u32,
+    pub fps: u32,
+    pub steps: u32,
+    pub cfg: f64,
+    pub seed: i64,
+    pub start_image: Option<&'a str>,
+    pub filename_prefix: &'a str,
+}
+
+/// Wan 2.2's three files (bare names as ComfyUI sees them in `diffusion_models`
+/// / `text_encoders` / `vae`).
+#[derive(Debug, Clone, Copy)]
+pub struct WanModels<'a> {
+    pub unet: &'a str,
+    /// The umt5 text encoder.
+    pub clip: &'a str,
+    pub vae: &'a str,
+}
+
+/// Wan 2.2 TI2V text/image-to-video. Core ComfyUI video nodes only:
+/// `UNETLoader` + `CLIPLoader type=wan` + `VAELoader` → `ModelSamplingSD3`
+/// (shift) → `WanImageToVideo` (the latent factory; `start_image` optional) →
+/// `KSampler` → `VAEDecode` → `CreateVideo` → `SaveVideo` (mp4/h264).
+pub fn wan_ti2v(i: &VideoInputs, m: &WanModels) -> Value {
+    // Wan 5B recommends a sampling shift around 8.
+    const WAN_SHIFT: f64 = 8.0;
+
+    let mut g = json!({
+        "37": {
+            "class_type": "UNETLoader",
+            "inputs": { "unet_name": m.unet, "weight_dtype": "default" }
+        },
+        "38": {
+            "class_type": "CLIPLoader",
+            "inputs": { "clip_name": m.clip, "type": "wan" }
+        },
+        "39": {
+            "class_type": "VAELoader",
+            "inputs": { "vae_name": m.vae }
+        },
+        "6": {
+            "class_type": "CLIPTextEncode",
+            "inputs": { "text": i.positive, "clip": ["38", 0] }
+        },
+        "7": {
+            "class_type": "CLIPTextEncode",
+            "inputs": { "text": i.negative, "clip": ["38", 0] }
+        },
+        "48": {
+            "class_type": "ModelSamplingSD3",
+            "inputs": { "model": ["37", 0], "shift": WAN_SHIFT }
+        },
+        "55": {
+            "class_type": "WanImageToVideo",
+            "inputs": {
+                "positive": ["6", 0],
+                "negative": ["7", 0],
+                "vae": ["39", 0],
+                "width": i.width,
+                "height": i.height,
+                "length": i.length,
+                "batch_size": 1
+            }
+        },
+        "3": {
+            "class_type": "KSampler",
+            "inputs": {
+                "seed": i.seed,
+                "steps": i.steps,
+                "cfg": i.cfg,
+                "sampler_name": "uni_pc",
+                "scheduler": "simple",
+                "denoise": 1.0,
+                "model": ["48", 0],
+                "positive": ["55", 0],
+                "negative": ["55", 1],
+                "latent_image": ["55", 2]
+            }
+        },
+        "8": {
+            "class_type": "VAEDecode",
+            "inputs": { "samples": ["3", 0], "vae": ["39", 0] }
+        },
+        "58": {
+            "class_type": "CreateVideo",
+            "inputs": { "images": ["8", 0], "fps": i.fps }
+        },
+        "59": {
+            "class_type": "SaveVideo",
+            "inputs": { "video": ["58", 0], "filename_prefix": i.filename_prefix, "format": "mp4" }
+        }
+    });
+
+    if let Some(frame) = i.start_image {
+        g["60"] = json!({
+            "class_type": "LoadImage",
+            "inputs": { "image": frame }
+        });
+        g["55"]["inputs"]["start_image"] = json!(["60", 0]);
+    }
+    g
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -284,5 +398,73 @@ mod tests {
             },
         );
         assert_eq!(g["26"]["inputs"]["guidance"], 10.0);
+    }
+
+    fn video_inputs() -> VideoInputs<'static> {
+        VideoInputs {
+            positive: "a boat on a calm sea",
+            negative: "blurry",
+            width: 832,
+            height: 480,
+            length: 81,
+            fps: 24,
+            steps: 30,
+            cfg: 5.0,
+            seed: 7,
+            start_image: None,
+            filename_prefix: "job-vid",
+        }
+    }
+
+    #[test]
+    fn wan_graph_wires_the_video_chain_for_text_to_video() {
+        let g = wan_ti2v(
+            &video_inputs(),
+            &WanModels {
+                unet: "wan2.2_ti2v_5B_fp16.safetensors",
+                clip: "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
+                vae: "wan2.2_vae.safetensors",
+            },
+        );
+        assert_eq!(g["37"]["class_type"], "UNETLoader");
+        assert_eq!(
+            g["37"]["inputs"]["unet_name"],
+            "wan2.2_ti2v_5B_fp16.safetensors"
+        );
+        assert_eq!(g["38"]["inputs"]["type"], "wan");
+        assert_eq!(g["48"]["class_type"], "ModelSamplingSD3");
+        assert_eq!(g["55"]["class_type"], "WanImageToVideo");
+        assert_eq!(g["55"]["inputs"]["length"], 81);
+        assert!(
+            g["55"]["inputs"].get("start_image").is_none(),
+            "T2V: no start frame"
+        );
+        // sampler ← model-sampling; sampler ← the WanImageToVideo latent + conds.
+        assert_eq!(g["3"]["inputs"]["model"], json!(["48", 0]));
+        assert_eq!(g["3"]["inputs"]["positive"], json!(["55", 0]));
+        assert_eq!(g["3"]["inputs"]["latent_image"], json!(["55", 2]));
+        assert_eq!(g["3"]["inputs"]["seed"], 7);
+        assert_eq!(g["58"]["class_type"], "CreateVideo");
+        assert_eq!(g["58"]["inputs"]["fps"], 24);
+        assert_eq!(g["59"]["class_type"], "SaveVideo");
+        assert_eq!(g["59"]["inputs"]["format"], "mp4");
+        assert_eq!(g["59"]["inputs"]["filename_prefix"], "job-vid");
+    }
+
+    #[test]
+    fn wan_graph_adds_a_load_image_for_image_to_video() {
+        let mut i = video_inputs();
+        i.start_image = Some("job-src.png");
+        let g = wan_ti2v(
+            &i,
+            &WanModels {
+                unet: "u",
+                clip: "c",
+                vae: "v",
+            },
+        );
+        assert_eq!(g["60"]["class_type"], "LoadImage");
+        assert_eq!(g["60"]["inputs"]["image"], "job-src.png");
+        assert_eq!(g["55"]["inputs"]["start_image"], json!(["60", 0]));
     }
 }

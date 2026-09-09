@@ -8,14 +8,18 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 
 use serde_json::Value;
 use tokio::sync::watch;
 
+use super::media::{
+    comfy_err as image_err, file_name, resolve_seed, round_to, str_param, write_output,
+};
 use crate::db::{Database, EventLevel, Model};
 use crate::pipeline::{self, FluxModels, Recipe, Txt2ImgInputs};
 use crate::runtime::ComfyUiAdapter;
-use crate::{CoreError, Result};
+use crate::Result;
 
 const DEFAULT_DIM: u32 = 1024;
 const MIN_DIM: u32 = 256;
@@ -32,16 +36,9 @@ const MAX_CFG: f64 = 30.0;
 const DEFAULT_SAMPLER: &str = "euler";
 const DEFAULT_SCHEDULER: &str = "normal";
 
-/// JSON stays lossless below 2^53, so random seeds are drawn from that range —
-/// the UI can show and re-submit them without precision loss.
-const SEED_CEILING: u64 = 1 << 53;
-
-fn image_err(msg: impl std::fmt::Display) -> CoreError {
-    CoreError::Runtime {
-        runtime: "comfyui".into(),
-        message: msg.to_string(),
-    }
-}
+/// Upper bound on one image render — a slow first checkpoint load plus a large,
+/// high-step render. Past this the job fails rather than hanging forever.
+const IMAGE_TIMEOUT: Duration = Duration::from_secs(600);
 
 /// A resolved text-to-image request, pulled from a job's `params`. Every field
 /// has a default; only a non-empty `prompt` is required.
@@ -95,12 +92,6 @@ impl ImageRequest {
             .and_then(Value::as_f64)
             .map_or(DEFAULT_CFG, |v| v.clamp(MIN_CFG, MAX_CFG));
 
-        let seed = params
-            .get("seed")
-            .and_then(Value::as_i64)
-            .filter(|s| *s >= 0)
-            .unwrap_or_else(random_seed);
-
         Ok(Self {
             prompt,
             negative,
@@ -110,7 +101,7 @@ impl ImageRequest {
             cfg,
             sampler: str_param(params, "sampler", DEFAULT_SAMPLER),
             scheduler: str_param(params, "scheduler", DEFAULT_SCHEDULER),
-            seed,
+            seed: resolve_seed(params),
         })
     }
 
@@ -223,17 +214,14 @@ pub async fn run(
         }
     };
 
-    let Some(image) = comfyui.generate_image(&workflow, cancel).await? else {
+    let Some(image) = comfyui
+        .generate_media(&workflow, cancel, IMAGE_TIMEOUT)
+        .await?
+    else {
         return Ok(ImageOutcome::Cancelled);
     };
 
-    tokio::fs::create_dir_all(outputs_dir)
-        .await
-        .map_err(|e| image_err(format!("create {}: {e}", outputs_dir.display())))?;
-    let output_path = outputs_dir.join(format!("{job_id}.{}", image.extension));
-    tokio::fs::write(&output_path, &image.bytes)
-        .await
-        .map_err(|e| image_err(format!("write {}: {e}", output_path.display())))?;
+    let output_path = write_output(outputs_dir, job_id, &image.extension, &image.bytes).await?;
 
     db.jobs()
         .append_event(
@@ -253,14 +241,6 @@ pub async fn run(
         width: req.width,
         height: req.height,
     }))
-}
-
-/// The bare file name as ComfyUI sees it in its model folders.
-fn file_name(path: &str) -> Result<&str> {
-    Path::new(path)
-        .file_name()
-        .and_then(|f| f.to_str())
-        .ok_or_else(|| image_err("the model file has no name"))
 }
 
 /// Flux's three companion files, resolved from the library by role + name.
@@ -312,35 +292,6 @@ fn name_is_t5(s: &str) -> bool {
 fn name_is_clip_l(s: &str) -> bool {
     let n = s.to_ascii_lowercase();
     n.contains("clip") && !n.contains("t5")
-}
-
-fn str_param(params: &Value, key: &str, default: &str) -> String {
-    params
-        .get(key)
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .unwrap_or(default)
-        .to_string()
-}
-
-fn round_to(v: u64, multiple: u32) -> u32 {
-    let m = u64::from(multiple);
-    let rounded = ((v + m / 2) / m).saturating_mul(m);
-    u32::try_from(rounded).unwrap_or(u32::MAX)
-}
-
-/// A non-crypto random seed: hash the current time with a process-random keyed
-/// hasher. Good enough for image seeds — they only need to differ per call.
-fn random_seed() -> i64 {
-    use std::hash::{BuildHasher, Hasher};
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    let mut h = std::collections::hash_map::RandomState::new().build_hasher();
-    if let Ok(d) = SystemTime::now().duration_since(UNIX_EPOCH) {
-        h.write_u128(d.as_nanos());
-    }
-    i64::try_from(h.finish() % SEED_CEILING).unwrap_or(0)
 }
 
 #[cfg(test)]
@@ -398,14 +349,6 @@ mod tests {
         assert_eq!(params["width"], DEFAULT_DIM);
         // The engine's own key survived.
         assert_eq!(params["vram_needed_mb"], 8000);
-    }
-
-    #[test]
-    fn random_seeds_vary() {
-        let a = random_seed();
-        let b = random_seed();
-        assert!(a >= 0 && b >= 0);
-        assert_ne!(a, b, "two draws should differ");
     }
 
     #[test]

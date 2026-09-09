@@ -99,9 +99,30 @@ hierher, damit nichts verloren geht.
   inert) — bräuchte einen `save`-Dialog-Command. Alles eigene kleine Slices bei
   Bedarf.
 - Output-Retention (3.7 zeigt nur einen Hinweis): automatisches Aufräumen /
-  Größenlimit / „Ordner öffnen"-Button für `<local_root>/outputs`. Auch: die
-  Bild-Bytes werden von `GET /jobs/{id}/output` am Stück gelesen — für Video
-  später auf Streaming umstellen.
+  Größenlimit / „Ordner öffnen"-Button für `<local_root>/outputs`. Mit Video
+  (4.1) dringlicher — Clips sind groß (4.5 hat den Retention-Hinweis).
+- **Video-Job gegen die echte ComfyUI verproben (4.0):** (a) `SaveVideo` +
+  `av>=17` sind wirklich in der Installer-venv; (b) der reale `/history`-
+  Output-Key für Video (`videos` / `images` / `gifs` — `collect_media` prüft
+  alle drei, aber der echte Name ist ungeprüft); (c) `CLIPLoader type="wan"` +
+  `UNETLoader weight_dtype="default"` finden die `video/diffusion_models/`- und
+  `text_encoders/`-Ordner aus `extra_model_paths.yaml`; (d) Wan-Shift / Sampler
+  (`uni_pc`/`simple`) / Steps an einem echten 5B-Render kalibrieren; (e) das
+  1800-s-Timeout gegen echte Clip-Zeiten prüfen.
+- **`generate_media` puffert die ganze Ausgabe im RAM** (`Vec<u8>` aus `/view`)
+  — für einzelne PNGs ok, für einen mehr-MB-`.mp4` verschwenderisch. Auf
+  Streaming (`reqwest` → `tokio::fs`) umstellen, zusammen mit dem
+  `GET /jobs/{id}/output`-Streaming unten.
+- **Video-Store-Vermischung (4.1):** Wans VAE + umt5-Encoder werden als
+  `Vae` / `TextEncoder` importiert und landen unter
+  `<store>/image/{vae,text_encoders}/`, nicht unter `<store>/video/`. ComfyUI
+  findet sie per Dateiname über den gemergten Ordner-Key, also funktional egal —
+  aber unsauber. Optionen: eigene `video/`-Unterordner + ein dritter YAML-Block,
+  oder ein „für Video"-Flag beim Import.
+- Video-`from_params` (4.1): harte Grenzen sind Backend-seitig geklemmt
+  (`width`/`height` 128–1280 auf 16, `length` auf `4k+1` 5–121, `fps` 8–30,
+  `steps` 1–60, `cfg` 1–15). Die UI (4.3) muss dieselben Grenzen + eine
+  „größer/länger = viel langsamer, kann OOM"-Warnung zeigen.
 - ComfyUI-Optionen (3.7): nur `vram_mode` ist exponiert. Weitere sinnvolle
   Flags (`--reserve-vram`, `--fast`, `--use-split-cross-attention`) + ein
   „extra args"-Feld könnten dazu, wenn echte Flux-Läufe zeigen was fehlt.
@@ -109,8 +130,10 @@ hierher, damit nichts verloren geht.
   `ComfyUiAdapter::set_options` + Server-Neustart wäre der saubere Live-Weg,
   analog zum offenen `LlamaServerOptions`-Live-Apply.
 - `GET /jobs/{id}/output` (3.5) liest die ganze Datei in den RAM und serviert
-  sie am Stück — ok für einzelne SDXL-PNGs (~1–3 MB); bei großen Bildern /
-  Video später auf `tokio_util::io::ReaderStream` + `Content-Length` umstellen.
+  sie am Stück — ok für einzelne SDXL-PNGs (~1–3 MB); mit Video (4.1, `mp4` /
+  `webm` Content-Type ist da) auf `tokio_util::io::ReaderStream` +
+  `Content-Length` + Range-Requests umstellen (der `<video>`-Player in 4.3 will
+  seeken).
 
 ## Vor Phase 5 (Agents)
 - Hermes Agent auf der echten Windows-Maschine: `bash -l`-Abhängigkeit

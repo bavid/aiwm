@@ -47,11 +47,8 @@ const HEALTH_POLL_INTERVAL: Duration = Duration::from_millis(500);
 /// ComfyUI + torch import can take a while on a cold start.
 const SERVER_READY_TIMEOUT: Duration = Duration::from_secs(120);
 
-/// How often [`ComfyUiAdapter::generate_image`] polls `GET /history`.
-const IMAGE_POLL_INTERVAL: Duration = Duration::from_millis(750);
-/// Upper bound on one image job — a slow first checkpoint load plus a large,
-/// high-step render. Past this the job fails rather than hanging forever.
-const IMAGE_GENERATE_TIMEOUT: Duration = Duration::from_secs(600);
+/// How often [`ComfyUiAdapter::generate_media`] polls `GET /history`.
+const MEDIA_POLL_INTERVAL: Duration = Duration::from_millis(750);
 
 /// Progress of [`ComfyUiAdapter::install`], mirrored to the UI status line.
 #[derive(Debug, Clone, Serialize)]
@@ -75,13 +72,12 @@ pub(super) fn comfy_err(msg: impl std::fmt::Display) -> CoreError {
     }
 }
 
-/// A rendered image, straight from ComfyUI's `/view` — the caller writes it to
-/// the outputs directory.
+/// A rendered file (image or video), straight from ComfyUI's `/view` — the
+/// caller writes it to the outputs directory.
 #[derive(Debug, Clone)]
-pub struct GeneratedImage {
+pub struct GeneratedMedia {
     pub bytes: Vec<u8>,
-    /// File extension for the saved image, from the returned filename
-    /// (`"png"` unless a workflow asked for something else).
+    /// File extension from the returned filename (`png` / `mp4` / …).
     pub extension: String,
 }
 
@@ -357,15 +353,18 @@ impl ComfyUiAdapter {
         self.client.system_stats(port).await.ok()
     }
 
-    /// Run one image `workflow` (an API-format graph from [`crate::pipeline`])
-    /// on the running server: queue it, poll `GET /history` until it finishes,
-    /// then fetch the image. `Ok(None)` means `cancel` flipped mid-render — the
-    /// workflow was interrupted. The server and its resident checkpoint stay up.
-    pub async fn generate_image(
+    /// Run one `workflow` (an API-format graph from [`crate::pipeline`]) on the
+    /// running server: queue it, poll `GET /history` until it finishes, then
+    /// fetch the output file (image or video). `Ok(None)` means `cancel` flipped
+    /// mid-render — the workflow was interrupted. The server and its resident
+    /// model stay up. `timeout` bounds one render (image: minutes; video: much
+    /// longer).
+    pub async fn generate_media(
         &self,
         workflow: &serde_json::Value,
         mut cancel: watch::Receiver<bool>,
-    ) -> Result<Option<GeneratedImage>> {
+        timeout: Duration,
+    ) -> Result<Option<GeneratedMedia>> {
         let port = self
             .up_port()
             .ok_or_else(|| comfy_err("the ComfyUI server is not running"))?;
@@ -375,7 +374,7 @@ impl ComfyUiAdapter {
             .submit_prompt(port, workflow, &client_id)
             .await?;
 
-        let deadline = Instant::now() + IMAGE_GENERATE_TIMEOUT;
+        let deadline = Instant::now() + timeout;
         loop {
             if *cancel.borrow_and_update() {
                 let _ = self.client.interrupt(port).await;
@@ -384,27 +383,27 @@ impl ComfyUiAdapter {
             match self.client.history(port, &prompt_id).await? {
                 PromptOutcome::Pending => {}
                 PromptOutcome::Failed(msg) => return Err(comfy_err(msg)),
-                PromptOutcome::Done(images) => {
-                    let image = images
+                PromptOutcome::Done(files) => {
+                    let file = files
                         .into_iter()
                         .next()
-                        .ok_or_else(|| comfy_err("ComfyUI finished but produced no image"))?;
-                    let extension = image
+                        .ok_or_else(|| comfy_err("ComfyUI finished but produced no output"))?;
+                    let extension = file
                         .filename
                         .rsplit_once('.')
                         .map_or_else(|| "png".to_string(), |(_, ext)| ext.to_ascii_lowercase());
-                    let bytes = self.client.view(port, &image).await?;
-                    return Ok(Some(GeneratedImage { bytes, extension }));
+                    let bytes = self.client.view(port, &file).await?;
+                    return Ok(Some(GeneratedMedia { bytes, extension }));
                 }
             }
             if Instant::now() >= deadline {
                 let _ = self.client.interrupt(port).await;
                 return Err(comfy_err(format!(
-                    "image generation did not finish within {}s",
-                    IMAGE_GENERATE_TIMEOUT.as_secs()
+                    "the render did not finish within {}s",
+                    timeout.as_secs()
                 )));
             }
-            tokio::time::sleep(IMAGE_POLL_INTERVAL).await;
+            tokio::time::sleep(MEDIA_POLL_INTERVAL).await;
         }
     }
 

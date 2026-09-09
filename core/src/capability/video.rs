@@ -1,0 +1,417 @@
+//! The text-to-video capability: drive one `job_type=video` body.
+//!
+//! By the time this runs the engine has put the video model's VRAM slot on the
+//! GPU (scheduler → `ComfyUiAdapter::load_model`, which starts the server). Here
+//! we turn the job's params into a fixed Wan 2.2 workflow ([`crate::pipeline`]),
+//! hand it to ComfyUI, wait for the clip, and write it to
+//! `<outputs>/<job_id>.mp4`.
+//!
+//! Video is **slow** — minutes per clip. The event trail says so, and the UI
+//! (4.3) sets expectations up front. Image→video (a start frame) lands in 4.2.
+
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::Duration;
+
+use serde_json::Value;
+use tokio::sync::watch;
+
+use super::media::{comfy_err as video_err, file_name, resolve_seed, round_to, write_output};
+use crate::db::{Database, EventLevel, Model};
+use crate::pipeline::{self, VideoInputs, WanModels};
+use crate::runtime::ComfyUiAdapter;
+use crate::Result;
+
+const DEFAULT_WIDTH: u32 = 832;
+const DEFAULT_HEIGHT: u32 = 480;
+const MIN_DIM: u32 = 128;
+/// Hard cap — 720p-ish. Bigger is much slower and closer to the VRAM edge.
+const MAX_DIM: u32 = 1280;
+const DIM_STEP: u32 = 16;
+
+/// Frames. Wan wants `(length - 1) % 4 == 0`, i.e. `4k + 1`.
+const DEFAULT_LENGTH: u32 = 81; // ~3.4 s @ 24 fps
+const MIN_LENGTH: u32 = 5;
+const MAX_LENGTH: u32 = 121; // ~5 s @ 24 fps
+
+const DEFAULT_FPS: u32 = 24;
+const MIN_FPS: u32 = 8;
+const MAX_FPS: u32 = 30;
+
+const DEFAULT_STEPS: u32 = 30;
+const MAX_STEPS: u32 = 60;
+
+const DEFAULT_CFG: f64 = 5.0;
+const MIN_CFG: f64 = 1.0;
+const MAX_CFG: f64 = 15.0;
+
+/// A video render takes minutes; this is the ceiling before the job fails
+/// rather than hanging forever.
+const VIDEO_TIMEOUT: Duration = Duration::from_secs(1800);
+
+/// A resolved text-to-video request, pulled from a job's `params`. Every field
+/// has a default; only a non-empty `prompt` is required.
+#[derive(Debug, Clone, PartialEq)]
+pub struct VideoRequest {
+    pub prompt: String,
+    pub negative: String,
+    pub width: u32,
+    pub height: u32,
+    pub length: u32,
+    pub fps: u32,
+    pub steps: u32,
+    pub cfg: f64,
+    pub seed: i64,
+}
+
+impl VideoRequest {
+    pub fn from_params(params: &Value) -> Result<Self> {
+        let prompt = params
+            .get("prompt")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|p| !p.is_empty())
+            .ok_or_else(|| video_err("video job has no `prompt`"))?
+            .to_string();
+        let negative = params
+            .get("negative")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .trim()
+            .to_string();
+
+        let dim = |key: &str, default: u32| {
+            params
+                .get(key)
+                .and_then(Value::as_u64)
+                .map_or(default, |v| round_to(v, DIM_STEP).clamp(MIN_DIM, MAX_DIM))
+        };
+        let clamped = |key: &str, default: u32, lo: u32, hi: u32| {
+            params
+                .get(key)
+                .and_then(Value::as_u64)
+                .and_then(|v| u32::try_from(v).ok())
+                .map_or(default, |v| v.clamp(lo, hi))
+        };
+        let length = params
+            .get("length")
+            .and_then(Value::as_u64)
+            .and_then(|v| u32::try_from(v).ok())
+            .map_or(DEFAULT_LENGTH, round_video_length);
+        let cfg = params
+            .get("cfg")
+            .and_then(Value::as_f64)
+            .map_or(DEFAULT_CFG, |v| v.clamp(MIN_CFG, MAX_CFG));
+
+        Ok(Self {
+            prompt,
+            negative,
+            width: dim("width", DEFAULT_WIDTH),
+            height: dim("height", DEFAULT_HEIGHT),
+            length,
+            fps: clamped("fps", DEFAULT_FPS, MIN_FPS, MAX_FPS),
+            steps: clamped("steps", DEFAULT_STEPS, 1, MAX_STEPS),
+            cfg,
+            seed: resolve_seed(params),
+        })
+    }
+
+    /// Write the resolved values back over the job's `params` so a random seed
+    /// becomes reproducible and the gallery has concrete numbers.
+    pub fn apply_to(&self, params: &mut Value) {
+        let Some(obj) = params.as_object_mut() else {
+            return;
+        };
+        obj.insert("prompt".into(), self.prompt.clone().into());
+        obj.insert("negative".into(), self.negative.clone().into());
+        obj.insert("width".into(), self.width.into());
+        obj.insert("height".into(), self.height.into());
+        obj.insert("length".into(), self.length.into());
+        obj.insert("fps".into(), self.fps.into());
+        obj.insert("steps".into(), self.steps.into());
+        obj.insert("cfg".into(), self.cfg.into());
+        obj.insert("seed".into(), self.seed.into());
+    }
+
+    /// Clip length in seconds (for UI copy).
+    pub fn seconds(&self) -> f64 {
+        f64::from(self.length) / f64::from(self.fps.max(1))
+    }
+}
+
+/// A finished video body.
+#[derive(Debug, Clone)]
+pub struct VideoDone {
+    pub output_path: PathBuf,
+    pub seed: i64,
+    pub width: u32,
+    pub height: u32,
+    pub length: u32,
+    pub fps: u32,
+}
+
+/// How the video body came to rest.
+#[derive(Debug, Clone)]
+pub enum VideoOutcome {
+    Done(VideoDone),
+    /// The user cancelled while ComfyUI was rendering.
+    Cancelled,
+}
+
+/// Render `req` on `comfyui` with `model` as the Wan diffusion model, save the
+/// clip under `outputs_dir`. Returns when the file is written, ComfyUI errors,
+/// or `cancel` flips to `true`.
+pub async fn run(
+    db: &Database,
+    comfyui: &Arc<ComfyUiAdapter>,
+    outputs_dir: &Path,
+    job_id: &str,
+    model: &Model,
+    req: VideoRequest,
+    cancel: watch::Receiver<bool>,
+) -> Result<VideoOutcome> {
+    let unet = file_name(&model.file_path)?;
+    let c = resolve_wan_companions(db).await?;
+
+    db.jobs()
+        .append_event(
+            job_id,
+            EventLevel::Info,
+            &format!(
+                "rendering {}\u{00d7}{} video, {} frames @ {} fps (~{:.1}s), {} steps, cfg {:.1}, \
+                 seed {} \u{2014} {}",
+                req.width,
+                req.height,
+                req.length,
+                req.fps,
+                req.seconds(),
+                req.steps,
+                req.cfg,
+                req.seed,
+                model.name
+            ),
+        )
+        .await?;
+    db.jobs()
+        .append_event(
+            job_id,
+            EventLevel::Info,
+            &format!(
+                "Wan \u{2014} encoder \u{201c}{}\u{201d}, VAE \u{201c}{}\u{201d} \u{2014} this takes \
+                 several minutes",
+                c.clip, c.vae
+            ),
+        )
+        .await?;
+
+    let workflow = pipeline::wan_ti2v(
+        &VideoInputs {
+            positive: &req.prompt,
+            negative: &req.negative,
+            width: req.width,
+            height: req.height,
+            length: req.length,
+            fps: req.fps,
+            steps: req.steps,
+            cfg: req.cfg,
+            seed: req.seed,
+            start_image: None,
+            filename_prefix: job_id,
+        },
+        &WanModels {
+            unet,
+            clip: &c.clip,
+            vae: &c.vae,
+        },
+    );
+
+    let Some(media) = comfyui
+        .generate_media(&workflow, cancel, VIDEO_TIMEOUT)
+        .await?
+    else {
+        return Ok(VideoOutcome::Cancelled);
+    };
+
+    let ext = if media.extension.is_empty() {
+        "mp4"
+    } else {
+        &media.extension
+    };
+    let output_path = write_output(outputs_dir, job_id, ext, &media.bytes).await?;
+
+    db.jobs()
+        .append_event(
+            job_id,
+            EventLevel::Info,
+            &format!(
+                "saved {} ({} KB)",
+                output_path.display(),
+                media.bytes.len() / 1024
+            ),
+        )
+        .await?;
+
+    Ok(VideoOutcome::Done(VideoDone {
+        output_path,
+        seed: req.seed,
+        width: req.width,
+        height: req.height,
+        length: req.length,
+        fps: req.fps,
+    }))
+}
+
+/// Wan's two companion files, resolved from the library by role + name.
+#[derive(Debug)]
+struct WanCompanionFiles {
+    clip: String,
+    vae: String,
+}
+
+async fn resolve_wan_companions(db: &Database) -> Result<WanCompanionFiles> {
+    let clip = db
+        .models()
+        .for_role("text_encoder")
+        .await?
+        .into_iter()
+        .find(|m| name_is_umt5(&m.name) || name_is_umt5(&m.file_path))
+        .ok_or_else(|| {
+            video_err(
+                "Wan needs the umt5 text encoder — import umt5_xxl_… as \
+                 \u{201c}Text encoder / CLIP\u{201d} on the Models tab",
+            )
+        })?;
+    let vae = db
+        .models()
+        .for_role("vae")
+        .await?
+        .into_iter()
+        .find(|m| name_is_wan(&m.name) || name_is_wan(&m.file_path))
+        .ok_or_else(|| {
+            video_err("Wan needs its VAE — import wan2.2_vae.safetensors as \u{201c}VAE\u{201d}")
+        })?;
+    Ok(WanCompanionFiles {
+        clip: file_name(&clip.file_path)?.to_string(),
+        vae: file_name(&vae.file_path)?.to_string(),
+    })
+}
+
+fn name_is_umt5(s: &str) -> bool {
+    s.to_ascii_lowercase().contains("umt5")
+}
+
+fn name_is_wan(s: &str) -> bool {
+    s.to_ascii_lowercase().contains("wan")
+}
+
+/// Round a requested frame count to Wan's `4k + 1` and clamp.
+fn round_video_length(v: u32) -> u32 {
+    let k = (v.saturating_sub(1) + 2) / 4;
+    (4 * k + 1).clamp(MIN_LENGTH, MAX_LENGTH)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn from_params_fills_video_defaults() {
+        let r = VideoRequest::from_params(&serde_json::json!({ "prompt": " a boat " })).unwrap();
+        assert_eq!(r.prompt, "a boat");
+        assert_eq!(r.width, DEFAULT_WIDTH);
+        assert_eq!(r.height, DEFAULT_HEIGHT);
+        assert_eq!(r.length, DEFAULT_LENGTH);
+        assert_eq!(r.fps, DEFAULT_FPS);
+        assert_eq!(r.steps, DEFAULT_STEPS);
+        assert!(r.seed >= 0);
+        assert!((r.seconds() - 3.375).abs() < 0.01);
+    }
+
+    #[test]
+    fn from_params_rejects_a_blank_prompt() {
+        assert!(VideoRequest::from_params(&serde_json::json!({})).is_err());
+    }
+
+    #[test]
+    fn length_is_snapped_to_wan_grid_and_clamped() {
+        assert_eq!(round_video_length(80), 81);
+        assert_eq!(round_video_length(100), 101);
+        assert_eq!(round_video_length(3), MIN_LENGTH);
+        assert_eq!(round_video_length(9999), MAX_LENGTH);
+        // every result is 4k + 1
+        for v in [1, 7, 40, 81, 200] {
+            assert_eq!(round_video_length(v) % 4, 1);
+        }
+    }
+
+    #[test]
+    fn from_params_clamps_size_length_steps() {
+        let r = VideoRequest::from_params(&serde_json::json!({
+            "prompt": "x", "width": 5000, "height": 470, "length": 400, "steps": 999, "fps": 120
+        }))
+        .unwrap();
+        assert_eq!(r.width, MAX_DIM);
+        assert_eq!(r.height, 464); // 470 → nearest 16
+        assert_eq!(r.length, MAX_LENGTH);
+        assert_eq!(r.steps, MAX_STEPS);
+        assert_eq!(r.fps, MAX_FPS);
+    }
+
+    #[test]
+    fn apply_to_pins_values_without_dropping_engine_metadata() {
+        let mut params = serde_json::json!({ "prompt": "sea", "vram_needed_mb": 12000 });
+        let r = VideoRequest::from_params(&params).unwrap();
+        r.apply_to(&mut params);
+        assert_eq!(params["seed"], r.seed);
+        assert_eq!(params["length"], DEFAULT_LENGTH);
+        assert_eq!(params["vram_needed_mb"], 12000);
+    }
+
+    #[test]
+    fn companion_name_heuristics() {
+        assert!(name_is_umt5("umt5_xxl_fp8_e4m3fn_scaled.safetensors"));
+        assert!(!name_is_umt5("t5xxl_fp8.safetensors"));
+        assert!(name_is_wan("wan2.2_vae.safetensors"));
+        assert!(!name_is_wan("ae.safetensors"));
+    }
+
+    #[tokio::test]
+    async fn resolve_wan_companions_reports_what_is_missing() {
+        use crate::db::{Database, NewModel};
+        let db = Database::connect_in_memory().await.unwrap();
+        let add = |name: &str, role: &str| {
+            let (name, role) = (name.to_string(), role.to_string());
+            let db = db.clone();
+            async move {
+                db.models()
+                    .insert(NewModel {
+                        name: name.clone(),
+                        format: "safetensors".into(),
+                        file_path: format!("E:\\AI\\models\\video\\x\\{name}"),
+                        size_bytes: 1,
+                        source: "manual".into(),
+                        roles: vec![role],
+                        ..NewModel::default()
+                    })
+                    .await
+                    .unwrap();
+            }
+        };
+
+        assert!(resolve_wan_companions(&db)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("umt5"));
+        add("umt5_xxl_fp8_e4m3fn_scaled.safetensors", "text_encoder").await;
+        assert!(resolve_wan_companions(&db)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("VAE"));
+        add("wan2.2_vae.safetensors", "vae").await;
+        let c = resolve_wan_companions(&db).await.unwrap();
+        assert_eq!(c.clip, "umt5_xxl_fp8_e4m3fn_scaled.safetensors");
+        assert_eq!(c.vae, "wan2.2_vae.safetensors");
+    }
+}

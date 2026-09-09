@@ -21,7 +21,7 @@ VRAM-Schätzung, Migration 0004 / 2.6). `model_roles` (coding / chat / upscaler 
 base_diffusion / …), `model_links` (pro Runtime: passthrough | extra_path |
 junction | hardlink | copy).
 
-## `ModelKind` — getypter Store (3.3)
+## `ModelKind` — getypter Store (3.3 · Video 4.1)
 
 Beim Import bestimmt `core::model::ModelKind` (Typ-Hint aus der UI oder aus der
 Endung: `.gguf`→`chat`, `.safetensors`→`checkpoint`) das Ziel:
@@ -34,6 +34,14 @@ Endung: `.gguf`→`chat`, `.safetensors`→`checkpoint`) das Ziel:
 | `Vae` | `image/vae/` | `vae` | `vae` |
 | `Lora` | `image/loras/` | `loras` | — |
 | `TextEncoder` | `image/text_encoders/` | `text_encoders` | `text_encoder` |
+| `VideoModel` | `video/diffusion_models/` | `diffusion_models` | `base_video` |
+
+Der Video-Store (`<store>/video/`) bekommt einen eigenen zweiten Block
+`aiwm_video:` in `extra_model_paths.yaml` (`base_path: <store>/video`). Wans
+Begleiter (umt5-Encoder, VAE) werden weiterhin als `TextEncoder` / `Vae`
+importiert und liegen unter `<store>/image/{text_encoders,vae}/` — ComfyUI merged
+die Ordner-Keys und findet sie per Dateiname; die kosmetische Vermischung ist ein
+TODO. Typ-Hint `video` beim Import routet in den Video-Store.
 
 `import_model` nimmt `.gguf` **und** `.safetensors`; `.ckpt`/`.bin`/`.pt`/`.pth`
 werden mit Klartext abgelehnt (Pickle kann beim Laden Code ausführen — erst nach
@@ -42,12 +50,13 @@ werden mit Klartext abgelehnt (Pickle kann beim Laden Code ausführen — erst n
 Modelle landen flach im Typ-Ordner (ComfyUI-Konvention), Namens-Kollision →
 `-<hash8>`-Suffix.
 
-Bild-Modelle bekommen die Rolle aus dem Typ (`ModelKind::default_role`), so dass
-`Auto` das `base_diffusion`-Modell findet und `capability::image` die Flux-
-Begleiter (`text_encoder` / `vae`) auflösen kann (3.4/3.6). `family` +
-VRAM-Headroom aus einer Datei-Namens-Heuristik: `flux`/`sd3` → +2,5 GB (der T5
-wird beim Sampling ausgelagert), sonst +2 GB. Ein echter Wert wartet auf die
-`.safetensors`-Header-Inspektion + Kalibrierung (Phase 6).
+Bild- und Video-Modelle bekommen die Rolle aus dem Typ
+(`ModelKind::default_role`), so dass `Auto` das `base_diffusion`- bzw.
+`base_video`-Modell findet und `capability::image` / `capability::video` die
+Begleiter (`text_encoder` / `vae`) auflösen können (3.4/3.6/4.1). `family` +
+VRAM-Headroom aus einer Datei-Namens-Heuristik: `flux`/`sd3`/`wan`/`ltx` →
++2,5 GB (der T5/umt5 wird beim Sampling ausgelagert), sonst +2 GB. Ein echter
+Wert wartet auf die `.safetensors`-Header-Inspektion + Kalibrierung (Phase 6).
 
 ## Katalog — „Known models" (3.6)
 
