@@ -44,10 +44,13 @@ echten 4080 (alle Smokes fuhren gegen die Fake-ComfyUI).
 gebaut). **Offen: 4.0** — die echte ComfyUI auf der 4080 verproben (cu130-Treiber,
 GGUF-Ordner-Keys, `SaveVideo`/`av`, Zeit/VRAM kalibrieren) — läuft vermutlich an
 der echten Maschine. Plan + Research: [docs/PHASE_4_PLAN.md](docs/PHASE_4_PLAN.md).
-**Phase 5 (Agents) — geplant:** [docs/PHASE_5_PLAN.md](docs/PHASE_5_PLAN.md).
-Nicht selbst bauen — **OpenCode** (`opencode serve`) + **Hermes Agent** (Nous
-Research) orchestrieren und sandboxen, Endpoint = lokaler `llama-server`.
-Sandkasten = Pfad-Allowlist + Command-Approval (UI) + erzwungene Offline-Config.
+**Phase 5 (Agents) — Plan + 5.0 ✅:** [docs/PHASE_5_PLAN.md](docs/PHASE_5_PLAN.md),
+**ADR-021**. Nicht selbst bauen — **OpenCode** (`opencode serve`, Adapter 1) +
+**Hermes Agent** (Nous Research, Adapter 2) orchestrieren und sandboxen,
+Endpoint = lokaler `llama-server --jinja`. Sandkasten = Pfad-Allowlist +
+Command-Approval (UI) + erzwungene Offline-Config. 5.0 hat verprobt: `opencode
+serve` + erzwungene Config + der Approval-Zyklus laufen; `--jinja` emittiert
+OpenAI-`tool_calls`; Hermes 0.19 läuft nativ auf Windows (Git-Bash, kein WSL).
 
 - **4.1** ✅ **`capability::video`**: `job_type=video` → feste `wan_ti2v`-Pipeline
   (`WanImageToVideo` → `KSampler` → `VAEDecode` → `CreateVideo` → `SaveVideo`,

@@ -193,10 +193,15 @@ hierher, damit nichts verloren geht.
 ## Vor Phase 5 (Agents)
 - ~~Agent-Research + Scheibenplan~~ → ✅ [PHASE_5_PLAN.md](PHASE_5_PLAN.md)
   (OpenCode + Hermes recherchiert, 5.0–5.5, offene Entscheidungen A–F).
-- **Hermes Agent auf der echten Windows-Maschine: `bash -l`-Abhängigkeit** —
-  Git-Bash mitliefern oder WSL2 dokumentieren → **Slice 5.0**.
-- **`llama-server`-Tool-Calling verproben** (`--jinja` + Coding-Modell — geben
-  OpenCode/Hermes verlässliche `tool_calls`?) → **Slice 5.0**, Blocker-Kandidat.
+- ~~Hermes `bash -l` / WSL2~~ → ✅ 5.0 (ADR-021): Hermes 0.19 hat native Windows-
+  + Git-Bash-Behandlung, **kein WSL2-Zwang**. Offen: Hermes ist schwer (~120
+  Deps + `hermes postinstall` = node/Browser/ripgrep/ffmpeg) — Installer-Umfang
+  in 5.4 klären; evtl. wird Hermes „Advanced/optional".
+- ~~`llama-server`-Tool-Calling~~ → ✅ 5.0 (ADR-021): `--jinja` emittiert
+  OpenAI-`tool_calls`, OpenCode parst sie (Stub-Test). **Offen:** ein echter
+  Coding-Modell-Lauf (Qwen2.5-Coder-GGUF) → verlässliche `tool_calls`? + KV-Cache
+  nicht zu hart quantisieren → **5.1-Smoke**. `LlamaCppAdapter` braucht ein
+  `--jinja`-Flag (+ optional `--chat-template`) fürs Agent-Modell → 5.1.
 - Agent-Sandbox-Niveau: ✅ festgelegt (Plan §B) — Pfad-Allowlist + Command-
   Approval + erzwungene Config; echte FS-/Prozess-Isolation opt-in + später
   (eigener ADR).

@@ -648,6 +648,60 @@ Familien-Dispatch, gleiche `VideoInputs`.
 
 ---
 
+## ADR-021 — Agent-Adapter: OpenCode zuerst, `llama-server --jinja`, Hermes ohne WSL-Zwang
+
+**Status:** Entschieden — Slice 5.0 (Voraussetzungen verprobt). **Verfeinert
+ADR-010** (Reihenfolge, Windows-Shell).
+
+**Kontext:** ADR-010 nannte Hermes Agent als **Adapter 1**, OpenCode als 2, und
+markierte Hermes' `bash -l`-Abhängigkeit als Windows-Risiko. Slice 5.0 hat beide
+auf der echten Maschine verprobt (`node` 24, `uv` 0.12, Git-Bash, `wsl` da).
+
+**Befunde:**
+1. **OpenCode** (`opencode-ai` 1.18.30) = **eine self-contained `bin/opencode.exe`**
+   (npm-Paket, native Windows). `opencode serve` läuft; `GET /doc` = OpenAPI 3.1.
+   Config **komplett per `OPENCODE_CONFIG_CONTENT`-Env erzwingbar** (`GET /config`
+   spiegelt sie). `enabled_providers: ["local"]` + `disabled_providers:
+   ["opencode", …]` → nur unser lokaler Provider bleibt. Der Approval-Zyklus
+   verprobt: `permission.asked`-Event (mit `always`-Muster-Vorschlag) → `GET
+   /permission` → `POST /permission/{id}/reply`. CWD = Projekt/Workspace.
+2. **Hermes Agent** (`hermes-agent` 0.19.0) = `uv pip install`, **~120 Python-
+   Deps + `hermes postinstall` zieht `node` / Browser / `ripgrep` / `ffmpeg`** —
+   deutlich schwerer. `hermes serve` (headless JSON-RPC/WS, `--skip-build`),
+   `hermes -z` single-shot, `hermes acp`. **`bash -l` entschärft:** 0.19 hat
+   native Windows- + Git-Bash-Pfad-Behandlung (MSYS); **kein WSL2-Zwang** — die
+   mitgelieferte Git-Bash reicht.
+3. **`llama-server --jinja`** emittiert Standard-OpenAI-`tool_calls` (aus dem im
+   GGUF eingebetteten Chat-Template), nativ für Qwen 2.5 (Coder), Hermes 2/3,
+   Llama 3.x, Functionary, Mistral Nemo. OpenCodes `@ai-sdk/openai-compatible`-
+   Runtime parst genau dieses Format (Stub-Test bewiesen). Ohne `--jinja` kommen
+   die Tool-Delimiter als Klartext durch.
+
+**Entscheidung:**
+- **OpenCode ist Adapter 1** (Slice 5.1) — leichter, Config erzwingbar, Approval-
+  API sauber. **Hermes ist Adapter 2** (Slice 5.4). Dreht die ADR-010/ROADMAP-
+  Reihenfolge um; „beide Adapter" bleibt.
+- Der `LlamaCppAdapter` bekommt in 5.1 ein **`--jinja`-Flag** (+ optional
+  `--chat-template`), wenn er ein Agent-/`coding`-Modell serviert.
+- Erzwungene OpenCode-Config: custom Provider → `http://127.0.0.1:<llama-port>/v1`,
+  `enabled_providers: ["local"]` + `disabled_providers: ["opencode", …]`,
+  `permission: {bash: ask, edit: ask, webfetch: deny}`, `cwd` = Workspace.
+- Hermes-Adapter mit gemanagtem `HERMES_HOME` unter `<data>/agents/hermes/` +
+  erzwungener `config.yaml`; Git-Bash-Pfad aus der Umgebung.
+
+**Konsequenzen:**
+- (+) Erster funktionierender Agent kommt ohne das Hermes-Gewicht.
+- (+) Tool-Calling-Risiko (ADR-010 offen) auf „echten Coding-Modell-Lauf" (5.1-
+  Smoke) reduziert.
+- (−) Hermes' 120 Deps + node/Browser/ripgrep/ffmpeg machen den Installer
+  chunkig (wie der ComfyUI-Installer) — evtl. wird Hermes „Advanced/optional".
+- (−) OpenCodes API ist groß (~180 Ops) und `v1`/`v2`-gemischt — wir binden nur
+  ~8 Endpunkte, hand-geschrieben (kein Generated Client).
+- (−) Beides nur Scratchpad-verprobt gegen Stubs; der echte agentische Loop mit
+  einem lokalen Coding-Modell kommt in 5.1.
+
+---
+
 ## Offene Entscheidungen
 
 | # | Frage | Status |

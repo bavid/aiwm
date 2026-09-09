@@ -142,10 +142,12 @@ lokaler `llama-server`. **OpenCode zuerst** (`opencode serve`, Config per Env
 erzwingbar, kein `bash -l` — Empfehlung, dreht die Reihenfolge unten um),
 **Hermes Agent** (Nous Research, Memory/Skills/Sub-Agents) zweiter.
 
-- 5.0 Windows-Voraussetzungen verproben — `opencode serve`, Hermes' `bash -l`
-  (Git-Bash vs WSL2), **`llama-server`-Tool-Calling** (`--jinja` + Coding-Modell)
-- 5.1 `core::agent` + `AgentAdapter` + Migration `0005` + **OpenCode-Adapter**
-  (supervised `serve`, erzwungene Config, Scheduler-Pin, SSE-Proxy)
+- [x] 5.0 Windows-Voraussetzungen verprobt (ADR-021) — `opencode serve` + forced
+  config + Approval-API OK; Hermes 0.19 nativ Windows (Git-Bash, kein WSL-Zwang,
+  aber ~120 Deps + node/Browser/ripgrep/ffmpeg); `llama-server --jinja` emittiert
+  OpenAI-`tool_calls` (Qwen2.5-Coder/Hermes/Llama3.x) — echter Modell-Lauf = 5.1
+- [ ] 5.1 `core::agent` + `AgentAdapter` + Migration `0005` + **OpenCode-Adapter**
+  (supervised `serve`, erzwungene Config, Scheduler-Pin, SSE-Proxy, `--jinja`)
 - 5.2 Sandkasten: Command-Approval-Fluss (UI), Pfad-Allowlist, Offline erzwungen
 - 5.3 Agents-UI-Tab (Profile, Transkript mit Tool-Calls + Approvals, Workspace-Picker)
 - 5.4 **Hermes-Adapter** (`uv`-Installer, gemanagtes Profil, erzwungene `config.yaml`)

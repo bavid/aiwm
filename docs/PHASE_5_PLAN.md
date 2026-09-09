@@ -32,7 +32,7 @@ Export/Import bringt Config + DB + Agent-Profil auf eine zweite Maschine.
 
 | Scheibe | Inhalt | Status |
 |---|---|---|
-| **5.0** | **Windows-Voraussetzungen verproben** (Phase-4-`bash -l`-TODO): auf der echten Maschine — (a) `uv` da (aus Phase 3); (b) `opencode` installieren + `opencode serve` startet, `/doc` erreichbar; (c) Hermes' `bash -l`-Env-Snapshot: Git-Bash mitliefern **oder** WSL2 dokumentieren — entscheiden; (d) **`llama-server`-Tool-Calling**: `--jinja` + ein Coding-Modell (Qwen2.5-Coder o. Ä.) — funktionieren `tool_calls` im `/v1/chat/completions`? Welche Chat-Template? Ergebnis + Fixes dokumentieren. **Voraussetzung.** | offen |
+| **5.0** | **Windows-Voraussetzungen verproben**: (a) `opencode` installieren + `opencode serve` + API; (b) Hermes installieren + `bash -l`-Frage klären; (c) **`llama-server`-Tool-Calling** (`--jinja` + Coding-Modell). Ergebnis + Fixes dokumentieren. **Voraussetzung.** | ✅ *(bis auf den echten Coding-Modell-Render — siehe „## 5.0 — Ergebnis" + ADR-021)* |
 | 5.1 | **Agent-Framework + OpenCode-Adapter**: `core::agent` (`AgentAdapter`-Trait, `AgentProfile`, `AgentSession`), Migration `0005` (`agents`, `agent_sessions`). `OpenCodeAdapter` — `opencode serve --port … --hostname 127.0.0.1` unter `RuntimeSupervisor`; Config **erzwungen** über `OPENCODE_CONFIG_CONTENT` (custom provider → `http://127.0.0.1:<llama-port>/v1`, `enabled_providers: [local]`, `permission` alles `ask`, `webfetch: deny`), `cwd` = Workspace. Scheduler: `reserve + pin` fürs Session-Modell (`coding`-Rolle \| explizit). HTTP-Proxy: `POST /session`, `POST /session/:id/message`, `GET /global/event` (SSE) → Core-Events. `POST /agents`, `POST /agent-sessions`, `POST /agent-sessions/:id/message`, `GET /agent-sessions/:id` + Tauri-Commands. `capability::agent` treibt eine Session. | offen |
 | 5.2 | **Sandkasten**: Approval-Fluss — der SSE-Stream trägt `permission`-Events → Core reicht sie durch → UI „Agent will ausführen: `<cmd>` — Allow / Deny / Always" → Core `POST`t die Entscheidung. **Pfad-Allowlist**: `cwd` + OpenCode-`permission` verbietet Edits außerhalb; Lese-Extras optional read-only. **Offline erzwungen**: `offline_mode` → Netz-Tools hart aus, dokumentiert dass echte Prozess-Isolation vertagt ist. Secrets: kein `.env` / keine Keys in der Agent-Env (Dummy-`apiKey`). | offen |
 | 5.3 | **Agents-UI-Tab**: Profil-Liste + „New profile" (Runtime, Modell [Auto über `coding`], Workspace-Ordner-Picker, erlaubte Pfade, Toolset); Session-Ansicht — Transkript mit Tool-Call-Karten (Datei-Diffs, Shell-Output), Approval-Prompts inline, „Stop"; „Coding"-Dashboard-Button aktiv. Workspace-Registry (Pfad + Label) im Core. | offen |
@@ -109,12 +109,10 @@ Quellen: [OpenCode Server](https://opencode.ai/docs/server) ·
 
 ## Offene Entscheidungen (Empfehlung → deine Freigabe)
 
-**A — Adapter-Reihenfolge.**
-→ **Empfehlung: OpenCode zuerst (5.1), Hermes zweiter (5.4)** — dreht die
-ROADMAP-Reihenfolge um. OpenCodes `serve`-API ist voll dokumentiert, die Config
-per Env erzwingbar, kein `bash -l`. Das bringt schneller einen **funktionierenden,
-gesandboxten, offline** Agenten und entkoppelt das Windows-Shell-Risiko von
-Hermes vom Rest der Phase. ADR-010s „beide Adapter" bleibt.
+**A — Adapter-Reihenfolge.** → **✅ entschieden (ADR-021): OpenCode zuerst,
+Hermes zweiter.** 5.0 hat es bestätigt — OpenCode = eine `.exe`, Config per Env
+erzwingbar, Approval-Fluss verprobt; Hermes = 120 Deps + node/Browser/ripgrep/
+ffmpeg. Dreht die ROADMAP-Reihenfolge um; ADR-010s „beide Adapter" bleibt.
 
 **B — Sandkasten-Niveau (MVP).**
 → **Empfehlung: Pfad-Allowlist (cwd, rekursiv) + Command-Approval (Mensch im UI,
@@ -134,16 +132,72 @@ meist genutzt), analog `chat`. Ein GGUF mit verlässlichem Tool-Calling
 (Qwen2.5-Coder-7B/14B, o. Ä.) — kuratierte Liste als spätere `docs/AGENT_MODELS.md`.
 
 **E — `llama-server`-Tool-Calling (Risiko).**
-→ **In 5.0 verproben.** OpenCode/Hermes brauchen verlässliche `tool_calls` aus
-`/v1/chat/completions`. `llama-server --jinja` + das richtige Chat-Template pro
-Modell. Fällt es aus → GBNF-Grammar-Fallback / ein anderes Modell / OpenCodes
-„native tool calling off". **Blocker-Kandidat** — deshalb eigene Scheibe 5.0.
+→ **✅ weitgehend entschärft (5.0 / ADR-021):** `llama-server --jinja` emittiert
+Standard-OpenAI-`tool_calls`, die OpenCodes `@ai-sdk/openai-compatible`-Runtime
+parst (Stub-Test bewiesen); nativ für Qwen 2.5 Coder / Hermes / Llama 3.x.
+`LlamaCppAdapter` braucht dafür ein `--jinja`-Flag (5.1). **Offen:** ein echter
+Coding-Modell-Lauf → 5.1-Smoke.
 
 **F — Backup-Umfang.**
 → **Empfehlung: `config.toml` + `aiwm.db` + `<data>/agents/<profil>/`** (die
 gemanagten Agent-Configs/Memory/Skills, die wir besitzen) + ein **Modell-
 Manifest** (Namen/SHAs, nicht die GB-Dateien). Ein `.zip`, versioniert.
 `~/.hermes/` des Users bleibt außen vor (wir fahren ein eigenes Profil).
+
+---
+
+## 5.0 — Ergebnis (weitgehend abgeschlossen) · **ADR-021**
+
+Alles auf der echten Maschine verprobt (`node` 24, `uv` 0.12, `wsl`, Git-Bash da).
+Details + Entscheidungen in **ADR-021**; Kurzfassung:
+
+- **OpenCode** (`opencode-ai` 1.18.30, npm → **eine self-contained `bin/opencode.exe`**,
+  läuft nativ Windows): `opencode serve --port … --hostname 127.0.0.1` läuft;
+  `GET /doc` = OpenAPI 3.1 (~180 Ops). **`OPENCODE_CONFIG_CONTENT`-Env erzwingt
+  die Config** — `GET /config` spiegelt sie 1:1. `enabled_providers: ["local"]`
+  + `disabled_providers: ["opencode", …]` → `GET /config/providers` zeigt **nur
+  `local`** (der eingebaute „OpenCode Zen"-Provider muss explizit in
+  `disabled_providers`). Der **Approval-Fluss verprobt** (Streaming-Stub emittiert
+  einen OpenAI-`tool_calls`-Delta): `GET /event` liefert `permission.asked`
+  `{ id, permission:"bash", patterns, metadata.command, always:["cat *"],
+  tool:{messageID,callID} }` → `GET /permission` → `POST /permission/{id}/reply`.
+  Transkript-Events: `message.part.updated` mit `part.type` `text` / `tool`
+  (`status` pending→running, `input`). Prompt: `POST /session/{id}/prompt_async`
+  bzw. `POST /session/{id}/message` `{providerID, modelID, parts:[{type:text,text}]}`.
+  **CWD = Projekt** — der Adapter muss `cwd` = Workspace setzen. State unter
+  `~/.local/share/opencode/` (respektiert `XDG_*`). **→ erster Adapter, bestätigt.**
+- **Hermes Agent** (`hermes-agent` 0.19.0, PyPI, `uv pip install` — **120
+  Dependencies** + `hermes postinstall` zieht `node` / Browser / `ripgrep` /
+  `ffmpeg`; deutlich schwerer als OpenCode). `hermes serve` = headless
+  JSON-RPC/WS-Gateway (`127.0.0.1:9119`, `--skip-build` ohne npm); `hermes -z
+  "<prompt>"` single-shot; `hermes acp` (ACP-stdio). Config
+  `$HERMES_HOME/config.yaml` (`model: {provider: custom, base_url, api_key}`),
+  `hermes doctor` als Selbsttest. **`bash -l` ist entschärft**: 0.19 hat
+  native Windows- + Git-Bash-Pfad-Behandlung (MSYS `/c/Users/…`), der
+  WSL2-Zwang aus ADR-010 gilt nicht mehr — Git-Bash reicht; `terminal.
+  auto_source_bashrc` / `shell_init_files` sind nur PATH-Feinschliff.
+- **`llama-server`-Tool-Calling** (Entscheidung E — **war Blocker-Kandidat,
+  jetzt „Config-Detail"**): `llama-server --jinja` parst OpenAI-Tool-Calls aus
+  dem im GGUF eingebetteten Chat-Template; nativ für **Qwen 2.5 / Qwen 2.5
+  Coder**, **Hermes 2/3**, Llama 3.x, Functionary, Mistral Nemo. Ohne `--jinja`
+  → Tool-Delimiter kommen als Klartext durch. Ggf. `--chat-template <name>` /
+  `--chat-template-file`. Der Stub-Test hat bewiesen: OpenCodes
+  `@ai-sdk/openai-compatible`-Runtime parst **Standard-OpenAI-`tool_calls`-
+  Deltas** — genau was `llama-server --jinja` emittiert. **Offen bleibt nur**:
+  ein echter Coding-Modell-Lauf (Qwen2.5-Coder-GGUF) → verlässlich `tool_calls`?
+  KV-Cache nicht zu hart quantisieren (`-ctk q4_0` schadet). → 5.1-Smoke.
+- **`LlamaCppAdapter`** braucht in 5.1 ein **`--jinja`-Flag** (+ optional
+  `--chat-template`), wenn er ein `coding`-Rollen-Modell für einen Agenten
+  serviert — neues Feld in `LlamaServerOptions` / `[llama]` oder ein
+  Agent-spezifischer Spawn.
+
+Verifiziert (Scratchpad-Probes, keine Repo-Änderung außer Docs):
+- `opencode serve` + forced config + `enabled_providers` + der
+  `permission.asked` → `reply`-Zyklus, end-to-end gegen einen SSE-`tool_calls`-Stub.
+- `hermes-agent` Installation (`uv venv` 3.13 + `uv pip install`), `hermes
+  doctor` / `config` lesen unsere `config.yaml` (custom endpoint).
+- Research: llama.cpp `docs/function-calling.md`, OpenCode `/docs/server` +
+  `/docs/config`, Hermes FAQ/Docs.
 
 ---
 
