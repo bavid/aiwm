@@ -422,8 +422,10 @@ Verifiziert:
 
 Der Agents-Tab — reine UI gegen die 5.1cb-Bindings. Keine Rust-Änderung.
 
-- **`ui/src/features/agents/Agents.tsx`** (`AgentsWorkbench`) + `agents.css`.
-  Zwei-Spalten-Layout (Profile links, Session rechts; einspaltig < 900 px).
+- **`ui/src/features/agents/`** — `Agents.tsx` (`AgentsWorkbench` + `ProfileRow`),
+  `NewProfileForm.tsx`, `SessionPanel.tsx`, `TranscriptView.tsx`, `transcript.ts`
+  (`groupEvents`, pure), `agents.css`. Zwei-Spalten-Layout (Profile links,
+  Session rechts; einspaltig < 900 px).
 - **Profile:** `useAgents()` (neuer 4 s-Poll-Hook). Karte je Profil (Name,
   Adapter-Badge, Modell-Badge „Auto · coding" \| Modellname, Workspace,
   Extra-Reads), „New session" / „Delete". `NewProfileForm` (aufklappbar):
