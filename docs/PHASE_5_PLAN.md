@@ -39,7 +39,8 @@ Export/Import bringt Config + DB + Agent-Profil auf eine zweite Maschine.
 | **5.1cb** | **Agent-Vertikale (API/UI-Anbindung)**: `App.agents` = `AgentSessions` + `OpenCodeAdapter::discover`; API `GET/POST /agents`, `DELETE /agents/:id`, `POST /agent-sessions`, `GET /agent-sessions/:id`, `POST /agent-sessions/:id/{message,permission,stop}` + DTOs + 8 Tauri-Commands + `ipc.ts`/dev-mock. `docs/AGENT_MODELS.md` mit kuratierten Kandidaten + manueller Smoke-Prozedur. Echter Qwen2.5-Coder-GGUF-Lauf = manuell (dokumentiert, wie 4.0). | ✅ |
 | 5.2 | **Sandkasten** (config-level, ADR-010): erzwungene OpenCode-`permission` — `edit`/`write` = `{"*":"deny","<ws>/**":"ask"}` (Edits nur im Workspace), `external_directory` = `{"*":"deny","<extra>/**":"allow"}` (Profil-Extras read-only), `bash` = `ask` (Approval-Fluss steht schon), `webfetch`/`websearch` = `deny` + `tools` beide `false` (Netz immer aus). `SpawnSpec.env_remove` + `SCRUBBED_ENV` strippt Cloud-Credentials aus dem `opencode`-Kind. Echte Prozess-Isolation + Toolset-Whitelisting vertagt. | ✅ |
 | 5.3 | **Agents-UI-Tab** (`ui/src/features/agents/`): Profil-Liste + „New profile" (Runtime, Modell [Auto über `coding` \| Pick], Workspace-Pfad-Feld, erlaubte Pfade); Session-View — Transkript (`text` gefaltet, `tool`-Karten mit Command + Output + Status, `permission` inline mit Allow once / Always / Deny), Zustands-Badge, Composer (nur bei `idle`), „Stop". „Coding"-Dashboard-Button → Tab. Kein nativer Ordner-Picker (kein `plugin-dialog`) → Text-Feld wie im Models-Tab; Workspace-Registry im Core vertagt (das Profil *ist* die Bindung). | ✅ |
-| 5.4 | **Hermes-Agent-Adapter**: `uv`-Installer (gepinnte Version) → gemanagtes Profil unter `<data>/agents/hermes/` (`HERMES_HOME`/`-p <profil>`); `config.yaml` **erzwungen** (`provider: custom`, `base_url` = `llama-server`, `security.redact_secrets`, Workspace, `HERMES_STREAM_READ_TIMEOUT=1800`). Treiben über Hermes' HTTP-Server (`/v1/responses` / `/api/jobs`) **oder** `hermes chat -q` pro Turn. Memory (`MEMORY.md`) + Skills leben im Profil-Ordner → Backup (5.5). `bash -l` per 5.0-Entscheidung. | offen |
+| **5.4a** | **Hermes-Adapter** (nur der Adapter, gegen ein Fixture): `HermesAgentAdapter` — **ein `hermes gateway` pro Session**, `cwd` = Workspace, per-Session managed `HERMES_HOME` mit erzwungener `config.yaml` (`provider: custom` → `spec.endpoint.base_url`, `redact_secrets`/`redact_pii`, `web_search:false`), API-Server-Settings via Spawn-Env (`API_SERVER_KEY` random, Bearer auf jedem Request). Turn = `POST /api/sessions/:id/chat/stream` → SSE → `AgentEvent` (event-Namen lenient — Docs unvollständig); Approval = `POST /v1/runs/:id/approval`; `interrupt` = `/v1/runs/:id/stop`. `aiwm-fake-hermes`-Fixture + Integrationstest. `CLOUD_CREDENTIAL_ENV` + `scrubbed_env(extra)` aus `opencode` in `agent/mod.rs` gehoben (geteilt). | ✅ |
+| **5.4b** | **Hermes-Installer + Anbindung**: `uv`-Installer (gepinnte `hermes-agent`-Version, `hermes postinstall` = node/Browser/ripgrep/ffmpeg — schwer; evtl. „Advanced/optional") → gemanagter venv unter `<runtimes>/hermes/`; `POST /runtimes/hermes/install` + Installer-Status. `AgentSessions.with_adapter(HermesAgentAdapter::discover(...))` in `App`; „Hermes"-Option im Profil-Formular frei. Realer `hermes`-Lauf → kalibriert die SSE-Event-Namen + `config.yaml`-Sandbox-Keys. Memory (`MEMORY.md`) + Skills im Profil-Ordner → Backup (5.5). | offen |
 | 5.5 | **Session-Persistenz + Backup/Restore**: `agent_sessions.checkpoint_path`, Wiederaufnahme nach Absturz/Neustart (OpenCode `/session` list + resume, Hermes `/resume`); Kontext-Kompaktierung: die Agents machen sie selbst, wir zeigen sie an. **Export/Import** — ein Archiv aus `config.toml` + `aiwm.db` + `<data>/agents/<profil>/` (+ Modell-Manifest, **nicht** die Modell-Dateien). Politur: Pin/Unpin-Lebenszyklus, „Agent pausieren?"-Fluss (R8), Diagnostics-Zeile pro Agent. | offen |
 
 Danach (Post-MVP): `aider` als optionaler dritter Adapter, lokaler Repository-
@@ -460,6 +461,58 @@ Verifiziert:
   „running", Approval-Karte) → „Allow once" → Tool „done" + Output +
   Abschlusstext + idle → Composer aktiv → „Stop" → „stopped" + „Close
   transcript". Keine Konsolenfehler.
+
+---
+
+## 5.4a — Ergebnis (abgeschlossen)
+
+Der zweite Adapter — `HermesAgentAdapter`, isoliert gegen ein Fixture. Noch
+**kein** Installer und keine `App`-Anbindung (5.4b). Die 5.4-Zeile wurde entlang
+dieser Naht geteilt.
+
+- **`agent::hermes`** (`hermes.rs` + `hermes/sse.rs`): implementiert `AgentAdapter`.
+  `open_session` startet **`hermes gateway` pro Session** über `RuntimeSupervisor`,
+  `cwd` = `spec.workspace`; schreibt einen managed `HERMES_HOME`
+  (`<home_root>/<uuid>/config.yaml` — die erzwungene Config) und setzt die
+  API-Server-Settings (`API_SERVER_ENABLED/HOST/PORT/KEY`, `KEY` = random UUID)
+  über die **Spawn-Env** (Env schlägt Config-Dateien bei Hermes). Wartet per
+  `GET /health` (Bearer). `POST /api/sessions {}` → Session-Id. Fehlgeschlagener
+  Start räumt den `HERMES_HOME` mit ab; `Drop` für `Session` löscht ihn.
+- **Turn:** `send` → `POST /api/sessions/:id/chat/stream {input}` (Bearer) →
+  die SSE-Antwort geht in eine **Turn-Task** (`sse::run`, pro Turn, ersetzt die
+  vorige). `reply_permission(session, request_id, decision)` → `POST
+  /v1/runs/{request_id}/approval {approved: decision != Deny}` (`request_id` =
+  die Run-Id). `interrupt` → `POST /v1/runs/{run}/stop` (Run-Id aus dem
+  SSE-Stream, `Arc<Mutex<Option<String>>>`). `close_session` → `DELETE
+  /api/sessions/:id` + `Session` droppen.
+- **`hermes/sse.rs`**: Standard-SSE (`event:` + `data:`, Leerzeile terminiert).
+  `map_event` — **Docs unvollständig**, daher lenient: `run.started|created`
+  (Run-Id merken), `assistant.delta|message.delta` → `Text`,
+  `tool.start|started`/`.progress`/`.complete|completed` → `Tool` (Fehler-Flag),
+  `approval.request|sudo.request|clarify.request` → `Permission{id: run_id}`,
+  `run.completed|complete`/`message.complete`/`session.idle` → `Idle`,
+  `run.failed|error` → `Error`. Bei `Ok(None)` (sauberes Stream-Ende) ein
+  `Idle` als Netz.
+- **`forced_config_yaml`**: `model.provider: custom` + `base_url` = der lokale
+  Endpoint, `providers.aiwm-local`, `security.redact_secrets`,
+  `privacy.redact_pii`, `permissions.mode: ask`, `tools.web_search/browser:
+  false`. Die Sandbox-YAML-Keys sind **geraten** (Docs) — 5.4b kalibriert.
+- **Geteilt gehoben:** `CLOUD_CREDENTIAL_ENV` (23 Cloud-Keys) + `scrubbed_env(extra)`
+  von `opencode` nach `agent/mod.rs`. OpenCode gibt `["OPENCODE_CONFIG",
+  "OPENCODE_API_KEY"]`, Hermes `["HERMES_CONFIG"]`.
+- **`bin/aiwm-fake-hermes`**: axum-Fixture, Bearer-Check, skriptet einen Turn
+  (`run.started` → `assistant.delta` → `tool.start terminal` → `approval.request`
+  → warten → Ergebnis + `run.completed`).
+
+Verifiziert:
+- **+9 Lib-Tests** (`agent::hermes` — `forced_config`, `spawn_spec`, `write_home`,
+  „not installed", `resolve_bin`; `agent::hermes::sse` — Deltas→Text + Run-Id,
+  Tool/Approval/Idle, Tool-Fehler, unbekannte Events ignoriert) → **281 Lib-Tests**.
+- **+1 Integrationsdatei** `core/tests/hermes_adapter.rs` (3, `#![cfg(windows)]`):
+  voller Turn open→send→approve→idle, Deny beendet den Turn, „not installed". →
+  **43 Integrationstests.** `check.ps1` grün.
+- **Kein realer `hermes`-Lauf** — die SSE-Event-Namen + `config.yaml`-Keys werden
+  in 5.4b kalibriert (wie der ComfyUI-`/history`-Key in Phase 4).
 
 ---
 

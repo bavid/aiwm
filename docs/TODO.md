@@ -194,9 +194,14 @@ hierher, damit nichts verloren geht.
 - ~~Agent-Research + Scheibenplan~~ → ✅ [PHASE_5_PLAN.md](PHASE_5_PLAN.md)
   (OpenCode + Hermes recherchiert, 5.0–5.5, offene Entscheidungen A–F).
 - ~~Hermes `bash -l` / WSL2~~ → ✅ 5.0 (ADR-021): Hermes 0.19 hat native Windows-
-  + Git-Bash-Behandlung, **kein WSL2-Zwang**. Offen: Hermes ist schwer (~120
-  Deps + `hermes postinstall` = node/Browser/ripgrep/ffmpeg) — Installer-Umfang
-  in 5.4 klären; evtl. wird Hermes „Advanced/optional".
+  + Git-Bash-Behandlung, **kein WSL2-Zwang**. Der Adapter (5.4a) ist fertig
+  (`hermes gateway` pro Session, erzwungene `config.yaml`, Bearer, `chat/stream`-
+  SSE). **Offen (5.4b):** der `uv`-Installer — Hermes ist schwer (~120 Deps +
+  `hermes postinstall` = node/Browser/ripgrep/ffmpeg); evtl. „Advanced/optional".
+  Der erste echte `hermes`-Lauf kalibriert die SSE-Event-Namen
+  (`assistant.delta` vs. `message.delta`, `approval.request`, ob `/chat/stream`
+  nach der Approval offen bleibt oder neu geöffnet werden muss) + die
+  `config.yaml`-Sandbox-Keys (`security`/`permissions`/`tools` sind geraten).
 - `llama-server`-Tool-Calling: `--jinja` emittiert OpenAI-`tool_calls`, OpenCode
   parst sie (5.0-Stub-Test). ✅ 5.1a: `LlamaServerOptions.jinja` (default an) +
   `chat_template` → `--jinja` / `--chat-template` im Spawn, `[llama]`-Config +

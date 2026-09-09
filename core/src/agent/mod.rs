@@ -13,8 +13,11 @@
 //!   and a [`FakeAgentAdapter`] for tests.
 //! - 5.1b: [`OpenCodeAdapter`] — the first real adapter (see `opencode`).
 //! - 5.1c: `capability::agent` + scheduler pinning + the API/UI wiring.
+//! - 5.2: the config-level sandbox (forced config + [`scrubbed_env`]).
+//! - 5.4: [`HermesAgentAdapter`] — the second adapter (see `hermes`).
 
 mod fake;
+mod hermes;
 mod opencode;
 
 use std::fmt;
@@ -26,10 +29,51 @@ use serde_json::Value;
 use tokio::sync::mpsc;
 
 pub use fake::FakeAgentAdapter;
+pub use hermes::HermesAgentAdapter;
 pub use opencode::OpenCodeAdapter;
 
 use crate::runtime::Health;
 use crate::Result;
+
+/// Cloud-provider credentials stripped from every managed agent runtime's child
+/// process (ADR-010, ADR-009) — the agent must reach only the local endpoint,
+/// and a stray key on the host must never leak into it.
+pub(crate) const CLOUD_CREDENTIAL_ENV: &[&str] = &[
+    "ANTHROPIC_API_KEY",
+    "OPENAI_API_KEY",
+    "OPENAI_BASE_URL",
+    "OPENROUTER_API_KEY",
+    "GEMINI_API_KEY",
+    "GOOGLE_API_KEY",
+    "GOOGLE_GENERATIVE_AI_API_KEY",
+    "GROQ_API_KEY",
+    "XAI_API_KEY",
+    "MISTRAL_API_KEY",
+    "DEEPSEEK_API_KEY",
+    "PERPLEXITY_API_KEY",
+    "TOGETHER_API_KEY",
+    "FIREWORKS_API_KEY",
+    "CEREBRAS_API_KEY",
+    "COHERE_API_KEY",
+    "AZURE_OPENAI_API_KEY",
+    "AWS_ACCESS_KEY_ID",
+    "AWS_SECRET_ACCESS_KEY",
+    "AWS_SESSION_TOKEN",
+    "GITHUB_TOKEN",
+    "GH_TOKEN",
+    "HF_TOKEN",
+    "HUGGING_FACE_HUB_TOKEN",
+];
+
+/// [`CLOUD_CREDENTIAL_ENV`] plus `extra` adapter-specific config overrides, as
+/// owned strings for [`crate::runtime::SpawnSpec::env_remove`].
+pub(crate) fn scrubbed_env(extra: &[&str]) -> Vec<String> {
+    CLOUD_CREDENTIAL_ENV
+        .iter()
+        .chain(extra)
+        .map(|s| (*s).to_string())
+        .collect()
+}
 
 /// Which managed agent runtime an adapter wraps. Matches the `agents.adapter`
 /// column and the serde name.

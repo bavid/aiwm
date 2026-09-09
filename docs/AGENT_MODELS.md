@@ -10,12 +10,15 @@ GGUF selbst von Hugging Face und importiert es über den **Models**-Tab als
 **Chat**-Typ, mit der zusätzlichen Rolle **`coding`**. Fehlt eine Datei mit
 `coding`-Rolle, lehnt `open_agent_session` mit Klartext ab.
 
-> **Noch nicht mit einem echten Coding-Modell verprobt.** Adapter (5.1b) +
-> Subsystem (5.1ca) + API (5.1cb) + Sandkasten-Config (5.2) laufen gegen
-> Fixtures. Der erste echte Lauf (Smoke unten) kalibriert die OpenCode-Event-
-> Ecken *und* prüft, dass die erzwungene `permission`-Config von der echten
-> `opencode`-Version akzeptiert wird — wie der ComfyUI-`/history`-Key in Phase 4.
-> Fixes fließen hierher zurück.
+> **Noch nicht mit einem echten Coding-Modell verprobt.** OpenCode-Adapter
+> (5.1b) + Subsystem (5.1ca) + API (5.1cb) + Sandkasten-Config (5.2) + UI (5.3)
+> + Hermes-Adapter (5.4a) laufen gegen Fixtures. Der erste echte Lauf (Smoke
+> unten) kalibriert die OpenCode-Event-Ecken *und* prüft, dass die erzwungene
+> `permission`-Config von der echten `opencode`-Version akzeptiert wird — wie der
+> ComfyUI-`/history`-Key in Phase 4. Für Hermes (5.4b) sind zusätzlich die
+> SSE-Event-Namen (`assistant.delta` vs. `message.delta`, `approval.request`, …)
+> und die `config.yaml`-Sandbox-Keys noch zu verifizieren. Fixes fließen hierher
+> zurück.
 
 Hardware-Kontext: RTX 4080 Super, 16 GB VRAM, 32 GB RAM. Ein 7B-Q4/Q5-Modell
 lässt ~9–11 GB VRAM für alles andere; ein 14B-Q4 füllt die Karte fast allein.
@@ -53,6 +56,11 @@ Chat-Template trägt die Tool-Grammatik). **KV-Cache nicht zu hart quantisieren*
 **Empfehlung als `Auto`-Default:** Qwen2.5-Coder-7B-Instruct Q5_K_M — bestes
 Tool-Calling/VRAM-Verhältnis auf 16 GB, lässt genug Kopf für ComfyUI-freie
 Arbeit.
+
+**Für den Hermes-Runtime** (5.4) ist **Hermes-3-Llama-3.1-8B** der natürliche
+Griff — Nous Researchs eigenes, auf ihren Agenten trainiertes Modell. Für den
+OpenCode-Runtime ist Qwen2.5-Coder stärker beim reinen Code. Beide brauchen die
+`coding`-Rolle; ein Profil bindet einen Runtime + ein Modell.
 
 Wenn ein GGUF-Template das Tool-Format nicht kennt: in den Settings
 `llama.chat_template` setzen (z. B. `qwen2.5-coder`, `hermes-3`) — `--jinja`

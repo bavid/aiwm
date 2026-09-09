@@ -165,7 +165,13 @@ erzwingbar, kein `bash -l` — Empfehlung, dreht die Reihenfolge unten um),
   profile", Session-View: Transkript mit Tool-Call-Karten + inline Approval-Prompts
   (Allow once / Always / Deny) + „Stop"; „Coding"-Dashboard-Button → Tab.
   Workspace-Registry im Core vertagt (das Profil ist die Bindung)
-- 5.4 **Hermes-Adapter** (`uv`-Installer, gemanagtes Profil, erzwungene `config.yaml`)
+- [x] 5.4a **Hermes-Adapter** (`agent::hermes`) — `hermes gateway` pro Session,
+  managed `HERMES_HOME` + erzwungene `config.yaml`, Bearer-Auth, `chat/stream`-SSE
+  → `AgentEvent` (lenient), Approval via `/v1/runs/:id/approval`; gegen
+  `aiwm-fake-hermes` getestet. `CLOUD_CREDENTIAL_ENV`/`scrubbed_env` nach `agent/mod.rs` gehoben
+- 5.4b **Hermes-Installer + Anbindung** — `uv`-Installer (gepinnte Version,
+  schwer), `POST /runtimes/hermes/install`, `App`-Registrierung, „Hermes" im
+  Profil-Formular frei; realer Lauf kalibriert SSE-Namen + Sandbox-Keys
 - 5.5 Session-Persistenz + Checkpoints + **Export/Import** (config + DB + Agent-Profil)
 - Post-MVP: `aider`, lokaler Repository-Index, MCP-Verwaltung, parallele Sessions
 

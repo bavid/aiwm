@@ -31,7 +31,7 @@ noch keine echte AI-Capability (die kommt ab Phase 2).
 | WP-9 | CI-Workflow, Git-Hooks (pre-commit fmt, pre-push voller Gate) |
 | WP-10 | ADRs finalisiert, Stub-Docs (MODELS/RUNTIMES/SECURITY/BENCHMARKS) |
 
-**272 Rust-Unit + 40 Integrationstests + 5 pytest** grün · `scripts/check.ps1` grün ·
+**281 Rust-Unit + 43 Integrationstests + 5 pytest** grün · `scripts/check.ps1` grün ·
 **null `unsafe`** im Produktivcode.
 
 **Phase 2 (MVP) ✅ abgeschlossen** — Scheiben 2.1–2.7 + durchgehender
@@ -44,7 +44,7 @@ echten 4080 (alle Smokes fuhren gegen die Fake-ComfyUI).
 gebaut). **Offen: 4.0** — die echte ComfyUI auf der 4080 verproben (cu130-Treiber,
 GGUF-Ordner-Keys, `SaveVideo`/`av`, Zeit/VRAM kalibrieren) — läuft vermutlich an
 der echten Maschine. Plan + Research: [docs/PHASE_4_PLAN.md](docs/PHASE_4_PLAN.md).
-**Phase 5 (Agents) — Plan + 5.0 + 5.1a + 5.1b + 5.1c + 5.2 + 5.3 ✅:** [docs/PHASE_5_PLAN.md](docs/PHASE_5_PLAN.md),
+**Phase 5 (Agents) — Plan + 5.0 + 5.1a + 5.1b + 5.1c + 5.2 + 5.3 + 5.4a ✅:** [docs/PHASE_5_PLAN.md](docs/PHASE_5_PLAN.md),
 **ADR-021**. Nicht selbst bauen — **OpenCode** (`opencode serve`, Adapter 1) +
 **Hermes Agent** (Nous Research, Adapter 2) orchestrieren und sandboxen,
 Endpoint = lokaler `llama-server --jinja`. Sandkasten = Pfad-Allowlist +
@@ -90,6 +90,16 @@ Command-Approval (UI) + erzwungene Offline-Config.
   `permission` inline mit Allow once / Always / Deny), Zustands-Badge, Composer
   (nur bei `idle`), „Stop". „Coding"-Dashboard-Button → Tab. UI-only, gegen die
   5.1cb-Bindings + dev-mock.
+- **5.4a** ✅ **Hermes-Adapter** (`agent::hermes`): `HermesAgentAdapter` — **ein
+  `hermes gateway` pro Session** unter `RuntimeSupervisor`, `cwd` = Workspace,
+  per-Session managed `HERMES_HOME` mit erzwungener `config.yaml` (`provider:
+  custom` → lokaler Endpoint, `redact_secrets`/`redact_pii`, Netz-Tools aus),
+  API-Server-Settings + random `API_SERVER_KEY` via Spawn-Env, Bearer auf jedem
+  Request. Turn = `POST /api/sessions/:id/chat/stream` → SSE → `AgentEvent`
+  (Event-Namen lenient — Docs unvollständig); Approval = `POST
+  /v1/runs/:id/approval`. Gegen `aiwm-fake-hermes` getestet. `CLOUD_CREDENTIAL_ENV`
+  + `scrubbed_env` von `opencode` in `agent/mod.rs` gehoben. Installer + `App`-
+  Anbindung = 5.4b.
 
 - **4.1** ✅ **`capability::video`**: `job_type=video` → feste `wan_ti2v`-Pipeline
   (`WanImageToVideo` → `KSampler` → `VAEDecode` → `CreateVideo` → `SaveVideo`,

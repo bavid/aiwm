@@ -10,7 +10,7 @@
 //! every shell command and file edit needs approval, edits are confined to the
 //! workspace, reads outside it are denied bar the profile's extra roots, and
 //! every network tool is off. The child's environment is also scrubbed of cloud
-//! credentials ([`SCRUBBED_ENV`]).
+//! credentials ([`super::scrubbed_env`]).
 //!
 //! Its `GET /event` SSE stream is translated into [`AgentEvent`]s. The exact
 //! real event shapes (`message.part.updated`, `permission.asked`, idle) are from
@@ -295,37 +295,9 @@ impl AgentAdapter for OpenCodeAdapter {
     }
 }
 
-/// Cloud-provider credentials and config overrides stripped from the `opencode`
-/// child's environment: the agent must reach only the local endpoint, and a
-/// stray key on the host must never leak into it (ADR-010, ADR-009).
-const SCRUBBED_ENV: &[&str] = &[
-    "ANTHROPIC_API_KEY",
-    "OPENAI_API_KEY",
-    "OPENAI_BASE_URL",
-    "OPENROUTER_API_KEY",
-    "GEMINI_API_KEY",
-    "GOOGLE_API_KEY",
-    "GOOGLE_GENERATIVE_AI_API_KEY",
-    "GROQ_API_KEY",
-    "XAI_API_KEY",
-    "MISTRAL_API_KEY",
-    "DEEPSEEK_API_KEY",
-    "PERPLEXITY_API_KEY",
-    "TOGETHER_API_KEY",
-    "FIREWORKS_API_KEY",
-    "CEREBRAS_API_KEY",
-    "COHERE_API_KEY",
-    "AZURE_OPENAI_API_KEY",
-    "AWS_ACCESS_KEY_ID",
-    "AWS_SECRET_ACCESS_KEY",
-    "AWS_SESSION_TOKEN",
-    "GITHUB_TOKEN",
-    "GH_TOKEN",
-    "HF_TOKEN",
-    "HUGGING_FACE_HUB_TOKEN",
-    "OPENCODE_CONFIG",
-    "OPENCODE_API_KEY",
-];
+/// OpenCode config overrides scrubbed on top of [`super::CLOUD_CREDENTIAL_ENV`]
+/// so a stray one on the host cannot weaken the forced config.
+const OPENCODE_ENV_OVERRIDES: &[&str] = &["OPENCODE_CONFIG", "OPENCODE_API_KEY"];
 
 /// The `opencode serve` launch spec: loopback port, `cwd` = the workspace, the
 /// forced config in the env, and every known cloud credential scrubbed.
@@ -346,7 +318,7 @@ fn build_spawn_spec(bin: &Path, port: u16, spec: &SessionSpec) -> SpawnSpec {
         "OPENCODE_CONFIG_CONTENT".into(),
         forced_config(spec).to_string(),
     )];
-    ss.env_remove = SCRUBBED_ENV.iter().map(|s| (*s).to_string()).collect();
+    ss.env_remove = super::scrubbed_env(OPENCODE_ENV_OVERRIDES);
     ss
 }
 
