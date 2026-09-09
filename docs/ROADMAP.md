@@ -157,7 +157,10 @@ erzwingbar, kein `bash -l` — Empfehlung, dreht die Reihenfolge unten um),
 - [x] 5.1cb **Agent-Vertikale (API-Anbindung)** — `App.agents` + `OpenCodeAdapter::discover`,
   API (`/agents`, `/agent-sessions/*`) + 8 Tauri-Commands + `ipc.ts`; `docs/AGENT_MODELS.md`
   (kuratierte GGUFs + manuelle Smoke). UI-Tab = 5.3
-- 5.2 Sandkasten: Command-Approval-Fluss (UI), Pfad-Allowlist, Offline erzwungen
+- [x] 5.2 **Sandkasten** (config-level, ADR-010) — erzwungene OpenCode-`permission`
+  (`edit`/`write` auf den Workspace, `external_directory` read-only, `bash` ask,
+  Netz-Tools aus) + `SpawnSpec.env_remove`/`SCRUBBED_ENV` gegen Cloud-Credentials.
+  Echte Prozess-Isolation vertagt. `docs/SECURITY.md` aktualisiert
 - 5.3 Agents-UI-Tab (Profile, Transkript mit Tool-Calls + Approvals, Workspace-Picker)
 - 5.4 **Hermes-Adapter** (`uv`-Installer, gemanagtes Profil, erzwungene `config.yaml`)
 - 5.5 Session-Persistenz + Checkpoints + **Export/Import** (config + DB + Agent-Profil)

@@ -11,9 +11,11 @@ GGUF selbst von Hugging Face und importiert es über den **Models**-Tab als
 `coding`-Rolle, lehnt `open_agent_session` mit Klartext ab.
 
 > **Noch nicht mit einem echten Coding-Modell verprobt.** Adapter (5.1b) +
-> Subsystem (5.1ca) + API (5.1cb) laufen gegen Fixtures. Der erste echte Lauf
-> (Smoke unten) kalibriert die OpenCode-Event-Ecken — wie der ComfyUI-`/history`-
-> Key in Phase 4. Fixes fließen hierher zurück.
+> Subsystem (5.1ca) + API (5.1cb) + Sandkasten-Config (5.2) laufen gegen
+> Fixtures. Der erste echte Lauf (Smoke unten) kalibriert die OpenCode-Event-
+> Ecken *und* prüft, dass die erzwungene `permission`-Config von der echten
+> `opencode`-Version akzeptiert wird — wie der ComfyUI-`/history`-Key in Phase 4.
+> Fixes fließen hierher zurück.
 
 Hardware-Kontext: RTX 4080 Super, 16 GB VRAM, 32 GB RAM. Ein 7B-Q4/Q5-Modell
 lässt ~9–11 GB VRAM für alles andere; ein 14B-Q4 füllt die Karte fast allein.
@@ -104,6 +106,10 @@ curl -s localhost:<port>/agent-sessions/<session-id>/stop -X POST
   (`message.part.updated` `state`-Keys, `permission.asked` vs. `.updated`,
   `session.error`)?
 - Kommt nach `POST /session/:id/abort` ein `session.idle`? (`interrupt`-Verhalten)
+- **Sandkasten (5.2):** `GET /config` gegen die erzwungene Config prüfen —
+  akzeptiert die echte `opencode`-Version `permission.edit` als Objekt +
+  `external_directory`? Ein Edit außerhalb des Workspace muss abgelehnt werden;
+  `webfetch` darf gar nicht erst als Tool auftauchen.
 - VRAM: Modell resident + gepinnt, `GET /runtimes` zeigt `llamacpp` mit dem
   Modell; ein Bild-/Chat-Job dazwischen → `blocked` mit „pause it or queue".
 - Netz trennen → die Session läuft weiter (nur der lokale Endpoint).

@@ -31,16 +31,34 @@ Loopback-only.** Kein öffentlicher Dienst.
 - SHA256-Verifikation bei Downloads (Phase 6). Echte Signaturen gibt es kaum.
 - Unbekannte Quellen: „⚠ Unverified" anzeigen, nicht automatisch ausführen.
 
-## Agent-Sandbox (Phase 5)
+## Agent-Sandbox (Phase 5, ADR-010 / ADR-021)
 
 Coding-/Agent-Runtimes können Dateien lesen/schreiben und Shell-Kommandos
-ausführen. MVP-Niveau der Grenzen:
+ausführen. **Der MVP-Sandkasten ist config-level, nicht prozess-level** —
+umgesetzt über die *erzwungene* Runtime-Config (5.1b/5.2), nicht über
+OS-Isolation. Für OpenCode (`agent::opencode::forced_config`, via
+`OPENCODE_CONFIG_CONTENT`, das merged und gewinnt):
 
-- Workspace-Pfad-Allowlist (Agent sieht nicht den ganzen PC)
-- Command-Approval für Shell-Aufrufe
-- kein Netzzugriff per Default
-- Secrets nicht in der Agent-Umgebung
-- echte FS-/Prozess-Isolation (WSL2/Container) optional, später
+- **Pfad-Allowlist.** `cwd` = Workspace. `permission.edit`/`.write` =
+  `{ "*": "deny", "<workspace>/**": "ask" }` (jeder Edit fragt, außerhalb gar
+  nicht). `permission.external_directory` = `{ "*": "deny", "<extra>/**":
+  "allow" }` — die Profil-Extra-Roots sind **read-only** (edit verbietet sie
+  weiter).
+- **Command-Approval.** `permission.bash = "ask"` — jedes Shell-Kommando geht
+  als `permission`-Event durch den Core an die UI; deren Antwort
+  (`allow_once` / `allow_always` / `deny`) wird zurück-`POST`et.
+- **Kein Netz.** `permission.webfetch`/`.websearch = "deny"` **und**
+  `tools.webfetch`/`.websearch = false`. `enabled_providers: ["local"]` +
+  `disabled_providers: [alle Cloud]` → nur der lokale `llama-server`. Gilt
+  **immer** für MVP-Agenten, unabhängig vom globalen `offline_mode`.
+- **Secrets nicht in der Agent-Env.** Der `opencode`-Kindprozess wird über
+  `SpawnSpec.env_remove` von bekannten Cloud-Credentials befreit
+  (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `AWS_*`, `GITHUB_TOKEN`, `HF_TOKEN`,
+  `OPENCODE_CONFIG`, … — Liste `SCRUBBED_ENV`); der `apiKey` im Provider ist ein
+  Dummy (`aiwm-local`).
+- **Vertagt (opt-in, eigener ADR):** echte FS-/Prozess-Isolation (WSL2,
+  Container, AppContainer, Firewall-Regel pro Agent), Toolset-Whitelisting pro
+  Profil, per-Kommando-Bash-Deny-Muster.
 
 ## Config / Secrets
 

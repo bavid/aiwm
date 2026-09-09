@@ -31,7 +31,7 @@ noch keine echte AI-Capability (die kommt ab Phase 2).
 | WP-9 | CI-Workflow, Git-Hooks (pre-commit fmt, pre-push voller Gate) |
 | WP-10 | ADRs finalisiert, Stub-Docs (MODELS/RUNTIMES/SECURITY/BENCHMARKS) |
 
-**270 Rust-Unit + 40 Integrationstests + 5 pytest** grün · `scripts/check.ps1` grün ·
+**272 Rust-Unit + 40 Integrationstests + 5 pytest** grün · `scripts/check.ps1` grün ·
 **null `unsafe`** im Produktivcode.
 
 **Phase 2 (MVP) ✅ abgeschlossen** — Scheiben 2.1–2.7 + durchgehender
@@ -44,7 +44,7 @@ echten 4080 (alle Smokes fuhren gegen die Fake-ComfyUI).
 gebaut). **Offen: 4.0** — die echte ComfyUI auf der 4080 verproben (cu130-Treiber,
 GGUF-Ordner-Keys, `SaveVideo`/`av`, Zeit/VRAM kalibrieren) — läuft vermutlich an
 der echten Maschine. Plan + Research: [docs/PHASE_4_PLAN.md](docs/PHASE_4_PLAN.md).
-**Phase 5 (Agents) — Plan + 5.0 + 5.1a + 5.1b + 5.1c ✅:** [docs/PHASE_5_PLAN.md](docs/PHASE_5_PLAN.md),
+**Phase 5 (Agents) — Plan + 5.0 + 5.1a + 5.1b + 5.1c + 5.2 ✅:** [docs/PHASE_5_PLAN.md](docs/PHASE_5_PLAN.md),
 **ADR-021**. Nicht selbst bauen — **OpenCode** (`opencode serve`, Adapter 1) +
 **Hermes Agent** (Nous Research, Adapter 2) orchestrieren und sandboxen,
 Endpoint = lokaler `llama-server --jinja`. Sandkasten = Pfad-Allowlist +
@@ -77,6 +77,13 @@ Command-Approval (UI) + erzwungene Offline-Config.
   `ipc.ts`-Bindings. [`docs/AGENT_MODELS.md`](docs/AGENT_MODELS.md) — kuratierte
   Coding-GGUFs (Qwen2.5-Coder-7B als `Auto`) + manuelle Smoke-Prozedur. Der echte
   GGUF-Lauf ist manuell (wie 4.0). UI-Tab = 5.3.
+- **5.2** ✅ **Sandkasten** (config-level, ADR-010): erzwungene OpenCode-`permission`
+  — `edit`/`write` = `{"*":"deny","<ws>/**":"ask"}` (Edits nur im Workspace),
+  `external_directory` read-only für Profil-Extras, `bash` ask, `webfetch`/
+  `websearch` deny + `tools` beide aus (Netz immer aus). `SpawnSpec.env_remove` +
+  `SCRUBBED_ENV` strippt Cloud-Credentials (`ANTHROPIC_API_KEY`, `AWS_*`,
+  `GITHUB_TOKEN`, …) aus dem `opencode`-Kind. Echte Prozess-Isolation vertagt.
+  [`docs/SECURITY.md`](docs/SECURITY.md).
 
 - **4.1** ✅ **`capability::video`**: `job_type=video` → feste `wan_ti2v`-Pipeline
   (`WanImageToVideo` → `KSampler` → `VAEDecode` → `CreateVideo` → `SaveVideo`,

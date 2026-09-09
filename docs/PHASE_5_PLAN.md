@@ -37,7 +37,7 @@ Export/Import bringt Config + DB + Agent-Profil auf eine zweite Maschine.
 | **5.1b** | **OpenCode-Adapter** (nur der Adapter, gegen ein Fixture): `opencode serve --port … --hostname 127.0.0.1` unter `RuntimeSupervisor`, **ein Prozess pro Session**, `cwd` = Workspace; Config **erzwungen** über `OPENCODE_CONFIG_CONTENT` (custom provider → `spec.endpoint.base_url`, `enabled_providers: ["local"]` + `disabled_providers: ["opencode",…]`, `permission` alles `ask`, `webfetch: deny`, `tools.webfetch: false`). `AgentAdapter` für OpenCode: `open_session` / `send` (`POST /session/:id/prompt_async`) / `events` (`GET /event` SSE → `AgentEvent`, mit `roles`-Cache gegen Echo) / `reply_permission` (`POST /permission/{id}/reply`) / `interrupt` (`abort`) / `close_session` (`DELETE /session/:id`). `aiwm-fake-opencode`-Fixture + Integrationstest (open → send → approve → idle, sowie deny). | ✅ |
 | **5.1ca** | **Agent-Subsystem (Core, ohne API)**: `capability::agent::AgentSessions` — eigenes Subsystem, **kein** Job (läuft nicht im Job-Loop). `open` → Coding-Modell auflösen (`coding`-Rolle \| explizit) → `CodingRuntime`-Trait platziert+pinnt es (`HybridScheduler::plan` → load/evict → `pin`, `LlamaCppAdapter::base_url()` neu+public) → `adapter.open_session` gegen `<llama>/v1` → Event-Drain-Task (`AgentEvent` → `agent_session_events` + `agent_sessions.state`). `message`/`reply`/`interrupt`/`stop` (stop = `close_session` + unpin + unload). MVP: **eine Session gleichzeitig**. Integrationstest `agent_session.rs` (fake-llama + fake-opencode, open→send→approve→idle→stop). | ✅ |
 | **5.1cb** | **Agent-Vertikale (API/UI-Anbindung)**: `App.agents` = `AgentSessions` + `OpenCodeAdapter::discover`; API `GET/POST /agents`, `DELETE /agents/:id`, `POST /agent-sessions`, `GET /agent-sessions/:id`, `POST /agent-sessions/:id/{message,permission,stop}` + DTOs + 8 Tauri-Commands + `ipc.ts`/dev-mock. `docs/AGENT_MODELS.md` mit kuratierten Kandidaten + manueller Smoke-Prozedur. Echter Qwen2.5-Coder-GGUF-Lauf = manuell (dokumentiert, wie 4.0). | ✅ |
-| 5.2 | **Sandkasten**: Approval-Fluss — der SSE-Stream trägt `permission`-Events → Core reicht sie durch → UI „Agent will ausführen: `<cmd>` — Allow / Deny / Always" → Core `POST`t die Entscheidung. **Pfad-Allowlist**: `cwd` + OpenCode-`permission` verbietet Edits außerhalb; Lese-Extras optional read-only. **Offline erzwungen**: `offline_mode` → Netz-Tools hart aus, dokumentiert dass echte Prozess-Isolation vertagt ist. Secrets: kein `.env` / keine Keys in der Agent-Env (Dummy-`apiKey`). | offen |
+| 5.2 | **Sandkasten** (config-level, ADR-010): erzwungene OpenCode-`permission` — `edit`/`write` = `{"*":"deny","<ws>/**":"ask"}` (Edits nur im Workspace), `external_directory` = `{"*":"deny","<extra>/**":"allow"}` (Profil-Extras read-only), `bash` = `ask` (Approval-Fluss steht schon), `webfetch`/`websearch` = `deny` + `tools` beide `false` (Netz immer aus). `SpawnSpec.env_remove` + `SCRUBBED_ENV` strippt Cloud-Credentials aus dem `opencode`-Kind. Echte Prozess-Isolation + Toolset-Whitelisting vertagt. | ✅ |
 | 5.3 | **Agents-UI-Tab**: Profil-Liste + „New profile" (Runtime, Modell [Auto über `coding`], Workspace-Ordner-Picker, erlaubte Pfade, Toolset); Session-Ansicht — Transkript mit Tool-Call-Karten (Datei-Diffs, Shell-Output), Approval-Prompts inline, „Stop"; „Coding"-Dashboard-Button aktiv. Workspace-Registry (Pfad + Label) im Core. | offen |
 | 5.4 | **Hermes-Agent-Adapter**: `uv`-Installer (gepinnte Version) → gemanagtes Profil unter `<data>/agents/hermes/` (`HERMES_HOME`/`-p <profil>`); `config.yaml` **erzwungen** (`provider: custom`, `base_url` = `llama-server`, `security.redact_secrets`, Workspace, `HERMES_STREAM_READ_TIMEOUT=1800`). Treiben über Hermes' HTTP-Server (`/v1/responses` / `/api/jobs`) **oder** `hermes chat -q` pro Turn. Memory (`MEMORY.md`) + Skills leben im Profil-Ordner → Backup (5.5). `bash -l` per 5.0-Entscheidung. | offen |
 | 5.5 | **Session-Persistenz + Backup/Restore**: `agent_sessions.checkpoint_path`, Wiederaufnahme nach Absturz/Neustart (OpenCode `/session` list + resume, Hermes `/resume`); Kontext-Kompaktierung: die Agents machen sie selbst, wir zeigen sie an. **Export/Import** — ein Archiv aus `config.toml` + `aiwm.db` + `<data>/agents/<profil>/` (+ Modell-Manifest, **nicht** die Modell-Dateien). Politur: Pin/Unpin-Lebenszyklus, „Agent pausieren?"-Fluss (R8), Diagnostics-Zeile pro Agent. | offen |
@@ -378,6 +378,43 @@ Verifiziert:
   `pnpm typecheck`/`lint`).
 - **Der echte GGUF-Lauf ist manuell** (dokumentiert) — kein persistentes
   `opencode`+Coding-Modell-Setup im Repo, analog Slice 4.0.
+
+---
+
+## 5.2 — Ergebnis (abgeschlossen)
+
+Der Sandkasten — **config-level** (ADR-010): die erzwungene OpenCode-Config +
+eine geschrubbte Kindprozess-Env. Keine OS-Isolation (vertagt).
+
+- **`SpawnSpec.env_remove: Vec<String>`** (neu) → `supervisor::spawn` ruft
+  `cmd.env_remove(k)` vor `cmd.env(k,v)`. `SpawnSpec` bekommt `#[derive(Default)]`,
+  `new()` nutzt `..Self::default()`. llama/comfy unberührt (leer).
+- **`agent::opencode::forced_config`** verschärft:
+  - `permission.edit` / `.write` = `{ "*": "deny", "<workspace>/**": "ask" }`
+    (OpenCode wertet last-match-wins → Catch-all zuerst). Edits nur im Workspace,
+    jeder fragt.
+  - `permission.external_directory` = `{ "*": "deny", "<extra>/**": "allow" }` je
+    Profil-Extra-Root — read-only (edit verbietet sie weiter).
+  - `permission.bash` = `"ask"` (Approval-Fluss war schon in 5.1b/ca da).
+  - `permission.webfetch` / `.websearch` = `"deny"` **und** `tools.webfetch` /
+    `.websearch` = `false`. Netz **immer** aus für MVP-Agenten (unabhängig vom
+    globalen `offline_mode` — der Agent soll ja gerade offline arbeiten).
+  - `glob_root(&Path) -> Option<String>` (Backslash→Slash, `/**`, `None` bei
+    leer → Regel bleibt zu statt „matcht alles").
+- **`build_spawn_spec(bin, port, spec)`** aus `open_session` extrahiert (testbar);
+  setzt `env_remove = SCRUBBED_ENV` (28 Einträge: `ANTHROPIC_API_KEY`,
+  `OPENAI_API_KEY`, `OPENROUTER_API_KEY`, `AWS_*`, `GITHUB_TOKEN`, `HF_TOKEN`,
+  `OPENCODE_CONFIG`, `OPENCODE_API_KEY`, …).
+
+Verifiziert:
+- **+2 Lib-Tests** (`agent::opencode` — `forced_config` konfiniert Edits auf den
+  Workspace + Reads auf die Allowlist + Netz-Tools aus; `build_spawn_spec`
+  schrubbt Cloud-Credentials + trägt die Config). `forced_config_locks_…` um
+  `websearch`/`tools` erweitert. → **272 Lib-Tests**.
+- `opencode_adapter.rs` + `agent_session.rs` weiter grün (die Fixture ignoriert
+  die Config, aber der Serde-Aufbau muss valide sein). `check.ps1` grün.
+- **`docs/SECURITY.md`** Agent-Sandbox-Abschnitt neu geschrieben (config-level,
+  die vier Hebel, was vertagt ist).
 
 ---
 

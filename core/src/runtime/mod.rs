@@ -69,21 +69,24 @@ pub enum Health {
 }
 
 /// How to launch a runtime process.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct SpawnSpec {
     pub program: PathBuf,
     pub args: Vec<String>,
     pub cwd: Option<PathBuf>,
+    /// Vars to set on the child (added to the inherited environment).
     pub env: Vec<(String, String)>,
+    /// Vars to strip from the inherited environment before spawning — the agent
+    /// sandbox uses this to keep cloud-provider API keys out of the child
+    /// (ADR-010).
+    pub env_remove: Vec<String>,
 }
 
 impl SpawnSpec {
     pub fn new(program: impl Into<PathBuf>) -> Self {
         Self {
             program: program.into(),
-            args: Vec::new(),
-            cwd: None,
-            env: Vec::new(),
+            ..Self::default()
         }
     }
 

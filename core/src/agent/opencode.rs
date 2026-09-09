@@ -3,14 +3,19 @@
 //! OpenCode ships as a single self-contained `opencode` binary. We supervise one
 //! `opencode serve` process **per session** (MVP: the scheduler pins one agent
 //! model at a time anyway), started with `cwd` = the workspace and its whole
-//! config **forced** through the `OPENCODE_CONFIG_CONTENT` env var — the endpoint
-//! is the local `llama-server` and nothing else, `bash`/`edit` need approval,
-//! `webfetch` is denied.
+//! config **forced** through the `OPENCODE_CONFIG_CONTENT` env var.
+//!
+//! The forced config is the MVP sandbox (5.2, ADR-010 — config-level, not
+//! process-level): the endpoint is the local `llama-server` and nothing else,
+//! every shell command and file edit needs approval, edits are confined to the
+//! workspace, reads outside it are denied bar the profile's extra roots, and
+//! every network tool is off. The child's environment is also scrubbed of cloud
+//! credentials ([`SCRUBBED_ENV`]).
 //!
 //! Its `GET /event` SSE stream is translated into [`AgentEvent`]s. The exact
 //! real event shapes (`message.part.updated`, `permission.asked`, idle) are from
-//! the 5.0 probe; a real coding-model run in 5.1c will calibrate the corners
-//! (like the ComfyUI `/history` output key was for video).
+//! the 5.0 probe; a real coding-model run will calibrate the corners (like the
+//! ComfyUI `/history` output key was for video).
 
 mod sse;
 
@@ -181,24 +186,7 @@ impl AgentAdapter for OpenCodeAdapter {
         let port = free_loopback_port()?;
         let base = format!("http://127.0.0.1:{port}");
 
-        let mut ss = SpawnSpec::new(&bin);
-        ss.args = vec![
-            "serve".into(),
-            "--port".into(),
-            port.to_string(),
-            "--hostname".into(),
-            "127.0.0.1".into(),
-            "--print-logs".into(),
-            "--log-level".into(),
-            "WARN".into(),
-        ];
-        ss.cwd = Some(spec.workspace.clone());
-        ss.env = vec![(
-            "OPENCODE_CONFIG_CONTENT".into(),
-            forced_config(spec).to_string(),
-        )];
-
-        let supervisor = RuntimeSupervisor::start(ADAPTER_ID, ss)?;
+        let supervisor = RuntimeSupervisor::start(ADAPTER_ID, build_spawn_spec(&bin, port, spec))?;
         self.await_config(&base, &supervisor).await?;
 
         let created: Value = self
@@ -307,10 +295,97 @@ impl AgentAdapter for OpenCodeAdapter {
     }
 }
 
-/// The forced `opencode.json` (via `OPENCODE_CONFIG_CONTENT`): only the local
-/// endpoint, approval on `bash`/`edit`, no network tools.
+/// Cloud-provider credentials and config overrides stripped from the `opencode`
+/// child's environment: the agent must reach only the local endpoint, and a
+/// stray key on the host must never leak into it (ADR-010, ADR-009).
+const SCRUBBED_ENV: &[&str] = &[
+    "ANTHROPIC_API_KEY",
+    "OPENAI_API_KEY",
+    "OPENAI_BASE_URL",
+    "OPENROUTER_API_KEY",
+    "GEMINI_API_KEY",
+    "GOOGLE_API_KEY",
+    "GOOGLE_GENERATIVE_AI_API_KEY",
+    "GROQ_API_KEY",
+    "XAI_API_KEY",
+    "MISTRAL_API_KEY",
+    "DEEPSEEK_API_KEY",
+    "PERPLEXITY_API_KEY",
+    "TOGETHER_API_KEY",
+    "FIREWORKS_API_KEY",
+    "CEREBRAS_API_KEY",
+    "COHERE_API_KEY",
+    "AZURE_OPENAI_API_KEY",
+    "AWS_ACCESS_KEY_ID",
+    "AWS_SECRET_ACCESS_KEY",
+    "AWS_SESSION_TOKEN",
+    "GITHUB_TOKEN",
+    "GH_TOKEN",
+    "HF_TOKEN",
+    "HUGGING_FACE_HUB_TOKEN",
+    "OPENCODE_CONFIG",
+    "OPENCODE_API_KEY",
+];
+
+/// The `opencode serve` launch spec: loopback port, `cwd` = the workspace, the
+/// forced config in the env, and every known cloud credential scrubbed.
+fn build_spawn_spec(bin: &Path, port: u16, spec: &SessionSpec) -> SpawnSpec {
+    let mut ss = SpawnSpec::new(bin);
+    ss.args = vec![
+        "serve".into(),
+        "--port".into(),
+        port.to_string(),
+        "--hostname".into(),
+        "127.0.0.1".into(),
+        "--print-logs".into(),
+        "--log-level".into(),
+        "WARN".into(),
+    ];
+    ss.cwd = Some(spec.workspace.clone());
+    ss.env = vec![(
+        "OPENCODE_CONFIG_CONTENT".into(),
+        forced_config(spec).to_string(),
+    )];
+    ss.env_remove = SCRUBBED_ENV.iter().map(|s| (*s).to_string()).collect();
+    ss
+}
+
+/// `<path>/**`, forward-slashed — an OpenCode permission glob. `None` for an
+/// empty path (so the caller leaves the rule fully closed rather than matching
+/// everything).
+fn glob_root(path: &Path) -> Option<String> {
+    let s = path.to_string_lossy().replace('\\', "/");
+    let s = s.trim_end_matches('/');
+    (!s.is_empty()).then(|| format!("{s}/**"))
+}
+
+/// The forced `opencode.json` (via `OPENCODE_CONFIG_CONTENT`, which merges and
+/// wins): only the local `llama-server`, every shell command and file edit needs
+/// approval, edits are confined to the workspace, reads outside it are denied,
+/// and every network tool is off. The MVP sandbox is **config-level** — real
+/// process/FS isolation is a later, opt-in ADR (ADR-010).
 fn forced_config(spec: &SessionSpec) -> Value {
     let model = &spec.endpoint.model;
+
+    // edit/write: deny everywhere, then `ask` inside the workspace (OpenCode
+    // evaluates last-match-wins, so the catch-all goes first).
+    let mut edit = serde_json::Map::new();
+    edit.insert("*".into(), json!("deny"));
+    if let Some(ws) = glob_root(&spec.workspace) {
+        edit.insert(ws, json!("ask"));
+    }
+    let edit = Value::Object(edit);
+
+    // external_directory: deny everything outside `cwd`, then allow the profile's
+    // extra roots — read-only, since `edit` above still denies writing there.
+    let mut external = serde_json::Map::new();
+    external.insert("*".into(), json!("deny"));
+    for p in &spec.allowed_paths {
+        if let Some(g) = glob_root(p) {
+            external.insert(g, json!("allow"));
+        }
+    }
+
     json!({
         "$schema": "https://opencode.ai/config.json",
         "provider": {
@@ -327,8 +402,15 @@ fn forced_config(spec: &SessionSpec) -> Value {
             "opencode", "anthropic", "openai", "openrouter", "google",
             "github-copilot", "xai", "azure", "amazon-bedrock", "google-vertex"
         ],
-        "permission": { "bash": "ask", "edit": "ask", "write": "ask", "webfetch": "deny" },
-        "tools": { "webfetch": false }
+        "permission": {
+            "bash": "ask",
+            "edit": edit.clone(),
+            "write": edit,
+            "webfetch": "deny",
+            "websearch": "deny",
+            "external_directory": Value::Object(external)
+        },
+        "tools": { "webfetch": false, "websearch": false }
     })
 }
 
@@ -402,7 +484,52 @@ mod tests {
             .iter()
             .any(|v| v == "opencode"));
         assert_eq!(c["permission"]["bash"], "ask");
+        // Every network tool is off, both as a tool and as a permission.
         assert_eq!(c["permission"]["webfetch"], "deny");
+        assert_eq!(c["permission"]["websearch"], "deny");
+        assert_eq!(c["tools"]["webfetch"], false);
+        assert_eq!(c["tools"]["websearch"], false);
+    }
+
+    #[test]
+    fn forced_config_confines_edits_to_the_workspace_and_reads_to_the_allowlist() {
+        let mut s = spec();
+        s.allowed_paths = vec![PathBuf::from("E:\\shared\\lib")];
+        let c = forced_config(&s);
+
+        // edit: deny by default, ask only under the workspace.
+        assert_eq!(c["permission"]["edit"]["*"], "deny");
+        assert_eq!(c["permission"]["edit"]["E:/proj/**"], "ask");
+        assert!(c["permission"]["edit"].get("E:/shared/lib/**").is_none());
+        // write is scoped the same way.
+        assert_eq!(c["permission"]["write"]["E:/proj/**"], "ask");
+
+        // reads outside cwd are denied except the profile's extra roots.
+        assert_eq!(c["permission"]["external_directory"]["*"], "deny");
+        assert_eq!(
+            c["permission"]["external_directory"]["E:/shared/lib/**"],
+            "allow"
+        );
+
+        // OpenCode is last-match-wins, so the catch-all must serialize first.
+        let edit = serde_json::to_string(&c["permission"]["edit"]).unwrap();
+        assert!(
+            edit.find("\"*\"").unwrap() < edit.find("E:/proj").unwrap(),
+            "{edit}"
+        );
+    }
+
+    #[test]
+    fn spawn_spec_scrubs_cloud_credentials_and_carries_the_forced_config() {
+        let ss = build_spawn_spec(Path::new("opencode.exe"), 41234, &spec());
+        assert!(ss.args.contains(&"41234".to_string()));
+        assert!(ss.env.iter().any(|(k, _)| k == "OPENCODE_CONFIG_CONTENT"));
+        for key in ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "OPENCODE_CONFIG"] {
+            assert!(
+                ss.env_remove.iter().any(|k| k == key),
+                "{key} should be scrubbed"
+            );
+        }
     }
 
     #[tokio::test]

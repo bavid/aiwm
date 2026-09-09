@@ -129,6 +129,9 @@ fn spawn(spec: &SpawnSpec, job: &JobObject) -> Result<tokio::process::Child> {
     if let Some(cwd) = &spec.cwd {
         cmd.current_dir(cwd);
     }
+    for k in &spec.env_remove {
+        cmd.env_remove(k);
+    }
     for (k, v) in &spec.env {
         cmd.env(k, v);
     }

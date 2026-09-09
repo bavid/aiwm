@@ -218,9 +218,13 @@ hierher, damit nichts verloren geht.
 - 5.1ca `AgentSessions`: MVP fährt **eine** Session gleichzeitig; mehrere
   parallele Sessions / Crash-Recovery aus `live_sessions()` = 5.5. `open` nimmt
   `first_message` optional — Zwischenzustand `Starting` nur kurz sichtbar.
-- Agent-Sandbox-Niveau: ✅ festgelegt (Plan §B) — Pfad-Allowlist + Command-
-  Approval + erzwungene Config; echte FS-/Prozess-Isolation opt-in + später
-  (eigener ADR).
+- Agent-Sandbox-Niveau: ✅ **umgesetzt in 5.2** (config-level) — erzwungene
+  OpenCode-`permission` (`edit`/`write` auf Workspace, `external_directory`
+  read-only, `bash` ask, Netz-Tools aus) + `SpawnSpec.env_remove`/`SCRUBBED_ENV`.
+  Details in [SECURITY.md](SECURITY.md). Vertagt (opt-in, eigener ADR): echte
+  FS-/Prozess-Isolation (WSL2/Container/AppContainer), **Toolset-Whitelisting pro
+  Profil** (`SessionSpec.toolset` wird noch nicht durchgesetzt), per-Kommando-
+  Bash-Deny-Muster.
 - Backup/Restore-Umfang: ✅ festgelegt (Plan §F) — `config.toml` + `aiwm.db` +
   `<data>/agents/<profil>/` + Modell-Manifest; **nicht** `~/.hermes/` des Users
   (eigenes gemanagtes Profil).
