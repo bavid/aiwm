@@ -169,9 +169,11 @@ erzwingbar, kein `bash -l` — Empfehlung, dreht die Reihenfolge unten um),
   managed `HERMES_HOME` + erzwungene `config.yaml`, Bearer-Auth, `chat/stream`-SSE
   → `AgentEvent` (lenient), Approval via `/v1/runs/:id/approval`; gegen
   `aiwm-fake-hermes` getestet. `CLOUD_CREDENTIAL_ENV`/`scrubbed_env` nach `agent/mod.rs` gehoben
-- 5.4b **Hermes-Installer + Anbindung** — `uv`-Installer (gepinnte Version,
-  schwer), `POST /runtimes/hermes/install`, `App`-Registrierung, „Hermes" im
-  Profil-Formular frei; realer Lauf kalibriert SSE-Namen + Sandbox-Keys
+- [x] 5.4b **Hermes-Installer + Anbindung** — `uv`-Installer (`agent::hermes::install`
+  + geteiltes `runtime::download::ensure_uv`), `HermesAgentAdapter::install`,
+  `POST /runtimes/hermes/install` + `GET /agent-runtimes`, `App`-Registrierung,
+  „Install Hermes"-Fluss im Profil-Formular. Realer `hermes`-Lauf (manuell)
+  kalibriert SSE-Namen + Sandbox-Keys
 - 5.5 Session-Persistenz + Checkpoints + **Export/Import** (config + DB + Agent-Profil)
 - Post-MVP: `aider`, lokaler Repository-Index, MCP-Verwaltung, parallele Sessions
 

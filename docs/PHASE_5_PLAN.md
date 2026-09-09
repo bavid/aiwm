@@ -40,7 +40,8 @@ Export/Import bringt Config + DB + Agent-Profil auf eine zweite Maschine.
 | 5.2 | **Sandkasten** (config-level, ADR-010): erzwungene OpenCode-`permission` — `edit`/`write` = `{"*":"deny","<ws>/**":"ask"}` (Edits nur im Workspace), `external_directory` = `{"*":"deny","<extra>/**":"allow"}` (Profil-Extras read-only), `bash` = `ask` (Approval-Fluss steht schon), `webfetch`/`websearch` = `deny` + `tools` beide `false` (Netz immer aus). `SpawnSpec.env_remove` + `SCRUBBED_ENV` strippt Cloud-Credentials aus dem `opencode`-Kind. Echte Prozess-Isolation + Toolset-Whitelisting vertagt. | ✅ |
 | 5.3 | **Agents-UI-Tab** (`ui/src/features/agents/`): Profil-Liste + „New profile" (Runtime, Modell [Auto über `coding` \| Pick], Workspace-Pfad-Feld, erlaubte Pfade); Session-View — Transkript (`text` gefaltet, `tool`-Karten mit Command + Output + Status, `permission` inline mit Allow once / Always / Deny), Zustands-Badge, Composer (nur bei `idle`), „Stop". „Coding"-Dashboard-Button → Tab. Kein nativer Ordner-Picker (kein `plugin-dialog`) → Text-Feld wie im Models-Tab; Workspace-Registry im Core vertagt (das Profil *ist* die Bindung). | ✅ |
 | **5.4a** | **Hermes-Adapter** (nur der Adapter, gegen ein Fixture): `HermesAgentAdapter` — **ein `hermes gateway` pro Session**, `cwd` = Workspace, per-Session managed `HERMES_HOME` mit erzwungener `config.yaml` (`provider: custom` → `spec.endpoint.base_url`, `redact_secrets`/`redact_pii`, `web_search:false`), API-Server-Settings via Spawn-Env (`API_SERVER_KEY` random, Bearer auf jedem Request). Turn = `POST /api/sessions/:id/chat/stream` → SSE → `AgentEvent` (event-Namen lenient — Docs unvollständig); Approval = `POST /v1/runs/:id/approval`; `interrupt` = `/v1/runs/:id/stop`. `aiwm-fake-hermes`-Fixture + Integrationstest. `CLOUD_CREDENTIAL_ENV` + `scrubbed_env(extra)` aus `opencode` in `agent/mod.rs` gehoben (geteilt). | ✅ |
-| **5.4b** | **Hermes-Installer + Anbindung**: `uv`-Installer (gepinnte `hermes-agent`-Version, `hermes postinstall` = node/Browser/ripgrep/ffmpeg — schwer; evtl. „Advanced/optional") → gemanagter venv unter `<runtimes>/hermes/`; `POST /runtimes/hermes/install` + Installer-Status. `AgentSessions.with_adapter(HermesAgentAdapter::discover(...))` in `App`; „Hermes"-Option im Profil-Formular frei. Realer `hermes`-Lauf → kalibriert die SSE-Event-Namen + `config.yaml`-Sandbox-Keys. Memory (`MEMORY.md`) + Skills im Profil-Ordner → Backup (5.5). | offen |
+| **5.4ba** | **Hermes-Installer + geteilte `uv`-Toolchain**: `runtime::download` wird das geteilte Toolchain-Modul — `ensure_uv(base, archive, dir)` + `CmdRunner`/`SystemRunner` aus `comfyui::install` gehoben (ComfyUI ruft jetzt `ensure_uv`, Verhalten unverändert). `agent::hermes::install`: `ensure_uv` → `uv venv` → `uv pip install hermes-agent==0.19.0` → best-effort `hermes postinstall`. `HermesAgentAdapter::install`/`install_state`/`is_installing` (wie `LlamaCppAdapter`). `#[ignore]`-PyPI-Smoke. | ✅ |
+| **5.4bb** | **Hermes an `App` + UI**: `App` hält `Arc<OpenCodeAdapter>` + `Arc<HermesAgentAdapter>`, beide via `.with_adapter()` auf `AgentSessions`. `POST /runtimes/hermes/install` + `GET /agent-runtimes` (`[{id, installed, install?}]`) + Tauri. `NewProfileForm`: der Runtime-`<select>` liest `/agent-runtimes` — nicht installiert = gesperrt + Setup-Karte mit „Install Hermes"-Button + Live-Phase/Prozent. Realer `hermes`-Lauf (manuell) kalibriert die SSE-Event-Namen + `config.yaml`-Sandbox-Keys. Memory/Skills im Profil-Ordner → Backup (5.5). | ✅ |
 | 5.5 | **Session-Persistenz + Backup/Restore**: `agent_sessions.checkpoint_path`, Wiederaufnahme nach Absturz/Neustart (OpenCode `/session` list + resume, Hermes `/resume`); Kontext-Kompaktierung: die Agents machen sie selbst, wir zeigen sie an. **Export/Import** — ein Archiv aus `config.toml` + `aiwm.db` + `<data>/agents/<profil>/` (+ Modell-Manifest, **nicht** die Modell-Dateien). Politur: Pin/Unpin-Lebenszyklus, „Agent pausieren?"-Fluss (R8), Diagnostics-Zeile pro Agent. | offen |
 
 Danach (Post-MVP): `aider` als optionaler dritter Adapter, lokaler Repository-
@@ -513,6 +514,56 @@ Verifiziert:
   **43 Integrationstests.** `check.ps1` grün.
 - **Kein realer `hermes`-Lauf** — die SSE-Event-Namen + `config.yaml`-Keys werden
   in 5.4b kalibriert (wie der ComfyUI-`/history`-Key in Phase 4).
+
+---
+
+## 5.4b — Ergebnis (abgeschlossen, ba + bb)
+
+Der Hermes-Installer + die `App`/UI-Anbindung. Ein echtes `hermes`-Setup gibt es
+im Repo noch nicht (analog Slice 4.0) — der Adapter/Installer sind gegen
+Fixtures verprobt.
+
+**5.4ba** (`ad82fac`) — Installer + `uv`-Refactor:
+- **`runtime::download`** ist jetzt das geteilte Toolchain-Modul
+  (`pub(crate) mod`): `UV_RELEASE_BASE`/`UV_ARCHIVE`, `ensure_uv(base, archive,
+  dir)` (idempotenter verifizierter Download + Unpack; `base`/`archive`
+  parametrisiert für die Installer-Tests) und `CmdRunner`/`SystemRunner` (aus
+  `comfyui::install` gehoben). ComfyUIs Installer ruft jetzt `download::ensure_uv`
+  und lässt seine Kopien fallen — Verhalten unverändert, alle seine Tests grün.
+- **`agent::hermes::install`**: `install()` → `ensure_uv` → `uv venv` →
+  `uv pip install hermes-agent==0.19.0` → **best-effort** `hermes postinstall`
+  (dessen Browser-/ffmpeg-Assets sind durch die erzwungene Config eh aus; ein
+  Fehler kostet nur ripgrep, das die Shell abdeckt). Alles unter
+  `<runtimes>/hermes/`. `InstallPhase` + `InstallStatus`
+  (`Idle | Running{phase,done,total} | Failed`).
+- **`HermesAgentAdapter`**: `install(offline)` / `install_state()` /
+  `is_installing()` (wie `LlamaCppAdapter` — `Mutex<InstallStatus>` +
+  Async-Install-Lock); lehnt einen Fixed-Path-Adapter + Offline-Mode ab.
+- **+7 Lib-Tests** (Installer: Offline, idempotent, volle Reihenfolge
+  uv→venv→pip→postinstall, pip-Fehler durchgereicht, postinstall-Fehler
+  nicht-fatal; Adapter: install lehnt Fixed-Path / Offline ab) +
+  `#[ignore]`-PyPI-Smoke.
+
+**5.4bb** (`cd01361`) — `App` + UI:
+- **`App`** hält `Arc<OpenCodeAdapter>` + `Arc<HermesAgentAdapter>` (typisiert für
+  Installer + Status-Report), beide via `.with_adapter()` auf `AgentSessions`.
+  Ein Profil mit `adapter: "hermes"` läuft jetzt durch.
+- **Handlers/HTTP/Tauri**: `install_hermes` (Hintergrund, `"started"` /
+  `"already_installed"`, lehnt Offline + laufenden Install ab) + `agent_runtimes`
+  → `[{id, installed, install?}]` (nur Hermes trägt einen Install-Status;
+  OpenCode = bring-your-own). `POST /runtimes/hermes/install`,
+  `GET /agent-runtimes`, 2 Tauri-Commands.
+- **`ipc.ts`**: `AgentRuntime` + `AgentInstallStatus`, `listAgentRuntimes` /
+  `installHermes`, `useAgentRuntimes()` (3 s-Poll).
+- **`NewProfileForm`**: der Runtime-`<select>` kommt aus `/agent-runtimes` — ein
+  nicht installierter Runtime ist markiert und blockt „Create profile"; bei
+  Hermes erscheint eine Setup-Karte mit „Install Hermes" + Live-Phase/Prozent
+  aus dem Poll; OpenCode zeigt einen „bring your own opencode"-Hinweis.
+  `dev-mock`: `list_agent_runtimes` + `install_hermes` (In-Memory-Flag).
+- **+2 API-Tests** (`agent-runtimes` listet beide; `install_hermes` lehnt Offline
+  ab) → **290 Lib-Tests**. `check.ps1` grün. **Browser-Smoke** (dev-mock): Hermes
+  wählen → „Install Hermes" → Poll flippt auf installiert → Hermes-Profil
+  anlegen, keine Konsolenfehler.
 
 ---
 

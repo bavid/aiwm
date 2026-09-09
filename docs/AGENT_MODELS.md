@@ -12,13 +12,15 @@ GGUF selbst von Hugging Face und importiert es über den **Models**-Tab als
 
 > **Noch nicht mit einem echten Coding-Modell verprobt.** OpenCode-Adapter
 > (5.1b) + Subsystem (5.1ca) + API (5.1cb) + Sandkasten-Config (5.2) + UI (5.3)
-> + Hermes-Adapter (5.4a) laufen gegen Fixtures. Der erste echte Lauf (Smoke
-> unten) kalibriert die OpenCode-Event-Ecken *und* prüft, dass die erzwungene
-> `permission`-Config von der echten `opencode`-Version akzeptiert wird — wie der
-> ComfyUI-`/history`-Key in Phase 4. Für Hermes (5.4b) sind zusätzlich die
-> SSE-Event-Namen (`assistant.delta` vs. `message.delta`, `approval.request`, …)
-> und die `config.yaml`-Sandbox-Keys noch zu verifizieren. Fixes fließen hierher
-> zurück.
+> + Hermes-Adapter + Installer (5.4) laufen gegen Fixtures. Der erste echte Lauf
+> (Smoke unten) kalibriert die OpenCode-Event-Ecken *und* prüft, dass die
+> erzwungene `permission`-Config von der echten `opencode`-Version akzeptiert
+> wird — wie der ComfyUI-`/history`-Key in Phase 4. Für **Hermes** sind
+> zusätzlich zu verifizieren: der `uv`-Installer + `hermes postinstall` (der
+> `#[ignore]`-Test `agent::hermes::install::tests::real_pinned_install` fährt
+> ihn), die SSE-Event-Namen (`assistant.delta` vs. `message.delta`,
+> `approval.request`, ob `/chat/stream` nach der Approval offen bleibt) und die
+> `config.yaml`-Sandbox-Keys. Fixes fließen hierher zurück.
 
 Hardware-Kontext: RTX 4080 Super, 16 GB VRAM, 32 GB RAM. Ein 7B-Q4/Q5-Modell
 lässt ~9–11 GB VRAM für alles andere; ein 14B-Q4 füllt die Karte fast allein.
