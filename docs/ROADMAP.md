@@ -136,18 +136,21 @@ läuft vermutlich an der echten Maschine.**
 
 ## Phase 5 — Agents
 
-- Agent-Profile (Runtime + Modell + Kontext + Tools + Workspace + Pfad-Allowlist)
-- **Adapter 1: Hermes Agent** (Nous Research) — Custom endpoint = lokaler
-  llama-server; nutzt sein eingebautes Memory/Skills/Sub-Agent-System, unser Tool
-  begrenzt Profil/Pfade/Commands. Windows: `bash -l`-Abhängigkeit vorab
-  verifizieren (Git-Bash mitliefern oder WSL2 dokumentieren).
-- **Adapter 2: OpenCode** (`serve`-Modus), erzwungene lokale Endpoint-Config
-- Session-Persistenz + Checkpoints (Hermes: `~/.hermes/` in Backup einbeziehen)
-- Context-Kompaktierung + lokaler Repository-Index (Retrieval) — für OpenCode;
-  bei Hermes durch dessen Memory teils abgedeckt
-- Sicherheitsgrenzen: Command-Approval, kein Netz per Default, Secrets-Isolation
-- Backup/Restore (Export/Import) von Config + DB + Agent-Memory
-- aider als optionaler dritter Adapter notiert
+**Scheibenplan + Research: [PHASE_5_PLAN.md](PHASE_5_PLAN.md).** Nicht selbst
+bauen — zwei fertige Open-Source-Agents orchestrieren + begrenzen, Endpoint =
+lokaler `llama-server`. **OpenCode zuerst** (`opencode serve`, Config per Env
+erzwingbar, kein `bash -l` — Empfehlung, dreht die Reihenfolge unten um),
+**Hermes Agent** (Nous Research, Memory/Skills/Sub-Agents) zweiter.
+
+- 5.0 Windows-Voraussetzungen verproben — `opencode serve`, Hermes' `bash -l`
+  (Git-Bash vs WSL2), **`llama-server`-Tool-Calling** (`--jinja` + Coding-Modell)
+- 5.1 `core::agent` + `AgentAdapter` + Migration `0005` + **OpenCode-Adapter**
+  (supervised `serve`, erzwungene Config, Scheduler-Pin, SSE-Proxy)
+- 5.2 Sandkasten: Command-Approval-Fluss (UI), Pfad-Allowlist, Offline erzwungen
+- 5.3 Agents-UI-Tab (Profile, Transkript mit Tool-Calls + Approvals, Workspace-Picker)
+- 5.4 **Hermes-Adapter** (`uv`-Installer, gemanagtes Profil, erzwungene `config.yaml`)
+- 5.5 Session-Persistenz + Checkpoints + **Export/Import** (config + DB + Agent-Profil)
+- Post-MVP: `aider`, lokaler Repository-Index, MCP-Verwaltung, parallele Sessions
 
 ## Phase 6 — Automatisierung & Model-Manager v2
 

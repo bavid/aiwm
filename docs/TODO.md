@@ -191,11 +191,18 @@ hierher, damit nichts verloren geht.
   seeken).
 
 ## Vor Phase 5 (Agents)
-- Hermes Agent auf der echten Windows-Maschine: `bash -l`-Abhängigkeit
-  verifizieren (Git-Bash mitliefern oder WSL2 dokumentieren)
-- Agent-Sandbox-Niveau festlegen (Pfad-Allowlist + Command-Approval reicht für
-  Start; echte FS-/Prozess-Isolation später/optional)
-- Backup/Restore-Konzept inkl. `~/.hermes/`
+- ~~Agent-Research + Scheibenplan~~ → ✅ [PHASE_5_PLAN.md](PHASE_5_PLAN.md)
+  (OpenCode + Hermes recherchiert, 5.0–5.5, offene Entscheidungen A–F).
+- **Hermes Agent auf der echten Windows-Maschine: `bash -l`-Abhängigkeit** —
+  Git-Bash mitliefern oder WSL2 dokumentieren → **Slice 5.0**.
+- **`llama-server`-Tool-Calling verproben** (`--jinja` + Coding-Modell — geben
+  OpenCode/Hermes verlässliche `tool_calls`?) → **Slice 5.0**, Blocker-Kandidat.
+- Agent-Sandbox-Niveau: ✅ festgelegt (Plan §B) — Pfad-Allowlist + Command-
+  Approval + erzwungene Config; echte FS-/Prozess-Isolation opt-in + später
+  (eigener ADR).
+- Backup/Restore-Umfang: ✅ festgelegt (Plan §F) — `config.toml` + `aiwm.db` +
+  `<data>/agents/<profil>/` + Modell-Manifest; **nicht** `~/.hermes/` des Users
+  (eigenes gemanagtes Profil).
 
 ## Vor Phase 6 (Model-Manager v2)
 - Spike: HF-Hub- + Ollama-Registry-API real testen (Rate-Limits, Token-Pflicht,

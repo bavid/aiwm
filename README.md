@@ -44,6 +44,10 @@ echten 4080 (alle Smokes fuhren gegen die Fake-ComfyUI).
 gebaut). **Offen: 4.0** — die echte ComfyUI auf der 4080 verproben (cu130-Treiber,
 GGUF-Ordner-Keys, `SaveVideo`/`av`, Zeit/VRAM kalibrieren) — läuft vermutlich an
 der echten Maschine. Plan + Research: [docs/PHASE_4_PLAN.md](docs/PHASE_4_PLAN.md).
+**Phase 5 (Agents) — geplant:** [docs/PHASE_5_PLAN.md](docs/PHASE_5_PLAN.md).
+Nicht selbst bauen — **OpenCode** (`opencode serve`) + **Hermes Agent** (Nous
+Research) orchestrieren und sandboxen, Endpoint = lokaler `llama-server`.
+Sandkasten = Pfad-Allowlist + Command-Approval (UI) + erzwungene Offline-Config.
 
 - **4.1** ✅ **`capability::video`**: `job_type=video` → feste `wan_ti2v`-Pipeline
   (`WanImageToVideo` → `KSampler` → `VAEDecode` → `CreateVideo` → `SaveVideo`,
@@ -196,6 +200,8 @@ pnpm -C ui exec tauri dev                 # Desktop-App (aus E:\AI ausführen)
 | [docs/PHASE_2_PLAN.md](docs/PHASE_2_PLAN.md) | Phase-2-Scheibenplan + Fortschritt |
 | [docs/PHASE_3_PLAN.md](docs/PHASE_3_PLAN.md) | Phase-3-Scheibenplan (Bild / ComfyUI) + Research + Ergebnisse |
 | [docs/PHASE_4_PLAN.md](docs/PHASE_4_PLAN.md) | Phase-4-Scheibenplan (Video) + Research |
+| [docs/PHASE_5_PLAN.md](docs/PHASE_5_PLAN.md) | Phase-5-Scheibenplan (Agents: OpenCode + Hermes) + Research |
+| [docs/VIDEO_MODELS.md](docs/VIDEO_MODELS.md) | Video-Modelle — kuratierte Liste (Wan 2.2, LTX-Video) |
 | [docs/DEV_SETUP.md](docs/DEV_SETUP.md) | Toolchain-Installation, Build-/Test-Befehle, Git-Hooks, CI |
 | [docs/DECISIONS.md](docs/DECISIONS.md) | Architecture Decision Records (ADRs) |
 | [docs/RISKS.md](docs/RISKS.md) | Risikoregister mit Gegenmaßnahmen |
