@@ -45,7 +45,8 @@ pub mod sidecar;
 pub mod telemetry;
 
 pub use agent::{
-    AgentAdapter, AgentEvent, AgentKind, EndpointConfig, PermissionDecision, SessionSpec,
+    AgentAdapter, AgentEvent, AgentKind, EndpointConfig, FakeAgentAdapter, OpenCodeAdapter,
+    PermissionDecision, SessionSpec,
 };
 pub use api::{ApiServer, Services};
 pub use app::App;

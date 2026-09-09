@@ -202,9 +202,17 @@ hierher, damit nichts verloren geht.
   `chat_template` → `--jinja` / `--chat-template` im Spawn, `[llama]`-Config +
   Settings-Toggle. **Offen:** ein echter Coding-Modell-Lauf (Qwen2.5-Coder-GGUF)
   → verlässliche `tool_calls`? + KV-Cache nicht zu hart quantisieren
-  (`-ctk q4_0` schadet) → **5.1b-Smoke**. `--jinja` global default-an ändert
-  Chats das Template (embedded statt Heuristik — sollte besser sein; falls eine
-  GGUF-Template kaputt ist: `jinja = false` + `chat_template` setzen).
+  (`-ctk q4_0` schadet) → **5.1c-Smoke** (der Adapter selbst ist in 5.1b gegen
+  ein Fixture verprobt; der echte Modell-Lauf hängt an `capability::agent` +
+  Scheduler-Pin). `--jinja` global default-an ändert Chats das Template
+  (embedded statt Heuristik — sollte besser sein; falls eine GGUF-Template
+  kaputt ist: `jinja = false` + `chat_template` setzen).
+- 5.1b OpenCode-Adapter: die exakten `GET /event`-Formen (`message.part.updated`
+  `state`-Keys, `permission.asked` vs. `permission.updated`, `session.error`)
+  stammen aus dem 5.0-Probe + Fixture — beim ersten echten `opencode`-Lauf in
+  5.1c gegenprüfen (wie der ComfyUI-`/history`-Output-Key in Phase 4). `interrupt`
+  nutzt `POST /session/:id/abort` — Realverhalten (kommt ein `session.idle`?)
+  offen.
 - Agent-Sandbox-Niveau: ✅ festgelegt (Plan §B) — Pfad-Allowlist + Command-
   Approval + erzwungene Config; echte FS-/Prozess-Isolation opt-in + später
   (eigener ADR).

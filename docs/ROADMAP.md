@@ -148,8 +148,11 @@ erzwingbar, kein `bash -l` — Empfehlung, dreht die Reihenfolge unten um),
   OpenAI-`tool_calls` (Qwen2.5-Coder/Hermes/Llama3.x) — echter Modell-Lauf = 5.1
 - [x] 5.1a Agent-Fundament — `core::agent` (`AgentAdapter`-Trait, `AgentEvent`,
   `FakeAgentAdapter`), Migration `0005` + `db::AgentRepo`, `LlamaServerOptions.jinja`
-- [ ] 5.1b **OpenCode-Adapter** (supervised `serve`, erzwungene Config,
-  Scheduler-Pin, SSE-Proxy, `capability::agent`, API + Tauri, Smoke mit echtem GGUF)
+- [x] 5.1b **OpenCode-Adapter** — supervised `opencode serve` pro Session,
+  erzwungene Config (`OPENCODE_CONFIG_CONTENT`), `GET /event` SSE → `AgentEvent`;
+  gegen `aiwm-fake-opencode` getestet (open→send→approve→idle)
+- [ ] 5.1c **Agent-Vertikale** — `capability::agent`, Scheduler `reserve + pin`,
+  API + Tauri, Smoke mit echtem Qwen2.5-Coder-GGUF
 - 5.2 Sandkasten: Command-Approval-Fluss (UI), Pfad-Allowlist, Offline erzwungen
 - 5.3 Agents-UI-Tab (Profile, Transkript mit Tool-Calls + Approvals, Workspace-Picker)
 - 5.4 **Hermes-Adapter** (`uv`-Installer, gemanagtes Profil, erzwungene `config.yaml`)

@@ -31,7 +31,7 @@ noch keine echte AI-Capability (die kommt ab Phase 2).
 | WP-9 | CI-Workflow, Git-Hooks (pre-commit fmt, pre-push voller Gate) |
 | WP-10 | ADRs finalisiert, Stub-Docs (MODELS/RUNTIMES/SECURITY/BENCHMARKS) |
 
-**254 Rust-Unit + 35 Integrationstests + 5 pytest** grün · `scripts/check.ps1` grün ·
+**260 Rust-Unit + 38 Integrationstests + 5 pytest** grün · `scripts/check.ps1` grün ·
 **null `unsafe`** im Produktivcode.
 
 **Phase 2 (MVP) ✅ abgeschlossen** — Scheiben 2.1–2.7 + durchgehender
@@ -44,7 +44,7 @@ echten 4080 (alle Smokes fuhren gegen die Fake-ComfyUI).
 gebaut). **Offen: 4.0** — die echte ComfyUI auf der 4080 verproben (cu130-Treiber,
 GGUF-Ordner-Keys, `SaveVideo`/`av`, Zeit/VRAM kalibrieren) — läuft vermutlich an
 der echten Maschine. Plan + Research: [docs/PHASE_4_PLAN.md](docs/PHASE_4_PLAN.md).
-**Phase 5 (Agents) — Plan + 5.0 + 5.1a ✅:** [docs/PHASE_5_PLAN.md](docs/PHASE_5_PLAN.md),
+**Phase 5 (Agents) — Plan + 5.0 + 5.1a + 5.1b ✅:** [docs/PHASE_5_PLAN.md](docs/PHASE_5_PLAN.md),
 **ADR-021**. Nicht selbst bauen — **OpenCode** (`opencode serve`, Adapter 1) +
 **Hermes Agent** (Nous Research, Adapter 2) orchestrieren und sandboxen,
 Endpoint = lokaler `llama-server --jinja`. Sandkasten = Pfad-Allowlist +
@@ -58,6 +58,12 @@ Command-Approval (UI) + erzwungene Offline-Config.
   (`agents` / `agent_sessions` / `agent_session_events`) + `db::AgentRepo`.
   `LlamaServerOptions.jinja` (default an) + `chat_template` — `--jinja` /
   `--chat-template` im Spawn, `[llama]`-Config + Settings-Toggle.
+- **5.1b** ✅ **OpenCode-Adapter**: `opencode serve` pro Session unter
+  `RuntimeSupervisor`, `cwd` = Workspace, Config erzwungen über
+  `OPENCODE_CONFIG_CONTENT` (nur lokaler Endpoint, `webfetch: deny`). `GET
+  /event` SSE → `AgentEvent` (Text / Tool / Permission / Idle), `roles`-Cache
+  gegen Prompt-Echo. Gegen `aiwm-fake-opencode` getestet: open → send →
+  approve → idle, Deny, `interrupt`. Scheduler/`capability::agent`/API = 5.1c.
 
 - **4.1** ✅ **`capability::video`**: `job_type=video` → feste `wan_ti2v`-Pipeline
   (`WanImageToVideo` → `KSampler` → `VAEDecode` → `CreateVideo` → `SaveVideo`,

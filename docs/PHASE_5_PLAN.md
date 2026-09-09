@@ -34,7 +34,8 @@ Export/Import bringt Config + DB + Agent-Profil auf eine zweite Maschine.
 |---|---|---|
 | **5.0** | **Windows-Voraussetzungen verproben**: (a) `opencode` installieren + `opencode serve` + API; (b) Hermes installieren + `bash -l`-Frage klären; (c) **`llama-server`-Tool-Calling** (`--jinja` + Coding-Modell). Ergebnis + Fixes dokumentieren. **Voraussetzung.** | ✅ *(bis auf den echten Coding-Modell-Render — siehe „## 5.0 — Ergebnis" + ADR-021)* |
 | **5.1a** | **Agent-Fundament**: `core::agent` (`AgentAdapter`-Trait, `AgentEvent`/`SessionSpec`/`PermissionDecision`, `FakeAgentAdapter`), Migration `0005` (`agents`, `agent_sessions`, `agent_session_events`) + `db::AgentRepo`. `LlamaServerOptions.jinja`/`chat_template` (+ `[llama]`-Config, Settings-UI) — `--jinja` default an (Tool-Calls). | ✅ |
-| **5.1b** | **OpenCode-Adapter**: `opencode serve --port … --hostname 127.0.0.1` unter `RuntimeSupervisor`; Config **erzwungen** über `OPENCODE_CONFIG_CONTENT` (custom provider → `http://127.0.0.1:<llama-port>/v1`, `enabled_providers: ["local"]` + `disabled_providers: ["opencode",…]`, `permission` alles `ask`, `webfetch: deny`), `cwd` = Workspace. Scheduler: `reserve + pin` fürs Session-Modell (`coding`-Rolle \| explizit). HTTP-Proxy: `POST /session`, `POST /session/:id/prompt_async`, `GET /event` (SSE) → `agent_session_events`; `permission.asked` → `GET /permission` → `POST /permission/{id}/reply`. `capability::agent` treibt eine Session. `POST /agents`, `POST /agent-sessions`, `POST /agent-sessions/:id/message`, `GET /agent-sessions/:id` + Tauri-Commands. **5.1b-Smoke** mit einem echten Qwen2.5-Coder-GGUF. | offen |
+| **5.1b** | **OpenCode-Adapter** (nur der Adapter, gegen ein Fixture): `opencode serve --port … --hostname 127.0.0.1` unter `RuntimeSupervisor`, **ein Prozess pro Session**, `cwd` = Workspace; Config **erzwungen** über `OPENCODE_CONFIG_CONTENT` (custom provider → `spec.endpoint.base_url`, `enabled_providers: ["local"]` + `disabled_providers: ["opencode",…]`, `permission` alles `ask`, `webfetch: deny`, `tools.webfetch: false`). `AgentAdapter` für OpenCode: `open_session` / `send` (`POST /session/:id/prompt_async`) / `events` (`GET /event` SSE → `AgentEvent`, mit `roles`-Cache gegen Echo) / `reply_permission` (`POST /permission/{id}/reply`) / `interrupt` (`abort`) / `close_session` (`DELETE /session/:id`). `aiwm-fake-opencode`-Fixture + Integrationstest (open → send → approve → idle, sowie deny). | ✅ |
+| **5.1c** | **Agent-Vertikale**: `capability::agent` / SessionManager treibt eine Session (SSE → `agent_session_events`, Zustand, Permission-Proxy); Scheduler `reserve + pin` fürs Session-Modell (`coding`-Rolle \| explizit), `LlamaCppAdapter::base_url()` public; API `POST /agents`, `POST /agent-sessions`, `POST /agent-sessions/:id/message`, `GET /agent-sessions/:id` + Tauri-Commands. **Smoke** mit einem echten Qwen2.5-Coder-GGUF. | offen |
 | 5.2 | **Sandkasten**: Approval-Fluss — der SSE-Stream trägt `permission`-Events → Core reicht sie durch → UI „Agent will ausführen: `<cmd>` — Allow / Deny / Always" → Core `POST`t die Entscheidung. **Pfad-Allowlist**: `cwd` + OpenCode-`permission` verbietet Edits außerhalb; Lese-Extras optional read-only. **Offline erzwungen**: `offline_mode` → Netz-Tools hart aus, dokumentiert dass echte Prozess-Isolation vertagt ist. Secrets: kein `.env` / keine Keys in der Agent-Env (Dummy-`apiKey`). | offen |
 | 5.3 | **Agents-UI-Tab**: Profil-Liste + „New profile" (Runtime, Modell [Auto über `coding`], Workspace-Ordner-Picker, erlaubte Pfade, Toolset); Session-Ansicht — Transkript mit Tool-Call-Karten (Datei-Diffs, Shell-Output), Approval-Prompts inline, „Stop"; „Coding"-Dashboard-Button aktiv. Workspace-Registry (Pfad + Label) im Core. | offen |
 | 5.4 | **Hermes-Agent-Adapter**: `uv`-Installer (gepinnte Version) → gemanagtes Profil unter `<data>/agents/hermes/` (`HERMES_HOME`/`-p <profil>`); `config.yaml` **erzwungen** (`provider: custom`, `base_url` = `llama-server`, `security.redact_secrets`, Workspace, `HERMES_STREAM_READ_TIMEOUT=1800`). Treiben über Hermes' HTTP-Server (`/v1/responses` / `/api/jobs`) **oder** `hermes chat -q` pro Turn. Memory (`MEMORY.md`) + Skills leben im Profil-Ordner → Backup (5.5). `bash -l` per 5.0-Entscheidung. | offen |
@@ -239,6 +240,57 @@ Verifiziert:
   `check.ps1` grün, `pnpm typecheck`/`lint` grün.
 - **Live** (Boot-Smoke): `aiwm-cored` startet, Migration `0005` legt
   `agents` / `agent_sessions` / `agent_session_events` an.
+
+---
+
+## 5.1b — Ergebnis (abgeschlossen)
+
+Der erste echte Adapter — `OpenCodeAdapter`, isoliert getestet gegen ein
+Fixture. Noch **keine** Scheduler-Anbindung, kein `capability::agent`, keine
+API/UI — das ist 5.1c. Die 5.1b-Zeile im Plan wurde entlang dieser Naht
+geteilt (Adapter jetzt, Vertikale = 5.1c).
+
+- **`agent::opencode`** (`opencode.rs` + `opencode/sse.rs`): `OpenCodeAdapter`
+  implementiert `AgentAdapter`. `open_session` startet `opencode serve --port
+  <frei> --hostname 127.0.0.1 --print-logs --log-level WARN` über
+  `RuntimeSupervisor` (Job Object), `cwd` = `spec.workspace`, Env
+  `OPENCODE_CONFIG_CONTENT` = die erzwungene Config; wartet per `GET /config`
+  auf Bereitschaft (30 s, `GaveUp`-Check), dann `POST /session` → Session-Id.
+  **Ein Prozess pro Session** (MVP — der Scheduler pinnt ohnehin ein
+  Agent-Modell). `send` → `POST /session/:id/prompt_async`
+  `{parts:[{type:text,text}]}`. `reply_permission` → `POST
+  /permission/{id}/reply` `{response: once|always|reject}`. `interrupt` →
+  `POST /session/:id/abort` (best-effort). `close_session` → `DELETE
+  /session/:id` + `Session` droppen (killt Reader-Task + Kindprozess).
+- **`forced_config`**: `provider.local` (`@ai-sdk/openai-compatible`,
+  `options.baseURL` = `spec.endpoint.base_url`, Dummy-`apiKey`),
+  `model: "local/<model>"`, `enabled_providers: ["local"]`,
+  `disabled_providers: ["opencode", …9 weitere]`, `permission` alles `ask` +
+  `webfetch: deny`, `tools.webfetch: false`.
+- **`opencode/sse.rs`**: der `GET /event`-Reader-Task (`resp.chunk()`-Schleife
+  + Zeilenpuffer, wie `llamacpp/client.rs`). `map_event` übersetzt
+  `message.updated` (→ `roles`-Cache), `message.part.updated` (text/tool, nur
+  von `assistant`-Messages — sonst würde der User-Prompt zurückgespiegelt),
+  `permission.asked`/`updated`, `session.idle`, `session.error` in
+  `AgentEvent`s; Events fremder Sessions werden verworfen.
+- **`bin/aiwm-fake-opencode`**: axum-Fixture, skriptet einen Turn (Text →
+  `bash`-Tool → `permission.asked` → [warten] → Tool-Ergebnis → Text →
+  `session.idle`; bei `reject` direkt idle). `AIWM_OPENCODE_PATH` zeigt den
+  Adapter im Test darauf.
+- **Binärauflösung**: `AIWM_OPENCODE_PATH` → `<runtimes>/opencode/[<ver>/]
+  [bin/]opencode` → `PATH`. `discover(runtimes_dir)` (Rescan) vs.
+  `with_binary(path)` (fix, Tests).
+
+Verifiziert:
+- **+9 Tests** — 6 Lib (`agent::opencode` — `forced_config`, „not installed",
+  `resolve_bin`-Env-Vorrang; `agent::opencode::sse` — User-Text nicht
+  gespiegelt/Assistant schon, Tool+Permission+Idle, Fremd-Session verworfen)
+  + 3 Integration (`tests/opencode_adapter.rs` — voller Turn
+  open→send→approve→idle, Deny beendet den Turn, `interrupt` mitten im Turn)
+  → **260 Lib-Tests**. `check.ps1` grün.
+- **Kein realer `opencode`-Lauf** — wie beim ComfyUI-`/history`-Key (Phase 4)
+  werden die exakten Event-Ecken beim ersten echten Coding-Modell-Lauf in
+  5.1c kalibriert.
 
 ---
 

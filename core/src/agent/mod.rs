@@ -5,14 +5,17 @@
 //! We do **not** build an agent. An adapter supervises the runtime's own
 //! process, forces its config (endpoint = the local `llama-server`, path
 //! allowlist, command approval), and translates its event stream into
-//! [`AgentEvent`]s. `capability::agent` (slice 5.1b) drives one session: it
+//! [`AgentEvent`]s. `capability::agent` (slice 5.1c) drives one session: it
 //! drains the event stream into `agent_session_events`, drives the session
 //! state, and proxies permission replies.
 //!
-//! Real adapters land in 5.1b; this slice ships the trait, the types, the DB
-//! layer ([`crate::db::AgentRepo`]) and a [`FakeAgentAdapter`] for tests.
+//! - 5.1a: the trait, the value types, the DB layer ([`crate::db::AgentRepo`])
+//!   and a [`FakeAgentAdapter`] for tests.
+//! - 5.1b: [`OpenCodeAdapter`] — the first real adapter (see `opencode`).
+//! - 5.1c: `capability::agent` + scheduler pinning + the API/UI wiring.
 
 mod fake;
+mod opencode;
 
 use std::fmt;
 use std::path::PathBuf;
@@ -23,6 +26,7 @@ use serde_json::Value;
 use tokio::sync::mpsc;
 
 pub use fake::FakeAgentAdapter;
+pub use opencode::OpenCodeAdapter;
 
 use crate::runtime::Health;
 use crate::Result;
