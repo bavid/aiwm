@@ -126,7 +126,8 @@ Video-Upscale danach als eigene Slices.
   `generate_image` → `generate_media`, `ModelKind::VideoModel` (gegen Fake-ComfyUI)
 - [x] 4.2 Bild→Video (`init_image` aus einem Bild-Job / Pfad → `input/`-Staging,
   `WanImageToVideo.start_image`; gegen Fake-ComfyUI)
-- [ ] 4.3 UI-Tab „Video" + Erwartungssteuerung (Dauer!) + `<video>`-Player + Galerie
+- [x] 4.3 UI-Tab „Video" + Erwartungssteuerung (Dauer!) + `<video>`-Player + Galerie
+  + „Start from image" (Galerie-Pick / Pfad) + `media-src` CSP
 - [ ] 4.4 LTX-2-GGUF als zweites Template + `docs/VIDEO_MODELS.md` + Katalog
 - [ ] 4.5 Politur: RAM-Warnung, Retention, Settings, Scheduler-Verprobung
 

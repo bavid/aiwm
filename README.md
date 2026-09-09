@@ -60,6 +60,15 @@ echten 4080 (alle Smokes fuhren gegen die Fake-ComfyUI).
   Kopie nach dem Render (auch bei Fehler/Cancel). Fehlender/ungültiger Frame →
   Klartext-Fehler vor dem langen Render. `aiwm-fake-comfy` prüft, dass der Frame
   wirklich in `input/` liegt.
+- **4.3** ✅ **Video-UI**: Tab „Video" (spiegelt „Image") — Prompt/Negativ,
+  Größe-Presets, Frames/FPS/Steps/CFG/Seed, Model [Auto], „Start from an image"
+  (Galerie-Pick oder Pfad + Thumbnail). **Erwartungssteuerung**: Cliplänge +
+  grobe Minuten-Schätzung, Warnung > 480p / 81 Frames, „Video ist langsam".
+  Fortschritt = die letzte Render-Event-Zeile (kein Prozentbalken). `<video>`-
+  Player auf `GET /jobs/{id}/output` (CSP `media-src`), Galerie-Kacheln als
+  stummes `<video>` mit „▶". „Video model" als Import-Typ auf dem Models-Tab,
+  „Generate Video" auf dem Dashboard aktiv. Neu: `components/NumField`,
+  `lib/dev-mock` (dev-only IPC-Bridge für den Browser).
 
 - **3.1** ✅ `ComfyUiAdapter` — ComfyUI als **ein** langlebiger, lazy gestarteter
   Server (`RuntimeAdapter`): Spawn/Health (`/system_stats`) über

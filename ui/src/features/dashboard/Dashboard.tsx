@@ -9,8 +9,8 @@ const CANCELLABLE: JobState[] = ["queued", "scheduled", "blocked", "preparing", 
 const CAPABILITIES: { key: string; label: string; hint: string; tab?: string }[] = [
   { key: "chat", label: "Chat", hint: "ready", tab: "chat" },
   { key: "image", label: "Generate Image", hint: "ready", tab: "image" },
+  { key: "video", label: "Generate Video", hint: "ready", tab: "video" },
   { key: "code", label: "Coding", hint: "Phase 5" },
-  { key: "video", label: "Generate Video", hint: "Phase 4" },
 ];
 
 const gb = (mb: number) => (mb / GB).toFixed(1);

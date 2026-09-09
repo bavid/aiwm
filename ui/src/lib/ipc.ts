@@ -232,20 +232,42 @@ export interface ImageParams {
   seed: number;
 }
 
-/** URL the loopback core serves a finished image job's picture from. Used as an
- *  `<img>` src — the CSP allows `http://127.0.0.1:*` for images. */
-export const imageOutputUrl = (coreApiPort: number, jobId: string) =>
+/** The parameters of a `job_type=video` job. After the engine runs, `params`
+ *  holds these resolved values (a random seed is pinned back; `length` is
+ *  snapped to Wan's 4k+1 frame grid). `init_image` is the image→video start
+ *  frame — a finished image job's id, or a path. */
+export interface VideoParams {
+  prompt: string;
+  negative: string;
+  width: number;
+  height: number;
+  /** Frame count. */
+  length: number;
+  fps: number;
+  steps: number;
+  cfg: number;
+  seed: number;
+  init_image?: string;
+}
+
+/** URL the loopback core serves a finished job's output file from — a PNG for
+ *  image jobs, an MP4 for video jobs. Used as an `<img>` / `<video>` src; the
+ *  CSP allows `http://127.0.0.1:*` for both `img-src` and `media-src`. */
+export const jobOutputUrl = (coreApiPort: number, jobId: string) =>
   `http://127.0.0.1:${coreApiPort}/jobs/${jobId}/output`;
+/** @deprecated use {@link jobOutputUrl} */
+export const imageOutputUrl = jobOutputUrl;
 
 /** What kind of file is being imported. `chat` → GGUF LLM for llama.cpp; the
- *  rest are ComfyUI image models routed to their typed store folder. */
+ *  rest are ComfyUI image / video models routed to their typed store folder. */
 export type ModelType =
   | "chat"
   | "checkpoint"
   | "diffusion_model"
   | "vae"
   | "lora"
-  | "text_encoder";
+  | "text_encoder"
+  | "video";
 
 export const importModel = (
   sourcePath: string,

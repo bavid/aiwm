@@ -1,0 +1,119 @@
+/** A canned Tauri IPC bridge for running the UI in a plain browser (`pnpm dev`
+ *  outside the Tauri shell). Dev-only: `main.tsx` loads this via a dynamic
+ *  import that is dead code in a production build. It exists so the studios can
+ *  be eyeballed without booting the whole stack; it is not a test double for
+ *  logic. Media URLs (`/jobs/{id}/output`) will not resolve here — the layout
+ *  and controls are what this is for. */
+import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
+
+type AnyRecord = Record<string, unknown>;
+
+const now = () => new Date().toISOString();
+
+const MODELS: AnyRecord[] = [
+  mkModel("m-wan", "wan2.2_ti2v_5B_fp16", { family: "wan", roles: ["base_video"], runtimes: ["comfyui"], vram_estimate_mb: 11800 }),
+  mkModel("m-umt5", "umt5_xxl_fp8_e4m3fn_scaled", { roles: ["text_encoder"], runtimes: ["comfyui"] }),
+  mkModel("m-wanvae", "wan2.2_vae", { family: "wan", roles: ["vae"], runtimes: ["comfyui"] }),
+  mkModel("m-sdxl", "SDXL Base 1.0", { family: "sdxl", roles: ["base_diffusion"], runtimes: ["comfyui"], vram_estimate_mb: 8200 }),
+  mkModel("m-qwen", "Qwen2.5 7B Instruct", { family: "qwen2", roles: ["chat"], runtimes: ["llamacpp"], vram_estimate_mb: 6400 }),
+];
+
+const JOBS: AnyRecord[] = [
+  mkJob("j-vid-1", "video", "completed", {
+    model_id: "m-wan",
+    output_path: "E:\\AI\\data\\outputs\\j-vid-1.mp4",
+    params: { prompt: "a paper boat drifting down a rain-soaked street", negative: "blurry", width: 832, height: 480, length: 81, fps: 24, steps: 30, cfg: 5, seed: 4212981 },
+  }),
+  mkJob("j-img-1", "image", "completed", {
+    model_id: "m-sdxl",
+    output_path: "E:\\AI\\data\\outputs\\j-img-1.png",
+    params: { prompt: "a bay at dawn, wide angle", negative: "", width: 1024, height: 1024, steps: 25, cfg: 7, seed: 99 },
+  }),
+];
+
+function mkModel(id: string, name: string, over: AnyRecord): AnyRecord {
+  return {
+    id, name, publisher: null, family: null, format: "safetensors", quant: null, arch: null,
+    param_count: null, file_path: `E:\\AI\\models\\${name}`, sha256: null, size_bytes: 6_000_000_000,
+    ctx_max: null, vram_estimate_mb: null, ram_estimate_mb: null, source: "manual",
+    imported_at: now(), last_used_at: null, use_count: 0,
+    n_layers: null, n_embd: null, n_heads: null, n_kv_heads: null, roles: [], runtimes: [],
+    ...over,
+  };
+}
+
+function mkJob(id: string, jobType: string, state: string, over: AnyRecord): AnyRecord {
+  return {
+    id, job_type: jobType, capability: null, state, params: {}, runtime_id: "comfyui",
+    model_id: null, created_at: now(), started_at: now(), finished_at: now(),
+    error_text: null, output_path: null, result: null, ...over,
+  };
+}
+
+const RUNTIMES: AnyRecord[] = [
+  { id: "llamacpp", kind: "llama_cpp", health: "unknown", vram_used_mb: 0, detail: "installed · idle" },
+  { id: "comfyui", kind: "comfy_ui", health: "healthy", vram_used_mb: 0, detail: "running on :48096 · ComfyUI 0.34.0 · model reserved" },
+];
+
+const ABOUT: AnyRecord = {
+  core_version: "0.0.1-dev", data_dir: "E:\\AI\\data", store_path: "E:\\AI\\models",
+  outputs_dir: "E:\\AI\\data\\outputs", core_api_port: 48096, vram_budget_mb: 14848, offline_mode: false,
+};
+
+const TELEMETRY: AnyRecord = {
+  captured_at_ms: Date.now(),
+  gpu: { state: "available", name: "NVIDIA RTX 4080 SUPER", vram_total_mb: 16376, vram_used_mb: 2100, vram_free_mb: 14276, utilization_pct: 3, temperature_c: 41, processes: [] },
+  host: { ram_total_mb: 32000, ram_used_mb: 14200, cpu_total_pct: 8, cpu_per_core_pct: [] },
+};
+
+let seq = 100;
+
+export function installDevMock(): void {
+  mockWindows("main");
+  mockIPC(async (cmd, args): Promise<unknown> => {
+    const a = (args ?? {}) as AnyRecord;
+    switch (cmd) {
+      case "about":
+        return ABOUT;
+      case "get_telemetry":
+        return TELEMETRY;
+      case "get_runtimes":
+        return RUNTIMES;
+      case "list_models":
+        return MODELS;
+      case "list_known_models":
+        return [];
+      case "list_jobs":
+        return JOBS;
+      case "get_config":
+        return {
+          store_path: "E:\\AI\\models", core_api_port: 48096, offline_mode: false, log_filter: "info",
+          vram_budget_mb: 0, llama: { gpu_layers: 999, ctx_size: 0, flash_attention: true, load_timeout_secs: 180 },
+          comfyui: { vram_mode: "auto" },
+        };
+      case "get_settings":
+        return {};
+      case "get_recent_logs":
+        return ["dev-mock: no real logs"];
+      case "job_detail": {
+        const job = JOBS.find((j) => j.id === a.id);
+        return job ? { job, events: [{ ts: now(), level: "info", message: "rendering 832×480 video, 81 frames @ 24 fps (~3.4s), 30 steps, cfg 5, seed 4212981 — wan2.2_ti2v_5B_fp16" }] } : null;
+      }
+      case "submit_job": {
+        const body = (a.body ?? {}) as AnyRecord;
+        const job = mkJob(`j-dev-${seq++}`, String(body.job_type ?? "video"), "running", {
+          params: body.params ?? {},
+          model_id: (body.model_id as string) ?? "m-wan",
+          output_path: null,
+        });
+        JOBS.unshift(job);
+        return job;
+      }
+      case "cancel_job":
+        return true;
+      default:
+        console.warn("dev-mock: unhandled command", cmd);
+        return null;
+    }
+  });
+}

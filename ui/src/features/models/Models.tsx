@@ -12,6 +12,7 @@ const MODEL_TYPES: { value: ModelType; label: string; ext: string }[] = [
   { value: "vae", label: "VAE", ext: ".safetensors" },
   { value: "lora", label: "LoRA", ext: ".safetensors" },
   { value: "text_encoder", label: "Text encoder / CLIP", ext: ".safetensors, .gguf" },
+  { value: "video", label: "Video model", ext: ".safetensors, .gguf" },
 ];
 
 const gb = (mb: number | null) => (mb == null ? "—" : `${(mb / 1024).toFixed(1)} GB`);

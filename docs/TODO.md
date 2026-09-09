@@ -133,8 +133,20 @@ hierher, damit nichts verloren geht.
   oder ein „für Video"-Flag beim Import.
 - Video-`from_params` (4.1): harte Grenzen sind Backend-seitig geklemmt
   (`width`/`height` 128–1280 auf 16, `length` auf `4k+1` 5–121, `fps` 8–30,
-  `steps` 1–60, `cfg` 1–15). Die UI (4.3) muss dieselben Grenzen + eine
-  „größer/länger = viel langsamer, kann OOM"-Warnung zeigen.
+  `steps` 1–60, `cfg` 1–15). ~~Die UI (4.3) muss dieselben Grenzen + eine
+  „größer/länger = viel langsamer, kann OOM"-Warnung zeigen.~~ → ✅ 4.3
+  (`Video.tsx` klemmt/snappt clientseitig, Warn-Notiz ab > 480p / 81 Frames).
+- **Video-UI-Politur (4.3):** (a) echter Prozentbalken statt letzter
+  Event-Zeile — braucht `/ws`-Fortschritt vom Core (`progress`/`executing`),
+  gleiche Baustelle wie beim Bild (3.4/3.5); (b) echtes Poster-Frame (erstes
+  Frame per ffmpeg/`av` extrahieren und als `poster=` setzen) statt
+  `<video preload=metadata>`; (c) die Minuten-Schätzung ist eine grobe Formel
+  (`frames × steps × pixel`) — nach 4.0 an echten Wan-Läufen kalibrieren;
+  (d) Galerie: Lightbox, Download-Knopf (Tauri-`save`-Dialog), Retention /
+  Löschen, Paginierung — wie bei der Bild-Galerie offen.
+- **`lib/dev-mock.ts` (4.3)** ist minimal — nur die Kommandos, die die Studios
+  brauchen. Wenn mehr Tabs im Browser getestet werden sollen, die fehlenden
+  Kommandos ergänzen (es warnt in der Konsole bei unbehandelten).
 - ComfyUI-Optionen (3.7): nur `vram_mode` ist exponiert. Weitere sinnvolle
   Flags (`--reserve-vram`, `--fast`, `--use-split-cross-attention`) + ein
   „extra args"-Feld könnten dazu, wenn echte Flux-Läufe zeigen was fehlt.

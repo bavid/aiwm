@@ -5,14 +5,16 @@ import { Diagnostics } from "./features/diagnostics/Diagnostics";
 import { ImageStudio } from "./features/image/Image";
 import { Models } from "./features/models/Models";
 import { Settings } from "./features/settings/Settings";
+import { VideoStudio } from "./features/video/Video";
 import { useAbout } from "./lib/hooks";
 
-type Tab = "dashboard" | "chat" | "image" | "models" | "diagnostics" | "settings";
+type Tab = "dashboard" | "chat" | "image" | "video" | "models" | "diagnostics" | "settings";
 
 const TABS: { id: Tab; label: string }[] = [
   { id: "dashboard", label: "Dashboard" },
   { id: "chat", label: "Chat" },
   { id: "image", label: "Image" },
+  { id: "video", label: "Video" },
   { id: "models", label: "Models" },
   { id: "diagnostics", label: "Diagnostics" },
   { id: "settings", label: "Settings" },
@@ -48,6 +50,7 @@ export default function App() {
         {tab === "dashboard" && <Dashboard onNavigate={(t) => setTab(t as Tab)} />}
         {tab === "chat" && <Chat />}
         {tab === "image" && <ImageStudio />}
+        {tab === "video" && <VideoStudio />}
         {tab === "models" && <Models />}
         {tab === "diagnostics" && <Diagnostics />}
         {tab === "settings" && <Settings />}

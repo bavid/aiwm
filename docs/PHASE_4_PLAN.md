@@ -23,7 +23,7 @@ schon Installierte läuft weiter.
 | **4.0** | **Die echte ComfyUI verproben** (Phase-3-Rest): auf der echten Maschine installieren, cu130-torch-CUDA-Laufzeit prüfen, SDXL- **und** Flux-GGUF-Pipeline aus Phase 3 real durchrendern, `DualCLIPLoaderGGUF`/`UnetLoaderGGUF`-Ordner-Key-Auflösung gegen `extra_model_paths.yaml` bestätigen, `av`/`SaveVideo` verfügbar. Fällt cu130 aus → cu128/cu126-Pin. Ergebnis + etwaige Fixes dokumentieren. **Voraussetzung für alles Weitere.** | offen |
 | 4.1 | `capability::video`: `job_type=video`, Params (prompt, negative, w/h, length in Frames, fps, steps, cfg, seed, model\|Auto über Rolle `base_video`); **feste Pipeline** `wan_ti2v` (`core::pipeline`) = `WanImageToVideo` (ohne `start_image` = T2V) → `KSampler` → `VAEDecode` → `CreateVideo` → `SaveVideo` (mp4/h264). `generate_image` → `generate_media` verallgemeinern (VIDEO-Output-Key in `/history`, `/view` für `.mp4`). `ModelKind::VideoModel` + Familie `wan`. Output nach `<outputs>/<job_id>.mp4` → `jobs.output_path`. VRAM-Schätzung pro Familie. Cancel via `/interrupt` | ✅ |
 | 4.2 | **Bild→Video**: `init_image`-Param (Pfad oder Job-ID eines fertigen Bildes); der Startframe wird nach `<comfyui-data>/input/<job_id>.<ext>` kopiert und als `LoadImage` → `WanImageToVideo.start_image` verdrahtet. Ein Bild-Job-Output aus der Galerie als Quelle | ✅ |
-| 4.3 | UI-Tab „Video" — Prompt/Negativ, Auflösung/Länge/fps/Steps/CFG/Seed, Model [Auto], optional „Start from image" (Galerie-Pick oder Pfad), „Generate"; **Erwartungssteuerung** (geschätzte Dauer + „das dauert Minuten", Fortschritt); `<video>`-Player auf `GET /jobs/{id}/output` (CSP `media-src`); Galerie der Video-Jobs (Poster = erstes Frame). Dashboard-Button „Generate Video" aktiv | offen |
+| 4.3 | UI-Tab „Video" — Prompt/Negativ, Auflösung/Länge/fps/Steps/CFG/Seed, Model [Auto], optional „Start from image" (Galerie-Pick oder Pfad), „Generate"; **Erwartungssteuerung** (geschätzte Dauer + „das dauert Minuten", Fortschritt); `<video>`-Player auf `GET /jobs/{id}/output` (CSP `media-src`); Galerie der Video-Jobs (Poster = erstes Frame). Dashboard-Button „Generate Video" aktiv | ✅ |
 | 4.4 | Zweites Template **LTX-2 / LTX 2.3 (GGUF)** über `ComfyUI-GGUF` (Node schon installiert); `docs/VIDEO_MODELS.md` (kuratierte Modelle: SHA256, HF-Quelle, Lizenz, Settings); Katalog-Einträge (`core::model::catalog`) | offen |
 | 4.5 | Politur: Erwartungssteuerung verfeinern (Zeit-Schätzung kalibrieren), **RAM-Warnung** wenn das Offload-Budget kritisch wird, Retention-Hinweis (Videos sind groß), Settings (Wan/LTX-Optionen, `--reserve-vram`), Diagnostics; Scheduler: Video-Slot neben LLM/Bild-Slot verproben (`core/tests/*_swap.rs`-Erweiterung) | offen |
 
@@ -265,6 +265,66 @@ für stärkere Bild-Treue (5B TI2V braucht es nicht; ggf. später als Option),
 Aufräumen verwaister `input/`-Kopien nach einem Absturz (der Guard deckt den
 Normalfall; ein Start-Sweep wäre robuster — TODO), Pfad-Allowlist für
 `init_image` (loopback-only MVP, ADR-008 — TODO).
+
+---
+
+## 4.3 — Ergebnis (abgeschlossen)
+
+UI-Tab **„Video"** — spiegelt den Image-Tab (gleiches Layout, Formular, Galerie),
+plus Erwartungssteuerung und `<video>`-Player.
+
+- **`features/video/Video.tsx`** (`VideoStudio`): Sidebar-Formular (Prompt,
+  Negativ, Größe-Presets Landscape/Portrait/Square/HD-720p, W/H/Frames/FPS/
+  Steps/CFG, Seed, Model [Auto über `base_video`]), Result-Panel, Galerie.
+  Frontend-Klemmung spiegelt `capability::video` (Dim auf 16 / 128–1280,
+  Frames auf Wans `4k+1` / 5–121, FPS 8–30, Steps 1–60, CFG 1–15).
+- **Erwartungssteuerung**: eine Notiz unter dem Formular nennt die Cliplänge
+  (`frames / fps`) und eine **grobe** Minuten-Spanne (skaliert mit Frames ×
+  Steps × Pixeln); ab > 480p / > 81 Frames wird sie zur Warnung
+  („viel langsamer, kann OOM"). „Video ist langsam — Minuten, nicht Sekunden."
+- **Fortschritt**: das Result-Panel pollt `job_detail` (900 ms) und zeigt die
+  letzte `rendering …` / `image→video …` / `takes several minutes`-Event-Zeile
+  + „This can take several minutes." (kein Prozentbalken — der Core liefert noch
+  keinen; TODO 4.5).
+- **`<video>`-Player**: `GET /jobs/{id}/output` (`controls preload="metadata"`).
+  CSP in `tauri.conf.json` um `media-src 'self' http://127.0.0.1:* http://localhost:*`
+  erweitert. Galerie-Kacheln = `<video muted preload="metadata">` (WebView2
+  zeigt das erste Frame) + „▶"-Overlay.
+- **Bild→Video im UI**: ein `<fieldset>` „Start from an image" — Dropdown der
+  fertigen Bild-Jobs (Galerie-Pick, sendet die Job-ID) **oder** ein
+  Pfad-Feld (gewinnt, wenn gefüllt). Bei Auswahl eine Mini-Vorschau des
+  Startframes. `params.init_image` geht mit.
+- **`ipc.ts`**: `VideoParams`-Interface, `jobOutputUrl` (generisch; `imageOutputUrl`
+  bleibt als Alias), `ModelType` um `"video"` erweitert. **`Models.tsx`**:
+  Import-Typ „Video model" (`.safetensors` / `.gguf`). **`App.tsx`**: „Video"-Tab
+  zwischen Image und Models. **`Dashboard.tsx`**: „Generate Video" → Tab,
+  „ready".
+- **`components/NumField.tsx`** (neu): das Zahlen-Eingabefeld aus `Image.tsx`
+  herausgezogen (jetzt von Image + Video geteilt).
+- **`lib/dev-mock.ts`** (neu, dev-only): ein gecannter Tauri-IPC-Bridge
+  (`@tauri-apps/api/mocks`), den `main.tsx` per dynamischem Import nur unter
+  `import.meta.env.DEV` **und** ohne Tauri-Shell lädt (im Prod-Build toter
+  Code — Bundle unverändert 52 Module). Damit lassen sich die Studios ohne
+  laufenden Core im Browser ansehen.
+
+Verifiziert:
+- `pnpm typecheck` + `pnpm lint` sauber, `pnpm build` grün (kein Größen-Zuwachs).
+  Rust unverändert (**242 Lib + 32 Integ**).
+- **Visuell** (Vite-Dev + `dev-mock`, Browser): Video-Tab rendert; „Generate"
+  → Result zeigt `running` + die `rendering 832×480 video …`-Zeile + „This can
+  take several minutes." + Meta (Prompt/Model/Clip); nach `completed` ein
+  `<video controls>` auf `127.0.0.1:<port>/jobs/<id>/output`; Galerie-Kachel =
+  `<video muted>`. HD-720p-Preset schaltet die Warn-Notiz + skaliert die
+  Schätzung (2–8 → 6–19 min). „Start from an image" zeigt die Thumbnail-
+  Vorschau und sendet die Job-ID. Models-Tab bietet „Video model" als
+  Import-Typ.
+
+Bewusst **nicht** in 4.3: echter Prozentbalken (Core hat noch keinen `/ws`-
+Fortschritt — 4.5), echtes Poster-Frame (erstes Frame per ffmpeg extrahieren —
+`<video preload=metadata>` reicht im MVP), Range-Requests für `<video>`-Seeking
+bei langen Clips (TODO, hängt am `GET /jobs/{id}/output`-Streaming), Lightbox /
+Download / Retention-Aufräumen der Galerie (eigene kleine Slices bei Bedarf),
+Registry der Größe-Presets.
 
 ---
 
