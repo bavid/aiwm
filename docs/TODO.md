@@ -253,6 +253,23 @@ hierher, damit nichts verloren geht.
 - Quality-Score-Gewichtung definieren (extern gepflegte Benchmarks + lokale
   Speed/VRAM/Stabilität)
 - Best-of-N-Modellauswahl: Bewertungskriterium pro Capability
+- **Upgrade-Check** (Modell-Explorer-Knopf „Gibt es was Besseres?"): offene Fragen
+  vor dem Bau —
+  - HF-Endpoint: `GET /api/models?filter=<lib>&sort=downloads&direction=-1` +
+    `pipeline_tag`/`author`-Filter; wie Rolle+Familie des lokalen Modells auf
+    HF-Filter mappen (GGUF-Repos vs. Original-Repos, `-GGUF`-Suffix-Konvention).
+  - Prompt ans lokale LLM: Kandidatenliste (nur echte API-Treffer, als JSON) +
+    aktuelles Modell → strukturierte Antwort (rank + Ein-Satz-Grund); **kein**
+    freier Modellname, Antwort gegen die Kandidaten-IDs validieren.
+  - Kompatibilitäts-Filter: `core::compat` VRAM-Fit gegen `vram_budget_mb` **vor**
+    der LLM-Bewertung anwenden (spart Tokens, hält die Liste ehrlich); Quant/
+    Format muss real beziehbar sein.
+  - Offline/Consent: der HF-Query ist ein externer Call → per-Aktion-Consent
+    (ADR-009), im `offline_mode` ist der Knopf gesperrt (kein stiller Fallback).
+  - Reicht das lokale Coding-/Chat-Modell für die Bewertung, oder braucht es ein
+    kleines dediziertes „Analyse"-Modell? Kein Netz für die LLM-Inferenz selbst.
+  - UI: Knopf pro Zeile im Models-Tab **und** pro Rolle (Auto-Kandidat); Ergebnis
+    als aufklappbare Vorschlagsliste mit „Import" → Download-Manager.
 
 ## Offen / später zu entscheiden
 - App-Selbst-Update offline (manueller Installer + Signaturprüfung angenommen)

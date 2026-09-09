@@ -195,6 +195,14 @@ erzwingbar, kein `bash -l` — Empfehlung, dreht die Reihenfolge unten um),
 - **Auto-Model-Auswahl** nutzt jetzt Benchmark-Daten
 - **Auto-Pipeline-Auswahl** verfeinert
 - **Collections**, Model-Versionen, Update-Checks
+- **Upgrade-Check (Modell-Explorer-Knopf):** „Gibt es inzwischen was Besseres?" pro
+  installiertem Modell / pro Rolle. Fragt den HF-Hub nach neueren/populäreren
+  Modellen derselben Rolle+Familie, das **lokale LLM** bewertet die Kandidaten
+  gegen das aktuelle Modell (Qualität, Alter, Downloads/Likes) — darf nur aus den
+  echten API-Treffern wählen, nichts erfinden. Harter Filter über die
+  Kompatibilitäts-/VRAM-Engine auf „läuft auf **dieser** Hardware". Ausgabe: kurze
+  Liste mit Ein-Satz-Begründung + „Import"-Knopf (→ Download-Manager). Der
+  HF-Query ist ein externer Call → per-Aktion-Consent, im `offline_mode` gesperrt.
 - Cloud-Provider-Adapter (opt-in): Claude/OpenAI als optionale Agent-Backends
 
 ## Später / bewusst offen
