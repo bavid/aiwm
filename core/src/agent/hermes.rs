@@ -15,6 +15,7 @@
 //! plausible spellings; a real `hermes` run will calibrate the corners — like
 //! the ComfyUI `/history` output key was for video.
 
+pub(crate) mod install;
 mod sse;
 
 use std::collections::HashMap;
@@ -25,11 +26,13 @@ use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use serde_json::{json, Value};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, Mutex as AsyncMutex};
 use tokio::task::JoinHandle;
 use uuid::Uuid;
 
+use self::install::InstallStatus;
 use super::{AgentAdapter, AgentEvent, AgentKind, EventStream, PermissionDecision, SessionSpec};
+use crate::runtime::download::SystemRunner;
 use crate::runtime::{free_loopback_port, Health, RuntimeSupervisor, SpawnSpec, SupervisorState};
 use crate::{CoreError, Result};
 
@@ -104,6 +107,9 @@ pub struct HermesAgentAdapter {
     home_root: PathBuf,
     http: reqwest::Client,
     sessions: Mutex<HashMap<String, Session>>,
+    install: Mutex<InstallStatus>,
+    /// Held for the duration of an install.
+    install_lock: AsyncMutex<()>,
 }
 
 impl HermesAgentAdapter {
@@ -129,6 +135,8 @@ impl HermesAgentAdapter {
             home_root,
             http,
             sessions: Mutex::new(HashMap::new()),
+            install: Mutex::new(InstallStatus::Idle),
+            install_lock: AsyncMutex::new(()),
         }
     }
 
@@ -141,6 +149,51 @@ impl HermesAgentAdapter {
 
     pub fn is_installed(&self) -> bool {
         self.resolve_bin().is_some()
+    }
+
+    /// The managed install root (`<runtimes_dir>/hermes/`), or `None` when the
+    /// adapter was built with a fixed binary path (tests).
+    fn install_root(&self) -> Option<&Path> {
+        match &self.launch {
+            LaunchSource::Scan(dir) => Some(dir),
+            LaunchSource::Fixed(_) => None,
+        }
+    }
+
+    pub fn install_state(&self) -> InstallStatus {
+        lock(&self.install).clone()
+    }
+
+    pub fn is_installing(&self) -> bool {
+        matches!(&*lock(&self.install), InstallStatus::Running { .. })
+    }
+
+    /// Download + build the pinned Hermes venv under the managed root. Long —
+    /// callers spawn it and poll [`install_state`](Self::install_state).
+    pub async fn install(&self, offline: bool) -> Result<()> {
+        let Some(root) = self.install_root().map(Path::to_path_buf) else {
+            return Err(err(
+                "this adapter uses a fixed binary path; nothing to install",
+            ));
+        };
+        let _guard = self.install_lock.lock().await;
+
+        let result = install::install(&root, offline, &SystemRunner, |phase, done, total| {
+            *lock(&self.install) = InstallStatus::Running {
+                phase,
+                done_bytes: done,
+                total_bytes: total,
+            };
+        })
+        .await;
+
+        *lock(&self.install) = match &result {
+            Ok(()) => InstallStatus::Idle,
+            Err(e) => InstallStatus::Failed {
+                error: e.to_string(),
+            },
+        };
+        result
     }
 
     /// `(base_url, bearer_key)` for a live session.
@@ -544,6 +597,24 @@ mod tests {
         assert_eq!(a.health().await, Health::Unknown);
         let e = a.open_session(&spec()).await.unwrap_err();
         assert!(e.to_string().contains("not installed"), "{e}");
+    }
+
+    #[tokio::test]
+    async fn install_refuses_a_fixed_path_adapter() {
+        let tmp = tempfile::tempdir().unwrap();
+        let a = HermesAgentAdapter::with_binary(None, tmp.path().to_path_buf());
+        assert!(matches!(a.install_state(), InstallStatus::Idle));
+        let e = a.install(false).await.unwrap_err();
+        assert!(e.to_string().contains("nothing to install"), "{e}");
+    }
+
+    #[tokio::test]
+    async fn install_refuses_in_offline_mode_for_a_managed_adapter() {
+        let tmp = tempfile::tempdir().unwrap();
+        let a = HermesAgentAdapter::discover(tmp.path());
+        let e = a.install(true).await.unwrap_err();
+        assert!(e.to_string().contains("offline mode"), "{e}");
+        assert!(matches!(a.install_state(), InstallStatus::Failed { .. }));
     }
 
     #[test]

@@ -46,7 +46,7 @@ pub mod telemetry;
 
 pub use agent::{
     AgentAdapter, AgentEvent, AgentKind, EndpointConfig, FakeAgentAdapter, HermesAgentAdapter,
-    OpenCodeAdapter, PermissionDecision, SessionSpec,
+    HermesInstallStatus, OpenCodeAdapter, PermissionDecision, SessionSpec,
 };
 pub use api::{ApiServer, Services};
 pub use app::App;

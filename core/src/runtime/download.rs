@@ -1,16 +1,32 @@
-//! Verified downloads shared by the runtime installers (llama.cpp, ComfyUI).
+//! Verified downloads + the `uv` toolchain, shared by the runtime and agent
+//! installers (llama.cpp, ComfyUI, Hermes).
 //!
 //! Stream a file while hashing it, reject on a size or SHA-256 mismatch (and
-//! delete the partial), then unpack the zip. These hit GitHub — not
+//! delete the partial), then unpack the zip. These hit GitHub / PyPI — not
 //! `127.0.0.1` — but only ever behind an explicit "set up <runtime>" action,
 //! and every caller refuses first in offline mode (ADR-009).
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
 use tokio::io::AsyncWriteExt as _;
 
 use crate::{CoreError, Result};
+
+/// Pinned `uv` (astral-sh) — a single static binary, `0.12.11`. Bump this URL
+/// together with [`UV_ARCHIVE`]'s digest + size.
+pub(crate) const UV_RELEASE_BASE: &str =
+    "https://github.com/astral-sh/uv/releases/download/0.12.11";
+
+/// `uv-x86_64-pc-windows-msvc.zip` for [`UV_RELEASE_BASE`]. SHA-256 from the
+/// release's published `.sha256` sidecar; size from the release asset.
+pub(crate) const UV_ARCHIVE: Archive<'static> = Archive {
+    name: "uv-x86_64-pc-windows-msvc.zip",
+    sha256: "e94225dea91e051472847bd6d146d7d66c4f54ffcd1f106678866a99580845f9",
+    size: 16_996_332,
+};
+
+const UV_EXE: &str = if cfg!(windows) { "uv.exe" } else { "uv" };
 
 /// One archive to fetch: URL basename, expected SHA-256 (lowercase hex) and
 /// exact byte size. Both are checked.
@@ -84,6 +100,32 @@ pub(crate) async fn download_verified(
     Ok(())
 }
 
+/// Download + verify + unpack the pinned `uv` into `<dir>/uv/`, returning the
+/// executable path. Idempotent — skips the fetch when it is already there.
+/// `base` / `archive` are parameters so the installers' tests can substitute a
+/// local server (production passes [`UV_RELEASE_BASE`] / [`UV_ARCHIVE`]).
+pub(crate) async fn ensure_uv(
+    base: &str,
+    archive: &Archive<'_>,
+    dir: &Path,
+    on_bytes: impl Fn(u64),
+) -> Result<PathBuf> {
+    let exe = dir.join("uv").join(UV_EXE);
+    if exe.is_file() {
+        return Ok(exe);
+    }
+    let staging = dir.join(".uv-download");
+    let _ = tokio::fs::remove_dir_all(&staging).await;
+    tokio::fs::create_dir_all(&staging)
+        .await
+        .map_err(|e| dl_err(format!("create {}: {e}", staging.display())))?;
+    let zip = staging.join(archive.name);
+    download_verified(&format!("{base}/{}", archive.name), archive, &zip, on_bytes).await?;
+    extract_zip(&zip, &dir.join("uv")).await?;
+    let _ = tokio::fs::remove_dir_all(&staging).await;
+    Ok(exe)
+}
+
 /// Unpack `zip_path` into `target`, rejecting entries with unsafe paths.
 pub(crate) async fn extract_zip(zip_path: &Path, target: &Path) -> Result<()> {
     unzip(zip_path, target, 0).await
@@ -150,6 +192,56 @@ pub(crate) fn hex(bytes: &[u8]) -> String {
         let _ = write!(s, "{b:02x}");
     }
     s
+}
+
+// --- subprocess boundary ----------------------------------------------------
+
+/// Runs one external command (a `uv` / `pip` step). Injected so the install
+/// orchestration is testable without a real Python toolchain.
+#[async_trait::async_trait]
+pub(crate) trait CmdRunner: Send + Sync {
+    async fn run(&self, program: &Path, args: &[&str], env: &[(&str, &str)]) -> Result<()>;
+}
+
+/// The real runner: `tokio::process::Command`, non-zero exit → error with the
+/// tail of stderr.
+pub(crate) struct SystemRunner;
+
+#[async_trait::async_trait]
+impl CmdRunner for SystemRunner {
+    async fn run(&self, program: &Path, args: &[&str], env: &[(&str, &str)]) -> Result<()> {
+        let mut cmd = tokio::process::Command::new(program);
+        cmd.args(args).kill_on_drop(true);
+        for (k, v) in env {
+            cmd.env(k, v);
+        }
+        let out = cmd
+            .output()
+            .await
+            .map_err(|e| dl_err(format!("run {}: {e}", program.display())))?;
+        if out.status.success() {
+            return Ok(());
+        }
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        let tail: String = stderr
+            .lines()
+            .rev()
+            .take(8)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect::<Vec<_>>()
+            .join("\n");
+        Err(dl_err(format!(
+            "{} {} exited with {}:\n{tail}",
+            program
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("cmd"),
+            args.first().copied().unwrap_or(""),
+            out.status
+        )))
+    }
 }
 
 #[cfg(test)]

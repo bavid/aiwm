@@ -12,7 +12,11 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::runtime::download::{download_verified, extract_zip, extract_zip_flat, Archive};
+use crate::runtime::download::{
+    download_verified, ensure_uv, extract_zip_flat, Archive, UV_ARCHIVE, UV_RELEASE_BASE,
+};
+// Re-exported so `comfyui::mod` (and this module's tests) reach them via `install::`.
+pub(crate) use crate::runtime::download::{CmdRunner, SystemRunner};
 use crate::{CoreError, Result};
 
 use super::RUNTIME_ID;
@@ -25,9 +29,6 @@ const PYTHON_VERSION: &str = "3.13";
 /// RTX 20-series and newer. Needs a recent NVIDIA driver.
 const TORCH_INDEX_URL: &str = "https://download.pytorch.org/whl/cu130";
 
-/// Pinned `uv` (astral-sh) — a single static binary, `0.12.11`. Bump this URL
-/// together with [`UV_ARCHIVE`]'s digest + size.
-const UV_RELEASE_BASE: &str = "https://github.com/astral-sh/uv/releases/download/0.12.11";
 const COMFYUI_ARCHIVE_BASE: &str = "https://github.com/comfyanonymous/ComfyUI/archive/refs/tags";
 const GGUF_ARCHIVE_BASE: &str = "https://github.com/city96/ComfyUI-GGUF/archive";
 
@@ -41,14 +42,6 @@ const GGUF_NODE_ARCHIVE: Archive<'static> = Archive {
     size: 38_051,
 };
 
-/// `uv-x86_64-pc-windows-msvc.zip` for [`UV_RELEASE_BASE`]. SHA-256 from the
-/// release's published `.sha256` sidecar; size from the release asset.
-const UV_ARCHIVE: Archive<'static> = Archive {
-    name: "uv-x86_64-pc-windows-msvc.zip",
-    sha256: "e94225dea91e051472847bd6d146d7d66c4f54ffcd1f106678866a99580845f9",
-    size: 16_996_332,
-};
-
 /// The GitHub source archive for [`PINNED_TAG`]. GitHub does **not** publish a
 /// digest for source archives, so this SHA-256 is the one we computed while
 /// curating the pin. A regeneration on GitHub's side surfaces as a
@@ -59,7 +52,6 @@ const COMFYUI_SRC: Archive<'static> = Archive {
     size: 12_613_058,
 };
 
-const UV_EXE: &str = if cfg!(windows) { "uv.exe" } else { "uv" };
 const VENV_PYTHON: &str = if cfg!(windows) {
     ".venv\\Scripts\\python.exe"
 } else {
@@ -74,7 +66,8 @@ pub fn install_root(runtimes_dir: &Path) -> PathBuf {
 
 /// The bootstrapped `uv` executable.
 pub fn uv_bin(runtimes_dir: &Path) -> PathBuf {
-    install_root(runtimes_dir).join("uv").join(UV_EXE)
+    let exe = if cfg!(windows) { "uv.exe" } else { "uv" };
+    install_root(runtimes_dir).join("uv").join(exe)
 }
 
 /// The ComfyUI checkout: `main.py`, `requirements.txt`, `.venv/`, `custom_nodes/`.
@@ -107,53 +100,6 @@ pub enum InstallPhase {
 /// gigabytes of wheels whose size we cannot know up front.
 pub const TOOLCHAIN_DOWNLOAD_BYTES: u64 =
     UV_ARCHIVE.size + COMFYUI_SRC.size + GGUF_NODE_ARCHIVE.size;
-
-// --- subprocess boundary ----------------------------------------------------
-
-/// Runs one external command. Injected so the install orchestration is testable
-/// without a real Python toolchain.
-#[async_trait::async_trait]
-pub trait CmdRunner: Send + Sync {
-    async fn run(&self, program: &Path, args: &[&str], env: &[(&str, &str)]) -> Result<()>;
-}
-
-/// The real runner: `tokio::process::Command`, non-zero exit → error with the
-/// tail of stderr.
-pub struct SystemRunner;
-
-#[async_trait::async_trait]
-impl CmdRunner for SystemRunner {
-    async fn run(&self, program: &Path, args: &[&str], env: &[(&str, &str)]) -> Result<()> {
-        let mut cmd = tokio::process::Command::new(program);
-        cmd.args(args).kill_on_drop(true);
-        for (k, v) in env {
-            cmd.env(k, v);
-        }
-        let out = cmd
-            .output()
-            .await
-            .map_err(|e| comfy_install_err(format!("run {}: {e}", program.display())))?;
-        if out.status.success() {
-            return Ok(());
-        }
-        let stderr = String::from_utf8_lossy(&out.stderr);
-        let tail: String = stderr
-            .lines()
-            .rev()
-            .take(8)
-            .collect::<Vec<_>>()
-            .into_iter()
-            .rev()
-            .collect::<Vec<_>>()
-            .join("\n");
-        Err(comfy_install_err(format!(
-            "{} {} exited with {}:\n{tail}",
-            program.file_name().and_then(|n| n.to_str()).unwrap_or("uv"),
-            args.first().copied().unwrap_or(""),
-            out.status
-        )))
-    }
-}
 
 // --- the installer --------------------------------------------------------
 
@@ -222,7 +168,6 @@ where
 
     fetch_sources(
         &root,
-        &uv,
         &home,
         gguf_node_dir(runtimes_dir).as_path(),
         spec,
@@ -241,11 +186,10 @@ where
     Ok(())
 }
 
-/// Fetch + unpack the three verified archives: `uv`, the ComfyUI source, and the
-/// pinned GGUF node.
+/// Fetch + unpack the verified toolchain: `uv` (via [`ensure_uv`]), the ComfyUI
+/// source, and the pinned GGUF node.
 async fn fetch_sources<F>(
     root: &Path,
-    uv: &Path,
     home: &Path,
     node_dir: &Path,
     spec: &FetchSpec<'_>,
@@ -262,19 +206,10 @@ where
     let total = spec.uv.size + spec.comfy.size + spec.gguf.size;
     let mut done = 0u64;
 
-    if !uv.is_file() {
-        let zip = staging.join(spec.uv.name);
-        download_verified(
-            &format!("{}/{}", spec.uv_base, spec.uv.name),
-            spec.uv,
-            &zip,
-            |n| {
-                on_progress(InstallPhase::Downloading, done + n, total);
-            },
-        )
-        .await?;
-        extract_zip(&zip, &root.join("uv")).await?;
-    }
+    ensure_uv(spec.uv_base, spec.uv, root, |n| {
+        on_progress(InstallPhase::Downloading, done + n, total);
+    })
+    .await?;
     done += spec.uv.size;
 
     if !home.join("main.py").is_file() {

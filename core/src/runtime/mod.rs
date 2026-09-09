@@ -10,7 +10,7 @@
 //! adapters (llama.cpp in Phase 2) implement the same trait.
 
 mod comfyui;
-mod download;
+pub(crate) mod download;
 mod fake;
 mod job;
 mod llamacpp;

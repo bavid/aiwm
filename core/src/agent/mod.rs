@@ -29,6 +29,7 @@ use serde_json::Value;
 use tokio::sync::mpsc;
 
 pub use fake::FakeAgentAdapter;
+pub use hermes::install::InstallStatus as HermesInstallStatus;
 pub use hermes::HermesAgentAdapter;
 pub use opencode::OpenCodeAdapter;
 
