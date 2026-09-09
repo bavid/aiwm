@@ -26,7 +26,8 @@
   color: var(--muted);
 }
 
-.import__field input[type="text"] {
+.import__field input[type="text"],
+.import__field select {
   padding: var(--space-2) var(--space-3);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
@@ -36,7 +37,12 @@
   font-size: var(--text-sm);
 }
 
-.import__field input:focus-visible {
+.import__field select {
+  font-family: var(--font-sans);
+}
+
+.import__field input:focus-visible,
+.import__field select:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
 }

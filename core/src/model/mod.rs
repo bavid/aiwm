@@ -2,9 +2,11 @@
 
 mod gguf;
 mod import;
+mod kind;
 
 pub use gguf::{read_gguf_info, GgufInfo};
 pub use import::{import_model, ImportOutcome, ImportRequest};
+pub use kind::ModelKind;
 
 /// Bytes per MiB, used for the VRAM/size estimates.
 pub(crate) const MIB: u64 = 1024 * 1024;

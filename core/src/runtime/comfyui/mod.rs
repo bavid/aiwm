@@ -468,6 +468,7 @@ mod tests {
         ComfyDirs {
             base: tmp.join("comfyui-data"),
             output: tmp.join("outputs"),
+            models_store: tmp.join("store"),
         }
     }
 

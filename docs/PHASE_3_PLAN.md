@@ -15,7 +15,7 @@ manuelles Eingreifen → Netz trennen → das schon Installierte läuft weiter.
 | **3.1** | `ComfyUiAdapter` (`RuntimeAdapter`): **ein** langlebiger Server, lazy beim ersten `load_model` gestartet (`--listen 127.0.0.1 --port … --base-directory … --output-directory … --disable-auto-launch --dont-print-server`), Health über `GET /system_stats`, Attach-Fallback, `unload_model` → `POST /free` (Server bleibt oben), `load_model` = Server hoch + VRAM-Slot reservieren + alten via `/free` verdrängen; `aiwm-fake-comfy`-Fixture | ✅ |
 | **3.2a** | ComfyUI-**Installer** (Kern): `uv` bootstrappen (verifizierter Static-Binary), ComfyUI-Quelle am gepinnten Tag (verifiziertes GitHub-`.zip`, flach entpackt), `uv venv --python 3.13` (lädt Python) + `uv pip install torch … --index-url cu130` + `-r requirements.txt` — die `uv`-Schritte hinter einem `CmdRunner`-Trait (unit-getestet). `offline_mode`-Hard-Refusal, idempotent, `InstallState`/`detail()`, `RuntimeRepo`, `POST /runtimes/comfyui/install`, Diagnostics-„Set up"-Knopf | ✅ |
 | **3.2b** | gepinnter Custom-Node-Satz — **exakt einer**: `city96/ComfyUI-GGUF` am Commit `6ea2651e` (verifiziertes `.zip` → `custom_nodes/ComfyUI-GGUF/`, `uv pip install -r <node>/requirements.txt` = `gguf`/`sentencepiece`/`protobuf` in die venv). Idempotenz + „installed" verlangen jetzt auch den Node. SDXL-txt2img braucht **keine** Custom Nodes | ✅ |
-| 3.3 | Link-Manager **echt**: neue Store-Struktur `E:\AI\models\image\{checkpoints,unet,vae,clip,loras}`; `core::link` junctioniert diese Ordner in ComfyUIs `models/…` (Directory-Junction, kein Admin — das, wofür 2.3 gebaut wurde); `import_model` nimmt `.safetensors`, routet per Rolle in den richtigen Unterordner; `model_links` = `comfyui`/`junction` | offen |
+| **3.3** | Getypter Bild-Store `<store>/image/{checkpoints,diffusion_models,vae,loras,text_encoders}/`; `ModelKind` + `import_model` nimmt `.safetensors` (+ Pickle-Ablehnung), routet per Typ-Hint/Endung; ComfyUI-Zugriff über **`extra_model_paths.yaml`** statt Junction (Store auf `E:`, Runtime auf `C:` → Junction unmöglich; ADR-019); `model_links` = `comfyui`/`extra_path`; UI-Typ-Dropdown | ✅ |
 | 3.4 | `capability::image`: `job_type=image`, Params (prompt, negative, w/h, steps, cfg, seed, model|Auto über Rolle); **feste Pipeline** = Workflow-JSON-Template + Param-Substitution (`core::pipeline`); `POST /prompt` → `/history/{id}` pollen → Bild via `/view` nach `<data>/outputs/<job_id>.png` → `jobs.output_path`; Cancel via `POST /interrupt`; VRAM-Schätzung pro Familie | offen |
 | 3.5 | UI: Tab „Image" — Prompt/Negativ, Größe/Steps/CFG/Seed, Model [Auto], „Generate"; Ergebnisbild; einfache **Galerie** (Bild-Jobs mit Thumbnail, Klick → Prompt/Seed/Modell); Dashboard-Button „Generate Image" aktiv | offen |
 | 3.6 | Zweites Template **Flux.1-dev (GGUF Q8)** über `ComfyUI-GGUF`; `docs/IMAGE_MODELS.md` (kuratierte Modelle: SHA256, Quelle HF, Lizenz, empfohlene Settings); kuratierte „Known models"-Liste für den assistierten Import | offen |
@@ -262,6 +262,58 @@ Verifiziert:
   `InstallingNode`, Node flach entpackt. `check.ps1` grün (185 Unit + 17 Integ.).
 - **Smoke (`#[ignore]`, echt)**: `real_pinned_install` zieht jetzt zusätzlich den
   Node und `import torch, gguf` läuft in der frischen venv — **grün in 70 s**.
+
+---
+
+## 3.3 — Ergebnis (abgeschlossen) · **Plan-Abweichung, siehe ADR-019**
+
+Junctions gehen nicht: der Store liegt auf `E:`, die ComfyUI-Installation unter
+`%LOCALAPPDATA%` (`C:`) — NTFS-Junctions überspannen keine Volumes. ComfyUIs
+`extra_model_paths.yaml` (`--extra-model-paths-config`) ist der native Weg und
+funktioniert über Volumes.
+
+- **`core::model::ModelKind`** (neu): `Chat` / `Checkpoint` / `DiffusionModel` /
+  `Vae` / `Lora` / `TextEncoder`. `from_hint` (mit Aliassen), `default_for_ext`,
+  `accepts_ext`, `store_subdir()` (`"llm"` bzw. `"image/checkpoints"` …),
+  `comfy_folder()` (ComfyUI-`folder_paths`-Schlüssel).
+- **`import_model`** generalisiert:
+  - nimmt `.gguf` **und** `.safetensors`; `.ckpt`/`.bin`/`.pt` → Klartext-
+    Ablehnung („Pickle … convert to .safetensors first").
+  - `ImportRequest.model_type: Option<String>` — Hint oder aus der Endung
+    abgeleitet (`.gguf`→`chat`, `.safetensors`→`checkpoint`), gegen die Endung
+    validiert.
+  - GGUF-Header nur für `chat` geparst; `.safetensors` wird nicht geparst
+    (kein sicherer bounded Reader — Header-Inspektion später).
+  - Ziel: `chat` → `<store>/llm/<slug>/<file>` (wie bisher); Bild → flach in
+    `<store>/image/<typ>/<file>` (ComfyUI-Konvention). Namens-Kollision → `-<hash8>`.
+  - VRAM-Schätzung: Bild = `Dateigröße + 2 GB` Headroom; Chat weiter über `compat`.
+  - Link: `chat` → `llamacpp`/`passthrough`; Bild → `comfyui`/`extra_path` mit
+    dem *Ordner* als `link_path`.
+- **`core::link`**: neue Variante `LinkStrategy::ExtraPath` (`materialize` =
+  No-Op, gibt den kanonischen Pfad zurück). `strategy_for("comfyui", …)` →
+  `ExtraPath`; `strategy_for` für alles andere ohne bekannten Namen weiter
+  `Junction` (LM Studio o. Ä.).
+- **`ComfyDirs.models_store`** (= `Config::store_path`). `ComfyDirs::ensure()`
+  schreibt jetzt zusätzlich `<comfyui-data>/aiwm-model-paths.yaml`
+  (`base_path: <store>/image` + fünf Ordner-Mappings) — bei **jedem** Server-Start,
+  damit ein geänderter Store-Pfad greift. `build_spawn_spec` hängt
+  `--extra-model-paths-config <die Datei>` an.
+- **UI**: Import-Formular bekommt ein **Typ-Dropdown** (Chat / Checkpoint /
+  Diffusion / VAE / LoRA / Text-Encoder); Rollen-Chips nur für Chat.
+
+Verifiziert:
+- 10 neue Unit-Tests (`ModelKind` 4, `import` 4 — safetensors→checkpoint+comfyui,
+  expliziter Typ, Pickle/unbekannt abgelehnt, GGUF-als-VAE abgelehnt; `link` 2 —
+  `ExtraPath` round-trip + `strategy_for`). `check.ps1` grün (195 Unit + 17 Integ.).
+- **Live** (`aiwm-cored`, Fake-ComfyUI): SDXL-`.safetensors` → `<store>/image/
+  checkpoints/…`, `runtimes: ["comfyui"]`, Link `extra_path`; expliziter
+  `model_type:vae` → `<store>/image/vae/…`; Chat-`.gguf` → `<store>/llm/…` +
+  `llamacpp`; ComfyUI-Start schreibt `aiwm-model-paths.yaml` mit `base_path:
+  <store>/image` + allen fünf Ordnern.
+
+Bewusst **nicht** in 3.3: `.safetensors`-Header-Inspektion (Arch/Precision aus
+dem JSON-Header — später), echtes Junctionen gegen LM Studio (Phase 3+),
+Modell-Rollen für Bild (`base_diffusion` etc. — 3.4, wenn `Auto` sie braucht).
 
 ---
 

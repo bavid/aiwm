@@ -3,9 +3,13 @@
 //!
 //! - [`Passthrough`](LinkStrategy::Passthrough): the runtime takes an absolute
 //!   path — nothing to create (llama.cpp).
-//! - [`Junction`](LinkStrategy::Junction): an NTFS directory reparse point from
-//!   `<runtime>/…/<slug>` to the canonical `<store>/llm/<slug>` — same volume,
-//!   no admin (ComfyUI, LM Studio).
+//! - [`ExtraPath`](LinkStrategy::ExtraPath): the runtime is *told* about the
+//!   store directory through its own config — ComfyUI's `extra_model_paths.yaml`
+//!   (3.3). No filesystem link; works across volumes, which a junction would not
+//!   (the store is on `E:`, the ComfyUI install under `%LOCALAPPDATA%`).
+//! - [`Junction`](LinkStrategy::Junction): an NTFS directory reparse point —
+//!   same volume, no admin. Built for LM Studio-style consumers with no
+//!   config-path feature.
 //! - [`Hardlink`](LinkStrategy::Hardlink): a file hardlink; same volume only.
 //! - [`Copy`](LinkStrategy::Copy): a real copy — the last resort, and Ollama's
 //!   only option.
@@ -23,6 +27,7 @@ const ERROR_NOT_SAME_DEVICE: i32 = 17;
 #[serde(rename_all = "snake_case")]
 pub enum LinkStrategy {
     Passthrough,
+    ExtraPath,
     Junction,
     Hardlink,
     Copy,
@@ -32,6 +37,7 @@ impl LinkStrategy {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Passthrough => "passthrough",
+            Self::ExtraPath => "extra_path",
             Self::Junction => "junction",
             Self::Hardlink => "hardlink",
             Self::Copy => "copy",
@@ -41,6 +47,7 @@ impl LinkStrategy {
     pub fn parse(s: &str) -> Option<Self> {
         Some(match s {
             "passthrough" => Self::Passthrough,
+            "extra_path" => Self::ExtraPath,
             "junction" => Self::Junction,
             "hardlink" => Self::Hardlink,
             "copy" => Self::Copy,
@@ -54,9 +61,11 @@ pub fn strategy_for(runtime_id: &str, _format: &str) -> LinkStrategy {
     match runtime_id {
         // llama-server takes `-m <absolute path>`.
         "llamacpp" => LinkStrategy::Passthrough,
+        // ComfyUI reads the store dirs it is pointed at via extra_model_paths.yaml.
+        "comfyui" => LinkStrategy::ExtraPath,
         // Ollama's store is content-addressed — it must own its own copy.
         "ollama" => LinkStrategy::Copy,
-        // ComfyUI / LM Studio scan a directory tree.
+        // Anything else with a directory scanner but no config-path feature.
         _ => LinkStrategy::Junction,
     }
 }
@@ -79,7 +88,8 @@ pub fn materialize(canonical_file: &Path, dest: &Path, strategy: LinkStrategy) -
         )));
     }
     match strategy {
-        LinkStrategy::Passthrough => Ok(canonical_file.to_path_buf()),
+        // The file stays where it is; the runtime's own config points at it.
+        LinkStrategy::Passthrough | LinkStrategy::ExtraPath => Ok(canonical_file.to_path_buf()),
 
         LinkStrategy::Junction => {
             let src_dir = canonical_file
@@ -126,7 +136,7 @@ pub fn materialize(canonical_file: &Path, dest: &Path, strategy: LinkStrategy) -
 /// Undo a [`materialize`] at `dest`. Never touches the canonical file.
 pub fn dematerialize(dest: &Path, strategy: LinkStrategy) -> Result<()> {
     match strategy {
-        LinkStrategy::Passthrough => Ok(()),
+        LinkStrategy::Passthrough | LinkStrategy::ExtraPath => Ok(()),
         LinkStrategy::Junction => remove_junction(dest),
         LinkStrategy::Hardlink | LinkStrategy::Copy => {
             let _ = std::fs::remove_file(dest);
@@ -212,6 +222,7 @@ mod tests {
     fn strategy_round_trips_as_string() {
         for s in [
             LinkStrategy::Passthrough,
+            LinkStrategy::ExtraPath,
             LinkStrategy::Junction,
             LinkStrategy::Hardlink,
             LinkStrategy::Copy,
@@ -227,8 +238,20 @@ mod tests {
         assert_eq!(strategy_for("ollama", "gguf"), LinkStrategy::Copy);
         assert_eq!(
             strategy_for("comfyui", "safetensors"),
-            LinkStrategy::Junction
+            LinkStrategy::ExtraPath
         );
+        assert_eq!(strategy_for("lmstudio", "gguf"), LinkStrategy::Junction);
+    }
+
+    #[test]
+    fn extra_path_is_a_no_op_that_returns_the_canonical_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let file = tmp.path().join("image/checkpoints/sdxl.safetensors");
+        write(&file, b"ST");
+        let got = materialize(&file, tmp.path(), LinkStrategy::ExtraPath).unwrap();
+        assert_eq!(got, file);
+        dematerialize(tmp.path(), LinkStrategy::ExtraPath).unwrap();
+        assert!(file.is_file());
     }
 
     #[test]

@@ -1,9 +1,18 @@
 import { useState } from "react";
 import { useModels } from "../../lib/hooks";
-import { importModel, type Model } from "../../lib/ipc";
+import { importModel, type Model, type ModelType } from "../../lib/ipc";
 import "./models.css";
 
 const ROLES = ["chat", "coding", "reasoning", "embedding"];
+
+const MODEL_TYPES: { value: ModelType; label: string; ext: string }[] = [
+  { value: "chat", label: "Chat / LLM", ext: ".gguf" },
+  { value: "checkpoint", label: "Image checkpoint", ext: ".safetensors" },
+  { value: "diffusion_model", label: "Diffusion model / UNet", ext: ".safetensors, .gguf" },
+  { value: "vae", label: "VAE", ext: ".safetensors" },
+  { value: "lora", label: "LoRA", ext: ".safetensors" },
+  { value: "text_encoder", label: "Text encoder / CLIP", ext: ".safetensors, .gguf" },
+];
 
 const gb = (mb: number | null) => (mb == null ? "—" : `${(mb / 1024).toFixed(1)} GB`);
 const params = (n: number | null) =>
@@ -68,10 +77,14 @@ export function Models() {
 
 function ImportForm({ onImported }: { onImported: () => void }) {
   const [path, setPath] = useState("");
+  const [modelType, setModelType] = useState<ModelType>("chat");
   const [roles, setRoles] = useState<string[]>(["chat"]);
   const [keepOriginal, setKeepOriginal] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
+
+  const isChat = modelType === "chat";
+  const typeInfo = MODEL_TYPES.find((t) => t.value === modelType)!;
 
   const toggle = (role: string) =>
     setRoles((rs) => (rs.includes(role) ? rs.filter((r) => r !== role) : [...rs, role]));
@@ -82,12 +95,12 @@ function ImportForm({ onImported }: { onImported: () => void }) {
     setBusy(true);
     setMessage(null);
     try {
-      const out = await importModel(path.trim(), roles, keepOriginal);
+      const out = await importModel(path.trim(), isChat ? roles : [], keepOriginal, modelType);
       setMessage({
         kind: "ok",
         text: out.already_present
           ? `Already imported as “${out.model.name}”.`
-          : `Imported “${out.model.name}” (${out.model.quant ?? "?"}).`,
+          : `Imported “${out.model.name}” — ${out.model.runtimes.join(", ") || "no runtime"}.`,
       });
       setPath("");
       onImported();
@@ -105,24 +118,41 @@ function ImportForm({ onImported }: { onImported: () => void }) {
       </header>
       <form className="import" onSubmit={submit}>
         <label className="import__field">
-          <span>Path to a .gguf file</span>
+          <span>Type</span>
+          <select value={modelType} onChange={(e) => setModelType(e.target.value as ModelType)}>
+            {MODEL_TYPES.map((t) => (
+              <option key={t.value} value={t.value}>
+                {t.label} ({t.ext})
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label className="import__field">
+          <span>Path to a {typeInfo.ext} file</span>
           <input
             type="text"
             value={path}
-            placeholder="E:\downloads\qwen2.5-coder-14b.Q4_K_M.gguf"
+            placeholder={
+              isChat
+                ? "E:\\downloads\\qwen2.5-coder-14b.Q4_K_M.gguf"
+                : "E:\\downloads\\sd_xl_base_1.0.safetensors"
+            }
             onChange={(e) => setPath(e.target.value)}
             spellCheck={false}
           />
         </label>
 
-        <div className="import__roles">
-          {ROLES.map((r) => (
-            <label key={r} className="chip">
-              <input type="checkbox" checked={roles.includes(r)} onChange={() => toggle(r)} />
-              {r}
-            </label>
-          ))}
-        </div>
+        {isChat && (
+          <div className="import__roles">
+            {ROLES.map((r) => (
+              <label key={r} className="chip">
+                <input type="checkbox" checked={roles.includes(r)} onChange={() => toggle(r)} />
+                {r}
+              </label>
+            ))}
+          </div>
+        )}
 
         <label className="chip">
           <input

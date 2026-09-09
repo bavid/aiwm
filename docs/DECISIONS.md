@@ -544,6 +544,58 @@ passt hier nicht.
 
 ---
 
+## ADR-019 — Bild-Modelle: getypter Store + ComfyUI via `extra_model_paths.yaml` (statt Junction)
+
+**Status:** Entschieden — umgesetzt (3.3). **Weicht bewusst von PHASE_3_PLAN §D ab.**
+
+**Kontext:** Der Plan sah vor, die Store-Ordner per NTFS-Junction in ComfyUIs
+`models/` zu spiegeln (die 2.3-`core::link`-Maschinerie). Zwei Probleme:
+1. **Junctions können keine Volumes überspannen.** Der Store liegt auf `E:`
+   (`E:\AI\models`, ADR-012), die ComfyUI-Installation unter `%LOCALAPPDATA%` =
+   `C:`. Ein Junction von `C:` nach `E:` geht nicht; Symlinks bräuchten Admin /
+   Developer Mode.
+2. ComfyUI hat für genau diesen Fall ein **erstklassiges, dokumentiertes
+   Feature**: `extra_model_paths.yaml` (per `--extra-model-paths-config`).
+
+**Entscheidung:**
+1. **Getypter Store:** `.gguf`-Chat-Modelle → `<store>/llm/<slug>/`. Bild-Modelle
+   (`.safetensors`, und `.gguf` für quantisiertes Flux) → flache getypte Ordner
+   `<store>/image/{checkpoints,diffusion_models,vae,loras,text_encoders}/`, 1:1
+   auf ComfyUIs `folder_paths`-Namen.
+2. **`ModelKind`** (`core::model`) — `Chat` / `Checkpoint` / `DiffusionModel` /
+   `Vae` / `Lora` / `TextEncoder`. `import_model` nimmt einen optionalen
+   `model_type`-Hint (sonst aus der Endung abgeleitet: `.gguf`→`chat`,
+   `.safetensors`→`checkpoint`), validiert ihn gegen die Endung, routet in den
+   Store-Ordner. Pickle-Formate (`.ckpt`/`.bin`/`.pt`) → Klartext-Ablehnung
+   („convert to .safetensors first"). `.safetensors` wird **nicht** geparst
+   (kein sicherer bounded Reader wie für GGUF; Header-Inspektion später).
+3. **ComfyUI-Zugriff:** Der Adapter schreibt vor jedem Server-Start
+   `<comfyui-data>/aiwm-model-paths.yaml` (`base_path: <store>/image`, alle fünf
+   Ordner-Mappings) und startet mit `--extra-model-paths-config <die Datei>`.
+   Kein Filesystem-Link. `model_links`-Strategie: neue Variante
+   `LinkStrategy::ExtraPath` (`materialize` = No-Op wie `Passthrough`).
+4. **VRAM-Schätzung** für Bild-Modelle: `Dateigröße + 2 GB` Headroom (grob;
+   echte Familien-Zahlen mit `capability::image`, 3.4).
+
+**Alternativen:**
+- *Junction (Plan §D):* scheitert am Volume-Wechsel. Verworfen.
+- *Store auf `C:` unter die ComfyUI-Installation legen:* widerspricht ADR-012
+  (1,5 TB auf `E:`) und koppelt Store an Runtime-Version.
+- *Symlink:* braucht Admin / Developer Mode — ADR-002 will „kein
+  Sonderrechte-Setup".
+
+**Konsequenzen:**
+- (+) Funktioniert über Volumes, ohne Admin, ohne Junction-Reconciliation bei
+  jedem Neustart. ComfyUIs eigener, getesteter Weg.
+- (+) `core::link` bleibt für Runtimes *ohne* Config-Pfad-Feature (LM Studio) —
+  `strategy_for` liefert dort weiter `Junction`.
+- (−) Wer in ComfyUIs `models/`-Ordner schaut, sieht die Dateien nicht (nur die
+  Config kennt sie). Kosmetisch.
+- (−) Der TODO „echtes Junctionen gegen einen realen Konsumenten" bleibt offen —
+  ComfyUI war nicht der richtige Konsument dafür.
+
+---
+
 ## Offene Entscheidungen
 
 | # | Frage | Status |

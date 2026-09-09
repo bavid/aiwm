@@ -189,7 +189,28 @@ export const submitJob = (body: SubmitJobBody) => invoke<Job>("submit_job", { bo
 export const jobDetail = (id: string) => invoke<JobDetail | null>("job_detail", { id });
 
 export const listModels = () => invoke<Model[]>("list_models");
-export const importModel = (sourcePath: string, roles: string[], keepOriginal: boolean) =>
+
+/** What kind of file is being imported. `chat` → GGUF LLM for llama.cpp; the
+ *  rest are ComfyUI image models routed to their typed store folder. */
+export type ModelType =
+  | "chat"
+  | "checkpoint"
+  | "diffusion_model"
+  | "vae"
+  | "lora"
+  | "text_encoder";
+
+export const importModel = (
+  sourcePath: string,
+  roles: string[],
+  keepOriginal: boolean,
+  modelType: ModelType,
+) =>
   invoke<ImportOutcome>("import_model", {
-    request: { source_path: sourcePath, roles, keep_original: keepOriginal },
+    request: {
+      source_path: sourcePath,
+      roles,
+      keep_original: keepOriginal,
+      model_type: modelType,
+    },
   });

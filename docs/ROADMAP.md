@@ -82,16 +82,20 @@ funktioniert weiter.
 **Scheibenplan + Research: [PHASE_3_PLAN.md](PHASE_3_PLAN.md).** MVP = Text→Bild
 über eine gekapselte ComfyUI-Runtime (gepinnter Tag, `uv`-venv, genau ein
 Custom Node). SDXL zuerst (`Auto`-Default), Flux.1-dev-GGUF als zweites Template.
-Feste Workflow-JSON-Pipelines, Modell-Rollen-Auflösung, echte Junctions in den
-ComfyUI-`models/`-Ordner (endlich der reale Konsument für `core::link`), Galerie
-mit Prompt/Seed/Modell, Scheduler koordiniert LLM ↔ Diffusion ums VRAM-Budget.
+Feste Workflow-JSON-Pipelines, Modell-Rollen-Auflösung, getypter Bild-Store, den
+ComfyUI über sein natives `extra_model_paths.yaml` liest (Junctions überspannen
+keine Volumes — ADR-019), Galerie mit Prompt/Seed/Modell, Scheduler koordiniert
+LLM ↔ Diffusion ums VRAM-Budget.
 
 - [x] 3.1 `ComfyUiAdapter` — ein langlebiger, lazy gestarteter Server; Spawn/
   Health/Attach/`/free`, `aiwm-fake-comfy`-Fixture (ADR-018)
 - [x] 3.2 Installer — `uv` + Quelle + venv + torch(cu130) + deps + der eine
   Custom Node `city96/ComfyUI-GGUF` (`CmdRunner`-getestet, echter Smoke 70 s,
   `POST /runtimes/comfyui/install`, geteiltes `runtime::download`)
-- [ ] 3.3 echte Junctions in `<comfy>/models/`
+- [x] 3.3 Getypter Bild-Store `<store>/image/{checkpoints,diffusion_models,vae,
+  loras,text_encoders}/`; `ModelKind` + `import_model` nimmt `.safetensors`
+  (+ Pickle-Ablehnung), routet per Typ-Hint/Endung; ComfyUI-Zugriff über
+  `extra_model_paths.yaml` statt Junction (ADR-019); UI-Typ-Dropdown
 - [ ] 3.4 `capability::image` (feste Pipeline, `/prompt` → `/history` → `/view`)
 - [ ] 3.5 UI-Tab „Image" + Galerie
 - [ ] 3.6 Flux-Template + `IMAGE_MODELS.md`

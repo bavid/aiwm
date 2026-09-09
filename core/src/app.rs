@@ -68,6 +68,7 @@ impl App {
             ComfyDirs {
                 base: paths.comfyui_data_dir(),
                 output: paths.outputs_dir(),
+                models_store: config.store_path.clone(),
             },
         ));
         runtimes.register(comfyui.clone());

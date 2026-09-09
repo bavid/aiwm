@@ -11,8 +11,13 @@ hierher, damit nichts verloren geht.
   (Brief 10.16 → Phase-6-Download-Manager); alte `runtimes/llamacpp/<build>/`
   beim Versions-Bump aufräumen
 - ~~Windows: Junction vs. Hardlink für Modell-Dateien testen~~ → ✅ 2.3
-  (`core::link`, ADR-007). Offen: echtes Junctionen in einen Runtime-Ordner
-  gegen einen realen Konsumenten (ComfyUI, Phase 3)
+  (`core::link`, ADR-007). **Offen bleibt** die Verprobung von `Junction` gegen
+  einen realen Konsumenten: ComfyUI war es nicht — der Store liegt auf `E:`, die
+  ComfyUI-Install unter `%LOCALAPPDATA%` (`C:`), und NTFS-Junctions überspannen
+  keine Volumes. ComfyUI liest den Store stattdessen über
+  `extra_model_paths.yaml` (`LinkStrategy::ExtraPath`, 3.3 / ADR-019). Der
+  nächste Junction-Kandidat wäre ein LM-Studio-artiger Konsument auf derselben
+  Volume.
 - sqlx: optional compile-time Query-Checking (`sqlx::query!`) via
   `cargo sqlx prepare` + `.sqlx/` im Repo + CI-Schritt `--check` (aktuell
   Runtime-Queries)
@@ -59,6 +64,18 @@ hierher, damit nichts verloren geht.
 - ComfyUI cu130-torch: GPU-**Treiber**-Kompatibilität auf der echten 4080 Super
   verifizieren, sobald 3.4 ein Bild rendert (der 3.2a-Smoke prüft nur
   `import torch`, nicht die CUDA-Laufzeit). Fällt es aus → cu128/cu126-Pin.
+- `.safetensors`-Header-Inspektion (3.3 vertagt): der JSON-Header am Dateianfang
+  trägt Tensor-Namen/Shapes/dtype — daraus ließen sich Arch-Familie (SDXL/Flux/
+  SD3.5), Precision (fp16/fp8) und ein besserer VRAM-Estimate ableiten, statt
+  „Dateigröße + 2 GB". Braucht einen bounded Reader wie beim GGUF-Header. Bis
+  dahin verlässt sich der Import auf den Typ-Hint aus der UI + die Endung.
+- `import_model` (3.3): Bild-Modelle bekommen noch keine `model_roles`
+  (`base_diffusion`/`vae`/…). Nachziehen, sobald die `Auto`-Pipeline-Auflösung
+  in 3.4/3.6 sie braucht.
+- ComfyDirs (3.3): der Store-Pfad landet über `aiwm-model-paths.yaml` erst beim
+  **nächsten** ComfyUI-Start in der laufenden Runtime. Bei laufendem Server nach
+  einer Store-Pfad-Änderung wäre ein Neu-Schreiben + `POST /free` oder ein
+  Server-Neustart sauberer — für den MVP ok (Settings sagt „Neustart nötig").
 
 ## Vor Phase 5 (Agents)
 - Hermes Agent auf der echten Windows-Maschine: `bash -l`-Abhängigkeit

@@ -31,7 +31,7 @@ noch keine echte AI-Capability (die kommt ab Phase 2).
 | WP-9 | CI-Workflow, Git-Hooks (pre-commit fmt, pre-push voller Gate) |
 | WP-10 | ADRs finalisiert, Stub-Docs (MODELS/RUNTIMES/SECURITY/BENCHMARKS) |
 
-**185 Rust-Unit + 17 Integrationstests + 5 pytest** grün · `scripts/check.ps1` grün ·
+**195 Rust-Unit + 17 Integrationstests + 5 pytest** grün · `scripts/check.ps1` grün ·
 **null `unsafe`** im Produktivcode.
 
 **Phase 2 (MVP) ✅ abgeschlossen** — Scheiben 2.1–2.7 + durchgehender
@@ -49,6 +49,14 @@ Modell-Wechsel-Test (`core/tests/model_swap.rs`).
   hinter `CmdRunner` (unit-getestet), echter End-to-End-Smoke in 70 s.
   `POST /runtimes/comfyui/install` + „Set up"-Knopf. Geteiltes
   `runtime::download`-Modul.
+- **3.3** ✅ **Getypter Bild-Store**: `core::model::ModelKind`
+  (Checkpoint/Diffusion/VAE/LoRA/Text-Encoder), `import_model` nimmt
+  `.safetensors` und routet per Typ-Hint/Endung nach
+  `<store>/image/<typ>/`; `.ckpt`/`.bin`/`.pt` → Klartext-Ablehnung (Pickle).
+  ComfyUI liest den Store über sein natives `extra_model_paths.yaml`
+  (`LinkStrategy::ExtraPath` statt Junction — die überspannt keine Volumes,
+  ADR-019), bei jedem Server-Start neu geschrieben. UI-Import-Formular mit
+  Typ-Dropdown.
 
 - **2.1** ✅ `ModelRepo`, eigener bounded GGUF-Header-Reader, manueller Import in
   den kanonischen Store, UI-Tab „Models".

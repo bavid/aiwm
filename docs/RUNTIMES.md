@@ -27,9 +27,9 @@ genutzt.
 |---|---|---|
 | Fake | `FakeRuntimeAdapter` | ✅ vollständig (Tests) |
 | llama.cpp / llama-server | `LlamaCppAdapter` | ✅ Adapter (2.2a) + Installer (2.2b): Download/Verify/Entpacken des gepinnten CUDA-Builds |
-| ComfyUI | `ComfyUiAdapter` | ✅ Adapter (3.1) + Installer (3.2): `uv` + gepinnte Quelle + venv (Python 3.13) + torch(cu130) + `requirements.txt` + der eine Custom Node `city96/ComfyUI-GGUF`, `POST /runtimes/comfyui/install`. Offen: Junctions in `models/` (3.3), Bild-Job (3.4) |
+| ComfyUI | `ComfyUiAdapter` | ✅ Adapter (3.1) + Installer (3.2) + getypter Bild-Store via `extra_model_paths.yaml` (3.3, ADR-019). Offen: Bild-Job (3.4) |
 | Ollama | `OllamaAdapter` | optional, Phase 3+ (Duplikate transparent, ADR-006) |
-| LM Studio | — | vorerst nicht (proprietär, GUI-zentriert) |
+| LM Studio | — | vorerst nicht (proprietär, GUI-zentriert); wenn doch, `strategy_for` → `Junction` |
 
 ### `LlamaCppAdapter` (Stand 2.4a)
 
@@ -68,6 +68,29 @@ genutzt.
   Kein Junction/Kopie nötig; der Import verzeichnet den Zusammenhang in
   `model_links` (`GET /models` → `runtimes: ["llamacpp"]`).
 
+### `ComfyUiAdapter` (Stand 3.3)
+
+- **Ein langlebiger Server für alle Bild-Modelle** (nicht ein Prozess pro Modell
+  wie llama.cpp), lazy beim ersten `load_model` gestartet. `unload` =
+  `POST /free` (Server bleibt oben), nicht Stop. Details + Begründung: ADR-018.
+- **Modell-Zugriff (ADR-019):** kein Junction. Der Store ist getypt —
+  `<store>/image/{checkpoints,diffusion_models,vae,loras,text_encoders}/` — und
+  `ComfyDirs::ensure()` schreibt bei **jedem** Server-Start
+  `<comfyui-data>/aiwm-model-paths.yaml` (`base_path: <store>/image` + die fünf
+  Ordner-Mappings). `build_spawn_spec` hängt `--extra-model-paths-config <yaml>`
+  an. Ein geänderter Store-Pfad greift also beim nächsten Start ohne weiteres
+  Zutun. Grund für die Plan-Abweichung: NTFS-Junctions überspannen keine Volumes
+  (Store `E:`, ComfyUI-Install `C:`), ComfyUI hat `extra_model_paths.yaml` als
+  First-Class-Feature.
+- **Installer (3.2):** `runtime::comfyui::install`. `uv` (0.12.11) + gepinnte
+  Quelle (`v0.34.0`) + `uv venv` (Python 3.13) + torch `cu130` +
+  `requirements.txt` + der eine Custom Node `city96/ComfyUI-GGUF` (Commit
+  gepinnt). Die `uv`-Schritte laufen hinter dem `CmdRunner`-Trait (Fake im Test);
+  Downloads über das geteilte `runtime::download`. `POST
+  /runtimes/comfyui/install` (202) startet im Hintergrund; Fortschritt in `GET
+  /runtimes` → `detail`. `offline_mode` = Hard-Refusal. Idempotent (`venv_python`
+  + `main.py` + `<node>/__init__.py`).
+
 ## Link-Manager (`core::link`, ADR-007)
 
 `materialize(canonical_file, dest, strategy) -> PathBuf` macht die kanonische
@@ -75,14 +98,20 @@ Datei für eine Runtime erreichbar und gibt den zu ladenden Pfad zurück:
 
 | Strategy | Wie | Für |
 |---|---|---|
-| `Passthrough` | nichts (kanonischer Pfad) | llama.cpp |
-| `Junction` | NTFS-Directory-Reparse-Point (`junction`-Crate, kein Admin, gleiche Volume) | ComfyUI, LM Studio |
+| `Passthrough` | nichts (kanonischer Pfad) | llama.cpp (`-m <store-datei>`) |
+| `ExtraPath` | nichts (No-Op); der Store-Ordner steht in ComfyUIs `extra_model_paths.yaml` | ComfyUI (ADR-019) |
+| `Junction` | NTFS-Directory-Reparse-Point (`junction`-Crate, kein Admin, gleiche Volume) | LM Studio o. Ä. (noch kein realer Konsument) |
 | `Hardlink` | `std::fs::hard_link`, nur gleiche Volume | Sonderfälle |
 | `Copy` | echte Kopie | Ollama (content-addressed Store) |
 
+`strategy_for(runtime_id, _)`: `"llamacpp"` → `Passthrough`, `"comfyui"` →
+`ExtraPath`, `"ollama"` → `Copy`, alles andere → `Junction`.
+
 `dematerialize` hebt den Link auf, ohne die Store-Datei zu berühren. Alle
-Operationen idempotent. In Phase 2 nur `Passthrough` aktiv; der Rest ist gebaut +
-getestet für Phase 3.
+Operationen idempotent. Aktiv: `Passthrough` (Phase 2) + `ExtraPath` (3.3).
+`Junction`/`Hardlink`/`Copy` sind gebaut + getestet, aber noch ohne realen
+Konsumenten — die Junction-Verprobung gegen eine echte Runtime bleibt offen
+(ComfyUI war wegen der Volume-Grenze nicht der richtige Kandidat).
 
 ## Manage-first (ADR-002)
 
@@ -105,10 +134,15 @@ geht der Job auf `blocked` mit Klartext-`error_text`
 
 - ~~llama.cpp: gepinnte Version + Bezugsquelle des Windows-CUDA-Builds~~ →
   ✅ umgesetzt (2.2b, ADR-014)
-- ComfyUI: minimale getestete Custom-Node-Menge (Custom Nodes = beliebiger Code)
-- `uv`-verwaltete venv pro Runtime; gebündelte CUDA-Runtime statt System-CUDA
+- ~~ComfyUI: minimale getestete Custom-Node-Menge~~ → ✅ genau einer,
+  `city96/ComfyUI-GGUF`, Commit gepinnt (3.2b)
+- ~~`uv`-verwaltete venv pro Runtime; gebündelte CUDA-Runtime statt System-CUDA~~
+  → ✅ ComfyUI-Installer (3.2): `uv venv` + torch `cu130`. cu130-Treiber-Bedarf
+  auf einer frischen Maschine gegen den echten Server verproben → 3.4
 - Health-Endpunkte + Modell-Load/Unload-APIs je Runtime — llama-server: `/health`,
   `/props`, `/completion`, `/v1/chat/completions`; **Router-Mode** (ein Server,
   mehrere Modelle, `?autoload=`) neu — als spätere Optimierung notiert
-- Shared Model Cache: welche Runtimes können dieselbe Datei via Junction nutzen
-  (llama.cpp/LM Studio/ComfyUI ja; Ollama nein — siehe [ANALYSIS.md](ANALYSIS.md) §1.3)
+- ~~Shared Model Cache: welche Runtimes können dieselbe Datei via Junction
+  nutzen~~ → ComfyUI liest den Store über `extra_model_paths.yaml` (ADR-019),
+  nicht via Junction (Volume-Grenze). Junction bleibt für LM-Studio-artige
+  Konsumenten reserviert. Ollama: Kopie (siehe [ANALYSIS.md](ANALYSIS.md) §1.3)
