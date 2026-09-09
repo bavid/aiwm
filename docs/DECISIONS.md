@@ -504,11 +504,13 @@ passt hier nicht.
 - *`comfy-cli` als Laufzeit-Tool*: eigenes Pip-Tool, eigener Env-Zustand — wir
   kontrollieren die venv selbst (3.2), wie bei llama.cpp die Binärdatei.
 
-**Installer (3.2a) — eigene `uv`-getriebene Pipeline statt `comfy-cli`.**
+**Installer (3.2) — eigene `uv`-getriebene Pipeline statt `comfy-cli`.**
 - **Weg:** `uv` als einzelne verifizierte Static-Binary bootstrappen →
-  ComfyUI-Quelle am gepinnten Tag (verifiziertes GitHub-`.zip`) → `uv venv
-  --python 3.13` (lädt Python) → `uv pip install torch … --index-url cu130` →
-  `uv pip install -r requirements.txt`. Alles unter
+  ComfyUI-Quelle am gepinnten Tag (verifiziertes GitHub-`.zip`) →
+  `city96/ComfyUI-GGUF` an einem gepinnten Commit (verifiziertes `.zip` →
+  `custom_nodes/`) → `uv venv --python 3.13` (lädt Python) → `uv pip install
+  torch … --index-url cu130` → `uv pip install -r requirements.txt` → `uv pip
+  install -r <node>/requirements.txt`. Alles unter
   `<local_root>/runtimes/comfyui/`, „Repair" = löschen. Die `uv`-Subprozess-
   Schritte hinter einem `CmdRunner`-Trait, damit die Orchestrierung ohne echtes
   Python unit-testbar ist.

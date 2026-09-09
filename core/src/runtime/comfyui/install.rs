@@ -19,19 +19,30 @@ use super::RUNTIME_ID;
 
 /// Pinned ComfyUI release tag. Bump together with [`COMFYUI_SRC`] below.
 pub const PINNED_TAG: &str = "v0.34.0";
-/// Pinned `uv` (astral-sh) version — a single static binary.
-pub const UV_VERSION: &str = "0.12.11";
 /// Python the venv is built with (`uv venv --python` downloads it).
 const PYTHON_VERSION: &str = "3.13";
 /// PyTorch wheel index — CUDA 13.0, ComfyUI's current recommendation for
 /// RTX 20-series and newer. Needs a recent NVIDIA driver.
 const TORCH_INDEX_URL: &str = "https://download.pytorch.org/whl/cu130";
 
-const UV_RELEASE_BASE: &str = "https://github.com/astral-sh/uv/releases/download";
+/// Pinned `uv` (astral-sh) — a single static binary, `0.12.11`. Bump this URL
+/// together with [`UV_ARCHIVE`]'s digest + size.
+const UV_RELEASE_BASE: &str = "https://github.com/astral-sh/uv/releases/download/0.12.11";
 const COMFYUI_ARCHIVE_BASE: &str = "https://github.com/comfyanonymous/ComfyUI/archive/refs/tags";
+const GGUF_ARCHIVE_BASE: &str = "https://github.com/city96/ComfyUI-GGUF/archive";
 
-/// `uv-x86_64-pc-windows-msvc.zip` for [`UV_VERSION`]. SHA-256 from the release's
-/// published `.sha256` sidecar; size from the release asset.
+/// The one custom node we ship (ADR-018): GGUF quantization support, needed to
+/// run Flux / SD3.5 on 16 GB. Pinned to a commit — the repo has no tags — and
+/// the archive SHA-256 we computed. Same caveat as [`COMFYUI_SRC`].
+const GGUF_NODE_DIR: &str = "ComfyUI-GGUF";
+const GGUF_NODE_ARCHIVE: Archive<'static> = Archive {
+    name: "6ea2651e7df66d7585f6ffee804b20e92fb38b8a.zip",
+    sha256: "aad273a0b774684285b4496f6edff7e2293bd29d71ef89926d6861bfdf4947ac",
+    size: 38_051,
+};
+
+/// `uv-x86_64-pc-windows-msvc.zip` for [`UV_RELEASE_BASE`]. SHA-256 from the
+/// release's published `.sha256` sidecar; size from the release asset.
 const UV_ARCHIVE: Archive<'static> = Archive {
     name: "uv-x86_64-pc-windows-msvc.zip",
     sha256: "e94225dea91e051472847bd6d146d7d66c4f54ffcd1f106678866a99580845f9",
@@ -75,6 +86,12 @@ fn venv_python(runtimes_dir: &Path) -> PathBuf {
     comfy_home(runtimes_dir).join(VENV_PYTHON)
 }
 
+fn gguf_node_dir(runtimes_dir: &Path) -> PathBuf {
+    comfy_home(runtimes_dir)
+        .join("custom_nodes")
+        .join(GGUF_NODE_DIR)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum InstallPhase {
@@ -83,11 +100,13 @@ pub enum InstallPhase {
     CreatingVenv,
     InstallingTorch,
     InstallingDeps,
+    InstallingNode,
 }
 
 /// Bytes to fetch for the toolchain — surfaced in the UI. The venv build adds
 /// gigabytes of wheels whose size we cannot know up front.
-pub const TOOLCHAIN_DOWNLOAD_BYTES: u64 = UV_ARCHIVE.size + COMFYUI_SRC.size;
+pub const TOOLCHAIN_DOWNLOAD_BYTES: u64 =
+    UV_ARCHIVE.size + COMFYUI_SRC.size + GGUF_NODE_ARCHIVE.size;
 
 // --- subprocess boundary ----------------------------------------------------
 
@@ -138,6 +157,26 @@ impl CmdRunner for SystemRunner {
 
 // --- the installer --------------------------------------------------------
 
+/// The pinned archives + their base URLs. Bundled so the pipeline functions
+/// stay readable; tests substitute a local server.
+struct FetchSpec<'a> {
+    uv_base: &'a str,
+    comfy_base: &'a str,
+    gguf_base: &'a str,
+    uv: &'a Archive<'a>,
+    comfy: &'a Archive<'a>,
+    gguf: &'a Archive<'a>,
+}
+
+const PINNED_SPEC: FetchSpec<'static> = FetchSpec {
+    uv_base: UV_RELEASE_BASE,
+    comfy_base: COMFYUI_ARCHIVE_BASE,
+    gguf_base: GGUF_ARCHIVE_BASE,
+    uv: &UV_ARCHIVE,
+    comfy: &COMFYUI_SRC,
+    gguf: &GGUF_NODE_ARCHIVE,
+};
+
 /// Install the pinned ComfyUI into `runtimes_dir`. Idempotent — a complete
 /// existing install returns immediately. `on_progress` gets
 /// `(phase, done_bytes, total_bytes)` for the download phases; the `uv` phases
@@ -151,28 +190,14 @@ pub async fn install<F>(
 where
     F: Fn(InstallPhase, u64, u64) + Send + Sync,
 {
-    install_with(
-        runtimes_dir,
-        offline,
-        runner,
-        &format!("{UV_RELEASE_BASE}/{UV_VERSION}"),
-        COMFYUI_ARCHIVE_BASE,
-        &UV_ARCHIVE,
-        &COMFYUI_SRC,
-        on_progress,
-    )
-    .await
+    install_with(runtimes_dir, offline, runner, &PINNED_SPEC, on_progress).await
 }
 
-#[allow(clippy::too_many_arguments)]
 async fn install_with<F>(
     runtimes_dir: &Path,
     offline: bool,
     runner: &dyn CmdRunner,
-    uv_base: &str,
-    comfy_base: &str,
-    uv_archive: &Archive<'_>,
-    comfy_archive: &Archive<'_>,
+    spec: &FetchSpec<'_>,
     on_progress: F,
 ) -> Result<()>
 where
@@ -182,8 +207,9 @@ where
     let uv = uv_bin(runtimes_dir);
     let home = comfy_home(runtimes_dir);
     let py = venv_python(runtimes_dir);
+    let node_marker = gguf_node_dir(runtimes_dir).join("__init__.py");
 
-    if py.is_file() && home.join("main.py").is_file() {
+    if py.is_file() && home.join("main.py").is_file() && node_marker.is_file() {
         return Ok(()); // already installed
     }
     if offline {
@@ -194,37 +220,35 @@ where
         ));
     }
 
-    fetch_toolchain(
+    fetch_sources(
         &root,
         &uv,
         &home,
-        uv_base,
-        comfy_base,
-        uv_archive,
-        comfy_archive,
+        gguf_node_dir(runtimes_dir).as_path(),
+        spec,
         &on_progress,
     )
     .await?;
     build_venv(&root, &uv, &home, &py, runner, &on_progress).await?;
 
-    if !py.is_file() {
+    if !py.is_file() || !node_marker.is_file() {
         return Err(comfy_install_err(
-            "install finished but the venv python is missing — the uv steps did not complete",
+            "install finished but the venv python or the GGUF node is missing — the steps \
+             did not complete",
         ));
     }
     tracing::info!(tag = PINNED_TAG, home = %home.display(), "ComfyUI installed");
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
-async fn fetch_toolchain<F>(
+/// Fetch + unpack the three verified archives: `uv`, the ComfyUI source, and the
+/// pinned GGUF node.
+async fn fetch_sources<F>(
     root: &Path,
     uv: &Path,
     home: &Path,
-    uv_base: &str,
-    comfy_base: &str,
-    uv_archive: &Archive<'_>,
-    comfy_archive: &Archive<'_>,
+    node_dir: &Path,
+    spec: &FetchSpec<'_>,
     on_progress: &F,
 ) -> Result<()>
 where
@@ -235,36 +259,50 @@ where
     tokio::fs::create_dir_all(&staging)
         .await
         .map_err(|e| comfy_install_err(format!("create {}: {e}", staging.display())))?;
-    let total = uv_archive.size + comfy_archive.size;
+    let total = spec.uv.size + spec.comfy.size + spec.gguf.size;
+    let mut done = 0u64;
 
     if !uv.is_file() {
-        let zip = staging.join(uv_archive.name);
+        let zip = staging.join(spec.uv.name);
         download_verified(
-            &format!("{uv_base}/{}", uv_archive.name),
-            uv_archive,
+            &format!("{}/{}", spec.uv_base, spec.uv.name),
+            spec.uv,
             &zip,
             |n| {
-                on_progress(InstallPhase::Downloading, n, total);
+                on_progress(InstallPhase::Downloading, done + n, total);
             },
         )
         .await?;
-        on_progress(InstallPhase::Extracting, uv_archive.size, total);
         extract_zip(&zip, &root.join("uv")).await?;
     }
+    done += spec.uv.size;
 
     if !home.join("main.py").is_file() {
-        let zip = staging.join(comfy_archive.name);
+        let zip = staging.join(spec.comfy.name);
         download_verified(
-            &format!("{comfy_base}/{}", comfy_archive.name),
-            comfy_archive,
+            &format!("{}/{}", spec.comfy_base, spec.comfy.name),
+            spec.comfy,
             &zip,
-            |n| on_progress(InstallPhase::Downloading, uv_archive.size + n, total),
+            |n| on_progress(InstallPhase::Downloading, done + n, total),
         )
         .await?;
-        on_progress(InstallPhase::Extracting, total, total);
         extract_zip_flat(&zip, home).await?;
     }
+    done += spec.comfy.size;
 
+    if !node_dir.join("__init__.py").is_file() {
+        let zip = staging.join(spec.gguf.name);
+        download_verified(
+            &format!("{}/{}", spec.gguf_base, spec.gguf.name),
+            spec.gguf,
+            &zip,
+            |n| on_progress(InstallPhase::Downloading, done + n, total),
+        )
+        .await?;
+        extract_zip_flat(&zip, node_dir).await?;
+    }
+
+    on_progress(InstallPhase::Extracting, total, total);
     let _ = tokio::fs::remove_dir_all(&staging).await;
     Ok(())
 }
@@ -288,12 +326,14 @@ where
         ("UV_CACHE_DIR", cache_dir.as_str()),
         ("UV_NO_PROGRESS", "1"),
     ];
-    let venv = home.join(".venv");
-    let (venv_s, home_s, reqs_s) = (
-        venv.to_string_lossy().into_owned(),
-        home.to_string_lossy().into_owned(),
-        home.join("requirements.txt").to_string_lossy().into_owned(),
-    );
+    let venv_s = home.join(".venv").to_string_lossy().into_owned();
+    let reqs_s = home.join("requirements.txt").to_string_lossy().into_owned();
+    let node_reqs_s = home
+        .join("custom_nodes")
+        .join(GGUF_NODE_DIR)
+        .join("requirements.txt")
+        .to_string_lossy()
+        .into_owned();
     let py_s = py.to_string_lossy().into_owned();
 
     if !py.is_file() {
@@ -304,23 +344,18 @@ where
     }
 
     on_progress(InstallPhase::InstallingTorch, 0, 0);
-    runner
-        .run(
-            uv,
-            &[
-                "pip",
-                "install",
-                "--python",
-                &py_s,
-                "--index-url",
-                TORCH_INDEX_URL,
-                "torch",
-                "torchvision",
-                "torchaudio",
-            ],
-            &env,
-        )
-        .await?;
+    let torch = &[
+        "pip",
+        "install",
+        "--python",
+        &py_s,
+        "--index-url",
+        TORCH_INDEX_URL,
+        "torch",
+        "torchvision",
+        "torchaudio",
+    ];
+    runner.run(uv, torch, &env).await?;
 
     on_progress(InstallPhase::InstallingDeps, 0, 0);
     runner
@@ -331,7 +366,15 @@ where
         )
         .await?;
 
-    let _ = home_s; // reserved for the custom-node step in 3.2b
+    on_progress(InstallPhase::InstallingNode, 0, 0);
+    runner
+        .run(
+            uv,
+            &["pip", "install", "--python", &py_s, "-r", &node_reqs_s],
+            &env,
+        )
+        .await?;
+
     Ok(())
 }
 
@@ -381,128 +424,7 @@ mod tests {
         }
     }
 
-    fn archives(uv_zip: &[u8], src_zip: &[u8]) -> (String, String) {
-        (hex(&Sha256::digest(uv_zip)), hex(&Sha256::digest(src_zip)))
-    }
-
-    async fn serve(uv_zip: Vec<u8>, src_zip: Vec<u8>) -> u16 {
-        let app = Router::new()
-            .route(
-                "/uv/uv.zip",
-                get(move || {
-                    let b = uv_zip.clone();
-                    async move { Body::from(b) }
-                }),
-            )
-            .route(
-                "/src/comfy.zip",
-                get(move || {
-                    let b = src_zip.clone();
-                    async move { Body::from(b) }
-                }),
-            );
-        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
-            .await
-            .unwrap();
-        let port = listener.local_addr().unwrap().port();
-        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-        port
-    }
-
-    #[tokio::test]
-    async fn refuses_in_offline_mode() {
-        let tmp = tempfile::tempdir().unwrap();
-        let err = install(tmp.path(), true, &RecordingRunner::default(), |_, _, _| {})
-            .await
-            .unwrap_err();
-        assert!(err.to_string().contains("offline mode"));
-    }
-
-    #[tokio::test]
-    async fn idempotent_when_already_installed() {
-        let tmp = tempfile::tempdir().unwrap();
-        let py = venv_python(tmp.path());
-        std::fs::create_dir_all(py.parent().unwrap()).unwrap();
-        std::fs::write(&py, b"py").unwrap();
-        std::fs::write(comfy_home(tmp.path()).join("main.py"), b"# comfy").unwrap();
-
-        let runner = RecordingRunner::default();
-        install(tmp.path(), true, &runner, |_, _, _| {})
-            .await
-            .unwrap();
-        assert!(runner.calls.lock().unwrap().is_empty(), "nothing to do");
-    }
-
-    #[tokio::test]
-    async fn full_install_fetches_then_runs_the_uv_steps_in_order() {
-        let uv_zip = make_zip(&[("uv.exe", b"MZ uv")]);
-        let src_zip = make_zip(&[
-            ("ComfyUI-0.34.0/main.py", b"# comfy"),
-            ("ComfyUI-0.34.0/requirements.txt", b"torch\ntorchsde\n"),
-        ]);
-        let (uv_sha, src_sha) = archives(&uv_zip, &src_zip);
-        let port = serve(uv_zip.clone(), src_zip.clone()).await;
-
-        let uv_archive = Archive {
-            name: "uv.zip",
-            sha256: &uv_sha,
-            size: uv_zip.len() as u64,
-        };
-        let src_archive = Archive {
-            name: "comfy.zip",
-            sha256: &src_sha,
-            size: src_zip.len() as u64,
-        };
-
-        let tmp = tempfile::tempdir().unwrap();
-        // The fake runner does not create the venv python, so add it after the
-        // "venv" call would have run — emulate by pre-creating it before deps.
-        let runner = VenvCreatingRunner {
-            py: venv_python(tmp.path()),
-            calls: Mutex::new(Vec::new()),
-        };
-        let phases: Mutex<Vec<InstallPhase>> = Mutex::new(Vec::new());
-
-        install_with(
-            tmp.path(),
-            false,
-            &runner,
-            &format!("http://127.0.0.1:{port}/uv"),
-            &format!("http://127.0.0.1:{port}/src"),
-            &uv_archive,
-            &src_archive,
-            |p, _, _| phases.lock().unwrap().push(p),
-        )
-        .await
-        .unwrap();
-
-        assert_eq!(std::fs::read(uv_bin(tmp.path())).unwrap(), b"MZ uv");
-        assert!(comfy_home(tmp.path()).join("main.py").is_file());
-
-        let calls = runner.calls.into_inner().unwrap();
-        assert_eq!(calls.len(), 3, "venv, torch, requirements: {calls:?}");
-        assert_eq!(calls[0][0], "venv");
-        assert!(
-            calls[1].contains(&"--index-url".to_string())
-                && calls[1].contains(&"torch".to_string())
-        );
-        assert!(calls[2].contains(&"-r".to_string()));
-
-        let phases = phases.into_inner().unwrap();
-        for expected in [
-            InstallPhase::Extracting,
-            InstallPhase::CreatingVenv,
-            InstallPhase::InstallingTorch,
-            InstallPhase::InstallingDeps,
-        ] {
-            assert!(
-                phases.contains(&expected),
-                "missing {expected:?} in {phases:?}"
-            );
-        }
-    }
-
-    /// Like [`RecordingRunner`] but drops a fake venv python on the first call,
+    /// Like [`RecordingRunner`] but drops a fake venv python on the `venv` call,
     /// so the "already there?" guards in `build_venv` behave.
     struct VenvCreatingRunner {
         py: PathBuf,
@@ -524,68 +446,237 @@ mod tests {
         }
     }
 
+    fn sha(b: &[u8]) -> String {
+        hex(&Sha256::digest(b))
+    }
+
+    struct Fixtures {
+        port: u16,
+        uv_zip: Vec<u8>,
+        src_zip: Vec<u8>,
+        node_zip: Vec<u8>,
+        uv_sha: String,
+        src_sha: String,
+        node_sha: String,
+    }
+
+    impl Fixtures {
+        /// The three archives, served from one local server. `src`/`node`
+        /// contents can be overridden (`None` = a valid minimal one).
+        async fn serve(src_body: Option<Vec<u8>>, node_body: Option<Vec<u8>>) -> Self {
+            let uv_zip = make_zip(&[("uv.exe", b"MZ uv")]);
+            let src_zip = src_body.unwrap_or_else(|| {
+                make_zip(&[
+                    ("ComfyUI-0.34.0/main.py", b"# comfy"),
+                    ("ComfyUI-0.34.0/requirements.txt", b"torch\ntorchsde\n"),
+                ])
+            });
+            let node_zip = node_body.unwrap_or_else(|| {
+                make_zip(&[
+                    ("ComfyUI-GGUF-abc/__init__.py", b"NODE_CLASS_MAPPINGS = {}"),
+                    ("ComfyUI-GGUF-abc/requirements.txt", b"gguf>=0.13.0\n"),
+                ])
+            });
+            let (u, s, n) = (uv_zip.clone(), src_zip.clone(), node_zip.clone());
+            let app = Router::new()
+                .route(
+                    "/uv/uv.zip",
+                    get(move || {
+                        let b = u.clone();
+                        async move { Body::from(b) }
+                    }),
+                )
+                .route(
+                    "/src/comfy.zip",
+                    get(move || {
+                        let b = s.clone();
+                        async move { Body::from(b) }
+                    }),
+                )
+                .route(
+                    "/node/gguf.zip",
+                    get(move || {
+                        let b = n.clone();
+                        async move { Body::from(b) }
+                    }),
+                );
+            let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+                .await
+                .unwrap();
+            let port = listener.local_addr().unwrap().port();
+            tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+            Self {
+                port,
+                uv_sha: sha(&uv_zip),
+                src_sha: sha(&src_zip),
+                node_sha: sha(&node_zip),
+                uv_zip,
+                src_zip,
+                node_zip,
+            }
+        }
+
+        fn spec(&self) -> (String, String, String, [Archive<'_>; 3]) {
+            let (ub, cb, nb) = (
+                format!("http://127.0.0.1:{}/uv", self.port),
+                format!("http://127.0.0.1:{}/src", self.port),
+                format!("http://127.0.0.1:{}/node", self.port),
+            );
+            let archives = [
+                Archive {
+                    name: "uv.zip",
+                    sha256: &self.uv_sha,
+                    size: self.uv_zip.len() as u64,
+                },
+                Archive {
+                    name: "comfy.zip",
+                    sha256: &self.src_sha,
+                    size: self.src_zip.len() as u64,
+                },
+                Archive {
+                    name: "gguf.zip",
+                    sha256: &self.node_sha,
+                    size: self.node_zip.len() as u64,
+                },
+            ];
+            (ub, cb, nb, archives)
+        }
+    }
+
+    async fn run_install_with<F>(
+        fx: &Fixtures,
+        tmp: &Path,
+        runner: &dyn CmdRunner,
+        on_progress: F,
+    ) -> Result<()>
+    where
+        F: Fn(InstallPhase, u64, u64) + Send + Sync,
+    {
+        let (ub, cb, nb, a) = fx.spec();
+        let spec = FetchSpec {
+            uv_base: &ub,
+            comfy_base: &cb,
+            gguf_base: &nb,
+            uv: &a[0],
+            comfy: &a[1],
+            gguf: &a[2],
+        };
+        install_with(tmp, false, runner, &spec, on_progress).await
+    }
+
+    #[tokio::test]
+    async fn refuses_in_offline_mode() {
+        let tmp = tempfile::tempdir().unwrap();
+        let err = install(tmp.path(), true, &RecordingRunner::default(), |_, _, _| {})
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("offline mode"));
+    }
+
+    #[tokio::test]
+    async fn idempotent_when_already_installed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let py = venv_python(tmp.path());
+        std::fs::create_dir_all(py.parent().unwrap()).unwrap();
+        std::fs::write(&py, b"py").unwrap();
+        std::fs::write(comfy_home(tmp.path()).join("main.py"), b"# comfy").unwrap();
+        std::fs::create_dir_all(gguf_node_dir(tmp.path())).unwrap();
+        std::fs::write(gguf_node_dir(tmp.path()).join("__init__.py"), b"x").unwrap();
+
+        let runner = RecordingRunner::default();
+        install(tmp.path(), true, &runner, |_, _, _| {})
+            .await
+            .unwrap();
+        assert!(runner.calls.lock().unwrap().is_empty(), "nothing to do");
+    }
+
+    #[tokio::test]
+    async fn full_install_fetches_all_three_then_runs_the_uv_steps_in_order() {
+        let fx = Fixtures::serve(None, None).await;
+        let tmp = tempfile::tempdir().unwrap();
+        let runner = VenvCreatingRunner {
+            py: venv_python(tmp.path()),
+            calls: Mutex::new(Vec::new()),
+        };
+        let phases: Mutex<Vec<InstallPhase>> = Mutex::new(Vec::new());
+
+        run_install_with(&fx, tmp.path(), &runner, |p, _, _| {
+            phases.lock().unwrap().push(p)
+        })
+        .await
+        .unwrap();
+
+        assert_eq!(std::fs::read(uv_bin(tmp.path())).unwrap(), b"MZ uv");
+        assert!(comfy_home(tmp.path()).join("main.py").is_file());
+        assert!(gguf_node_dir(tmp.path()).join("__init__.py").is_file());
+        assert!(
+            !gguf_node_dir(tmp.path()).join("ComfyUI-GGUF-abc").exists(),
+            "flattened"
+        );
+
+        let calls = runner.calls.into_inner().unwrap();
+        assert_eq!(calls.len(), 4, "venv, torch, requirements, node: {calls:?}");
+        assert_eq!(calls[0][0], "venv");
+        assert!(
+            calls[1].contains(&"--index-url".to_string())
+                && calls[1].contains(&"torch".to_string())
+        );
+        assert!(calls[2].last().unwrap().ends_with("requirements.txt"));
+        assert!(calls[3]
+            .last()
+            .unwrap()
+            .replace('\\', "/")
+            .ends_with("custom_nodes/ComfyUI-GGUF/requirements.txt"));
+
+        let phases = phases.into_inner().unwrap();
+        for expected in [
+            InstallPhase::Extracting,
+            InstallPhase::CreatingVenv,
+            InstallPhase::InstallingTorch,
+            InstallPhase::InstallingDeps,
+            InstallPhase::InstallingNode,
+        ] {
+            assert!(
+                phases.contains(&expected),
+                "missing {expected:?} in {phases:?}"
+            );
+        }
+    }
+
     #[tokio::test]
     async fn a_failing_uv_step_surfaces_the_error() {
-        let uv_zip = make_zip(&[("uv.exe", b"MZ")]);
-        let src_zip = make_zip(&[
-            ("ComfyUI-0.34.0/main.py", b"x"),
-            ("ComfyUI-0.34.0/requirements.txt", b"t"),
-        ]);
-        let (uv_sha, src_sha) = archives(&uv_zip, &src_zip);
-        let port = serve(uv_zip.clone(), src_zip.clone()).await;
+        let fx = Fixtures::serve(None, None).await;
         let tmp = tempfile::tempdir().unwrap();
-
-        let err = install_with(
-            tmp.path(),
-            false,
-            &FailingRunner,
-            &format!("http://127.0.0.1:{port}/uv"),
-            &format!("http://127.0.0.1:{port}/src"),
-            &Archive {
-                name: "uv.zip",
-                sha256: &uv_sha,
-                size: uv_zip.len() as u64,
-            },
-            &Archive {
-                name: "comfy.zip",
-                sha256: &src_sha,
-                size: src_zip.len() as u64,
-            },
-            |_, _, _| {},
-        )
-        .await
-        .unwrap_err();
+        let err = run_install_with(&fx, tmp.path(), &FailingRunner, |_, _, _| {})
+            .await
+            .unwrap_err();
         assert!(err.to_string().contains("boom running uv"));
     }
 
     #[tokio::test]
     async fn a_bad_source_hash_aborts_before_the_uv_steps() {
-        let uv_zip = make_zip(&[("uv.exe", b"MZ")]);
-        let (uv_sha, _) = archives(&uv_zip, b"");
-        let port = serve(uv_zip.clone(), b"corrupt".to_vec()).await;
+        let fx = Fixtures::serve(Some(b"corrupt".to_vec()), None).await;
         let tmp = tempfile::tempdir().unwrap();
         let runner = RecordingRunner::default();
 
-        let err = install_with(
-            tmp.path(),
-            false,
-            &runner,
-            &format!("http://127.0.0.1:{port}/uv"),
-            &format!("http://127.0.0.1:{port}/src"),
-            &Archive {
-                name: "uv.zip",
-                sha256: &uv_sha,
-                size: uv_zip.len() as u64,
-            },
-            &Archive {
+        // Override the source sha to a wrong one.
+        let (ub, cb, nb, a) = fx.spec();
+        let spec = FetchSpec {
+            uv_base: &ub,
+            comfy_base: &cb,
+            gguf_base: &nb,
+            uv: &a[0],
+            comfy: &Archive {
                 name: "comfy.zip",
                 sha256: "0000000000000000000000000000000000000000000000000000000000000000",
                 size: 7,
             },
-            |_, _, _| {},
-        )
-        .await
-        .unwrap_err();
+            gguf: &a[2],
+        };
+        let err = install_with(tmp.path(), false, &runner, &spec, |_, _, _| {})
+            .await
+            .unwrap_err();
         assert!(err.to_string().contains("SHA-256 mismatch"));
         assert!(runner.calls.lock().unwrap().is_empty(), "no uv steps ran");
         assert!(uv_bin(tmp.path()).is_file(), "uv still landed");
@@ -607,14 +698,16 @@ mod tests {
         let home = comfy_home(tmp.path());
         assert!(venv_python(tmp.path()).is_file());
         assert!(home.join("main.py").is_file());
-        // torch imports (proves the wheel + Python match; not the GPU driver).
+        assert!(gguf_node_dir(tmp.path()).join("__init__.py").is_file());
+        // torch + the node's `gguf` dep both import (proves the wheels + Python
+        // match; not the GPU driver — that waits for a real render in 3.4).
         SystemRunner
             .run(
                 &venv_python(tmp.path()),
-                &["-c", "import torch, sys; print(torch.__version__)"],
+                &["-c", "import torch, gguf; print('ok', torch.__version__)"],
                 &[],
             )
             .await
-            .expect("torch should import in the fresh venv");
+            .expect("torch and gguf should import in the fresh venv");
     }
 }

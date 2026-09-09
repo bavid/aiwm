@@ -27,7 +27,7 @@ genutzt.
 |---|---|---|
 | Fake | `FakeRuntimeAdapter` | ✅ vollständig (Tests) |
 | llama.cpp / llama-server | `LlamaCppAdapter` | ✅ Adapter (2.2a) + Installer (2.2b): Download/Verify/Entpacken des gepinnten CUDA-Builds |
-| ComfyUI | `ComfyUiAdapter` | ✅ Adapter (3.1) + Installer-Kern (3.2a): `uv` + gepinnte Quelle + venv + torch(cu130) + `requirements.txt`, `POST /runtimes/comfyui/install`. Offen: 1 Custom Node (3.2b), Bild-Job (3.4) |
+| ComfyUI | `ComfyUiAdapter` | ✅ Adapter (3.1) + Installer (3.2): `uv` + gepinnte Quelle + venv (Python 3.13) + torch(cu130) + `requirements.txt` + der eine Custom Node `city96/ComfyUI-GGUF`, `POST /runtimes/comfyui/install`. Offen: Junctions in `models/` (3.3), Bild-Job (3.4) |
 | Ollama | `OllamaAdapter` | optional, Phase 3+ (Duplikate transparent, ADR-006) |
 | LM Studio | — | vorerst nicht (proprietär, GUI-zentriert) |
 

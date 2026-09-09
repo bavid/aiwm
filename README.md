@@ -43,10 +43,11 @@ Modell-Wechsel-Test (`core/tests/model_swap.rs`).
   Server (`RuntimeAdapter`): Spawn/Health (`/system_stats`) über
   `RuntimeSupervisor`, Attach-Fallback, `unload` = `POST /free` (Server bleibt
   oben), `aiwm-fake-comfy`-Fixture (ADR-018).
-- **3.2a** ✅ ComfyUI-**Installer**: `uv` bootstrappen (verifiziert) → Quelle am
-  gepinnten Tag → `uv venv` (Python 3.13) → torch (cu130) + `requirements.txt`;
-  `uv`-Schritte hinter `CmdRunner` (unit-getestet), echter End-to-End-Smoke in
-  73 s. `POST /runtimes/comfyui/install` + „Set up"-Knopf. Geteiltes
+- **3.2** ✅ ComfyUI-**Installer**: `uv` bootstrappen (verifiziert) → Quelle am
+  gepinnten Tag → `uv venv` (Python 3.13) → torch (cu130) + `requirements.txt` +
+  der eine Custom Node `city96/ComfyUI-GGUF` (gepinnter Commit); `uv`-Schritte
+  hinter `CmdRunner` (unit-getestet), echter End-to-End-Smoke in 70 s.
+  `POST /runtimes/comfyui/install` + „Set up"-Knopf. Geteiltes
   `runtime::download`-Modul.
 
 - **2.1** ✅ `ModelRepo`, eigener bounded GGUF-Header-Reader, manueller Import in

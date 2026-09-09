@@ -14,7 +14,7 @@ manuelles Eingreifen → Netz trennen → das schon Installierte läuft weiter.
 |---|---|---|
 | **3.1** | `ComfyUiAdapter` (`RuntimeAdapter`): **ein** langlebiger Server, lazy beim ersten `load_model` gestartet (`--listen 127.0.0.1 --port … --base-directory … --output-directory … --disable-auto-launch --dont-print-server`), Health über `GET /system_stats`, Attach-Fallback, `unload_model` → `POST /free` (Server bleibt oben), `load_model` = Server hoch + VRAM-Slot reservieren + alten via `/free` verdrängen; `aiwm-fake-comfy`-Fixture | ✅ |
 | **3.2a** | ComfyUI-**Installer** (Kern): `uv` bootstrappen (verifizierter Static-Binary), ComfyUI-Quelle am gepinnten Tag (verifiziertes GitHub-`.zip`, flach entpackt), `uv venv --python 3.13` (lädt Python) + `uv pip install torch … --index-url cu130` + `-r requirements.txt` — die `uv`-Schritte hinter einem `CmdRunner`-Trait (unit-getestet). `offline_mode`-Hard-Refusal, idempotent, `InstallState`/`detail()`, `RuntimeRepo`, `POST /runtimes/comfyui/install`, Diagnostics-„Set up"-Knopf | ✅ |
-| 3.2b | gepinnter Custom-Node-Satz — **exakt einer**: `city96/ComfyUI-GGUF` (an einem Commit; `gguf`/`sentencepiece`/`protobuf` in die venv). SDXL-txt2img braucht **keine** Custom Nodes | offen |
+| **3.2b** | gepinnter Custom-Node-Satz — **exakt einer**: `city96/ComfyUI-GGUF` am Commit `6ea2651e` (verifiziertes `.zip` → `custom_nodes/ComfyUI-GGUF/`, `uv pip install -r <node>/requirements.txt` = `gguf`/`sentencepiece`/`protobuf` in die venv). Idempotenz + „installed" verlangen jetzt auch den Node. SDXL-txt2img braucht **keine** Custom Nodes | ✅ |
 | 3.3 | Link-Manager **echt**: neue Store-Struktur `E:\AI\models\image\{checkpoints,unet,vae,clip,loras}`; `core::link` junctioniert diese Ordner in ComfyUIs `models/…` (Directory-Junction, kein Admin — das, wofür 2.3 gebaut wurde); `import_model` nimmt `.safetensors`, routet per Rolle in den richtigen Unterordner; `model_links` = `comfyui`/`junction` | offen |
 | 3.4 | `capability::image`: `job_type=image`, Params (prompt, negative, w/h, steps, cfg, seed, model|Auto über Rolle); **feste Pipeline** = Workflow-JSON-Template + Param-Substitution (`core::pipeline`); `POST /prompt` → `/history/{id}` pollen → Bild via `/view` nach `<data>/outputs/<job_id>.png` → `jobs.output_path`; Cancel via `POST /interrupt`; VRAM-Schätzung pro Familie | offen |
 | 3.5 | UI: Tab „Image" — Prompt/Negativ, Größe/Steps/CFG/Seed, Model [Auto], „Generate"; Ergebnisbild; einfache **Galerie** (Bild-Jobs mit Thumbnail, Klick → Prompt/Seed/Modell); Dashboard-Button „Generate Image" aktiv | offen |
@@ -236,6 +236,32 @@ Verifiziert:
 Bewusst **nicht** in 3.2a: der Custom Node (→ 3.2b), Speicherplatz-Check vor dem
 Download (Phase 6), Cleanup alter `<tag>/` + `uv-cache/` + `python/` beim
 Versions-Bump ([TODO.md](TODO.md)).
+
+---
+
+## 3.2b — Ergebnis (abgeschlossen)
+
+- **`GGUF_NODE_ARCHIVE`** — `city96/ComfyUI-GGUF` am Commit
+  `6ea2651e7df66d7585f6ffee804b20e92fb38b8a` (das Repo hat keine Tags),
+  verifiziertes GitHub-`.zip` (SHA-256 selbst berechnet, gleicher Caveat wie die
+  ComfyUI-Quelle). `TOOLCHAIN_DOWNLOAD_BYTES` schließt es ein.
+- **`FetchSpec`** bündelt die drei Archive + Basis-URLs (statt sechs Extra-
+  Parameter durch jede Signatur). `fetch_sources` lädt/entpackt alle drei
+  (Node flach nach `<home>/custom_nodes/ComfyUI-GGUF/`).
+- **`build_venv`** hängt einen Schritt an: `InstallPhase::InstallingNode` →
+  `uv pip install --python <venv> -r custom_nodes/ComfyUI-GGUF/requirements.txt`
+  (`gguf>=0.13.0` / `sentencepiece` / `protobuf`).
+- **Idempotenz + „fertig"-Prüfung** verlangen jetzt auch `<node>/__init__.py` —
+  ein Abbruch nach der venv, aber vor dem Node, wird beim nächsten Lauf
+  fertiggestellt. `detail()` rendert „installing the GGUF node…".
+
+Verifiziert:
+- Unit-Test `full_install_fetches_all_three_then_runs_the_uv_steps_in_order`:
+  vier `uv`-Aufrufe in Reihenfolge (`venv` → torch → `requirements.txt` →
+  `custom_nodes/ComfyUI-GGUF/requirements.txt`), alle Phasen inkl.
+  `InstallingNode`, Node flach entpackt. `check.ps1` grün (185 Unit + 17 Integ.).
+- **Smoke (`#[ignore]`, echt)**: `real_pinned_install` zieht jetzt zusätzlich den
+  Node und `import torch, gguf` läuft in der frischen venv — **grün in 70 s**.
 
 ---
 
