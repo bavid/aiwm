@@ -42,6 +42,46 @@ pub struct Config {
     pub vram_budget_mb: u64,
     /// `llama-server` launch options (see [`crate::runtime::LlamaServerOptions`]).
     pub llama: LlamaConfig,
+    /// ComfyUI server launch options (see [`crate::runtime::ComfyOptions`]).
+    pub comfyui: ComfyConfig,
+}
+
+/// The `[comfyui]` table — ComfyUI server options the Settings UI exposes.
+/// Applied at startup; a change needs a restart.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ComfyConfig {
+    /// VRAM mode: `auto` (let ComfyUI decide) | `highvram` | `normalvram` |
+    /// `lowvram` | `novram`.
+    pub vram_mode: String,
+}
+
+impl Default for ComfyConfig {
+    fn default() -> Self {
+        Self {
+            vram_mode: "auto".to_string(),
+        }
+    }
+}
+
+impl ComfyConfig {
+    /// Build the runtime options the adapter launches with.
+    pub fn to_options(&self) -> crate::runtime::ComfyOptions {
+        crate::runtime::ComfyOptions {
+            vram_mode: crate::runtime::VramMode::parse(&self.vram_mode).unwrap_or_default(),
+            extra_args: Vec::new(),
+        }
+    }
+
+    fn validate(&self) -> Result<()> {
+        if crate::runtime::VramMode::parse(&self.vram_mode).is_none() {
+            return Err(CoreError::Config(format!(
+                "comfyui.vram_mode {:?} must be auto / highvram / normalvram / lowvram / novram",
+                self.vram_mode
+            )));
+        }
+        Ok(())
+    }
 }
 
 /// The subset of `LlamaServerOptions` a user configures via `[llama]` in
@@ -96,6 +136,7 @@ impl Default for Config {
             log_filter: DEFAULT_LOG_FILTER.to_string(),
             vram_budget_mb: 0,
             llama: LlamaConfig::default(),
+            comfyui: ComfyConfig::default(),
         }
     }
 }
@@ -192,6 +233,7 @@ impl Config {
             )));
         }
         self.llama.validate()?;
+        self.comfyui.validate()?;
         Ok(())
     }
 }
@@ -415,6 +457,49 @@ mod tests {
         let cfg = Config::load(&paths).unwrap();
         assert_eq!(cfg.vram_budget_mb, 8000);
         assert_eq!(cfg.llama, LlamaConfig::default());
+    }
+
+    #[test]
+    fn comfyui_vram_mode_round_trips_and_is_validated() {
+        let opts = ComfyConfig::default().to_options();
+        assert_eq!(opts.vram_mode, crate::runtime::VramMode::Auto);
+
+        let low = ComfyConfig {
+            vram_mode: "lowvram".into(),
+        };
+        assert_eq!(
+            low.to_options().vram_mode,
+            crate::runtime::VramMode::LowVram
+        );
+        assert!(low.validate().is_ok());
+
+        assert!(ComfyConfig {
+            vram_mode: "turbo".into()
+        }
+        .validate()
+        .is_err());
+
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = AppPaths::rooted(tmp.path());
+        let cfg = Config {
+            comfyui: low,
+            ..Config::default()
+        };
+        cfg.save(&paths).unwrap();
+        assert_eq!(
+            Config::read_from(&paths).unwrap().comfyui.vram_mode,
+            "lowvram"
+        );
+    }
+
+    #[test]
+    fn config_without_a_comfyui_table_still_loads() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = AppPaths::rooted(tmp.path());
+        std::fs::write(paths.config_file(), "vram_budget_mb = 8000\n").unwrap();
+
+        let cfg = Config::load(&paths).unwrap();
+        assert_eq!(cfg.comfyui, ComfyConfig::default());
     }
 
     #[test]

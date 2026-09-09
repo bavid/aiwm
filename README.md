@@ -31,13 +31,15 @@ noch keine echte AI-Capability (die kommt ab Phase 2).
 | WP-9 | CI-Workflow, Git-Hooks (pre-commit fmt, pre-push voller Gate) |
 | WP-10 | ADRs finalisiert, Stub-Docs (MODELS/RUNTIMES/SECURITY/BENCHMARKS) |
 
-**223 Rust-Unit + 25 Integrationstests + 5 pytest** grün · `scripts/check.ps1` grün ·
+**225 Rust-Unit + 26 Integrationstests + 5 pytest** grün · `scripts/check.ps1` grün ·
 **null `unsafe`** im Produktivcode.
 
 **Phase 2 (MVP) ✅ abgeschlossen** — Scheiben 2.1–2.7 + durchgehender
 Modell-Wechsel-Test (`core/tests/model_swap.rs`).
-**Phase 3 (Bild / ComfyUI) läuft** — Plan + Research:
-[docs/PHASE_3_PLAN.md](docs/PHASE_3_PLAN.md).
+**Phase 3 (Bild / ComfyUI) ✅ abgeschlossen** — Scheiben 3.1–3.7 + LLM↔Diffusion-
+Wechsel-Test (`core/tests/llm_diffusion_swap.rs`). Plan + Research:
+[docs/PHASE_3_PLAN.md](docs/PHASE_3_PLAN.md). Offen: cu130-Treiber-Check auf der
+echten 4080 (alle Smokes fuhren gegen die Fake-ComfyUI).
 
 - **3.1** ✅ `ComfyUiAdapter` — ComfyUI als **ein** langlebiger, lazy gestarteter
   Server (`RuntimeAdapter`): Spawn/Health (`/system_stats`) über
@@ -76,6 +78,12 @@ Modell-Wechsel-Test (`core/tests/model_swap.rs`).
   Rolle + Namen aufgelöst, fehlende mit Klartext-Fehler.
   `core::model::catalog` (SDXL + Flux-Stack, echte SHA-256) · `GET /models/known`
   · „Known models"-Panel im Models-Tab · [`docs/IMAGE_MODELS.md`](docs/IMAGE_MODELS.md).
+- **3.7** ✅ **Politur**: `[comfyui]`-Config-Tabelle (VRAM-Modus `--*vram`) in der
+  Settings-UI · Diagnostics-Statuszeile nennt ComfyUI-Version + Modus
+  (`GET /system_stats` bei jedem `health()` gecacht) · „Generated images"-Pfad +
+  Retention-Hinweis · `outputs_dir` in `GET /about` ·
+  **`core/tests/llm_diffusion_swap.rs`**: Chat → Bild-Job evictet das LLM selbst
+  → Chat evictet ComfyUI, alle drei `Completed`.
 
 - **2.1** ✅ `ModelRepo`, eigener bounded GGUF-Header-Reader, manueller Import in
   den kanonischen Store, UI-Tab „Models".

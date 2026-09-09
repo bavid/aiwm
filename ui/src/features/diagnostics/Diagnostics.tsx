@@ -24,6 +24,7 @@ export function Diagnostics() {
       `core         ${about?.core_version ?? "?"}`,
       `data dir     ${about?.data_dir ?? "?"}`,
       `store        ${about?.store_path ?? "?"}`,
+      `outputs      ${about?.outputs_dir ?? "?"}`,
       `API port     127.0.0.1:${about?.core_api_port ?? "?"}`,
       `VRAM budget  ${about?.vram_budget_mb ?? "?"} MB`,
       `offline      ${about ? String(about.offline_mode) : "?"}`,
@@ -49,6 +50,8 @@ export function Diagnostics() {
           <dd>{about?.data_dir ?? "…"}</dd>
           <dt>store</dt>
           <dd>{about?.store_path ?? "…"}</dd>
+          <dt>outputs</dt>
+          <dd>{about?.outputs_dir ?? "…"}</dd>
           <dt>API port</dt>
           <dd>{about ? `127.0.0.1:${about.core_api_port}` : "…"}</dd>
           <dt>VRAM budget</dt>

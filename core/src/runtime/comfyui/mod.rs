@@ -85,6 +85,73 @@ pub struct GeneratedImage {
     pub extension: String,
 }
 
+/// ComfyUI's VRAM-management mode — the `--<mode>vram` flag. `Auto` passes no
+/// flag and lets ComfyUI decide from the detected card; `LowVram` offloads more
+/// aggressively (useful for Flux on 16 GB).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum VramMode {
+    #[default]
+    Auto,
+    HighVram,
+    NormalVram,
+    LowVram,
+    NoVram,
+}
+
+impl VramMode {
+    pub fn parse(s: &str) -> Option<Self> {
+        Some(match s.trim().to_ascii_lowercase().as_str() {
+            "auto" => Self::Auto,
+            "highvram" => Self::HighVram,
+            "normalvram" => Self::NormalVram,
+            "lowvram" => Self::LowVram,
+            "novram" => Self::NoVram,
+            _ => return None,
+        })
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::HighVram => "highvram",
+            Self::NormalVram => "normalvram",
+            Self::LowVram => "lowvram",
+            Self::NoVram => "novram",
+        }
+    }
+
+    fn flag(self) -> Option<&'static str> {
+        match self {
+            Self::Auto => None,
+            Self::HighVram => Some("--highvram"),
+            Self::NormalVram => Some("--normalvram"),
+            Self::LowVram => Some("--lowvram"),
+            Self::NoVram => Some("--novram"),
+        }
+    }
+}
+
+/// Launch options for the ComfyUI server. The Settings UI exposes `vram_mode`
+/// via the `[comfyui]` table; a change needs an app restart (ADR-017).
+#[derive(Debug, Clone, Default)]
+pub struct ComfyOptions {
+    pub vram_mode: VramMode,
+    /// Extra raw args, appended verbatim.
+    pub extra_args: Vec<String>,
+}
+
+impl ComfyOptions {
+    /// The CLI args these options add, in order.
+    fn args(&self) -> Vec<String> {
+        self.vram_mode
+            .flag()
+            .map(str::to_string)
+            .into_iter()
+            .chain(self.extra_args.iter().cloned())
+            .collect()
+    }
+}
+
 /// How the adapter finds the ComfyUI entrypoint.
 #[derive(Debug)]
 enum LaunchSource {
@@ -111,12 +178,16 @@ enum Server {
 pub struct ComfyUiAdapter {
     launch: LaunchSource,
     dirs: ComfyDirs,
+    opts: ComfyOptions,
     #[allow(dead_code)] // model-name lookups land with capability::image (3.4)
     db: Database,
     client: ComfyClient,
     server: Mutex<Server>,
     /// The single model the scheduler thinks is resident (ADR-003).
     resident: Mutex<Option<LoadedModel>>,
+    /// Last `GET /system_stats` — cached on every `health()` so `detail()` can
+    /// show ComfyUI's version + VRAM without an async call.
+    stats: Mutex<Option<SystemStats>>,
     /// Serialises whole `load` / `unload` / `attach` / `stop` operations.
     op_lock: AsyncMutex<()>,
     install: Mutex<InstallState>,
@@ -141,14 +212,28 @@ impl ComfyUiAdapter {
         Self {
             launch,
             dirs,
+            opts: ComfyOptions::default(),
             db,
             client: ComfyClient::new(),
             server: Mutex::new(Server::Down),
             resident: Mutex::new(None),
+            stats: Mutex::new(None),
             op_lock: AsyncMutex::new(()),
             install: Mutex::new(InstallState::Idle),
             install_lock: AsyncMutex::new(()),
         }
+    }
+
+    /// Set the server launch options (VRAM mode, extra args). Applies on the
+    /// next server start.
+    #[must_use]
+    pub fn with_options(mut self, opts: ComfyOptions) -> Self {
+        self.opts = opts;
+        self
+    }
+
+    fn stats(&self) -> std::sync::MutexGuard<'_, Option<SystemStats>> {
+        self.stats.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     /// Current install progress (drives the UI status line).
@@ -335,7 +420,7 @@ impl ComfyUiAdapter {
             .ok_or_else(|| comfy_err("ComfyUI is not installed — run ComfyUI setup first"))?;
         self.dirs.ensure()?;
         let port = free_loopback_port()?;
-        let spec = build_spawn_spec(&launch, port, &self.dirs);
+        let spec = build_spawn_spec(&launch, port, &self.dirs, &self.opts);
 
         let supervisor = RuntimeSupervisor::start(RUNTIME_ID, spec)?;
         *self.server() = Server::Starting;
@@ -423,7 +508,7 @@ impl RuntimeAdapter for ComfyUiAdapter {
 
     fn spawn_spec(&self) -> Option<SpawnSpec> {
         let launch = self.server_launch()?;
-        Some(build_spawn_spec(&launch, 0, &self.dirs))
+        Some(build_spawn_spec(&launch, 0, &self.dirs, &self.opts))
     }
 
     async fn health(&self) -> Health {
@@ -434,7 +519,18 @@ impl RuntimeAdapter for ComfyUiAdapter {
                 Server::Up { port, .. } => *port,
             }
         };
-        self.client.health(port).await
+        // `/system_stats` doubles as the health probe (ComfyUI has no /health);
+        // cache the payload for `detail()`.
+        match self.client.system_stats(port).await {
+            Ok(s) => {
+                *self.stats() = Some(s);
+                Health::Healthy
+            }
+            Err(_) => {
+                *self.stats() = None;
+                Health::Unhealthy
+            }
+        }
     }
 
     /// Ensure the server is up and reserve the VRAM slot for `model_id`. Frees
@@ -512,11 +608,17 @@ impl RuntimeAdapter for ComfyUiAdapter {
                 } else {
                     "attached to"
                 };
-                if self.resident().is_some() {
-                    format!("{verb} :{port} · model reserved")
-                } else {
-                    format!("{verb} :{port}")
+                let mut line = format!("{verb} :{port}");
+                if let Some(v) = self.stats().as_ref().and_then(|s| s.version.as_deref()) {
+                    line.push_str(&format!(" · ComfyUI {v}"));
                 }
+                if self.opts.vram_mode != VramMode::Auto {
+                    line.push_str(&format!(" · {}", self.opts.vram_mode.as_str()));
+                }
+                if self.resident().is_some() {
+                    line.push_str(" · model reserved");
+                }
+                line
             }
         })
     }
@@ -587,16 +689,18 @@ mod tests {
 
         a.attach(port).await.unwrap();
         assert_eq!(a.health().await, Health::Healthy);
-        assert_eq!(a.detail(), Some(format!("attached to :{port}")));
+        // health() cached /system_stats, so detail() now names the version.
+        let d = a.detail().unwrap();
+        assert!(
+            d.starts_with(&format!("attached to :{port}")) && d.contains("ComfyUI 0.34.0"),
+            "{d}"
+        );
 
         // load_model on an attached server just reserves the slot.
         a.load_model("sdxl", 7_000).await.unwrap();
         assert_eq!(a.loaded_models().len(), 1);
         assert_eq!(a.vram_used_mb(), 7_000);
-        assert_eq!(
-            a.detail(),
-            Some(format!("attached to :{port} · model reserved"))
-        );
+        assert!(a.detail().unwrap().ends_with("· model reserved"));
 
         // A second model frees the first, still one resident.
         a.load_model("flux", 13_000).await.unwrap();

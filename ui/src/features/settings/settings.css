@@ -43,7 +43,8 @@
   color: var(--muted);
 }
 
-.set-field input {
+.set-field input,
+.set-field select {
   padding: var(--space-2) var(--space-3);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
@@ -51,6 +52,10 @@
   color: var(--text);
   font-family: var(--font-mono);
   font-size: var(--text-sm);
+}
+
+.set-field select {
+  font-family: var(--font-sans);
 }
 
 .set-field--inline {
@@ -70,9 +75,28 @@
 }
 
 .set-field input:focus-visible,
+.set-field select:focus-visible,
 .segmented__opt:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
+}
+
+.set-kv {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: var(--space-1) var(--space-4);
+  margin: 0 0 var(--space-2);
+  font-size: var(--text-sm);
+}
+
+.set-kv dt {
+  color: var(--muted);
+}
+
+.set-kv dd {
+  margin: 0;
+  font-family: var(--font-mono);
+  word-break: break-all;
 }
 
 .set-toggle {

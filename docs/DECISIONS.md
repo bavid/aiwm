@@ -432,9 +432,11 @@ braucht einen Ort, editierbare Felder und eine Aussage, wann eine Änderung grei
    der Settings-Lese-Pfad (`Config::read_from`) zeigt die Datei ohne Overlay — ein
    Override verschluckt nie still einen gespeicherten Wert.
 2. **Neustart-pflichtig ist der Normalfall, und die UI sagt es.** `store_path`,
-   `vram_budget_mb`, `log_filter`, `core_api_port` und die `[llama]`-Optionen
-   werden beim Start gelesen; eine Änderung braucht einen App-Neustart. Jedes
-   Feld trägt das Label („restart to apply" / „applies on the next model load").
+   `vram_budget_mb`, `log_filter`, `core_api_port`, die `[llama]`- und (ab 3.7)
+   die `[comfyui]`-Optionen werden beim Start gelesen; eine Änderung braucht
+   einen App-Neustart. Jedes Feld trägt das Label („restart to apply" / „applies
+   on the next model load"). `[comfyui].vram_mode` → `--<mode>vram`-Flag beim
+   ComfyUI-Spawn.
 3. **Ausnahme Offline:** `offline_mode` ist ein Sicherheits-Schalter (ADR-009) —
    ein neustart-pflichtiger Sicherheitsschalter ist schlechte UX. `App` hält ein
    `Arc<AtomicBool>` (`App::offline()`), aus der Config geseedet; die drei

@@ -19,7 +19,7 @@ manuelles Eingreifen → Netz trennen → das schon Installierte läuft weiter.
 | 3.4 | `capability::image`: `job_type=image`, Params (prompt, negative, w/h, steps, cfg, seed, model|Auto über Rolle `base_diffusion`); **feste Pipeline** = Workflow-JSON-Template + Param-Substitution (`core::pipeline`); `POST /prompt` → `/history/{id}` pollen → Bild via `/view` nach `<outputs>/<job_id>.png` → `jobs.output_path`; Cancel via `POST /interrupt`; VRAM-Schätzung pro Familie (Import-Zeit, Namens-Heuristik) | ✅ |
 | 3.5 | UI: Tab „Image" — Prompt/Negativ, Größe/Steps/CFG/Seed, Model [Auto], „Generate"; Ergebnisbild; einfache **Galerie** (Bild-Jobs mit Thumbnail, Klick → Prompt/Seed/Modell); Dashboard-Button „Generate Image" aktiv; Bild via `GET /jobs/{id}/output` | ✅ |
 | 3.6 | Zweites Template **Flux.1-dev (GGUF)** über `ComfyUI-GGUF` (`UnetLoaderGGUF` + `DualCLIPLoaderGGUF` + `VAELoader`, `FluxGuidance`, SD3-Latent); Companion-Auflösung (T5/CLIP-L/VAE per Rolle + Name); `docs/IMAGE_MODELS.md`; `core::model::catalog` + `GET /models/known` + „Known models"-Panel im Models-Tab | ✅ |
-| 3.7 | Politur: ComfyUI-Optionen in Settings (`--lowvram`-Schalter / VRAM-Modus), Diagnostics-Statuszeile, Output-Retention-Hinweis; Scheduler: Diffusion-Slot neben LLM-Slot sauber verproben | offen |
+| 3.7 | Politur: `[comfyui]`-Config-Tabelle (VRAM-Modus `--*vram`) + Settings-UI, Diagnostics-Statuszeile (ComfyUI-Version + Modus), Output-Retention-Hinweis + `outputs_dir` in `/about`; `core/tests/llm_diffusion_swap.rs` (LLM ↔ Diffusion Wechsel unterm VRAM-Budget) | ✅ |
 
 ---
 
@@ -476,7 +476,68 @@ Verifiziert:
 Bewusst **nicht** in 3.6: TOML-Pipeline-Registry (2 Templates reichen noch
 hartkodiert), `.safetensors`-Flux ohne GGUF, echte Verprobung des
 `DualCLIPLoaderGGUF`-Ordner-Key-Mappings gegen die **echte** ComfyUI (mit dem
-cu130-Treiber-Check zusammen, Phase 3.7 / real), SD 3.5.
+cu130-Treiber-Check zusammen, real), SD 3.5.
+
+---
+
+## 3.7 — Ergebnis (abgeschlossen) · **Phase 3 damit fertig**
+
+- **`[comfyui]`-Config** (`ComfyConfig { vram_mode }`, `#[serde(default,
+  deny_unknown_fields)]`, Default `"auto"`, validiert gegen `auto` / `highvram` /
+  `normalvram` / `lowvram` / `novram`). `to_options() -> ComfyOptions
+  { vram_mode: VramMode, extra_args }` — die neuen Runtime-Typen
+  (`crate::runtime::{ComfyOptions, VramMode}`), analog `LlamaServerOptions`.
+- **`ComfyUiAdapter::with_options`** — `build_spawn_spec` hängt den
+  `--<mode>vram`-Flag (`Auto` → keiner) + `extra_args` an. `App::load` reicht
+  `config.comfyui.to_options()` durch. Neustart-pflichtig (ADR-017, das
+  Settings-Banner sagt es).
+- **Diagnostics-Statuszeile**: `health()` ruft jetzt `GET /system_stats` direkt
+  (war implizit über `client.health`) und **cacht** das Ergebnis; `detail()`
+  zeigt `running on :<port> · ComfyUI <version> · <vram-mode> · model reserved`.
+- **Output-Retention**: `AboutDto.outputs_dir` neu; Settings-Tab „Generated
+  images"-Karte (Pfad + Hinweis „werden nicht automatisch gelöscht"),
+  Diagnostics-Environment + „Copy" zeigen `outputs`.
+- **Settings-UI**: neue „ComfyUI"-Sektion (VRAM-Modus-`<select>`) + „Generated
+  images"-Karte; `ConfigUpdate.comfyui` (`#[serde(default)]` — alte Clients ok).
+- **`core/tests/llm_diffusion_swap.rs`** — das Phase-3-DONE-Kriterium als ein
+  Test: Chat-Modell resident → Bild-Job braucht VRAM → die Engine evictet das
+  LLM (stoppt `llama-server`) und reserviert ComfyUI **selbst** → Bild
+  gerendert → zweiter Chat-Job evictet ComfyUIs Reservierung zurück. Alle drei
+  `Completed`, kein `blocked`, kein Mensch. (Analog `model_swap.rs` für
+  Chat↔Chat.)
+
+Verifiziert:
+- 6 neue Unit-Tests (`config` 2 — `[comfyui]` round-trip + Validierung + „ohne
+  `[comfyui]`-Tabelle lädt trotzdem"; `launch` — VRAM-Flag-Anhang + `Auto` fügt
+  nichts an; `comfyui`-Adapter-Test angepasst; `api` — `comfyui` im
+  `/config`-round-trip + 400 bei schlechtem Modus). 1 neuer Integrationstest
+  (`llm_diffusion_swap.rs`). `check.ps1` grün (**225 Unit + 26 Integ.**), `tsc`
+  + `eslint` sauber.
+- **Live** (`aiwm-cored` + Fake-ComfyUI mit Argument-Spy): `GET /about` trägt
+  `outputs_dir`; `[comfyui] vram_mode = "lowvram"` aus der `config.toml` wird
+  gelesen; `PUT /config` persistiert `novram`, `turbo` → 400; die ComfyUI wird
+  mit `--lowvram` gestartet; `GET /runtimes` detail =
+  `running on :49646 · ComfyUI 0.34.0-fake · lowvram · model reserved`.
+  (Der `PUT` nach dem Boot ändert die laufende Runtime nicht — Neustart-Semantik
+  bestätigt.)
+- **UI** (Vite-Dev, gemockter Bridge): Settings zeigt „ComfyUI" + „Generated
+  images"; VRAM-Modus-Select ändert den Dirty-State / aktiviert „Save changes".
+
+**Phase-3-DONE-Kriterium erreicht** (bis auf die reale ComfyUI, siehe „Offen").
+
+---
+
+## Offen nach Phase 3 (vor / mit Phase 4)
+
+- **cu130-torch + Flux-GGUF-Graph gegen die *echte* ComfyUI**: (a) CUDA-Laufzeit
+  auf der 4080 Super (der Installer-Smoke prüft nur `import torch`); (b)
+  `UnetLoaderGGUF` / `DualCLIPLoaderGGUF` finden die Store-Ordner aus
+  `extra_model_paths.yaml` (ComfyUIs `map_legacy` sollte es tun — im Quellcode
+  geprüft, nicht live); (c) Steps/Scheduler/Guidance an einem echten Render
+  kalibrieren. Fällt (a) aus → cu128/cu126-Pin.
+- Output-Cleanup / Retention-Limit (nur Hinweis im MVP).
+- `.safetensors`-Header-Inspektion (Familie/Precision/bessere VRAM-Schätzung,
+  robustere Flux-Companion-Auflösung).
 
 ---
 

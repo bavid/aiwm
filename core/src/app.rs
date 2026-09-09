@@ -62,15 +62,18 @@ impl App {
                 .with_options(config.llama.to_options()),
         );
         runtimes.register(llama.clone());
-        let comfyui = Arc::new(ComfyUiAdapter::discover(
-            db.clone(),
-            &paths.runtimes_dir(),
-            ComfyDirs {
-                base: paths.comfyui_data_dir(),
-                output: paths.outputs_dir(),
-                models_store: config.store_path.clone(),
-            },
-        ));
+        let comfyui = Arc::new(
+            ComfyUiAdapter::discover(
+                db.clone(),
+                &paths.runtimes_dir(),
+                ComfyDirs {
+                    base: paths.comfyui_data_dir(),
+                    output: paths.outputs_dir(),
+                    models_store: config.store_path.clone(),
+                },
+            )
+            .with_options(config.comfyui.to_options()),
+        );
         runtimes.register(comfyui.clone());
         let budget = resolve_vram_budget(&config, &telemetry);
         let scheduler = Arc::new(HybridScheduler::new(runtimes.clone(), budget));

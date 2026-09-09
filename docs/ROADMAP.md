@@ -77,15 +77,18 @@ funktioniert weiter.
 
 ---
 
-## Phase 3 — Bild *(in Arbeit)*
+## Phase 3 — Bild ✅
 
-**Scheibenplan + Research: [PHASE_3_PLAN.md](PHASE_3_PLAN.md).** MVP = Text→Bild
-über eine gekapselte ComfyUI-Runtime (gepinnter Tag, `uv`-venv, genau ein
-Custom Node). SDXL zuerst (`Auto`-Default), Flux.1-dev-GGUF als zweites Template.
-Feste Workflow-JSON-Pipelines, Modell-Rollen-Auflösung, getypter Bild-Store, den
-ComfyUI über sein natives `extra_model_paths.yaml` liest (Junctions überspannen
-keine Volumes — ADR-019), Galerie mit Prompt/Seed/Modell, Scheduler koordiniert
-LLM ↔ Diffusion ums VRAM-Budget.
+**Abgeschlossen.** Scheibenplan + Ergebnisse: [PHASE_3_PLAN.md](PHASE_3_PLAN.md).
+Text→Bild über eine gekapselte ComfyUI-Runtime (gepinnter Tag, `uv`-venv, genau
+ein Custom Node). SDXL (`Auto`-Default) + Flux.1-dev-GGUF als zweites Template.
+Feste Workflow-JSON-Pipelines, Companion-Auflösung, getypter Bild-Store den
+ComfyUI über `extra_model_paths.yaml` liest (ADR-019), Galerie mit Prompt/Seed/
+Modell, Scheduler koordiniert LLM ↔ Diffusion ums VRAM-Budget
+(`core/tests/llm_diffusion_swap.rs`).
+
+**Offen:** cu130-torch + der Flux-GGUF-Graph gegen die **echte** ComfyUI
+verproben — alle Smokes fuhren gegen `aiwm-fake-comfy` (siehe [TODO.md](TODO.md)).
 
 - [x] 3.1 `ComfyUiAdapter` — ein langlebiger, lazy gestarteter Server; Spawn/
   Health/Attach/`/free`, `aiwm-fake-comfy`-Fixture (ADR-018)
@@ -101,10 +104,10 @@ LLM ↔ Diffusion ums VRAM-Budget.
   Cancel via `/interrupt`, `Auto` über Rolle `base_diffusion`
 - [x] 3.5 UI-Tab „Image" — Prompt/Negativ, Größe/Steps/CFG/Seed, Model [Auto],
   „Generate", Ergebnisbild, Galerie; Bild via `GET /jobs/{id}/output`
-- [x] 3.6 Flux.1-dev-GGUF als zweites Template (`ComfyUI-GGUF`-Nodes, Companion-
-  Auflösung T5/CLIP-L/VAE), `docs/IMAGE_MODELS.md`, `core::model::catalog` +
-  `GET /models/known` + „Known models"-Panel
-- [ ] 3.7 Politur (Settings, Diagnostics, Scheduler-Verprobung)
+- [x] 3.6 Flux.1-dev-GGUF als zweites Template, Companion-Auflösung,
+  `docs/IMAGE_MODELS.md`, `core::model::catalog` + „Known models"-Panel
+- [x] 3.7 Politur — `[comfyui]`-Settings (VRAM-Modus), Diagnostics-Statuszeile,
+  Output-Retention-Hinweis; `core/tests/llm_diffusion_swap.rs`
 
 Nach dem txt2img-MVP: Image→Image, Inpaint, Upscale, Enhancement (eigene Slices).
 

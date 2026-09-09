@@ -18,6 +18,7 @@ pub fn about(app: &App) -> AboutDto {
         core_version: crate::CORE_VERSION.to_string(),
         data_dir: app.paths.root().display().to_string(),
         store_path: app.config.store_path.display().to_string(),
+        outputs_dir: app.paths.outputs_dir().display().to_string(),
         core_api_port: app.config.core_api_port,
         vram_budget_mb: app.scheduler.budget_mb(),
         offline_mode: app.offline(),
@@ -44,6 +45,7 @@ pub fn save_config(app: &App, update: ConfigUpdate) -> Result<Config> {
     cfg.offline_mode = update.offline_mode;
     cfg.vram_budget_mb = update.vram_budget_mb;
     cfg.llama = update.llama;
+    cfg.comfyui = update.comfyui;
     cfg.save(&app.paths)?;
     app.set_offline(cfg.offline_mode);
     Ok(cfg)

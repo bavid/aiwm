@@ -10,7 +10,9 @@ use std::fmt::Write as _;
 use std::net::Ipv4Addr;
 use std::path::{Path, PathBuf};
 
-use super::RUNTIME_ID;
+#[cfg(test)]
+use super::VramMode;
+use super::{ComfyOptions, RUNTIME_ID};
 use crate::model::ModelKind;
 use crate::runtime::SpawnSpec;
 use crate::{CoreError, Result};
@@ -99,8 +101,14 @@ fn model_paths_yaml_body(store_root: &Path) -> String {
 }
 
 /// Build the launch command. Always pins `--listen 127.0.0.1` (ADR-008) and
-/// keeps ComfyUI headless + quiet.
-pub(super) fn build_spawn_spec(launch: &ComfyLaunch, port: u16, dirs: &ComfyDirs) -> SpawnSpec {
+/// keeps ComfyUI headless + quiet. `opts` adds the VRAM-mode flag and any extra
+/// args from the `[comfyui]` config table.
+pub(super) fn build_spawn_spec(
+    launch: &ComfyLaunch,
+    port: u16,
+    dirs: &ComfyDirs,
+    opts: &ComfyOptions,
+) -> SpawnSpec {
     let mut spec = SpawnSpec::new(&launch.program);
     if let Some(main) = &launch.main {
         spec = spec.arg(main.to_string_lossy().into_owned());
@@ -121,7 +129,7 @@ pub(super) fn build_spawn_spec(launch: &ComfyLaunch, port: u16, dirs: &ComfyDirs
         .arg(dirs.model_paths_yaml().to_string_lossy().into_owned())
         .arg("--disable-auto-launch")
         .arg("--dont-print-server");
-    for extra in &launch.extra_args {
+    for extra in launch.extra_args.iter().chain(opts.args().iter()) {
         spec = spec.arg(extra.clone());
     }
     spec
@@ -214,9 +222,13 @@ mod tests {
         let launch = ComfyLaunch {
             program: PathBuf::from("C:\\c\\.venv\\Scripts\\python.exe"),
             main: Some(PathBuf::from("C:\\c\\ComfyUI\\main.py")),
-            extra_args: vec!["--lowvram".into()],
+            extra_args: vec!["--reserve-vram".into()],
         };
-        let spec = build_spawn_spec(&launch, 48311, &dirs());
+        let opts = ComfyOptions {
+            vram_mode: VramMode::LowVram,
+            extra_args: Vec::new(),
+        };
+        let spec = build_spawn_spec(&launch, 48311, &dirs(), &opts);
         assert_eq!(spec.program, launch.program);
         assert_eq!(spec.cwd, Some(PathBuf::from("C:\\c\\ComfyUI")));
         let joined = spec.args.join(" ");
@@ -229,22 +241,25 @@ mod tests {
             .contains("--extra-model-paths-config C:\\aiwm\\comfyui-data\\aiwm-model-paths.yaml"));
         assert!(joined.contains("--disable-auto-launch"));
         assert!(joined.contains("--dont-print-server"));
+        // launch.extra_args, then the options' VRAM flag, last.
         assert!(
-            joined.ends_with("--lowvram"),
-            "extra args come last: {joined}"
+            joined.ends_with("--reserve-vram --lowvram"),
+            "options args come last: {joined}"
         );
     }
 
     #[test]
-    fn spawn_spec_for_the_fixture_has_no_main_arg() {
+    fn spawn_spec_for_the_fixture_has_no_main_arg_and_no_vram_flag_on_auto() {
         let launch = ComfyLaunch {
             program: PathBuf::from("aiwm-fake-comfy.exe"),
             ..ComfyLaunch::default()
         };
-        let spec = build_spawn_spec(&launch, 1, &dirs());
+        let spec = build_spawn_spec(&launch, 1, &dirs(), &ComfyOptions::default());
         assert!(spec.cwd.is_none());
         assert!(!spec.args.iter().any(|a| a.ends_with("main.py")));
-        assert!(spec.args.join(" ").contains("--port 1"));
+        let joined = spec.args.join(" ");
+        assert!(joined.contains("--port 1"));
+        assert!(!joined.contains("vram"), "Auto adds no flag: {joined}");
     }
 
     #[test]

@@ -4,6 +4,7 @@ import {
   getConfig,
   saveConfig,
   type AppConfig,
+  type ComfyConfig,
   type ConfigUpdate,
   type LlamaConfig,
 } from "../../lib/ipc";
@@ -16,6 +17,14 @@ const THEME_OPTIONS: { value: Theme; label: string }[] = [
   { value: "dark", label: "Dark" },
 ];
 
+const VRAM_MODES: { value: string; label: string }[] = [
+  { value: "auto", label: "Auto — let ComfyUI decide from the card" },
+  { value: "highvram", label: "High VRAM — keep everything on the GPU" },
+  { value: "normalvram", label: "Normal VRAM" },
+  { value: "lowvram", label: "Low VRAM — offload aggressively (helps Flux on 16 GB)" },
+  { value: "novram", label: "No VRAM — minimal GPU use (slow)" },
+];
+
 type Form = ConfigUpdate;
 
 const toForm = (c: AppConfig): Form => ({
@@ -23,6 +32,7 @@ const toForm = (c: AppConfig): Form => ({
   offline_mode: c.offline_mode,
   vram_budget_mb: c.vram_budget_mb,
   llama: { ...c.llama },
+  comfyui: { ...c.comfyui },
 });
 
 const sameForm = (a: Form, b: Form): boolean =>
@@ -32,7 +42,8 @@ const sameForm = (a: Form, b: Form): boolean =>
   a.llama.gpu_layers === b.llama.gpu_layers &&
   a.llama.ctx_size === b.llama.ctx_size &&
   a.llama.flash_attention === b.llama.flash_attention &&
-  a.llama.load_timeout_secs === b.llama.load_timeout_secs;
+  a.llama.load_timeout_secs === b.llama.load_timeout_secs &&
+  a.comfyui.vram_mode === b.comfyui.vram_mode;
 
 export function Settings() {
   const about = useAbout();
@@ -75,6 +86,8 @@ export function Settings() {
   };
   const patchLlama = (next: Partial<LlamaConfig>) =>
     patch({ llama: { ...form.llama, ...next } });
+  const patchComfy = (next: Partial<ComfyConfig>) =>
+    patch({ comfyui: { ...form.comfyui, ...next } });
 
   const chooseTheme = (t: Theme) => {
     setTheme(t);
@@ -91,7 +104,7 @@ export function Settings() {
       setForm(f);
       setStatus({
         kind: "ok",
-        text: "Saved. Offline mode applies now; store path, VRAM budget and llama.cpp options take effect after a restart.",
+        text: "Saved. Offline mode applies now; store path, VRAM budget, llama.cpp and ComfyUI options take effect after a restart.",
       });
     } catch (e) {
       setStatus({ kind: "err", text: e instanceof Error ? e.message : String(e) });
@@ -236,6 +249,43 @@ export function Settings() {
             <strong>Flash attention</strong> — <code>--flash-attn on</code>
           </span>
         </label>
+      </section>
+
+      <section className="card set-group">
+        <header className="card__head">
+          <h2>ComfyUI</h2>
+          <span className="card__sub">restart to apply</span>
+        </header>
+        <label className="set-field">
+          <span>
+            VRAM mode — the <code>--*vram</code> flag ComfyUI starts with
+          </span>
+          <select
+            value={form.comfyui.vram_mode}
+            onChange={(e) => patchComfy({ vram_mode: e.target.value })}
+          >
+            {VRAM_MODES.map((m) => (
+              <option key={m.value} value={m.value}>
+                {m.label}
+              </option>
+            ))}
+          </select>
+        </label>
+      </section>
+
+      <section className="card set-group">
+        <header className="card__head">
+          <h2>Generated images</h2>
+          <span className="card__sub">read-only</span>
+        </header>
+        <dl className="set-kv">
+          <dt>Folder</dt>
+          <dd>{about?.outputs_dir ?? "…"}</dd>
+        </dl>
+        <p className="muted">
+          Images are kept until you delete them — this folder grows over time.
+          Automatic cleanup / retention limits come later.
+        </p>
       </section>
 
       <div className="settings__bar">

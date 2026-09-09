@@ -8,6 +8,8 @@ export interface AboutInfo {
   core_version: string;
   data_dir: string;
   store_path: string;
+  /** Where generated images land. */
+  outputs_dir: string;
   core_api_port: number;
   vram_budget_mb: number;
   offline_mode: boolean;
@@ -23,6 +25,12 @@ export interface LlamaConfig {
   load_timeout_secs: number;
 }
 
+/** ComfyUI server options — the `[comfyui]` table in config.toml. */
+export interface ComfyConfig {
+  /** VRAM mode: auto | highvram | normalvram | lowvram | novram. */
+  vram_mode: string;
+}
+
 /** The full config.toml as the core sees it. */
 export interface AppConfig {
   store_path: string;
@@ -32,6 +40,7 @@ export interface AppConfig {
   /** VRAM budget (MB) for the scheduler; 0 = auto-detect from the GPU. */
   vram_budget_mb: number;
   llama: LlamaConfig;
+  comfyui: ComfyConfig;
 }
 
 /** The user-editable subset the Settings tab sends back. */
@@ -40,6 +49,7 @@ export interface ConfigUpdate {
   offline_mode: boolean;
   vram_budget_mb: number;
   llama: LlamaConfig;
+  comfyui: ComfyConfig;
 }
 
 export interface GpuProcess {

@@ -3,7 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::config::LlamaConfig;
+use crate::config::{ComfyConfig, LlamaConfig};
 use crate::db::{Job, JobEvent};
 use crate::runtime::{Health, RuntimeKind};
 
@@ -12,6 +12,8 @@ pub struct AboutDto {
     pub core_version: String,
     pub data_dir: String,
     pub store_path: String,
+    /// Where generated images land (`GET /jobs/{id}/output` serves from here).
+    pub outputs_dir: String,
     pub core_api_port: u16,
     pub vram_budget_mb: u64,
     pub offline_mode: bool,
@@ -26,6 +28,9 @@ pub struct ConfigUpdate {
     /// `0` = auto-detect from the GPU.
     pub vram_budget_mb: u64,
     pub llama: LlamaConfig,
+    /// New in 3.7; older clients that omit it keep ComfyUI on `auto`.
+    #[serde(default)]
+    pub comfyui: ComfyConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

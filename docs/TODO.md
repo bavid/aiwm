@@ -98,6 +98,16 @@ hierher, damit nichts verloren geht.
   Style-Presets. Der Download-Button ist heikel im Tauri-Sandbox (`<a download>`
   inert) — bräuchte einen `save`-Dialog-Command. Alles eigene kleine Slices bei
   Bedarf.
+- Output-Retention (3.7 zeigt nur einen Hinweis): automatisches Aufräumen /
+  Größenlimit / „Ordner öffnen"-Button für `<local_root>/outputs`. Auch: die
+  Bild-Bytes werden von `GET /jobs/{id}/output` am Stück gelesen — für Video
+  später auf Streaming umstellen.
+- ComfyUI-Optionen (3.7): nur `vram_mode` ist exponiert. Weitere sinnvolle
+  Flags (`--reserve-vram`, `--fast`, `--use-split-cross-attention`) + ein
+  „extra args"-Feld könnten dazu, wenn echte Flux-Läufe zeigen was fehlt.
+  `vram_mode` ändert die **laufende** Runtime nicht (Neustart) — ein
+  `ComfyUiAdapter::set_options` + Server-Neustart wäre der saubere Live-Weg,
+  analog zum offenen `LlamaServerOptions`-Live-Apply.
 - `GET /jobs/{id}/output` (3.5) liest die ganze Datei in den RAM und serviert
   sie am Stück — ok für einzelne SDXL-PNGs (~1–3 MB); bei großen Bildern /
   Video später auf `tokio_util::io::ReaderStream` + `Content-Length` umstellen.

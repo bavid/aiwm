@@ -105,6 +105,11 @@ genutzt.
   SD3-Latent, Sampler bei CFG 1). Für Flux löst `capability::image` die drei
   Begleiter (T5 / CLIP-L / VAE) über Rolle + Namen auf; fehlt einer → Klartext-
   Fehler. Feste Templates, keine user-editierbare Registry (PHASE_3_PLAN §C).
+- **Optionen (`[comfyui]`, 3.7):** `ComfyOptions { vram_mode, extra_args }` —
+  `vram_mode` (`auto` / `highvram` / `normalvram` / `lowvram` / `novram`) wird
+  zum `--<mode>vram`-Flag beim Spawn. Settings-UI, `config.toml`,
+  neustart-pflichtig (ADR-017). `detail()` zeigt bei laufendem Server die
+  ComfyUI-Version (aus dem `/system_stats`-Cache) + den Modus.
 
 ## Link-Manager (`core::link`, ADR-007)
 
