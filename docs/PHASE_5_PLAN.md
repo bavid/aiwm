@@ -42,7 +42,9 @@ Export/Import bringt Config + DB + Agent-Profil auf eine zweite Maschine.
 | **5.4a** | **Hermes-Adapter** (nur der Adapter, gegen ein Fixture): `HermesAgentAdapter` — **ein `hermes gateway` pro Session**, `cwd` = Workspace, per-Session managed `HERMES_HOME` mit erzwungener `config.yaml` (`provider: custom` → `spec.endpoint.base_url`, `redact_secrets`/`redact_pii`, `web_search:false`), API-Server-Settings via Spawn-Env (`API_SERVER_KEY` random, Bearer auf jedem Request). Turn = `POST /api/sessions/:id/chat/stream` → SSE → `AgentEvent` (event-Namen lenient — Docs unvollständig); Approval = `POST /v1/runs/:id/approval`; `interrupt` = `/v1/runs/:id/stop`. `aiwm-fake-hermes`-Fixture + Integrationstest. `CLOUD_CREDENTIAL_ENV` + `scrubbed_env(extra)` aus `opencode` in `agent/mod.rs` gehoben (geteilt). | ✅ |
 | **5.4ba** | **Hermes-Installer + geteilte `uv`-Toolchain**: `runtime::download` wird das geteilte Toolchain-Modul — `ensure_uv(base, archive, dir)` + `CmdRunner`/`SystemRunner` aus `comfyui::install` gehoben (ComfyUI ruft jetzt `ensure_uv`, Verhalten unverändert). `agent::hermes::install`: `ensure_uv` → `uv venv` → `uv pip install hermes-agent==0.19.0` → best-effort `hermes postinstall`. `HermesAgentAdapter::install`/`install_state`/`is_installing` (wie `LlamaCppAdapter`). `#[ignore]`-PyPI-Smoke. | ✅ |
 | **5.4bb** | **Hermes an `App` + UI**: `App` hält `Arc<OpenCodeAdapter>` + `Arc<HermesAgentAdapter>`, beide via `.with_adapter()` auf `AgentSessions`. `POST /runtimes/hermes/install` + `GET /agent-runtimes` (`[{id, installed, install?}]`) + Tauri. `NewProfileForm`: der Runtime-`<select>` liest `/agent-runtimes` — nicht installiert = gesperrt + Setup-Karte mit „Install Hermes"-Button + Live-Phase/Prozent. Realer `hermes`-Lauf (manuell) kalibriert die SSE-Event-Namen + `config.yaml`-Sandbox-Keys. Memory/Skills im Profil-Ordner → Backup (5.5). | ✅ |
-| 5.5 | **Session-Persistenz + Backup/Restore**: `agent_sessions.checkpoint_path`, Wiederaufnahme nach Absturz/Neustart (OpenCode `/session` list + resume, Hermes `/resume`); Kontext-Kompaktierung: die Agents machen sie selbst, wir zeigen sie an. **Export/Import** — ein Archiv aus `config.toml` + `aiwm.db` + `<data>/agents/<profil>/` (+ Modell-Manifest, **nicht** die Modell-Dateien). Politur: Pin/Unpin-Lebenszyklus, „Agent pausieren?"-Fluss (R8), Diagnostics-Zeile pro Agent. | offen |
+| **5.5a** | **Session-Recovery + Pin/Unpin-Lebenszyklus**: `AgentRepo::recover_orphaned()` (ein UPDATE, failt jede noch nicht terminale Session beim Start — ihr Runtime-Prozess ist mit dem alten App-Prozess gestorben; Resume ist bei Prozess-pro-Session unpraktikabel). `capability::agent`: Live-Map = `Arc<Mutex<..>>`, der Drain-Task hält ein `Weak` darauf — endet der Event-Stream ohne `stop()` (terminales `Error` / Runtime tot), räumt der Task selbst auf: Live-Eintrag weg, Coding-Modell entpinnt, Row `Failed`. | ✅ |
+| **5.5b** | **Export/Import-Backup**: Alle Agent-Daten (Profile, Sessions, Transkripte) liegen in `aiwm.db` → kein Profil-Ordner nötig. Archiv = `aiwm.db`-Snapshot (`VACUUM INTO`) + `config.toml` + Modell-Manifest (Namen + SHA-256, **nicht** die Dateien) + Metadaten, als `.zip`. Import kann die offene SQLite nicht überschreiben → staged nach `<data>/.pending-import/`, `App::load` tauscht beim nächsten Start (alte Dateien als `*.pre-import`). `GET /export` / `POST /import` + Tauri + Settings-Karte „Backup & restore". | ✅ |
+| 5.5c | **Politur (vertagt/Post-MVP)**: Kontext-Kompaktierung anzeigen (die Agents machen sie selbst), „Agent pausieren?"-Fluss (R8), Diagnostics-Zeile pro Agent. Checkpoint-basiertes Resume nur falls je ein In-Prozess-Runtime-Modell kommt. | offen |
 
 Danach (Post-MVP): `aider` als optionaler dritter Adapter, lokaler Repository-
 Index (Embeddings über ein kleines lokales Modell) für Retrieval, MCP-Server aus
@@ -564,6 +566,64 @@ Fixtures verprobt.
   ab) → **290 Lib-Tests**. `check.ps1` grün. **Browser-Smoke** (dev-mock): Hermes
   wählen → „Install Hermes" → Poll flippt auf installiert → Hermes-Profil
   anlegen, keine Konsolenfehler.
+
+---
+
+## 5.5 — Ergebnis (abgeschlossen, a + b)
+
+Session-Recovery, der Pin/Unpin-Lebenszyklus und ein portables Backup. Die
+Politur (5.5c) ist bewusst vertagt — siehe Tabelle.
+
+**5.5a** (`c2d3c69`) — Recovery + Lebenszyklus:
+- **`AgentRepo::recover_orphaned()`** — ein UPDATE, das jede Session, die noch
+  `starting|idle|working|awaiting_approval` ist, auf `failed` setzt
+  (`error_text` = „…restart", `ended_at` gesetzt). Ihr Runtime-Prozess ist mit
+  dem vorigen App-Prozess gestorben; ein Prozess-pro-Session-Modell kann nicht
+  „resumen". `App::seed` ruft es neben `jobs().recover_interrupted()` — ein
+  Neustart zeigt nie mehr eine Phantom-„working"-Session.
+- **`capability::agent`**: die Live-Map ist jetzt `Arc<Mutex<HashMap<..>>>`,
+  jeder Drain-Task hält ein `Weak` darauf + `Arc<dyn CodingRuntime>` +
+  `model_id`. Endet der Event-Stream **ohne** `stop()` (terminales `Error` oder
+  Runtime-Prozess tot), finalisiert der Task selbst: Live-Eintrag entfernen,
+  Coding-Modell entpinnen (VRAM frei), Row `Failed` falls nicht schon terminal.
+  `stop()` gewinnt das Rennen (nimmt den Eintrag zuerst — der Drain sieht `None`
+  und tut nichts). Vorher blieb ein abgestürzter Runtime für immer gepinnt und
+  `is_live()` hing auf `true`.
+- **+2 Lib-Tests** (recover failt die Unfertigen / no-op beim zweiten Sweep;
+  ein terminales Error entpinnt + öffnet das Ein-Session-Gate ohne `stop`).
+
+**5.5b** (dieser Commit) — Export/Import:
+- **`core::backup`**: `export(paths, db) -> Vec<u8>` baut das `.zip` in-memory —
+  `META_ENTRY` (Format 1, Core-Version, Zeitstempel, Modell-Anzahl) + `aiwm.db`
+  (konsistenter Snapshot) + `config.toml` + `models.json` (Name, SHA-256,
+  Größe, Basename, Rollen — **nie** die GGUF-/safetensors-Dateien).
+  `export_to_file` schreibt nach `<data>/exports/aiwm-export-<ts>.zip`.
+- **`Database::snapshot_to(dest)`** = `VACUUM INTO '<dest>'` (WAL eingefaltet,
+  eine saubere Datei). Nur für eine On-Disk-DB sinnvoll — aus `:memory:` ist
+  `VACUUM INTO` ein stiller No-op (die Backup-Tests fahren daher gegen eine
+  Temp-Datei-DB); `snapshot_to` failt hart, wenn danach keine Datei da ist.
+- **`stage_import(paths, zip, db)`** validiert (Format, SQLite-Magic der
+  `aiwm.db`), rechnet `missing_models` (Manifest-SHA nicht im lokalen Store)
+  und schreibt `aiwm.db` + `config.toml` nach `<data>/.pending-import/`. Die
+  Live-DB bleibt unberührt.
+- **`apply_pending_import(paths)`** läuft in `App::load` **vor** dem DB-Open:
+  liegt `<staging>/aiwm.db`, wird die aktuelle DB nach `aiwm.db.pre-import`
+  verschoben (`-wal`/`-shm` weg), die gestagte einge-`rename`t, dito
+  `config.toml`, Staging-Ordner weg, `tracing::warn!`.
+- **API/Tauri/UI**: `GET /export` (streamt `application/zip`), `POST /import`
+  (Body = Zip-Bytes → `ImportSummary` JSON, Junk → 400); Tauri
+  `export_backup` (→ Pfad) / `import_backup(path)`. `ipc.ts`: `ImportSummary` +
+  `exportBackup`/`importBackup`. **Settings → „Backup & restore"**
+  (`BackupCard.tsx`): Export-Knopf → Pfad + „reveal"; Pfadfeld + „Restore" →
+  Zusammenfassung (Core-Version, Datum, Modell-Anzahl, fehlende Modelle) +
+  „Neustart nötig". `dev-mock`: beide Commands.
+- **+4 Tests** (`backup`: Export hat jeden Teil; stage→apply tauscht die DB +
+  flaggt fehlende Modelle; Junk-Archiv wird abgelehnt und staged nichts.
+  `db`: `snapshot_to` schreibt eine lesbare Kopie) **+1 API-Test**
+  (Export→Import-Roundtrip über HTTP, Junk → 400).
+
+**Vertagt in 5.5c** (Tabelle): Kompaktierungs-Anzeige, Pause-Fluss (R8),
+Diagnostics-Zeile pro Agent, Checkpoint-Resume.
 
 ---
 

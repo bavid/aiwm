@@ -99,6 +99,17 @@ impl AppPaths {
         self.local_root.join("outputs")
     }
 
+    /// Where `POST /export` writes backup archives (roamed — small).
+    pub fn exports_dir(&self) -> PathBuf {
+        self.root.join("exports")
+    }
+
+    /// A staging dir an import drops its `aiwm.db` / `config.toml` into; the
+    /// next [`crate::backup::apply_pending_import`] on startup swaps them in.
+    pub fn pending_import_dir(&self) -> PathBuf {
+        self.root.join(".pending-import")
+    }
+
     /// Create the root and logs directories if missing. Idempotent.
     pub fn ensure(&self) -> Result<()> {
         for dir in [self.root.clone(), self.logs_dir()] {

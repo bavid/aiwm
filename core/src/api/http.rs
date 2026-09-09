@@ -49,6 +49,8 @@ pub fn router(app: Arc<App>) -> Router {
             post(agent_session_permission),
         )
         .route("/agent-sessions/{id}/stop", post(stop_agent_session))
+        .route("/export", get(export_backup))
+        .route("/import", post(import_backup))
         .route("/logs", get(logs))
         .route("/ws", get(ws_upgrade))
         .with_state(app)
@@ -237,6 +239,28 @@ async fn install_hermes(
 
 async fn agent_runtimes(State(app): AppState) -> Json<Vec<super::dto::AgentRuntimeDto>> {
     Json(handlers::agent_runtimes(&app))
+}
+
+async fn export_backup(State(app): AppState) -> Result<Response, ApiError> {
+    let bytes = handlers::export_backup(&app).await?;
+    Ok((
+        [
+            (axum::http::header::CONTENT_TYPE, "application/zip"),
+            (
+                axum::http::header::CONTENT_DISPOSITION,
+                "attachment; filename=\"aiwm-export.zip\"",
+            ),
+        ],
+        bytes,
+    )
+        .into_response())
+}
+
+async fn import_backup(
+    State(app): AppState,
+    body: axum::body::Bytes,
+) -> Result<Json<crate::backup::ImportSummary>, ApiError> {
+    Ok(Json(handlers::import_backup(&app, &body).await?))
 }
 
 // --- agents (Phase 5.1c) ---------------------------------------------------

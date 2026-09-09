@@ -10,6 +10,7 @@ import {
   type LlamaConfig,
 } from "../../lib/ipc";
 import { getTheme, setTheme, type Theme } from "../../lib/theme";
+import { BackupCard } from "./BackupCard";
 import "./settings.css";
 
 const gb = (bytes: number) => `${(bytes / 1024 ** 3).toFixed(2)} GB`;
@@ -362,6 +363,8 @@ export function Settings() {
           come later; for now, open the folder and prune it yourself.
         </p>
       </section>
+
+      <BackupCard />
 
       <div className="settings__bar">
         {status && (

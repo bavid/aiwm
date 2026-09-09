@@ -224,8 +224,12 @@ hierher, damit nichts verloren geht.
   nutzt `POST /session/:id/abort` — Realverhalten (kommt ein `session.idle`?)
   offen.
 - 5.1ca `AgentSessions`: MVP fährt **eine** Session gleichzeitig; mehrere
-  parallele Sessions / Crash-Recovery aus `live_sessions()` = 5.5. `open` nimmt
-  `first_message` optional — Zwischenzustand `Starting` nur kurz sichtbar.
+  parallele Sessions bleiben Post-MVP. `open` nimmt `first_message` optional —
+  Zwischenzustand `Starting` nur kurz sichtbar.
+- 5.5a Crash-Recovery: ✅ umgesetzt — `AgentRepo::recover_orphaned()` failt beim
+  Start jede nicht-terminale Session (Prozess-pro-Session → kein echtes Resume).
+  Checkpoint-basiertes Resume nur relevant, falls je ein In-Prozess-Runtime-
+  Modell kommt (5.5c, vertagt).
 - Agent-Sandbox-Niveau: ✅ **umgesetzt in 5.2** (config-level) — erzwungene
   OpenCode-`permission` (`edit`/`write` auf Workspace, `external_directory`
   read-only, `bash` ask, Netz-Tools aus) + `SpawnSpec.env_remove`/`SCRUBBED_ENV`.
@@ -233,9 +237,14 @@ hierher, damit nichts verloren geht.
   FS-/Prozess-Isolation (WSL2/Container/AppContainer), **Toolset-Whitelisting pro
   Profil** (`SessionSpec.toolset` wird noch nicht durchgesetzt), per-Kommando-
   Bash-Deny-Muster.
-- Backup/Restore-Umfang: ✅ festgelegt (Plan §F) — `config.toml` + `aiwm.db` +
-  `<data>/agents/<profil>/` + Modell-Manifest; **nicht** `~/.hermes/` des Users
-  (eigenes gemanagtes Profil).
+- Backup/Restore-Umfang: ✅ **umgesetzt in 5.5b** (`core::backup`). Da alle
+  Agent-Daten (Profile, Sessions, Transkripte) in `aiwm.db` liegen, ist das
+  Archiv nur `aiwm.db`-Snapshot + `config.toml` + Modell-Manifest (SHA-256,
+  **nicht** die Dateien) — kein Profil-Ordner nötig. Import staged nach
+  `<data>/.pending-import/`, `App::load` tauscht beim Neustart (alt →
+  `*.pre-import`). Settings-Karte „Backup & restore".
+- 5.5c (vertagt, Post-MVP-Politur): Kontext-Kompaktierung anzeigen, „Agent
+  pausieren?"-Fluss (R8), Diagnostics-Zeile pro Agent.
 
 ## Vor Phase 6 (Model-Manager v2)
 - Spike: HF-Hub- + Ollama-Registry-API real testen (Rate-Limits, Token-Pflicht,

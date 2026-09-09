@@ -28,6 +28,7 @@
 pub mod agent;
 pub mod api;
 pub mod app;
+pub mod backup;
 pub mod capability;
 pub mod compat;
 pub mod config;

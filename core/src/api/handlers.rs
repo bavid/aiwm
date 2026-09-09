@@ -362,6 +362,35 @@ pub async fn stop_agent_session(app: &App, id: &str) -> Result<()> {
     app.agents.stop(id).await
 }
 
+// --- backup / restore (Phase 5.5) ----------------------------------------
+
+/// Build the export archive (zip bytes) — `GET /export` streams this.
+pub async fn export_backup(app: &App) -> Result<Vec<u8>> {
+    crate::backup::export(&app.paths, &app.db).await
+}
+
+/// Write the export to `<data>/exports/` and return the path (the Tauri command
+/// uses this; the browser downloads the bytes instead).
+pub async fn export_backup_to_file(app: &App) -> Result<String> {
+    let path = crate::backup::export_to_file(&app.paths, &app.db).await?;
+    Ok(path.to_string_lossy().into_owned())
+}
+
+/// Validate an export archive and stage it for the next startup.
+pub async fn import_backup(app: &App, zip_bytes: &[u8]) -> Result<crate::backup::ImportSummary> {
+    crate::backup::stage_import(&app.paths, zip_bytes, &app.db).await
+}
+
+/// Same, from a path on disk (the Tauri command; the user picks a file).
+pub async fn import_backup_from_file(
+    app: &App,
+    path: &str,
+) -> Result<crate::backup::ImportSummary> {
+    let bytes =
+        std::fs::read(path).map_err(|e| CoreError::Config(format!("cannot read {path}: {e}")))?;
+    import_backup(app, &bytes).await
+}
+
 /// Tail of the current day's log file.
 pub fn recent_logs(app: &App, lines: usize) -> Result<Vec<String>> {
     let dir = app.paths.logs_dir();

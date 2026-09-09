@@ -428,3 +428,26 @@ export const listAgentRuntimes = () =>
   invoke<AgentRuntime[]>("list_agent_runtimes");
 /** Start the Hermes install (background). "started" | "already_installed". */
 export const installHermes = () => invoke<string>("install_hermes");
+
+// --- backup & restore (Phase 5.5) ---
+
+/** What an import staged, to relay before the restart. */
+export interface ImportSummary {
+  /** Core version that wrote the archive. */
+  core_version: string;
+  /** When the archive was created (RFC 3339). */
+  created_at: string;
+  model_count: number;
+  /** `"<name> (<file>)"` for each archived model whose file is not in this
+   *  machine's store — the user must re-import these. */
+  missing_models: string[];
+  restart_required: boolean;
+}
+
+/** Write a portable backup (db snapshot + config + model manifest, **not** the
+ *  model files) to `<data>/exports/` and return its path. */
+export const exportBackup = () => invoke<string>("export_backup");
+/** Validate an export archive and stage it for the next startup. The live db is
+ *  untouched until the app restarts. */
+export const importBackup = (path: string) =>
+  invoke<ImportSummary>("import_backup", { path });

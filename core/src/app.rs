@@ -59,6 +59,9 @@ impl App {
     /// Requires a Tokio runtime.
     pub async fn load(paths: AppPaths) -> Result<Self> {
         paths.ensure()?;
+        if crate::backup::apply_pending_import(&paths)? {
+            tracing::warn!("a backup import was applied on startup");
+        }
         let config = Config::load(&paths)?;
         let db = Database::connect(&paths.db_file()).await?;
         Self::seed(&db).await?;

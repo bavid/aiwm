@@ -660,6 +660,44 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn export_then_import_round_trips_over_http() {
+        let (app, tmp) = test_app().await;
+        let server = ApiServer::bind(app.clone(), SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
+            .await
+            .unwrap();
+        let base = format!("http://{}", server.addr);
+
+        let resp = reqwest::get(format!("{base}/export")).await.unwrap();
+        assert_eq!(resp.status(), 200);
+        assert_eq!(resp.headers()["content-type"], "application/zip");
+        let zip = resp.bytes().await.unwrap();
+        assert_eq!(&zip[..2], b"PK", "a zip archive");
+
+        let summary: serde_json::Value = reqwest::Client::new()
+            .post(format!("{base}/import"))
+            .body(zip.clone())
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(summary["restart_required"], true);
+        assert_eq!(summary["model_count"], 0);
+        assert!(summary["missing_models"].as_array().unwrap().is_empty());
+        // The archive is staged, the live db untouched until the next startup.
+        assert!(tmp.path().join(".pending-import").join("aiwm.db").is_file());
+
+        let junk = reqwest::Client::new()
+            .post(format!("{base}/import"))
+            .body(b"not a zip".to_vec())
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(junk.status(), 400);
+    }
+
+    #[tokio::test]
     async fn install_hermes_refuses_in_offline_mode() {
         let tmp = tempfile::tempdir().unwrap();
         let paths = crate::AppPaths::rooted(tmp.path());

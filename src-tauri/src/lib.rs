@@ -102,6 +102,19 @@ async fn list_agent_runtimes(
 }
 
 #[tauri::command]
+async fn export_backup(app: tauri::State<'_, Arc<App>>) -> Result<String, String> {
+    to_ipc(handlers::export_backup_to_file(&app).await)
+}
+
+#[tauri::command]
+async fn import_backup(
+    app: tauri::State<'_, Arc<App>>,
+    path: String,
+) -> Result<aiwm_core::backup::ImportSummary, String> {
+    to_ipc(handlers::import_backup_from_file(&app, &path).await)
+}
+
+#[tauri::command]
 async fn cancel_job(app: tauri::State<'_, Arc<App>>, id: String) -> Result<Option<bool>, String> {
     to_ipc(handlers::cancel_job(&app, &id).await)
 }
@@ -253,6 +266,8 @@ fn try_run() -> anyhow::Result<()> {
             install_comfyui,
             install_hermes,
             list_agent_runtimes,
+            export_backup,
+            import_backup,
             cancel_job,
             submit_job,
             job_detail,

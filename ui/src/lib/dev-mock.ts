@@ -174,6 +174,16 @@ export function installDevMock(): void {
       case "install_hermes":
         HERMES_INSTALLED = true;
         return "started";
+      case "export_backup":
+        return "E:\\AI\\data\\exports\\aiwm-export-2026-01-01T00-00-00Z.zip";
+      case "import_backup":
+        return {
+          core_version: "0.0.1",
+          created_at: now(),
+          model_count: MODELS.length,
+          missing_models: ["Qwen2.5 Coder (coder.gguf)"],
+          restart_required: true,
+        };
       case "create_agent": {
         const body = (a.body ?? {}) as AnyRecord;
         const agent = {

@@ -174,7 +174,15 @@ erzwingbar, kein `bash -l` — Empfehlung, dreht die Reihenfolge unten um),
   `POST /runtimes/hermes/install` + `GET /agent-runtimes`, `App`-Registrierung,
   „Install Hermes"-Fluss im Profil-Formular. Realer `hermes`-Lauf (manuell)
   kalibriert SSE-Namen + Sandbox-Keys
-- 5.5 Session-Persistenz + Checkpoints + **Export/Import** (config + DB + Agent-Profil)
+- [x] 5.5a **Session-Recovery + Pin/Unpin-Lebenszyklus** — `AgentRepo::recover_orphaned()`
+  failt beim Start jede nicht-terminale Session (Runtime-Prozess tot); der Drain-Task
+  hält ein `Weak` auf die Live-Map und entpinnt/`Failed`-t selbst, wenn ein Runtime
+  ohne `stop()` stirbt
+- [x] 5.5b **Export/Import-Backup** (`core::backup`) — `.zip` aus `aiwm.db`-Snapshot
+  (`VACUUM INTO`) + `config.toml` + Modell-Manifest (SHA-256, **nicht** die Dateien);
+  Import staged nach `<data>/.pending-import/`, `App::load` tauscht beim Neustart
+  (alt → `*.pre-import`). `GET /export` / `POST /import` + Tauri + Settings-Karte
+- 5.5c (vertagt) Kompaktierungs-Anzeige, „Agent pausieren?"-Fluss, Diagnostics-Zeile pro Agent
 - Post-MVP: `aider`, lokaler Repository-Index, MCP-Verwaltung, parallele Sessions
 
 ## Phase 6 — Automatisierung & Model-Manager v2

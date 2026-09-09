@@ -25,7 +25,7 @@ use sqlx::SqlitePool;
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 
-use crate::Result;
+use crate::{CoreError, Result};
 
 static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
 
@@ -102,6 +102,30 @@ impl Database {
         Ok(rows.into_iter().map(|(n,)| n).collect())
     }
 
+    /// Write a consistent snapshot of the whole database to `dest` (`VACUUM
+    /// INTO` — a single clean file, WAL folded in). `dest` must not already
+    /// exist. Only meaningful for an on-disk database: `VACUUM INTO` is a
+    /// silent no-op from a `:memory:` source.
+    pub async fn snapshot_to(&self, dest: &Path) -> Result<()> {
+        // `dest` comes from `AppPaths`, never user input; `''` doubling and the
+        // forward-slash form are belt-and-braces for the SQL string literal.
+        let target = dest
+            .to_string_lossy()
+            .replace('\\', "/")
+            .replace('\'', "''");
+        let sql = format!("VACUUM INTO '{target}'");
+        sqlx::raw_sql(sqlx::AssertSqlSafe(sql))
+            .execute(&self.pool)
+            .await?;
+        if !dest.is_file() {
+            return Err(CoreError::Db(format!(
+                "VACUUM INTO produced no file at {} (in-memory source?)",
+                dest.display()
+            )));
+        }
+        Ok(())
+    }
+
     pub async fn close(&self) {
         self.pool.close().await;
     }
@@ -136,6 +160,24 @@ mod tests {
                 "missing table {expected}"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn snapshot_to_writes_a_readable_copy() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Database::connect(&dir.path().join("live.db"))
+            .await
+            .unwrap();
+        db.settings().set("marker", "kept").await.unwrap();
+
+        let snap = dir.path().join("snap.db");
+        db.snapshot_to(&snap).await.unwrap();
+
+        let reopened = Database::connect(&snap).await.unwrap();
+        assert_eq!(
+            reopened.settings().get("marker").await.unwrap().as_deref(),
+            Some("kept")
+        );
     }
 
     #[tokio::test]

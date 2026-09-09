@@ -67,6 +67,20 @@ OS-Isolation. Für OpenCode (`agent::opencode::forced_config`, via
 - Erforderliche Werte werden beim Start validiert (`Config::validate`), kaputte
   `AIWM_*`-Overrides sind harte Startfehler (kein stilles Fallback).
 
+## Backup / Restore (Phase 5.5b, `core::backup`)
+
+- Das Export-`.zip` enthält einen **`aiwm.db`-Snapshot** (Agent-Transkripte,
+  Modell-Pfade, Job-Historie), `config.toml` und ein Modell-Manifest (Namen +
+  SHA-256) — **nie** die Modell-Dateien. Es ist **unverschlüsselt**; behandle es
+  wie den `%APPDATA%`-Ordner selbst (lokal, nicht unbedacht teilen).
+- Export/Import laufen rein lokal (Datei rein, Datei raus) — kein Netz, kein
+  `offline_mode`-Bezug.
+- Import **überschreibt nichts sofort**: `stage_import` schreibt nur nach
+  `<data>/.pending-import/`, `apply_pending_import` (in `App::load`, vor dem
+  DB-Open) tauscht beim nächsten Start und hebt die ersetzten Dateien als
+  `*.pre-import` auf. Die `aiwm.db` im Archiv wird vor dem Stagen gegen die
+  SQLite-Magic geprüft; ein unpassendes Format-Feld wird abgelehnt.
+
 ## Offene Punkte
 
 - App-Selbst-Update offline (manueller Installer + Signaturprüfung angenommen)
