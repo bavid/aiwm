@@ -299,6 +299,14 @@ impl LlamaCppAdapter {
         }
     }
 
+    /// The loopback origin of the resident model's server (`http://127.0.0.1:<port>`),
+    /// or `None` when nothing is loaded. An agent session points its runtime at
+    /// `<base_url>/v1` (ADR-021).
+    pub fn base_url(&self) -> Option<String> {
+        self.loaded_port()
+            .map(|port| format!("http://127.0.0.1:{port}"))
+    }
+
     /// Generate a completion from the resident model (non-streaming).
     pub async fn complete(&self, prompt: &str, max_tokens: i32) -> Result<String> {
         let port = self
@@ -643,11 +651,16 @@ mod tests {
         assert_eq!(a.vram_used_mb(), 6000);
         assert_eq!(a.health().await, Health::Healthy);
         assert_eq!(a.detail(), Some(format!("attached to qwen on :{port}")));
+        assert_eq!(
+            a.base_url().as_deref(),
+            Some(&*format!("http://127.0.0.1:{port}"))
+        );
         assert_eq!(a.complete("hey", 4).await.unwrap(), "hi from mock");
 
         // Unloading an attached server clears our slot without stopping anything.
         a.unload_model("qwen").await.unwrap();
         assert!(a.loaded_models().is_empty());
+        assert_eq!(a.base_url(), None);
         assert_eq!(LlamaClient::new().health(port).await, Health::Healthy);
     }
 

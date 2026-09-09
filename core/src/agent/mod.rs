@@ -33,7 +33,7 @@ use crate::Result;
 
 /// Which managed agent runtime an adapter wraps. Matches the `agents.adapter`
 /// column and the serde name.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentKind {
     OpenCode,
@@ -47,6 +47,16 @@ impl AgentKind {
             Self::OpenCode => "opencode",
             Self::Hermes => "hermes",
             Self::Fake => "fake",
+        }
+    }
+
+    /// Parse the `agents.adapter` column value.
+    pub fn from_adapter(s: &str) -> Option<Self> {
+        match s {
+            "opencode" => Some(Self::OpenCode),
+            "hermes" => Some(Self::Hermes),
+            "fake" => Some(Self::Fake),
+            _ => None,
         }
     }
 }

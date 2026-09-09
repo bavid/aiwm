@@ -151,8 +151,11 @@ erzwingbar, kein `bash -l` — Empfehlung, dreht die Reihenfolge unten um),
 - [x] 5.1b **OpenCode-Adapter** — supervised `opencode serve` pro Session,
   erzwungene Config (`OPENCODE_CONFIG_CONTENT`), `GET /event` SSE → `AgentEvent`;
   gegen `aiwm-fake-opencode` getestet (open→send→approve→idle)
-- [ ] 5.1c **Agent-Vertikale** — `capability::agent`, Scheduler `reserve + pin`,
-  API + Tauri, Smoke mit echtem Qwen2.5-Coder-GGUF
+- [x] 5.1ca **Agent-Subsystem (Core)** — `capability::agent::AgentSessions` +
+  `CodingRuntime` (Scheduler-Plan + Pin, `LlamaCppAdapter::base_url()`), Event-Drain
+  → `agent_session_events`/`state`; Integrationstest fake-llama + fake-opencode
+- [ ] 5.1cb **Agent-Vertikale (API/UI-Anbindung)** — `App` + Adapter-Registry, API
+  (`/agents`, `/agent-sessions/*`) + Tauri, Smoke mit echtem Qwen2.5-Coder-GGUF
 - 5.2 Sandkasten: Command-Approval-Fluss (UI), Pfad-Allowlist, Offline erzwungen
 - 5.3 Agents-UI-Tab (Profile, Transkript mit Tool-Calls + Approvals, Workspace-Picker)
 - 5.4 **Hermes-Adapter** (`uv`-Installer, gemanagtes Profil, erzwungene `config.yaml`)

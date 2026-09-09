@@ -35,7 +35,8 @@ Export/Import bringt Config + DB + Agent-Profil auf eine zweite Maschine.
 | **5.0** | **Windows-Voraussetzungen verproben**: (a) `opencode` installieren + `opencode serve` + API; (b) Hermes installieren + `bash -l`-Frage klären; (c) **`llama-server`-Tool-Calling** (`--jinja` + Coding-Modell). Ergebnis + Fixes dokumentieren. **Voraussetzung.** | ✅ *(bis auf den echten Coding-Modell-Render — siehe „## 5.0 — Ergebnis" + ADR-021)* |
 | **5.1a** | **Agent-Fundament**: `core::agent` (`AgentAdapter`-Trait, `AgentEvent`/`SessionSpec`/`PermissionDecision`, `FakeAgentAdapter`), Migration `0005` (`agents`, `agent_sessions`, `agent_session_events`) + `db::AgentRepo`. `LlamaServerOptions.jinja`/`chat_template` (+ `[llama]`-Config, Settings-UI) — `--jinja` default an (Tool-Calls). | ✅ |
 | **5.1b** | **OpenCode-Adapter** (nur der Adapter, gegen ein Fixture): `opencode serve --port … --hostname 127.0.0.1` unter `RuntimeSupervisor`, **ein Prozess pro Session**, `cwd` = Workspace; Config **erzwungen** über `OPENCODE_CONFIG_CONTENT` (custom provider → `spec.endpoint.base_url`, `enabled_providers: ["local"]` + `disabled_providers: ["opencode",…]`, `permission` alles `ask`, `webfetch: deny`, `tools.webfetch: false`). `AgentAdapter` für OpenCode: `open_session` / `send` (`POST /session/:id/prompt_async`) / `events` (`GET /event` SSE → `AgentEvent`, mit `roles`-Cache gegen Echo) / `reply_permission` (`POST /permission/{id}/reply`) / `interrupt` (`abort`) / `close_session` (`DELETE /session/:id`). `aiwm-fake-opencode`-Fixture + Integrationstest (open → send → approve → idle, sowie deny). | ✅ |
-| **5.1c** | **Agent-Vertikale**: `capability::agent` / SessionManager treibt eine Session (SSE → `agent_session_events`, Zustand, Permission-Proxy); Scheduler `reserve + pin` fürs Session-Modell (`coding`-Rolle \| explizit), `LlamaCppAdapter::base_url()` public; API `POST /agents`, `POST /agent-sessions`, `POST /agent-sessions/:id/message`, `GET /agent-sessions/:id` + Tauri-Commands. **Smoke** mit einem echten Qwen2.5-Coder-GGUF. | offen |
+| **5.1ca** | **Agent-Subsystem (Core, ohne API)**: `capability::agent::AgentSessions` — eigenes Subsystem, **kein** Job (läuft nicht im Job-Loop). `open` → Coding-Modell auflösen (`coding`-Rolle \| explizit) → `CodingRuntime`-Trait platziert+pinnt es (`HybridScheduler::plan` → load/evict → `pin`, `LlamaCppAdapter::base_url()` neu+public) → `adapter.open_session` gegen `<llama>/v1` → Event-Drain-Task (`AgentEvent` → `agent_session_events` + `agent_sessions.state`). `message`/`reply`/`interrupt`/`stop` (stop = `close_session` + unpin + unload). MVP: **eine Session gleichzeitig**. Integrationstest `agent_session.rs` (fake-llama + fake-opencode, open→send→approve→idle→stop). | ✅ |
+| **5.1cb** | **Agent-Vertikale (API/UI-Anbindung)**: `App` hält `AgentSessions` + Adapter-Registry (`OpenCodeAdapter::discover`); API `POST /agents`, `GET /agents`, `POST /agent-sessions`, `GET /agent-sessions/:id`, `POST /agent-sessions/:id/message`, `POST /agent-sessions/:id/permission`, `POST /agent-sessions/:id/stop` + Tauri-Commands + DTOs. `docs/AGENT_MODELS.md` + **Smoke mit echtem Qwen2.5-Coder-GGUF**. | offen |
 | 5.2 | **Sandkasten**: Approval-Fluss — der SSE-Stream trägt `permission`-Events → Core reicht sie durch → UI „Agent will ausführen: `<cmd>` — Allow / Deny / Always" → Core `POST`t die Entscheidung. **Pfad-Allowlist**: `cwd` + OpenCode-`permission` verbietet Edits außerhalb; Lese-Extras optional read-only. **Offline erzwungen**: `offline_mode` → Netz-Tools hart aus, dokumentiert dass echte Prozess-Isolation vertagt ist. Secrets: kein `.env` / keine Keys in der Agent-Env (Dummy-`apiKey`). | offen |
 | 5.3 | **Agents-UI-Tab**: Profil-Liste + „New profile" (Runtime, Modell [Auto über `coding`], Workspace-Ordner-Picker, erlaubte Pfade, Toolset); Session-Ansicht — Transkript mit Tool-Call-Karten (Datei-Diffs, Shell-Output), Approval-Prompts inline, „Stop"; „Coding"-Dashboard-Button aktiv. Workspace-Registry (Pfad + Label) im Core. | offen |
 | 5.4 | **Hermes-Agent-Adapter**: `uv`-Installer (gepinnte Version) → gemanagtes Profil unter `<data>/agents/hermes/` (`HERMES_HOME`/`-p <profil>`); `config.yaml` **erzwungen** (`provider: custom`, `base_url` = `llama-server`, `security.redact_secrets`, Workspace, `HERMES_STREAM_READ_TIMEOUT=1800`). Treiben über Hermes' HTTP-Server (`/v1/responses` / `/api/jobs`) **oder** `hermes chat -q` pro Turn. Memory (`MEMORY.md`) + Skills leben im Profil-Ordner → Backup (5.5). `bash -l` per 5.0-Entscheidung. | offen |
@@ -291,6 +292,49 @@ Verifiziert:
 - **Kein realer `opencode`-Lauf** — wie beim ComfyUI-`/history`-Key (Phase 4)
   werden die exakten Event-Ecken beim ersten echten Coding-Modell-Lauf in
   5.1c kalibriert.
+
+---
+
+## 5.1ca — Ergebnis (abgeschlossen)
+
+Das Agent-Subsystem im Core — verdrahtet Scheduler + `LlamaCppAdapter` +
+`AgentAdapter` zu einer treibbaren Session. Noch **keine** API/Tauri/UI (5.1cb).
+
+- **`LlamaCppAdapter::base_url()`** (neu, public) → `Some("http://127.0.0.1:<port>")`
+  solange ein Modell resident ist, sonst `None`.
+- **`capability::agent::CodingRuntime`** (Trait) — „halte das Coding-Modell für
+  die Session-Dauer auf der GPU": `acquire(model_id, vram) -> <base>/v1`,
+  `release(model_id)`. `LlamaCodingRuntime` (Produktion): `HybridScheduler::plan`
+  → `RunNow` / `load_model` / evict+load / `SchedulerBlocked` → `pin`. Der Trait
+  hält das Subsystem vom Job-Loop **und** von einem echten `llama-server` im
+  Unit-Test entkoppelt (Stub).
+- **`capability::agent::AgentSessions`** — `new(db, Arc<dyn CodingRuntime>)` +
+  `.with_adapter(Arc<dyn AgentAdapter>)`. `open(agent_id, first_message?)`:
+  Profil laden → `AgentKind::from_adapter` → Adapter da? → Modell auflösen
+  (`profile.model_id` \| `models.pick_for_role("coding")`, sonst Klartext-Fehler)
+  → `coding.acquire` → `create_session` → `adapter.open_session(SessionSpec {
+  workspace, allowed_paths, toolset, endpoint })` → `bind_adapter_session` →
+  `adapter.events` → **Drain-Task** → ggf. `first_message` senden. Schlägt der
+  Runtime-Start fehl: `coding.release` + Session `Failed`. `message` / `reply`
+  (Permission) / `interrupt` / `stop` (= `close_session` + `release` + `Stopped`).
+  **MVP: eine Session gleichzeitig** (`open` lehnt eine zweite mit Klartext ab —
+  der Scheduler pinnt genau ein Agent-Modell).
+- **Drain-Task** (`drain_events`): jedes Event → `append_event(kind, payload)` +
+  `next_state()` (`Permission`→`AwaitingApproval`, `Idle`→`Idle`, `Text`/`Tool`
+  →`Working`, `Error{terminal:true}`→`Failed` und Task-Ende).
+- **`AgentKind`**: `+ Hash`, `+ from_adapter(&str)`.
+
+Verifiziert:
+- **+6 Lib-Tests** (`next_state`-Mapping; „kein Coding-Modell"; „falscher Adapter
+  → nichts gepinnt"; `SchedulerBlocked` → keine Session; voller Zyklus mit
+  Stub-`CodingRuntime` + `FakeAgentAdapter`; eine Session gleichzeitig) →
+  **266 Lib-Tests**. `attach`-Test um `base_url()` erweitert.
+- **+1 Integrationsdatei** `core/tests/agent_session.rs` (2 Tests, `#![cfg(windows)]`):
+  echtes `AgentSessions` + `LlamaCodingRuntime` + `LlamaCppAdapter`(fake-llama) +
+  `OpenCodeAdapter`(fake-opencode) — open (mit Turn) → Modell resident + gepinnt
+  → `permission`-Event parkt die Session → approve → `tool`/`text`/`idle` → stop
+  entpinnt + entlädt; plus Deny-Variante. **40 Integrationstests.**
+- `check.ps1` grün.
 
 ---
 
