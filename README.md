@@ -31,7 +31,7 @@ noch keine echte AI-Capability (die kommt ab Phase 2).
 | WP-9 | CI-Workflow, Git-Hooks (pre-commit fmt, pre-push voller Gate) |
 | WP-10 | ADRs finalisiert, Stub-Docs (MODELS/RUNTIMES/SECURITY/BENCHMARKS) |
 
-**195 Rust-Unit + 17 Integrationstests + 5 pytest** grün · `scripts/check.ps1` grün ·
+**211 Rust-Unit + 23 Integrationstests + 5 pytest** grün · `scripts/check.ps1` grün ·
 **null `unsafe`** im Produktivcode.
 
 **Phase 2 (MVP) ✅ abgeschlossen** — Scheiben 2.1–2.7 + durchgehender
@@ -57,6 +57,13 @@ Modell-Wechsel-Test (`core/tests/model_swap.rs`).
   (`LinkStrategy::ExtraPath` statt Junction — die überspannt keine Volumes,
   ADR-019), bei jedem Server-Start neu geschrieben. UI-Import-Formular mit
   Typ-Dropdown.
+- **3.4** ✅ **`capability::image`**: `job_type=image` → feste SDXL-txt2img-
+  Pipeline (`core::pipeline`, Workflow-JSON + Param-Substitution) → `POST /prompt`
+  → `/history` pollen → Bild über `/view` nach `<outputs>/<job_id>.png`,
+  `jobs.output_path`; Cancel = `POST /interrupt`. `Auto` wählt das
+  `base_diffusion`-Modell, der zufällige Seed wird in die Job-Params
+  zurückgeschrieben. Der Scheduler tauscht LLM ↔ Diffusion ums VRAM-Budget (wie
+  beim Modell-Wechsel).
 
 - **2.1** ✅ `ModelRepo`, eigener bounded GGUF-Header-Reader, manueller Import in
   den kanonischen Store, UI-Tab „Models".

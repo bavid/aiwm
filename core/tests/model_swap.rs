@@ -13,7 +13,9 @@ use std::sync::Arc;
 
 use aiwm_core::db::{Database, NewJob, NewModel};
 use aiwm_core::orchestrator::{JobEngine, JobOutcome, JobState};
-use aiwm_core::runtime::{LlamaCppAdapter, LlamaServerOptions, RuntimeAdapter, RuntimeRegistry};
+use aiwm_core::runtime::{
+    ComfyDirs, ComfyUiAdapter, LlamaCppAdapter, LlamaServerOptions, RuntimeAdapter, RuntimeRegistry,
+};
 use aiwm_core::scheduler::HybridScheduler;
 
 fn fake_llama_bin() -> PathBuf {
@@ -42,12 +44,24 @@ impl Harness {
             ),
         );
         registry.register(llama.clone());
+        let comfyui = Arc::new(ComfyUiAdapter::with_launch(
+            db.clone(),
+            None,
+            ComfyDirs {
+                base: tmp.path().join("comfyui-data"),
+                output: tmp.path().join("outputs"),
+                models_store: tmp.path().join("store"),
+            },
+        ));
+        registry.register(comfyui.clone());
         let scheduler = Arc::new(HybridScheduler::new(registry.clone(), budget_mb));
         let engine = Arc::new(JobEngine::new(
             db.clone(),
             registry,
             scheduler,
             llama.clone(),
+            comfyui,
+            tmp.path().join("outputs"),
         ));
         Self {
             db,

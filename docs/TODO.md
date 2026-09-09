@@ -62,20 +62,27 @@ hierher, damit nichts verloren geht.
   ADR-018). Offen: Cleanup von `runtimes/comfyui/{<alter-tag>,uv-cache,python}`
   beim Versions-Bump; freien Speicherplatz vor dem torch-Download prüfen
 - ComfyUI cu130-torch: GPU-**Treiber**-Kompatibilität auf der echten 4080 Super
-  verifizieren, sobald 3.4 ein Bild rendert (der 3.2a-Smoke prüft nur
-  `import torch`, nicht die CUDA-Laufzeit). Fällt es aus → cu128/cu126-Pin.
+  verifizieren — **weiterhin offen**: der 3.4-Smoke fährt gegen die
+  Fake-ComfyUI, nicht die echte CUDA-Laufzeit. Sobald die echte ComfyUI ein
+  Bild rendert prüfen; fällt es aus → cu128/cu126-Pin.
 - `.safetensors`-Header-Inspektion (3.3 vertagt): der JSON-Header am Dateianfang
   trägt Tensor-Namen/Shapes/dtype — daraus ließen sich Arch-Familie (SDXL/Flux/
   SD3.5), Precision (fp16/fp8) und ein besserer VRAM-Estimate ableiten, statt
-  „Dateigröße + 2 GB". Braucht einen bounded Reader wie beim GGUF-Header. Bis
-  dahin verlässt sich der Import auf den Typ-Hint aus der UI + die Endung.
-- `import_model` (3.3): Bild-Modelle bekommen noch keine `model_roles`
-  (`base_diffusion`/`vae`/…). Nachziehen, sobald die `Auto`-Pipeline-Auflösung
-  in 3.4/3.6 sie braucht.
+  Namens-Heuristik + „Dateigröße + Familie-Headroom". Braucht einen bounded
+  Reader wie beim GGUF-Header.
+- ~~`import_model`: Bild-Modelle bekommen keine `model_roles`~~ → ✅ 3.4:
+  `ModelKind::default_role()` (`Checkpoint`/`DiffusionModel` → `base_diffusion`).
+  VAE/LoRA/Text-Encoder bekommen noch keine — nachziehen, wenn 3.6 eine
+  Pipeline baut, die sie per Rolle auflöst (aktuell nur `base_diffusion`).
 - ComfyDirs (3.3): der Store-Pfad landet über `aiwm-model-paths.yaml` erst beim
   **nächsten** ComfyUI-Start in der laufenden Runtime. Bei laufendem Server nach
   einer Store-Pfad-Änderung wäre ein Neu-Schreiben + `POST /free` oder ein
   Server-Neustart sauberer — für den MVP ok (Settings sagt „Neustart nötig").
+- Bild-Job (3.4): MVP pollt `/history` (750 ms). `/ws`-Fortschritt
+  (`progress` / `executing` / `executed`) an die UI streamen — sinnvoll ab 3.5,
+  wenn eine Fortschrittsanzeige nötig ist. Auch: SDXL-Refiner-Pass,
+  Batch-Größe > 1, ein HTTP-Endpunkt der das fertige Bild ausliefert (3.5 liest
+  es sonst direkt von der Platte).
 
 ## Vor Phase 5 (Agents)
 - Hermes Agent auf der echten Windows-Maschine: `bash -l`-Abhängigkeit

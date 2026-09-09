@@ -16,7 +16,8 @@
 //! - [`db`]           — sqlx pool, migrations, repositories (WP-2)
 //! - [`runtime`]      — `RuntimeAdapter` trait, supervisor, llama.cpp (2.2) + ComfyUI (3.1) adapters
 //! - [`orchestrator`] — job state machine + engine (WP-5)
-//! - [`capability`]   — capability-specific job bodies (chat, 2.4)
+//! - [`capability`]   — capability-specific job bodies (chat 2.4, image 3.4)
+//! - [`pipeline`]     — fixed image workflow-JSON templates (3.4)
 //! - [`compat`]        — VRAM / KV-cache fit estimate before a model load (2.6)
 //! - [`link`]         — canonical model file ↔ runtime layout (junction/copy, 2.3)
 //! - [`scheduler`]    — `Scheduler` trait + hybrid scheduler skeleton (WP-5)
@@ -35,6 +36,7 @@ pub mod logging;
 pub mod model;
 pub mod orchestrator;
 pub mod paths;
+pub mod pipeline;
 pub mod runtime;
 pub mod scheduler;
 pub mod sidecar;

@@ -27,7 +27,7 @@ genutzt.
 |---|---|---|
 | Fake | `FakeRuntimeAdapter` | ✅ vollständig (Tests) |
 | llama.cpp / llama-server | `LlamaCppAdapter` | ✅ Adapter (2.2a) + Installer (2.2b): Download/Verify/Entpacken des gepinnten CUDA-Builds |
-| ComfyUI | `ComfyUiAdapter` | ✅ Adapter (3.1) + Installer (3.2) + getypter Bild-Store via `extra_model_paths.yaml` (3.3, ADR-019). Offen: Bild-Job (3.4) |
+| ComfyUI | `ComfyUiAdapter` | ✅ Adapter (3.1) + Installer (3.2) + getypter Bild-Store via `extra_model_paths.yaml` (3.3, ADR-019) + Bild-Job `capability::image` (3.4). Offen: UI + Galerie (3.5) |
 | Ollama | `OllamaAdapter` | optional, Phase 3+ (Duplikate transparent, ADR-006) |
 | LM Studio | — | vorerst nicht (proprietär, GUI-zentriert); wenn doch, `strategy_for` → `Junction` |
 
@@ -90,6 +90,15 @@ genutzt.
   /runtimes/comfyui/install` (202) startet im Hintergrund; Fortschritt in `GET
   /runtimes` → `detail`. `offline_mode` = Hard-Refusal. Idempotent (`venv_python`
   + `main.py` + `<node>/__init__.py`).
+- **Bild-Job (3.4):** `ComfyClient` bekam `submit_prompt` (`POST /prompt`),
+  `history` (`GET /history/{id}`), `view` (`GET /view`); `interrupt` ist der
+  Cancel-Hook. `generate_image(workflow, cancel)` reiht die API-Format-Graph
+  ein, pollt `/history` alle 750 ms, holt das Bild via `/view` — spiegelt
+  `LlamaCppAdapter::stream_completion`. Die Graph baut `core::pipeline`
+  (`sdxl_txt2img`, feste Templates, PHASE_3_PLAN §C). Der `JobEngine`-Body
+  (`job_type=image`) schreibt sie nach `<outputs>/<job_id>.png` und setzt
+  `jobs.output_path`; `Auto` wählt das `base_diffusion`-Modell. Die
+  600-s-Deckelung lässt einen Job eher fehlschlagen als hängen.
 
 ## Link-Manager (`core::link`, ADR-007)
 

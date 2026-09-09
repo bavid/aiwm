@@ -79,6 +79,8 @@ impl App {
             runtimes.clone(),
             scheduler.clone(),
             llama.clone(),
+            comfyui.clone(),
+            paths.outputs_dir(),
         ));
         let offline = Arc::new(AtomicBool::new(config.offline_mode));
 

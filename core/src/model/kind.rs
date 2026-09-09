@@ -63,6 +63,17 @@ impl ModelKind {
         self == Self::Chat
     }
 
+    /// The model role the importer assigns so `Auto` capability selection can
+    /// find this model. Chat models get their roles from the user; image models
+    /// are typed, so the kind implies the role.
+    pub fn default_role(self) -> Option<&'static str> {
+        match self {
+            // The checkpoint / diffusion transformer a text-to-image job needs.
+            Self::Checkpoint | Self::DiffusionModel => Some("base_diffusion"),
+            Self::Chat | Self::Vae | Self::Lora | Self::TextEncoder => None,
+        }
+    }
+
     /// Path under the store root, e.g. `"llm"` or `"image/checkpoints"`.
     pub fn store_subdir(self) -> &'static str {
         match self {
@@ -155,5 +166,16 @@ mod tests {
             assert!(k.comfy_folder().is_some());
             assert!(k.store_subdir().starts_with("image/"));
         }
+    }
+
+    #[test]
+    fn checkpoints_carry_the_base_diffusion_role() {
+        assert_eq!(ModelKind::Checkpoint.default_role(), Some("base_diffusion"));
+        assert_eq!(
+            ModelKind::DiffusionModel.default_role(),
+            Some("base_diffusion")
+        );
+        assert_eq!(ModelKind::Vae.default_role(), None);
+        assert_eq!(ModelKind::Chat.default_role(), None);
     }
 }

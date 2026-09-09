@@ -1,31 +1,58 @@
 //! Test fixture: a minimal ComfyUI stand-in.
 //!
-//! Speaks just enough of the real HTTP API for the runtime adapter tests —
-//! `GET /system_stats`, `POST /free`, `POST /interrupt` — and parses `--port`
-//! from the command line the way the real server does, ignoring every other
-//! flag. Queueing prompts (`/prompt`, `/history`, `/view`) is added when
-//! `capability::image` lands (3.4). Not part of the shipped product; it exists
-//! so the spawn / health / serve / stop cycle can be exercised without a
-//! multi-GB Python install.
+//! Speaks just enough of the real HTTP API for the runtime + image-capability
+//! tests: `GET /system_stats`, `POST /free`, `POST /interrupt`, `POST /prompt`,
+//! `GET /history/{id}`, `GET /view`. It parses `--port` the way the real server
+//! does and ignores every other real flag. Not part of the shipped product —
+//! it exists so the spawn / health / render / cancel cycle can be exercised
+//! without a multi-GB Python install.
 //!
-//! `--fake-ready-ms <n>` delays the socket bind by `n` milliseconds, simulating
-//! a slow Python + torch cold start (nothing listens until then).
+//! Fixture-only flags:
+//! - `--fake-ready-ms <n>`  — delay the socket bind by `n` ms (slow cold start).
+//! - `--fake-render-ms <n>` — `/history` reports "pending" until `n` ms after
+//!   the prompt was submitted, then "done" (exercises the poll loop / cancel).
+//! - `--fake-history-error` — `/history` reports an execution error instead.
 
+use std::collections::HashMap;
 use std::net::Ipv4Addr;
-use std::time::Duration;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
+use axum::extract::{Path, Query, State};
 use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use serde_json::json;
+use serde_json::{json, Value};
+
+/// A 1×1 transparent PNG — what `/view` hands back.
+const TINY_PNG: &[u8] = &[
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+    0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4,
+    0x89, 0x00, 0x00, 0x00, 0x0a, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9c, 0x63, 0x00, 0x01, 0x00, 0x00,
+    0x05, 0x00, 0x01, 0x0d, 0x0a, 0x2d, 0xb4, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae,
+    0x42, 0x60, 0x82,
+];
+
+#[derive(Clone)]
+struct Fixture {
+    render_delay: Duration,
+    history_error: bool,
+    prompts: Arc<Mutex<HashMap<String, Prompt>>>,
+}
+
+struct Prompt {
+    submitted_at: Instant,
+    filename_prefix: String,
+}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let mut port = 8188u16;
     let mut ready_ms = 0u64;
+    let mut render_ms = 0u64;
+    let mut history_error = false;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
-        // The real server takes many flags; the fixture needs only these two.
         match arg.as_str() {
             "--port" => {
                 if let Some(v) = args.next() {
@@ -35,6 +62,10 @@ async fn main() -> anyhow::Result<()> {
             "--fake-ready-ms" => {
                 ready_ms = args.next().and_then(|v| v.parse().ok()).unwrap_or(0);
             }
+            "--fake-render-ms" => {
+                render_ms = args.next().and_then(|v| v.parse().ok()).unwrap_or(0);
+            }
+            "--fake-history-error" => history_error = true,
             _ => {}
         }
     }
@@ -43,10 +74,20 @@ async fn main() -> anyhow::Result<()> {
         tokio::time::sleep(Duration::from_millis(ready_ms)).await;
     }
 
+    let state = Fixture {
+        render_delay: Duration::from_millis(render_ms),
+        history_error,
+        prompts: Arc::new(Mutex::new(HashMap::new())),
+    };
+
     let app = Router::new()
         .route("/system_stats", get(system_stats))
         .route("/free", post(ok))
-        .route("/interrupt", post(ok));
+        .route("/interrupt", post(ok))
+        .route("/prompt", post(submit_prompt))
+        .route("/history/{id}", get(history))
+        .route("/view", get(view))
+        .with_state(state);
 
     let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, port)).await?;
     eprintln!("fake-comfy: listening on 127.0.0.1:{port}");
@@ -54,7 +95,7 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn system_stats() -> Json<serde_json::Value> {
+async fn system_stats() -> Json<Value> {
     Json(json!({
         "system": {
             "os": "nt",
@@ -73,4 +114,64 @@ async fn system_stats() -> Json<serde_json::Value> {
 
 async fn ok() -> impl IntoResponse {
     Json(json!({ "ok": true }))
+}
+
+async fn submit_prompt(State(fx): State<Fixture>, Json(body): Json<Value>) -> Json<Value> {
+    let prefix = body
+        .pointer("/prompt/9/inputs/filename_prefix")
+        .and_then(Value::as_str)
+        .unwrap_or("fake")
+        .to_string();
+    let id = format!("p-{}", fx.prompts.lock().map(|m| m.len()).unwrap_or(0) + 1);
+    if let Ok(mut prompts) = fx.prompts.lock() {
+        prompts.insert(
+            id.clone(),
+            Prompt {
+                submitted_at: Instant::now(),
+                filename_prefix: prefix,
+            },
+        );
+    }
+    Json(json!({ "prompt_id": id, "number": 1, "node_errors": {} }))
+}
+
+async fn history(State(fx): State<Fixture>, Path(id): Path<String>) -> Json<Value> {
+    let Ok(prompts) = fx.prompts.lock() else {
+        return Json(json!({}));
+    };
+    let Some(prompt) = prompts.get(&id) else {
+        return Json(json!({}));
+    };
+    if prompt.submitted_at.elapsed() < fx.render_delay {
+        return Json(json!({})); // still rendering
+    }
+    let entry = if fx.history_error {
+        json!({
+            "status": {
+                "status_str": "error",
+                "completed": false,
+                "messages": [
+                    ["execution_start", {}],
+                    ["execution_error", { "exception_message": "fake render error" }]
+                ]
+            }
+        })
+    } else {
+        json!({
+            "status": { "status_str": "success", "completed": true, "messages": [] },
+            "outputs": {
+                "9": { "images": [
+                    { "filename": format!("{}_00001_.png", prompt.filename_prefix),
+                      "subfolder": "", "type": "output" }
+                ]}
+            }
+        })
+    };
+    let mut out = serde_json::Map::new();
+    out.insert(id, entry);
+    Json(Value::Object(out))
+}
+
+async fn view(Query(_q): Query<HashMap<String, String>>) -> impl IntoResponse {
+    ([(axum::http::header::CONTENT_TYPE, "image/png")], TINY_PNG)
 }

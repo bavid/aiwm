@@ -22,10 +22,10 @@ use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
-use tokio::sync::Mutex as AsyncMutex;
+use tokio::sync::{watch, Mutex as AsyncMutex};
 
-use self::client::ComfyClient;
 pub use self::client::SystemStats;
+use self::client::{ComfyClient, PromptOutcome};
 use self::install::InstallPhase;
 use self::launch::{build_spawn_spec, resolve_launch};
 pub use self::launch::{ComfyDirs, ComfyLaunch};
@@ -47,6 +47,12 @@ const HEALTH_POLL_INTERVAL: Duration = Duration::from_millis(500);
 /// ComfyUI + torch import can take a while on a cold start.
 const SERVER_READY_TIMEOUT: Duration = Duration::from_secs(120);
 
+/// How often [`ComfyUiAdapter::generate_image`] polls `GET /history`.
+const IMAGE_POLL_INTERVAL: Duration = Duration::from_millis(750);
+/// Upper bound on one image job — a slow first checkpoint load plus a large,
+/// high-step render. Past this the job fails rather than hanging forever.
+const IMAGE_GENERATE_TIMEOUT: Duration = Duration::from_secs(600);
+
 /// Progress of [`ComfyUiAdapter::install`], mirrored to the UI status line.
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "state", rename_all = "snake_case")]
@@ -67,6 +73,16 @@ pub(super) fn comfy_err(msg: impl std::fmt::Display) -> CoreError {
         runtime: RUNTIME_ID.into(),
         message: msg.to_string(),
     }
+}
+
+/// A rendered image, straight from ComfyUI's `/view` — the caller writes it to
+/// the outputs directory.
+#[derive(Debug, Clone)]
+pub struct GeneratedImage {
+    pub bytes: Vec<u8>,
+    /// File extension for the saved image, from the returned filename
+    /// (`"png"` unless a workflow asked for something else).
+    pub extension: String,
 }
 
 /// How the adapter finds the ComfyUI entrypoint.
@@ -254,6 +270,57 @@ impl ComfyUiAdapter {
     pub async fn system_stats(&self) -> Option<SystemStats> {
         let port = self.up_port()?;
         self.client.system_stats(port).await.ok()
+    }
+
+    /// Run one image `workflow` (an API-format graph from [`crate::pipeline`])
+    /// on the running server: queue it, poll `GET /history` until it finishes,
+    /// then fetch the image. `Ok(None)` means `cancel` flipped mid-render — the
+    /// workflow was interrupted. The server and its resident checkpoint stay up.
+    pub async fn generate_image(
+        &self,
+        workflow: &serde_json::Value,
+        mut cancel: watch::Receiver<bool>,
+    ) -> Result<Option<GeneratedImage>> {
+        let port = self
+            .up_port()
+            .ok_or_else(|| comfy_err("the ComfyUI server is not running"))?;
+        let client_id = uuid::Uuid::now_v7().to_string();
+        let prompt_id = self
+            .client
+            .submit_prompt(port, workflow, &client_id)
+            .await?;
+
+        let deadline = Instant::now() + IMAGE_GENERATE_TIMEOUT;
+        loop {
+            if *cancel.borrow_and_update() {
+                let _ = self.client.interrupt(port).await;
+                return Ok(None);
+            }
+            match self.client.history(port, &prompt_id).await? {
+                PromptOutcome::Pending => {}
+                PromptOutcome::Failed(msg) => return Err(comfy_err(msg)),
+                PromptOutcome::Done(images) => {
+                    let image = images
+                        .into_iter()
+                        .next()
+                        .ok_or_else(|| comfy_err("ComfyUI finished but produced no image"))?;
+                    let extension = image
+                        .filename
+                        .rsplit_once('.')
+                        .map_or_else(|| "png".to_string(), |(_, ext)| ext.to_ascii_lowercase());
+                    let bytes = self.client.view(port, &image).await?;
+                    return Ok(Some(GeneratedImage { bytes, extension }));
+                }
+            }
+            if Instant::now() >= deadline {
+                let _ = self.client.interrupt(port).await;
+                return Err(comfy_err(format!(
+                    "image generation did not finish within {}s",
+                    IMAGE_GENERATE_TIMEOUT.as_secs()
+                )));
+            }
+            tokio::time::sleep(IMAGE_POLL_INTERVAL).await;
+        }
     }
 
     /// Start the supervised process if it is down and wait for `/system_stats`.

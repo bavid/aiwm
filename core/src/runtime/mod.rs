@@ -17,7 +17,7 @@ mod llamacpp;
 mod registry;
 mod supervisor;
 
-pub use comfyui::{ComfyDirs, ComfyLaunch, ComfyUiAdapter, SystemStats};
+pub use comfyui::{ComfyDirs, ComfyLaunch, ComfyUiAdapter, GeneratedImage, SystemStats};
 pub use fake::{FakeConfig, FakeRuntimeAdapter};
 pub use job::JobObject;
 pub use llamacpp::{GenerationEvent, InstallState, LlamaCppAdapter, LlamaServerOptions};

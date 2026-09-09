@@ -16,7 +16,7 @@ manuelles Eingreifen → Netz trennen → das schon Installierte läuft weiter.
 | **3.2a** | ComfyUI-**Installer** (Kern): `uv` bootstrappen (verifizierter Static-Binary), ComfyUI-Quelle am gepinnten Tag (verifiziertes GitHub-`.zip`, flach entpackt), `uv venv --python 3.13` (lädt Python) + `uv pip install torch … --index-url cu130` + `-r requirements.txt` — die `uv`-Schritte hinter einem `CmdRunner`-Trait (unit-getestet). `offline_mode`-Hard-Refusal, idempotent, `InstallState`/`detail()`, `RuntimeRepo`, `POST /runtimes/comfyui/install`, Diagnostics-„Set up"-Knopf | ✅ |
 | **3.2b** | gepinnter Custom-Node-Satz — **exakt einer**: `city96/ComfyUI-GGUF` am Commit `6ea2651e` (verifiziertes `.zip` → `custom_nodes/ComfyUI-GGUF/`, `uv pip install -r <node>/requirements.txt` = `gguf`/`sentencepiece`/`protobuf` in die venv). Idempotenz + „installed" verlangen jetzt auch den Node. SDXL-txt2img braucht **keine** Custom Nodes | ✅ |
 | **3.3** | Getypter Bild-Store `<store>/image/{checkpoints,diffusion_models,vae,loras,text_encoders}/`; `ModelKind` + `import_model` nimmt `.safetensors` (+ Pickle-Ablehnung), routet per Typ-Hint/Endung; ComfyUI-Zugriff über **`extra_model_paths.yaml`** statt Junction (Store auf `E:`, Runtime auf `C:` → Junction unmöglich; ADR-019); `model_links` = `comfyui`/`extra_path`; UI-Typ-Dropdown | ✅ |
-| 3.4 | `capability::image`: `job_type=image`, Params (prompt, negative, w/h, steps, cfg, seed, model|Auto über Rolle); **feste Pipeline** = Workflow-JSON-Template + Param-Substitution (`core::pipeline`); `POST /prompt` → `/history/{id}` pollen → Bild via `/view` nach `<data>/outputs/<job_id>.png` → `jobs.output_path`; Cancel via `POST /interrupt`; VRAM-Schätzung pro Familie | offen |
+| 3.4 | `capability::image`: `job_type=image`, Params (prompt, negative, w/h, steps, cfg, seed, model|Auto über Rolle `base_diffusion`); **feste Pipeline** = Workflow-JSON-Template + Param-Substitution (`core::pipeline`); `POST /prompt` → `/history/{id}` pollen → Bild via `/view` nach `<outputs>/<job_id>.png` → `jobs.output_path`; Cancel via `POST /interrupt`; VRAM-Schätzung pro Familie (Import-Zeit, Namens-Heuristik) | ✅ |
 | 3.5 | UI: Tab „Image" — Prompt/Negativ, Größe/Steps/CFG/Seed, Model [Auto], „Generate"; Ergebnisbild; einfache **Galerie** (Bild-Jobs mit Thumbnail, Klick → Prompt/Seed/Modell); Dashboard-Button „Generate Image" aktiv | offen |
 | 3.6 | Zweites Template **Flux.1-dev (GGUF Q8)** über `ComfyUI-GGUF`; `docs/IMAGE_MODELS.md` (kuratierte Modelle: SHA256, Quelle HF, Lizenz, empfohlene Settings); kuratierte „Known models"-Liste für den assistierten Import | offen |
 | 3.7 | Politur: ComfyUI-Optionen in Settings (`--lowvram`-Schalter / VRAM-Modus), Diagnostics-Statuszeile, Output-Retention-Hinweis; Scheduler: Diffusion-Slot neben LLM-Slot sauber verproben | offen |
@@ -314,6 +314,66 @@ Verifiziert:
 Bewusst **nicht** in 3.3: `.safetensors`-Header-Inspektion (Arch/Precision aus
 dem JSON-Header — später), echtes Junctionen gegen LM Studio (Phase 3+),
 Modell-Rollen für Bild (`base_diffusion` etc. — 3.4, wenn `Auto` sie braucht).
+
+---
+
+## 3.4 — Ergebnis (abgeschlossen)
+
+Entscheidung **C** umgesetzt: **nur feste Pipelines**, ein Template
+(`sdxl_txt2img`) — die kanonische ComfyUI-Default-Graph, braucht keine Custom
+Nodes.
+
+- **`core::pipeline`** (neu): `sdxl_txt2img(&Txt2ImgInputs) -> serde_json::Value`
+  baut die API-Format-Graph (`CheckpointLoaderSimple` → 2× `CLIPTextEncode` →
+  `EmptyLatentImage` → `KSampler` → `VAEDecode` → `SaveImage`), Params in die
+  bekannten Node-Slots substituiert. Flux + eine TOML-Registry kommen mit 3.6.
+- **`ComfyClient`** (3.1 erweitert): `submit_prompt` (`POST /prompt` →
+  `prompt_id`, `node_errors` werden zu Klartext), `history` (`GET /history/{id}`
+  → `Pending` / `Done(Vec<ImageRef>)` / `Failed(msg)`), `view` (`GET /view` →
+  Bytes). `interrupt` ist jetzt live (Cancel-Hook).
+- **`ComfyUiAdapter::generate_image(workflow, cancel) -> Option<GeneratedImage>`**
+  (analog `LlamaCppAdapter::stream_completion`): Prompt einreihen, alle 750 ms
+  `/history` pollen, bei Fertigstellung das erste Bild via `/view` holen.
+  `None` = mittendrin gecancelt (`POST /interrupt`, Server bleibt oben).
+  Timeout 600 s → Job schlägt fehl statt zu hängen.
+- **`capability::image`**: `ImageRequest::from_params` (nur `prompt` Pflicht;
+  w/h auf Vielfache von 8 gerundet + geklemmt, steps/cfg geklemmt, fehlender
+  Seed → zufällig, JSON-sicher < 2⁵³). `run(...)` baut die Pipeline, ruft
+  `generate_image`, schreibt `<outputs>/<job_id>.<ext>`, Event-Trail. Der
+  aufgelöste Request (konkreter Seed) wird via `JobRepo::set_params` in die
+  Job-Params zurückgeschrieben — reproduzierbar, und die Galerie (3.5) hat
+  konkrete Zahlen.
+- **`JobEngine`**: `resolve_image_target` — explizites Checkpoint oder `Auto`
+  (`pick_for_role("base_diffusion")`, most-recently-used). VRAM-Reservierung =
+  der Import-Schätzwert des Checkpoints (kein KV-Cache). Image-Body im
+  `try_drive` nach `Running`; `output_path` wandert über den `Post→Completed`-
+  Patch in die DB. Der Scheduler ist modalitäts-agnostisch — ein Image-Job
+  evictet bei Bedarf das residente LLM (und umgekehrt).
+- **`import_model`** (3.3-Nachzug): `ModelKind::default_role()` → `Checkpoint` /
+  `DiffusionModel` bekommen `base_diffusion`; Familie + VRAM-Headroom aus einer
+  Datei-Namens-Heuristik (`flux`/`sd3` → +3 GB, `xl` → +2 GB).
+- **`aiwm-fake-comfy`**: `/prompt` / `/history/{id}` / `/view` (1×1-PNG) +
+  `--fake-render-ms` / `--fake-history-error` für die Poll- / Cancel- / Fehler-
+  Tests.
+
+Bewusst **nicht** in 3.4: die UI (→ 3.5), `/ws`-Fortschritt (MVP pollt), SDXL-
+Refiner-Pass, Batch > 1, ein HTTP-Endpunkt fürs Bild (die UI liest die Datei
+direkt, 3.5), echte per-Familie-VRAM-Zahlen (brauchen Header-Inspektion +
+Kalibrierung, Phase 6).
+
+Verifiziert:
+- 16 neue Unit-Tests (`pipeline` 2, `capability::image` 6, `ComfyClient` 5,
+  `ModelKind::default_role` 1, `import` 1 Flux-Familie, `JobRepo::set_params` 1).
+  6 Integrationstests `tests/image_job.rs` gegen den Fixture-Subprozess: Auto-Job
+  → PNG auf der Platte + gepinnter Seed, explizites Checkpoint, fehlender Prompt,
+  kein Modell, ComfyUI-Execution-Error, Cancel mitten im Rendern.
+  `check.ps1` grün (211 Unit + 23 Integ.).
+- **Live** (`aiwm-cored` + Fake-ComfyUI über `AIWM_COMFYUI_PYTHON`): SDXL-
+  `.safetensors` importiert (`family=sdxl`, `roles=[base_diffusion]`), Auto-
+  Image-Job `queued → preparing → completed`, ComfyUI lazy gestartet,
+  `output_path` = `<outputs>/<job_id>.png` (echte PNG-Bytes), `params.seed`
+  konkret; zweiter Job mit langsamem `/history` → `POST …/cancel` →
+  `cancelled`, keine Datei.
 
 ---
 

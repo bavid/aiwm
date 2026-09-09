@@ -323,6 +323,20 @@ impl<'a> JobRepo<'a> {
         Ok(())
     }
 
+    /// Replace a job's `params_json`. Used once the engine has resolved a
+    /// request (e.g. an image job's random seed) so the stored params are
+    /// concrete and reproducible. No transition, no event.
+    pub async fn set_params(&self, id: &str, params: &serde_json::Value) -> Result<()> {
+        let json = serde_json::to_string(params)
+            .map_err(|e| CoreError::Db(format!("serialize params: {e}")))?;
+        sqlx::query("UPDATE jobs SET params_json = $1 WHERE id = $2")
+            .bind(&json)
+            .bind(id)
+            .execute(self.pool)
+            .await?;
+        Ok(())
+    }
+
     pub async fn append_event(&self, id: &str, level: EventLevel, message: &str) -> Result<()> {
         sqlx::query("INSERT INTO job_events (job_id, ts, level, message) VALUES ($1, $2, $3, $4)")
             .bind(id)
@@ -469,6 +483,25 @@ mod tests {
         assert!(events
             .iter()
             .any(|e| e.level == EventLevel::Error && e.message.contains("boom")));
+    }
+
+    #[tokio::test]
+    async fn set_params_replaces_the_stored_request() {
+        let db = db().await;
+        let job = db
+            .jobs()
+            .insert(NewJob::new("image").on("comfyui", "sdxl", 8_000))
+            .await
+            .unwrap();
+
+        let mut params = job.params.clone();
+        params["seed"] = serde_json::json!(4242);
+        db.jobs().set_params(&job.id, &params).await.unwrap();
+
+        let stored = db.jobs().get(&job.id).await.unwrap().unwrap();
+        assert_eq!(stored.params["seed"], 4242);
+        // The engine metadata `on()` wrote is still there.
+        assert_eq!(stored.vram_needed_mb(), 8_000);
     }
 
     #[tokio::test]

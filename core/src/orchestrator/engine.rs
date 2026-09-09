@@ -3,10 +3,12 @@
 //! drive the job through the state machine — recording every transition and
 //! event.
 //!
-//! `job_type == "chat"` runs a real body ([`crate::capability::chat`]); every
-//! other type is still a no-op placeholder.
+//! `job_type == "chat"` streams from llama.cpp ([`crate::capability::chat`]);
+//! `job_type == "image"` runs a fixed workflow on ComfyUI
+//! ([`crate::capability::image`]); every other type is still a no-op placeholder.
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use serde::Serialize;
@@ -14,13 +16,20 @@ use tokio::sync::watch;
 
 use super::JobState;
 use crate::capability::chat::{self, ChatOutcome};
+use crate::capability::image::{self, ImageOutcome};
 use crate::compat::{self, VramEstimate};
-use crate::db::{EventLevel, Job, JobPatch, NewJob};
-use crate::runtime::{LlamaCppAdapter, RuntimeRegistry};
+use crate::db::{EventLevel, Job, JobPatch, Model, NewJob};
+use crate::runtime::{ComfyUiAdapter, LlamaCppAdapter, RuntimeRegistry};
 use crate::scheduler::{Decision, PlanRequest, Scheduler};
 use crate::{CoreError, Database, Result};
 
 const CANCEL_REASON: &str = "cancelled by user";
+/// Runtime ids the engine wires capability bodies to.
+const LLAMACPP: &str = "llamacpp";
+const COMFYUI: &str = "comfyui";
+/// Fallback VRAM reservation for an image checkpoint whose import estimate is
+/// missing — enough for SDXL on a 16 GB card.
+const IMAGE_VRAM_FALLBACK_MB: u64 = 8192;
 
 /// How a job came to rest.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -51,6 +60,9 @@ pub struct JobEngine {
     registry: RuntimeRegistry,
     scheduler: Arc<dyn Scheduler>,
     llama: Arc<LlamaCppAdapter>,
+    comfyui: Arc<ComfyUiAdapter>,
+    /// Where image jobs write their output (`<job_id>.png`).
+    outputs_dir: PathBuf,
     /// Cancel signals for jobs the engine is actively driving right now.
     cancels: Mutex<HashMap<String, watch::Sender<bool>>>,
 }
@@ -61,12 +73,16 @@ impl JobEngine {
         registry: RuntimeRegistry,
         scheduler: Arc<dyn Scheduler>,
         llama: Arc<LlamaCppAdapter>,
+        comfyui: Arc<ComfyUiAdapter>,
+        outputs_dir: PathBuf,
     ) -> Self {
         Self {
             db,
             registry,
             scheduler,
             llama,
+            comfyui,
+            outputs_dir,
             cancels: Mutex::new(HashMap::new()),
         }
     }
@@ -177,6 +193,11 @@ impl JobEngine {
     /// (weights + KV cache at the effective context + overhead) so the scheduler
     /// plans against a realistic number, not the on-disk size.
     async fn resolve_target(&self, job: &Job) -> Result<Target> {
+        // Image jobs always run on ComfyUI; the VRAM math is different (no KV
+        // cache), so resolve them on their own path — explicit model or `Auto`.
+        if job.job_type == "image" {
+            return self.resolve_image_target(job).await;
+        }
         if let (Some(runtime_id), Some(model_id)) = (&job.runtime_id, &job.model_id) {
             let (name, estimate) = self.vram_estimate(model_id).await;
             let need = estimate.as_ref().map_or(0, |e| e.total_mb);
@@ -225,6 +246,55 @@ impl JobEngine {
         Err(CoreError::Runtime {
             runtime: "?".into(),
             message: format!("job {} has no runtime or model to run on", job.id),
+        })
+    }
+
+    /// Resolve an `image` job onto ComfyUI: an explicit checkpoint, or `Auto`
+    /// (the `base_diffusion`-role model, most-recently-used first). The VRAM
+    /// reservation is the checkpoint's import estimate (weights + a headroom for
+    /// activations / the VAE) — there is no KV cache to size.
+    async fn resolve_image_target(&self, job: &Job) -> Result<Target> {
+        let model = match &job.model_id {
+            Some(id) => self
+                .db
+                .models()
+                .get(id)
+                .await?
+                .ok_or_else(|| CoreError::Runtime {
+                    runtime: COMFYUI.into(),
+                    message: format!("image model {id} is not in the library"),
+                })?,
+            None => {
+                let picked = self
+                    .db
+                    .models()
+                    .pick_for_role("base_diffusion")
+                    .await?
+                    .ok_or_else(|| CoreError::Runtime {
+                        runtime: COMFYUI.into(),
+                        message:
+                            "no image model in the library — import an SDXL .safetensors first"
+                                .into(),
+                    })?;
+                self.db
+                    .jobs()
+                    .append_event(
+                        &job.id,
+                        EventLevel::Info,
+                        &format!("auto-selected model \u{201c}{}\u{201d}", picked.name),
+                    )
+                    .await?;
+                picked
+            }
+        };
+
+        self.db.jobs().assign(&job.id, COMFYUI, &model.id).await?;
+        Ok(Target {
+            runtime_id: COMFYUI.into(),
+            model_id: model.id.clone(),
+            model_name: model.name.clone(),
+            vram_mb: job.vram_needed_mb().max(image_vram_mb(&model)),
+            estimate: None,
         })
     }
 
@@ -368,8 +438,9 @@ impl JobEngine {
         .await?;
 
         // --- job body ---
+        let mut output_path: Option<String> = None;
         if job.job_type == "chat" {
-            if runtime_id != "llamacpp" {
+            if runtime_id != LLAMACPP {
                 return Err(CoreError::Runtime {
                     runtime: runtime_id.clone(),
                     message: "chat jobs run on llama.cpp".into(),
@@ -413,6 +484,64 @@ impl JobEngine {
                     return Ok(JobOutcome::Cancelled { job_id: job.id });
                 }
             }
+        } else if job.job_type == "image" {
+            if runtime_id != COMFYUI {
+                return Err(CoreError::Runtime {
+                    runtime: runtime_id.clone(),
+                    message: "image jobs run on ComfyUI".into(),
+                });
+            }
+            let model = self.require_model(&model_id).await?;
+            let req = image::ImageRequest::from_params(&job.params)?;
+            // Pin the resolved request (concrete seed) back onto the job.
+            let mut params = job.params.clone();
+            req.apply_to(&mut params);
+            self.db.jobs().set_params(&job.id, &params).await?;
+
+            match image::run(
+                &self.db,
+                &self.comfyui,
+                &self.outputs_dir,
+                &job.id,
+                &model,
+                req,
+                cancel,
+            )
+            .await?
+            {
+                ImageOutcome::Done(done) => {
+                    let _ = self.db.models().mark_used(&model_id).await;
+                    self.db
+                        .jobs()
+                        .append_event(
+                            &job.id,
+                            EventLevel::Info,
+                            &format!(
+                                "image ready — {}×{}, seed {}",
+                                done.width, done.height, done.seed
+                            ),
+                        )
+                        .await?;
+                    output_path = Some(done.output_path.to_string_lossy().into_owned());
+                }
+                ImageOutcome::Cancelled => {
+                    self.db
+                        .jobs()
+                        .append_event(&job.id, EventLevel::Warn, "cancelled while rendering")
+                        .await?;
+                    self.to(
+                        &mut job,
+                        JobState::Cancelled,
+                        JobPatch {
+                            error_text: Some(CANCEL_REASON.into()),
+                            set_finished_at: true,
+                            ..Default::default()
+                        },
+                    )
+                    .await?;
+                    return Ok(JobOutcome::Cancelled { job_id: job.id });
+                }
+            }
         }
 
         self.to(&mut job, JobState::Post, JobPatch::default())
@@ -421,6 +550,7 @@ impl JobEngine {
             &mut job,
             JobState::Completed,
             JobPatch {
+                output_path,
                 set_finished_at: true,
                 ..Default::default()
             },
@@ -428,6 +558,19 @@ impl JobEngine {
         .await?;
 
         Ok(JobOutcome::Completed { job_id: job.id })
+    }
+
+    /// Fetch a library model the engine already resolved, erroring if it
+    /// vanished between resolution and use.
+    async fn require_model(&self, model_id: &str) -> Result<Model> {
+        self.db
+            .models()
+            .get(model_id)
+            .await?
+            .ok_or_else(|| CoreError::Runtime {
+                runtime: COMFYUI.into(),
+                message: format!("model {model_id} disappeared from the library"),
+            })
     }
 
     /// If the cancel flag is set, move `job` to `Cancelled` and return the
@@ -481,6 +624,17 @@ impl JobEngine {
     }
 }
 
+/// VRAM (MB) to reserve for an image checkpoint. Uses the estimate `import`
+/// computed (on-disk size + a family-shaped headroom); falls back to a value
+/// that fits SDXL when an older import left it unset.
+fn image_vram_mb(model: &Model) -> u64 {
+    model
+        .vram_estimate_mb
+        .and_then(|mb| u64::try_from(mb).ok())
+        .filter(|mb| *mb > 0)
+        .unwrap_or(IMAGE_VRAM_FALLBACK_MB)
+}
+
 /// Turn the scheduler's terse `Blocked` reason into a plain-language sentence
 /// that names the model and breaks down where the VRAM goes.
 fn blocked_message(
@@ -503,7 +657,7 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use crate::runtime::{FakeRuntimeAdapter, RuntimeAdapter};
+    use crate::runtime::{ComfyDirs, FakeRuntimeAdapter, RuntimeAdapter};
     use crate::scheduler::HybridScheduler;
 
     struct Fixture {
@@ -517,13 +671,43 @@ mod tests {
         Arc::new(LlamaCppAdapter::with_binary(db.clone(), None))
     }
 
+    /// A ComfyUI adapter with no launch command — image jobs never run in these
+    /// unit tests, so it only needs to exist for `JobEngine::new`.
+    fn test_comfy(db: &Database) -> Arc<crate::runtime::ComfyUiAdapter> {
+        let tmp = std::env::temp_dir();
+        Arc::new(crate::runtime::ComfyUiAdapter::with_launch(
+            db.clone(),
+            None,
+            ComfyDirs {
+                base: tmp.clone(),
+                output: tmp.clone(),
+                models_store: tmp,
+            },
+        ))
+    }
+
+    fn test_engine(
+        db: &Database,
+        registry: RuntimeRegistry,
+        scheduler: Arc<dyn Scheduler>,
+    ) -> JobEngine {
+        JobEngine::new(
+            db.clone(),
+            registry,
+            scheduler,
+            test_llama(db),
+            test_comfy(db),
+            std::env::temp_dir(),
+        )
+    }
+
     async fn fixture(budget_mb: u64) -> Fixture {
         let db = Database::connect_in_memory().await.unwrap();
         let registry = RuntimeRegistry::new();
         let rt = Arc::new(FakeRuntimeAdapter::healthy("llamacpp"));
         registry.register(rt.clone());
         let scheduler = Arc::new(HybridScheduler::new(registry.clone(), budget_mb));
-        let engine = JobEngine::new(db.clone(), registry, scheduler.clone(), test_llama(&db));
+        let engine = test_engine(&db, registry, scheduler.clone());
         Fixture {
             engine,
             db,
@@ -591,7 +775,7 @@ mod tests {
         }));
         registry.register(rt.clone());
         let scheduler = Arc::new(HybridScheduler::new(registry.clone(), 16_384));
-        let engine = JobEngine::new(db.clone(), registry, scheduler, test_llama(&db));
+        let engine = test_engine(&db, registry, scheduler);
 
         let job = engine
             .submit(NewJob::new("noop").on("fake", "broken", 100))

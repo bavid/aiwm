@@ -12,9 +12,11 @@ use crate::db::{Database, Model, NewModel};
 use crate::{CoreError, Result};
 
 /// Headroom over the on-disk size for an image model's VRAM estimate — UNet
-/// activations + VAE + CUDA/compute buffers. Rough; the real per-family numbers
-/// come with `capability::image` (3.4).
-const IMAGE_VRAM_HEADROOM_MB: i64 = 2048;
+/// activations + VAE + CUDA/compute buffers. Rough; a real per-family answer
+/// waits for `.safetensors` header inspection + calibration (Phase 6).
+const IMAGE_HEADROOM_MB: i64 = 2048;
+/// Flux / SD3 carry a large T5 text encoder — reserve more.
+const HEAVY_IMAGE_HEADROOM_MB: i64 = 3072;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct ImportRequest {
@@ -101,21 +103,7 @@ pub async fn import_model(
 
     let new = match &gguf {
         Some(g) => gguf_new_model(g, &name, &dest, sha256, size_bytes, req.roles),
-        None => NewModel {
-            name: name.clone(),
-            format: ext.clone(),
-            file_path: dest.to_string_lossy().into_owned(),
-            sha256: Some(sha256),
-            size_bytes: i64::try_from(size_bytes).unwrap_or(i64::MAX),
-            vram_estimate_mb: Some(
-                i64::try_from(size_bytes / MIB)
-                    .unwrap_or(i64::MAX)
-                    .saturating_add(IMAGE_VRAM_HEADROOM_MB),
-            ),
-            source: "manual".to_string(),
-            roles: req.roles,
-            ..NewModel::default()
-        },
+        None => image_new_model(kind, &name, &dest, &ext, sha256, size_bytes),
     };
 
     let model = db.models().insert(new).await?;
@@ -196,6 +184,52 @@ fn gguf_new_model(
         n_kv_heads: dims.n_kv_heads.map(i64::from),
         roles,
         ..NewModel::default()
+    }
+}
+
+/// A `.safetensors` image model. No header parse yet (deferred), so the family
+/// and VRAM headroom are guessed from the file name; the role comes from the
+/// typed [`ModelKind`] so `Auto` image selection can find it.
+fn image_new_model(
+    kind: ModelKind,
+    name: &str,
+    dest: &Path,
+    ext: &str,
+    sha256: String,
+    size_bytes: u64,
+) -> NewModel {
+    let (family, headroom_mb) = image_family(name);
+    let size_mb = i64::try_from(size_bytes / MIB).unwrap_or(i64::MAX);
+    NewModel {
+        name: name.to_string(),
+        family,
+        format: ext.to_string(),
+        file_path: dest.to_string_lossy().into_owned(),
+        sha256: Some(sha256),
+        size_bytes: i64::try_from(size_bytes).unwrap_or(i64::MAX),
+        vram_estimate_mb: Some(size_mb.saturating_add(headroom_mb)),
+        source: "manual".to_string(),
+        roles: kind
+            .default_role()
+            .map(str::to_string)
+            .into_iter()
+            .collect(),
+        ..NewModel::default()
+    }
+}
+
+/// Guess `(family, VRAM headroom)` from an image model's file name. Flux / SD3
+/// need extra room for their T5 text encoder; SDXL and SD1.5 are lighter.
+fn image_family(name: &str) -> (Option<String>, i64) {
+    let n = name.to_ascii_lowercase();
+    if n.contains("flux") {
+        (Some("flux".to_string()), HEAVY_IMAGE_HEADROOM_MB)
+    } else if n.contains("sd3") || n.contains("sd35") {
+        (Some("sd3".to_string()), HEAVY_IMAGE_HEADROOM_MB)
+    } else if n.contains("xl") {
+        (Some("sdxl".to_string()), IMAGE_HEADROOM_MB)
+    } else {
+        (None, IMAGE_HEADROOM_MB)
     }
 }
 
@@ -502,13 +536,16 @@ mod tests {
         assert_eq!(out.model.format, "safetensors");
         assert_eq!(out.model.arch, None, "no GGUF header parsed");
         assert_eq!(out.model.runtimes, ["comfyui"]);
+        // Typed → carries the role so `Auto` image jobs find it.
+        assert_eq!(out.model.roles, ["base_diffusion"]);
+        assert_eq!(out.model.family.as_deref(), Some("sdxl"));
         let p = out.model.file_path.replace('\\', "/");
         assert!(
             p.contains("/image/checkpoints/sd_xl_base_1.0.safetensors"),
             "{p}"
         );
         // ~3 MB file + the image headroom.
-        assert!(out.model.vram_estimate_mb.unwrap() >= IMAGE_VRAM_HEADROOM_MB);
+        assert!(out.model.vram_estimate_mb.unwrap() >= IMAGE_HEADROOM_MB);
 
         let links = db.models().links(&out.model.id).await.unwrap();
         assert_eq!(links[0].strategy, "extra_path");
@@ -516,6 +553,31 @@ mod tests {
             .link_path
             .replace('\\', "/")
             .ends_with("image/checkpoints"));
+    }
+
+    #[tokio::test]
+    async fn a_flux_checkpoint_gets_a_bigger_headroom_and_the_family() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = tmp.path().join("store");
+        let db = Database::connect_in_memory().await.unwrap();
+        let src = write_safetensors(tmp.path(), "flux1-dev.safetensors", &vec![0u8; 2_000_000]);
+
+        let out = import_model(
+            &db,
+            &store,
+            ImportRequest {
+                model_type: Some("diffusion_model".into()),
+                ..req(&src)
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(out.model.family.as_deref(), Some("flux"));
+        assert_eq!(out.model.roles, ["base_diffusion"]);
+        assert!(out.model.vram_estimate_mb.unwrap() >= HEAVY_IMAGE_HEADROOM_MB);
+        let p = out.model.file_path.replace('\\', "/");
+        assert!(p.contains("/image/diffusion_models/"), "{p}");
     }
 
     #[tokio::test]

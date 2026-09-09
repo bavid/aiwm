@@ -26,21 +26,28 @@ junction | hardlink | copy).
 Beim Import bestimmt `core::model::ModelKind` (Typ-Hint aus der UI oder aus der
 Endung: `.gguf`→`chat`, `.safetensors`→`checkpoint`) das Ziel:
 
-| `ModelKind` | Store-Unterordner | ComfyUI-`folder_paths`-Schlüssel |
-|---|---|---|
-| `Chat` | `llm/<slug>/` | — (llama.cpp) |
-| `Checkpoint` | `image/checkpoints/` | `checkpoints` |
-| `DiffusionModel` | `image/diffusion_models/` | `diffusion_models` |
-| `Vae` | `image/vae/` | `vae` |
-| `Lora` | `image/loras/` | `loras` |
-| `TextEncoder` | `image/text_encoders/` | `text_encoders` |
+| `ModelKind` | Store-Unterordner | ComfyUI-`folder_paths`-Schlüssel | Rolle (auto) |
+|---|---|---|---|
+| `Chat` | `llm/<slug>/` | — (llama.cpp) | — (User wählt) |
+| `Checkpoint` | `image/checkpoints/` | `checkpoints` | `base_diffusion` |
+| `DiffusionModel` | `image/diffusion_models/` | `diffusion_models` | `base_diffusion` |
+| `Vae` | `image/vae/` | `vae` | — |
+| `Lora` | `image/loras/` | `loras` | — |
+| `TextEncoder` | `image/text_encoders/` | `text_encoders` | — |
 
 `import_model` nimmt `.gguf` **und** `.safetensors`; `.ckpt`/`.bin`/`.pt`/`.pth`
 werden mit Klartext abgelehnt (Pickle kann beim Laden Code ausführen — erst nach
 `.safetensors` konvertieren). GGUF-Header wird nur für `chat` geparst;
 `.safetensors`-Header-Inspektion (Arch/Precision) ist auf später vertagt. Bild-
 Modelle landen flach im Typ-Ordner (ComfyUI-Konvention), Namens-Kollision →
-`-<hash8>`-Suffix. VRAM-Schätzung Bild = Dateigröße + 2 GB Headroom.
+`-<hash8>`-Suffix.
+
+Bild-Modelle bekommen die Rolle aus dem Typ (`ModelKind::default_role`, 3.4), so
+dass `Auto` bei einem `job_type=image` das `base_diffusion`-Modell findet
+(most-recently-used). `family` + VRAM-Headroom kommen aus einer Datei-Namens-
+Heuristik: `flux`/`sd3` → +3 GB (großer T5-Text-Encoder), sonst +2 GB. Ein
+echter Wert wartet auf die `.safetensors`-Header-Inspektion + Kalibrierung
+(Phase 6).
 
 ## Status
 
@@ -49,7 +56,7 @@ Modelle landen flach im Typ-Ordner (ComfyUI-Konvention), Namens-Kollision →
 | Schema + Tabellen | ✅ WP-2 (+ `jobs.result`, Migration 0002, 2.4a) |
 | `ModelRepo` (CRUD, Rollen, `find_by_*`, `pick_for_role`) | ✅ 2.1 / 2.4a |
 | Manueller Modell-Import (GGUF **oder** `.safetensors` wählen → getypter Store) | ✅ 2.1 · `.safetensors` + `ModelKind`-Routing + Pickle-Ablehnung 3.3 |
-| `Auto`-Modellwahl (Rolle → zuletzt/meist genutzt → Name) | ✅ 2.4a (ADR-015); benchmark-gestützt erst Phase 6 |
+| `Auto`-Modellwahl (Rolle → zuletzt/meist genutzt → Name) | ✅ 2.4a `chat` (ADR-015) · 3.4 `base_diffusion` für `job_type=image`; benchmark-gestützt erst Phase 6 |
 | Kanonischer Store + Link-Manager | ✅ Store 2.1 · `core::link` 2.3 (Passthrough/Junction/Hardlink/Copy, `model_links`, ADR-007) · `ExtraPath` 3.3 (ADR-019). GGUF → llama.cpp = `passthrough`; Bild → ComfyUI = `extra_path` |
 | VRAM-Fit-Schätzung vor dem Load (`core::compat`) | ✅ 2.6 (ADR-016): Gewichte + KV-Cache aus GGUF-Arch-Dims + flacher Overhead, geschätzt für `min(ctx_max, 8192)`; Scheduler plant dagegen; passt es nicht → `blocked` mit Klartext. Kalibrierung → Phase 6 |
 | Online-Discovery (HF Hub, Ollama-Library) | Phase 6 |

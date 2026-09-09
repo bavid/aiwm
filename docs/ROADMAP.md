@@ -96,7 +96,9 @@ LLM ↔ Diffusion ums VRAM-Budget.
   loras,text_encoders}/`; `ModelKind` + `import_model` nimmt `.safetensors`
   (+ Pickle-Ablehnung), routet per Typ-Hint/Endung; ComfyUI-Zugriff über
   `extra_model_paths.yaml` statt Junction (ADR-019); UI-Typ-Dropdown
-- [ ] 3.4 `capability::image` (feste Pipeline, `/prompt` → `/history` → `/view`)
+- [x] 3.4 `capability::image` — `job_type=image`, feste SDXL-txt2img-Pipeline
+  (`core::pipeline`), `/prompt` → `/history` → `/view` → `<outputs>/<job_id>.png`,
+  Cancel via `/interrupt`, `Auto` über Rolle `base_diffusion`
 - [ ] 3.5 UI-Tab „Image" + Galerie
 - [ ] 3.6 Flux-Template + `IMAGE_MODELS.md`
 - [ ] 3.7 Politur (Settings, Diagnostics, Scheduler-Verprobung)
