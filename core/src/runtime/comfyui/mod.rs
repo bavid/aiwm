@@ -353,6 +353,13 @@ impl ComfyUiAdapter {
         self.client.system_stats(port).await.ok()
     }
 
+    /// ComfyUI's `input/` folder — where `LoadImage` reads from. Image→video
+    /// (`capability::video`, 4.2) stages a start frame here before the render
+    /// and removes it after.
+    pub fn input_dir(&self) -> PathBuf {
+        self.dirs.input()
+    }
+
     /// Run one `workflow` (an API-format graph from [`crate::pipeline`]) on the
     /// running server: queue it, poll `GET /history` until it finishes, then
     /// fetch the output file (image or video). `Ok(None)` means `cancel` flipped

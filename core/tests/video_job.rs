@@ -28,6 +28,25 @@ fn video_job(prompt: &str) -> NewJob {
     j
 }
 
+/// A `video` job that starts from `init_image` (a path or a finished job's id).
+fn img2vid_job(prompt: &str, init_image: &str) -> NewJob {
+    let mut j = NewJob::new("video");
+    j.params = serde_json::json!({
+        "prompt": prompt, "width": 512, "height": 288, "length": 5, "steps": 2,
+        "init_image": init_image,
+    });
+    j
+}
+
+/// A 1×1 PNG — a plausible start frame on disk.
+const PNG_1PX: &[u8] = &[
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+    0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4,
+    0x89, 0x00, 0x00, 0x00, 0x0a, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9c, 0x63, 0x00, 0x01, 0x00, 0x00,
+    0x05, 0x00, 0x01, 0x0d, 0x0a, 0x2d, 0xb4, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae,
+    0x42, 0x60, 0x82,
+];
+
 struct Harness {
     db: Database,
     engine: Arc<JobEngine>,
@@ -162,6 +181,146 @@ async fn auto_video_job_renders_an_mp4_and_writes_the_file() {
     );
     assert!(
         events.iter().any(|m| m.contains("video ready")),
+        "{events:?}"
+    );
+}
+
+#[tokio::test]
+async fn image_to_video_from_a_path_stages_the_frame_then_cleans_it_up() {
+    let h = harness().await;
+    h.add_model("wan2.2_ti2v_5B_fp16.safetensors", Some("wan"), "base_video")
+        .await;
+    h.add_model(
+        "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
+        None,
+        "text_encoder",
+    )
+    .await;
+    h.add_model("wan2.2_vae.safetensors", Some("wan"), "vae")
+        .await;
+
+    let frame = h.tmp.path().join("start.png");
+    std::fs::write(&frame, PNG_1PX).unwrap();
+
+    let job = h
+        .engine
+        .submit(img2vid_job("pan across the bay", &frame.to_string_lossy()))
+        .await
+        .unwrap();
+    let outcome = h.engine.run_next().await.unwrap().unwrap();
+    assert!(
+        matches!(&outcome, JobOutcome::Completed { job_id } if *job_id == job.id),
+        "got {outcome:?} — the fake server errors unless the frame really landed in input/"
+    );
+
+    let stored = h.db.jobs().get(&job.id).await.unwrap().unwrap();
+    assert_eq!(stored.state, JobState::Completed);
+    assert!(is_mp4(Path::new(&stored.output_path.unwrap())));
+    assert_eq!(
+        stored.params["init_image"],
+        frame.to_string_lossy().as_ref()
+    );
+
+    // The staged copy under <comfyui-data>/input/ is gone after the render.
+    let staged = h
+        .tmp
+        .path()
+        .join("comfyui-data")
+        .join("input")
+        .join(format!("{}.png", job.id));
+    assert!(!staged.exists(), "staged start frame should be removed");
+
+    let events: Vec<String> =
+        h.db.jobs()
+            .events(&job.id)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|e| e.message)
+            .collect();
+    assert!(
+        events.iter().any(|m| m.contains("start frame")),
+        "{events:?}"
+    );
+}
+
+#[tokio::test]
+async fn image_to_video_from_a_finished_image_job() {
+    let h = harness().await;
+    h.add_model("sd_xl_base_1.0.safetensors", Some("sdxl"), "base_diffusion")
+        .await;
+    h.add_model("wan2.2_ti2v_5B_fp16.safetensors", Some("wan"), "base_video")
+        .await;
+    h.add_model(
+        "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
+        None,
+        "text_encoder",
+    )
+    .await;
+    h.add_model("wan2.2_vae.safetensors", Some("wan"), "vae")
+        .await;
+
+    // First an image job, so its output can seed the video.
+    let mut img = NewJob::new("image");
+    img.params = serde_json::json!({ "prompt": "a bay at dawn", "steps": 2 });
+    let img = h.engine.submit(img).await.unwrap();
+    assert!(matches!(
+        h.engine.run_next().await.unwrap().unwrap(),
+        JobOutcome::Completed { .. }
+    ));
+
+    let vid = h
+        .engine
+        .submit(img2vid_job("the boats drift out", &img.id))
+        .await
+        .unwrap();
+    assert!(matches!(
+        h.engine.run_next().await.unwrap().unwrap(),
+        JobOutcome::Completed { job_id } if job_id == vid.id
+    ));
+
+    let stored = h.db.jobs().get(&vid.id).await.unwrap().unwrap();
+    assert_eq!(stored.state, JobState::Completed);
+    assert!(is_mp4(Path::new(&stored.output_path.unwrap())));
+}
+
+#[tokio::test]
+async fn a_video_job_with_a_missing_start_frame_fails_before_rendering() {
+    let h = harness().await;
+    h.add_model("wan2.2_ti2v_5B_fp16.safetensors", Some("wan"), "base_video")
+        .await;
+    h.add_model(
+        "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
+        None,
+        "text_encoder",
+    )
+    .await;
+    h.add_model("wan2.2_vae.safetensors", Some("wan"), "vae")
+        .await;
+
+    let missing = h.tmp.path().join("nope.png");
+    let job = h
+        .engine
+        .submit(img2vid_job("x", &missing.to_string_lossy()))
+        .await
+        .unwrap();
+    match h.engine.run_next().await.unwrap().unwrap() {
+        JobOutcome::Failed { error, .. } => {
+            assert!(error.contains("start frame not found"), "{error}");
+        }
+        other => panic!("expected Failed, got {other:?}"),
+    }
+    // Never got as far as the "takes several minutes" event.
+    let events: Vec<String> =
+        h.db.jobs()
+            .events(&job.id)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|e| e.message)
+            .collect();
+    assert!(
+        !events.iter().any(|m| m.contains("takes several minutes")),
         "{events:?}"
     );
 }

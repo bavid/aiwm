@@ -27,7 +27,7 @@ genutzt.
 |---|---|---|
 | Fake | `FakeRuntimeAdapter` | ✅ vollständig (Tests) |
 | llama.cpp / llama-server | `LlamaCppAdapter` | ✅ Adapter (2.2a) + Installer (2.2b): Download/Verify/Entpacken des gepinnten CUDA-Builds |
-| ComfyUI | `ComfyUiAdapter` | ✅ Adapter (3.1) + Installer (3.2) + getypter Store via `extra_model_paths.yaml` (3.3) + Bild-Job (3.4) + UI/Galerie (3.5) + Flux-Template (3.6) + Politur (3.7) + **Video-Job** (`wan_ti2v`, `generate_media`, 4.1). Offen: echte ComfyUI verproben (4.0), Video-UI (4.3) |
+| ComfyUI | `ComfyUiAdapter` | ✅ Adapter (3.1) + Installer (3.2) + getypter Store via `extra_model_paths.yaml` (3.3) + Bild-Job (3.4) + UI/Galerie (3.5) + Flux-Template (3.6) + Politur (3.7) + **Video-Job** (`wan_ti2v`, `generate_media`, 4.1) + **Bild→Video** (`init_image` → `input/`-Staging, 4.2). Offen: echte ComfyUI verproben (4.0), Video-UI (4.3) |
 | Ollama | `OllamaAdapter` | optional, Phase 3+ (Duplikate transparent, ADR-006) |
 | LM Studio | — | vorerst nicht (proprietär, GUI-zentriert); wenn doch, `strategy_for` → `Junction` |
 
@@ -109,6 +109,15 @@ genutzt.
   `capability::video` löst umt5-Encoder + Wan-VAE über Rolle + Namen auf. Cancel
   = `POST /interrupt`. `capability::media` bündelt die Seed-/Datei-Helfer für
   Bild + Video.
+- **Bild→Video (4.2):** der `init_image`-Param ist eine Job-ID (Output eines
+  fertigen Bild-Jobs) oder ein Bildpfad. `capability::video::resolve_start_frame`
+  löst ihn zu einer existierenden `.png`/`.jpg`/`.webp`-Datei auf,
+  `stage_start_frame` kopiert sie nach `ComfyUiAdapter::input_dir()` (=
+  `<base>/input/`) als `<job_id>.<ext>`; der bare Name geht als `start_image` in
+  `wan_ti2v` → `LoadImage` → `WanImageToVideo.start_image`. Ein `StagedFrame`-
+  `Drop`-Guard löscht die Kopie, sobald der Body zurückkehrt (Erfolg / Fehler /
+  Cancel). Angelegt **vor** dem „takes several minutes"-Event, damit ein
+  ungültiger Frame sofort fehlschlägt.
 - **Templates (`core::pipeline`, 3.4/3.6/4.1):** `Recipe::for_family` wählt
   `checkpoint_txt2img` (SDXL & Co, Core-Nodes) oder `flux_txt2img`
   (`UnetLoaderGGUF` + `DualCLIPLoaderGGUF` + `VAELoader` + `FluxGuidance`,

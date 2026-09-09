@@ -22,7 +22,7 @@ schon Installierte läuft weiter.
 |---|---|---|
 | **4.0** | **Die echte ComfyUI verproben** (Phase-3-Rest): auf der echten Maschine installieren, cu130-torch-CUDA-Laufzeit prüfen, SDXL- **und** Flux-GGUF-Pipeline aus Phase 3 real durchrendern, `DualCLIPLoaderGGUF`/`UnetLoaderGGUF`-Ordner-Key-Auflösung gegen `extra_model_paths.yaml` bestätigen, `av`/`SaveVideo` verfügbar. Fällt cu130 aus → cu128/cu126-Pin. Ergebnis + etwaige Fixes dokumentieren. **Voraussetzung für alles Weitere.** | offen |
 | 4.1 | `capability::video`: `job_type=video`, Params (prompt, negative, w/h, length in Frames, fps, steps, cfg, seed, model\|Auto über Rolle `base_video`); **feste Pipeline** `wan_ti2v` (`core::pipeline`) = `WanImageToVideo` (ohne `start_image` = T2V) → `KSampler` → `VAEDecode` → `CreateVideo` → `SaveVideo` (mp4/h264). `generate_image` → `generate_media` verallgemeinern (VIDEO-Output-Key in `/history`, `/view` für `.mp4`). `ModelKind::VideoModel` + Familie `wan`. Output nach `<outputs>/<job_id>.mp4` → `jobs.output_path`. VRAM-Schätzung pro Familie. Cancel via `/interrupt` | ✅ |
-| 4.2 | **Bild→Video**: `init_image`-Param (Pfad oder Job-ID eines fertigen Bildes); der Startframe wird nach `<comfyui-data>/input/<job_id>.<ext>` kopiert und als `LoadImage` → `WanImageToVideo.start_image` verdrahtet. Ein Bild-Job-Output aus der Galerie als Quelle | offen |
+| 4.2 | **Bild→Video**: `init_image`-Param (Pfad oder Job-ID eines fertigen Bildes); der Startframe wird nach `<comfyui-data>/input/<job_id>.<ext>` kopiert und als `LoadImage` → `WanImageToVideo.start_image` verdrahtet. Ein Bild-Job-Output aus der Galerie als Quelle | ✅ |
 | 4.3 | UI-Tab „Video" — Prompt/Negativ, Auflösung/Länge/fps/Steps/CFG/Seed, Model [Auto], optional „Start from image" (Galerie-Pick oder Pfad), „Generate"; **Erwartungssteuerung** (geschätzte Dauer + „das dauert Minuten", Fortschritt); `<video>`-Player auf `GET /jobs/{id}/output` (CSP `media-src`); Galerie der Video-Jobs (Poster = erstes Frame). Dashboard-Button „Generate Video" aktiv | offen |
 | 4.4 | Zweites Template **LTX-2 / LTX 2.3 (GGUF)** über `ComfyUI-GGUF` (Node schon installiert); `docs/VIDEO_MODELS.md` (kuratierte Modelle: SHA256, HF-Quelle, Lizenz, Settings); Katalog-Einträge (`core::model::catalog`) | offen |
 | 4.5 | Politur: Erwartungssteuerung verfeinern (Zeit-Schätzung kalibrieren), **RAM-Warnung** wenn das Offload-Budget kritisch wird, Retention-Hinweis (Videos sind groß), Settings (Wan/LTX-Optionen, `--reserve-vram`), Diagnostics; Scheduler: Video-Slot neben LLM/Bild-Slot verproben (`core/tests/*_swap.rs`-Erweiterung) | offen |
@@ -215,6 +215,56 @@ puffert noch komplett im RAM — TODO), die echte ComfyUI (4.0 — `SaveVideo`,
 `av`, der reale `/history`-Output-Key, Zeit/VRAM-Kalibrierung). Wans VAE + umt5
 liegen weiterhin unter `<store>/image/{vae,text_encoders}/` (ComfyUI findet sie
 per Dateiname über den gemergten Ordner-Key) — kosmetisch, TODO.
+
+---
+
+## 4.2 — Ergebnis (abgeschlossen)
+
+Bild→Video über denselben `wan_ti2v`-Graphen — `WanImageToVideo` nimmt einen
+Startframe entgegen (das Node macht T2V *und* I2V). Weiter gegen `aiwm-fake-comfy`.
+
+- **`VideoRequest.init_image: Option<String>`** — aus `params["init_image"]`
+  (getrimmt, leer → `None`). `from_params` extrahiert nur den Rohwert;
+  `apply_to` schreibt ihn unverändert zurück (Galerie in 4.3 zeigt die Quelle).
+- **`capability::video`**: neu `resolve_start_frame(db, spec)` — `spec` ist
+  entweder die **Job-ID** eines fertigen Bild-Jobs (`db.jobs().get` → dessen
+  `output_path`) oder ein **Dateipfad**. Muss eine existierende
+  `.png`/`.jpg`/`.jpeg`/`.webp`-Datei sein, sonst Klartext-Fehler
+  („start frame not found" / „must be a … image"). `stage_start_frame` kopiert
+  sie nach `<comfyui input>/<job_id>.<ext>`; der bare Dateiname geht als
+  `start_image` in `wan_ti2v` (→ `LoadImage` → `WanImageToVideo.start_image`).
+- **`StagedFrame`-Guard**: ein `Drop`-Typ entfernt die `input/`-Kopie, sobald
+  `run` zurückkehrt (Erfolg, Fehler *oder* Cancel). Die Kopie wird **vor** dem
+  „takes several minutes"-Event angelegt, damit ein schlechter `init_image`
+  sofort fehlschlägt. Event „image→video — start frame from <spec>".
+- **`ComfyUiAdapter::input_dir()`** (+ `ComfyDirs::input()`) — `<base>/input/`,
+  öffentlich, damit `capability::video` dort ablegen kann.
+- **`aiwm-fake-comfy`**: parst jetzt `--base-directory`, scannt den Graphen nach
+  `LoadImage` und lässt `/history` **fehlschlagen**, wenn die referenzierte
+  Datei nicht unter `<base>/input/` liegt — der Integrationstest beweist damit,
+  dass das Staging wirklich am richtigen Ort landet.
+- Engine unverändert: der `try_drive`-`video`-Zweig (`from_params` → `apply_to`
+  → `set_params` → `video::run`) trägt `init_image` schon durch.
+
+Verifiziert:
+- **+3 Unit-Tests** (`video` — `init_image`-Parse/Roundtrip, `checked_frame`
+  Ablehnungen, `resolve_start_frame` Pfad + Job-ohne-Output) → **242 Lib-Tests**.
+  **+3 Integrationstests** `tests/video_job.rs`: Startframe aus einem **Pfad**
+  (staged, gerendert, Kopie danach entfernt, Event „start frame"); Startframe
+  aus einem **fertigen Bild-Job** (Bild-Job zuerst, dann seine ID); fehlender
+  Startframe → `Failed` „start frame not found", **vor** dem Render → **32
+  Integrationstests**. `check.ps1` grün.
+- **Live** (`smoke_42.sh`): (A) `init_image` = Pfad → mp4, `params.init_image`
+  gepinnt, `<comfyui-data>/input/<job>.png` nach dem Render weg. (B) `init_image`
+  = Bild-Job-ID → mp4, Event nennt die Job-ID. (C) `init_image` = `Z:/nope/…`
+  → `failed` „start frame not found", kein „takes several minutes".
+
+Bewusst **nicht** in 4.2: Video-UI mit Galerie-Pick (4.3), Startframe-Skalierung
+auf die Zielauflösung (ComfyUIs `WanImageToVideo` klemmt selbst), `clip_vision`
+für stärkere Bild-Treue (5B TI2V braucht es nicht; ggf. später als Option),
+Aufräumen verwaister `input/`-Kopien nach einem Absturz (der Guard deckt den
+Normalfall; ein Start-Sweep wäre robuster — TODO), Pfad-Allowlist für
+`init_image` (loopback-only MVP, ADR-008 — TODO).
 
 ---
 

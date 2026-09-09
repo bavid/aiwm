@@ -108,7 +108,19 @@ hierher, damit nichts verloren geht.
   `UNETLoader weight_dtype="default"` finden die `video/diffusion_models/`- und
   `text_encoders/`-Ordner aus `extra_model_paths.yaml`; (d) Wan-Shift / Sampler
   (`uni_pc`/`simple`) / Steps an einem echten 5B-Render kalibrieren; (e) das
-  1800-s-Timeout gegen echte Clip-Zeiten prüfen.
+  1800-s-Timeout gegen echte Clip-Zeiten prüfen; (f) **Bild→Video (4.2):** dass
+  `LoadImage` den nach `<base>/input/` kopierten Frame findet und
+  `WanImageToVideo.start_image` ihn ohne `clip_vision` akzeptiert (5B TI2V);
+  ob der Startframe vorab auf die Zielauflösung skaliert werden muss.
+- **Verwaiste `input/`-Kopien (4.2):** der `StagedFrame`-`Drop`-Guard räumt den
+  Normalfall (Erfolg / Fehler / Cancel) auf, aber nicht einen harten Absturz
+  mitten im Render. Ein Sweep von `<base>/input/*` beim Server-Start (oder ein
+  Alters-Filter) wäre robuster. Solange die App läuft, ist es dicht.
+- **`init_image` ist ein ungeprüfter Pfad (4.2):** jeder lesbare lokale
+  Bildpfad wird nach ComfyUIs `input/` kopiert. Für den loopback-only-MVP
+  (ADR-008, der Nutzer kontrolliert seine Maschine) ok; mit LAN-Zugriff /
+  Agenten (Phase 5) braucht es eine Allowlist (Outputs-Ordner + Store) oder
+  nur-Job-ID.
 - **`generate_media` puffert die ganze Ausgabe im RAM** (`Vec<u8>` aus `/view`)
   — für einzelne PNGs ok, für einen mehr-MB-`.mp4` verschwenderisch. Auf
   Streaming (`reqwest` → `tokio::fs`) umstellen, zusammen mit dem

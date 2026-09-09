@@ -1,4 +1,4 @@
-//! The text-to-video capability: drive one `job_type=video` body.
+//! The text/image-to-video capability: drive one `job_type=video` body.
 //!
 //! By the time this runs the engine has put the video model's VRAM slot on the
 //! GPU (scheduler → `ComfyUiAdapter::load_model`, which starts the server). Here
@@ -6,8 +6,12 @@
 //! hand it to ComfyUI, wait for the clip, and write it to
 //! `<outputs>/<job_id>.mp4`.
 //!
+//! With `init_image` (a finished job's id, or a path to an image) the frame is
+//! copied into ComfyUI's `input/` folder and wired to `WanImageToVideo` as the
+//! start frame (image→video, 4.2); the copy is removed after the render.
+//!
 //! Video is **slow** — minutes per clip. The event trail says so, and the UI
-//! (4.3) sets expectations up front. Image→video (a start frame) lands in 4.2.
+//! (4.3) sets expectations up front.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -21,6 +25,9 @@ use crate::db::{Database, EventLevel, Model};
 use crate::pipeline::{self, VideoInputs, WanModels};
 use crate::runtime::ComfyUiAdapter;
 use crate::Result;
+
+/// Image extensions a start frame may have (ComfyUI's `LoadImage` reads these).
+const FRAME_EXTS: [&str; 4] = ["png", "jpg", "jpeg", "webp"];
 
 const DEFAULT_WIDTH: u32 = 832;
 const DEFAULT_HEIGHT: u32 = 480;
@@ -49,8 +56,8 @@ const MAX_CFG: f64 = 15.0;
 /// rather than hanging forever.
 const VIDEO_TIMEOUT: Duration = Duration::from_secs(1800);
 
-/// A resolved text-to-video request, pulled from a job's `params`. Every field
-/// has a default; only a non-empty `prompt` is required.
+/// A resolved text/image-to-video request, pulled from a job's `params`. Every
+/// field has a default; only a non-empty `prompt` is required.
 #[derive(Debug, Clone, PartialEq)]
 pub struct VideoRequest {
     pub prompt: String,
@@ -62,6 +69,9 @@ pub struct VideoRequest {
     pub steps: u32,
     pub cfg: f64,
     pub seed: i64,
+    /// A start frame for image→video: a completed job's id, or a path to an
+    /// image file. `None` → text→video. Resolved + staged in [`run`].
+    pub init_image: Option<String>,
 }
 
 impl VideoRequest {
@@ -103,6 +113,13 @@ impl VideoRequest {
             .and_then(Value::as_f64)
             .map_or(DEFAULT_CFG, |v| v.clamp(MIN_CFG, MAX_CFG));
 
+        let init_image = params
+            .get("init_image")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string);
+
         Ok(Self {
             prompt,
             negative,
@@ -113,6 +130,7 @@ impl VideoRequest {
             steps: clamped("steps", DEFAULT_STEPS, 1, MAX_STEPS),
             cfg,
             seed: resolve_seed(params),
+            init_image,
         })
     }
 
@@ -131,6 +149,9 @@ impl VideoRequest {
         obj.insert("steps".into(), self.steps.into());
         obj.insert("cfg".into(), self.cfg.into());
         obj.insert("seed".into(), self.seed.into());
+        if let Some(src) = &self.init_image {
+            obj.insert("init_image".into(), src.clone().into());
+        }
     }
 
     /// Clip length in seconds (for UI copy).
@@ -173,6 +194,14 @@ pub async fn run(
     let unet = file_name(&model.file_path)?;
     let c = resolve_wan_companions(db).await?;
 
+    // image→video: resolve the start frame and stage it in ComfyUI's `input/`
+    // folder. The guard removes the copy when this function returns. Do it first
+    // so a bad `init_image` fails before the "takes several minutes" event.
+    let frame = match &req.init_image {
+        Some(spec) => Some(stage_start_frame(db, comfyui, job_id, spec).await?),
+        None => None,
+    };
+
     db.jobs()
         .append_event(
             job_id,
@@ -192,6 +221,18 @@ pub async fn run(
             ),
         )
         .await?;
+    if let Some(frame) = &frame {
+        db.jobs()
+            .append_event(
+                job_id,
+                EventLevel::Info,
+                &format!(
+                    "image\u{2192}video \u{2014} start frame from {}",
+                    frame.source
+                ),
+            )
+            .await?;
+    }
     db.jobs()
         .append_event(
             job_id,
@@ -215,7 +256,7 @@ pub async fn run(
             steps: req.steps,
             cfg: req.cfg,
             seed: req.seed,
-            start_image: None,
+            start_image: frame.as_ref().map(|f| f.name.as_str()),
             filename_prefix: job_id,
         },
         &WanModels {
@@ -259,6 +300,96 @@ pub async fn run(
         length: req.length,
         fps: req.fps,
     }))
+}
+
+/// A start frame copied into ComfyUI's `input/` folder. Dropping it removes the
+/// copy — the frame is only needed for the one render.
+struct StagedFrame {
+    /// Bare file name, as `LoadImage` refers to it.
+    name: String,
+    /// Full path of the copy (removed on drop).
+    path: PathBuf,
+    /// What the user asked for — a job id or a path (for the event trail).
+    source: String,
+}
+
+impl Drop for StagedFrame {
+    fn drop(&mut self) {
+        match std::fs::remove_file(&self.path) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => tracing::warn!(
+                path = %self.path.display(),
+                "could not remove staged start frame: {e}"
+            ),
+        }
+    }
+}
+
+/// Resolve `spec` (a completed job's id, or a path to an image) to a real file,
+/// then copy it to `<comfyui input>/<job_id>.<ext>` for `LoadImage`.
+async fn stage_start_frame(
+    db: &Database,
+    comfyui: &Arc<ComfyUiAdapter>,
+    job_id: &str,
+    spec: &str,
+) -> Result<StagedFrame> {
+    let source = resolve_start_frame(db, spec).await?;
+    let ext = source
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_ascii_lowercase)
+        .unwrap_or_else(|| "png".to_string());
+
+    let input_dir = comfyui.input_dir();
+    tokio::fs::create_dir_all(&input_dir)
+        .await
+        .map_err(|e| video_err(format!("create {}: {e}", input_dir.display())))?;
+    let name = format!("{job_id}.{ext}");
+    let path = input_dir.join(&name);
+    tokio::fs::copy(&source, &path).await.map_err(|e| {
+        video_err(format!(
+            "stage start frame {} \u{2192} {}: {e}",
+            source.display(),
+            path.display()
+        ))
+    })?;
+    Ok(StagedFrame {
+        name,
+        path,
+        source: spec.to_string(),
+    })
+}
+
+/// A start frame is either the output of a finished job (the gallery hands us
+/// its id) or a path to an image file on disk. Either way it must be an existing
+/// image ComfyUI's `LoadImage` can read.
+async fn resolve_start_frame(db: &Database, spec: &str) -> Result<PathBuf> {
+    if let Some(job) = db.jobs().get(spec).await? {
+        let out = job
+            .output_path
+            .ok_or_else(|| video_err(format!("job {spec} has no image output to start from")))?;
+        return checked_frame(&out);
+    }
+    checked_frame(spec)
+}
+
+fn checked_frame(path: &str) -> Result<PathBuf> {
+    let p = PathBuf::from(path);
+    let ext = p
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_ascii_lowercase);
+    if !ext.as_deref().is_some_and(|e| FRAME_EXTS.contains(&e)) {
+        return Err(video_err(format!(
+            "start frame must be a {} image \u{2014} got {path}",
+            FRAME_EXTS.join(" / ")
+        )));
+    }
+    if !p.is_file() {
+        return Err(video_err(format!("start frame not found: {path}")));
+    }
+    Ok(p)
 }
 
 /// Wan's two companion files, resolved from the library by role + name.
@@ -365,6 +496,71 @@ mod tests {
         assert_eq!(params["seed"], r.seed);
         assert_eq!(params["length"], DEFAULT_LENGTH);
         assert_eq!(params["vram_needed_mb"], 12000);
+    }
+
+    #[test]
+    fn from_params_reads_init_image_and_apply_to_round_trips_it() {
+        let none = VideoRequest::from_params(&serde_json::json!({ "prompt": "x" })).unwrap();
+        assert_eq!(none.init_image, None);
+        let blank =
+            VideoRequest::from_params(&serde_json::json!({ "prompt": "x", "init_image": "  " }))
+                .unwrap();
+        assert_eq!(blank.init_image, None);
+
+        let mut params = serde_json::json!({ "prompt": "x", "init_image": "  C:\\shots\\a.png  " });
+        let r = VideoRequest::from_params(&params).unwrap();
+        assert_eq!(r.init_image.as_deref(), Some("C:\\shots\\a.png"));
+        r.apply_to(&mut params);
+        assert_eq!(params["init_image"], "C:\\shots\\a.png");
+    }
+
+    #[test]
+    fn checked_frame_rejects_non_images_and_missing_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        let good = tmp.path().join("frame.png");
+        std::fs::write(&good, b"x").unwrap();
+        assert_eq!(checked_frame(&good.to_string_lossy()).unwrap(), good);
+
+        let mp4 = tmp.path().join("clip.mp4");
+        std::fs::write(&mp4, b"x").unwrap();
+        assert!(checked_frame(&mp4.to_string_lossy())
+            .unwrap_err()
+            .to_string()
+            .contains("must be a"));
+
+        assert!(
+            checked_frame(&tmp.path().join("gone.png").to_string_lossy())
+                .unwrap_err()
+                .to_string()
+                .contains("not found")
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_start_frame_takes_a_path_or_a_finished_jobs_output() {
+        use crate::db::{Database, NewJob};
+        let tmp = tempfile::tempdir().unwrap();
+        let db = Database::connect_in_memory().await.unwrap();
+
+        // A bare path to an image on disk.
+        let ondisk = tmp.path().join("hand.jpg");
+        std::fs::write(&ondisk, b"x").unwrap();
+        assert_eq!(
+            resolve_start_frame(&db, &ondisk.to_string_lossy())
+                .await
+                .unwrap(),
+            ondisk
+        );
+
+        // An image job that has not produced anything yet → a clear error.
+        let job = db.jobs().insert(NewJob::new("image")).await.unwrap();
+        assert!(resolve_start_frame(&db, &job.id)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("no image output"));
+        // (a job id that resolves to a real output is covered end-to-end in
+        // tests/video_job.rs)
     }
 
     #[test]

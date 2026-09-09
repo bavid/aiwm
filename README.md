@@ -31,7 +31,7 @@ noch keine echte AI-Capability (die kommt ab Phase 2).
 | WP-9 | CI-Workflow, Git-Hooks (pre-commit fmt, pre-push voller Gate) |
 | WP-10 | ADRs finalisiert, Stub-Docs (MODELS/RUNTIMES/SECURITY/BENCHMARKS) |
 
-**239 Rust-Unit + 29 Integrationstests + 5 pytest** grün · `scripts/check.ps1` grün ·
+**242 Rust-Unit + 32 Integrationstests + 5 pytest** grün · `scripts/check.ps1` grün ·
 **null `unsafe`** im Produktivcode.
 
 **Phase 2 (MVP) ✅ abgeschlossen** — Scheiben 2.1–2.7 + durchgehender
@@ -53,6 +53,13 @@ echten 4080 (alle Smokes fuhren gegen die Fake-ComfyUI).
   `base_video`-Modell, umt5-Encoder + Wan-VAE per Rolle/Namen aufgelöst.
   `GET /jobs/{id}/output` liefert `video/mp4`. (Gegen `aiwm-fake-comfy`; echte
   ComfyUI = 4.0.)
+- **4.2** ✅ **Bild→Video**: `init_image`-Param — eine Job-ID (Output eines
+  fertigen Bild-Jobs) oder ein Bildpfad. `capability::video` löst ihn auf,
+  kopiert den Frame nach `<comfyui-data>/input/<job_id>.<ext>` und verdrahtet ihn
+  als `LoadImage` → `WanImageToVideo.start_image`; ein `Drop`-Guard entfernt die
+  Kopie nach dem Render (auch bei Fehler/Cancel). Fehlender/ungültiger Frame →
+  Klartext-Fehler vor dem langen Render. `aiwm-fake-comfy` prüft, dass der Frame
+  wirklich in `input/` liegt.
 
 - **3.1** ✅ `ComfyUiAdapter` — ComfyUI als **ein** langlebiger, lazy gestarteter
   Server (`RuntimeAdapter`): Spawn/Health (`/system_stats`) über

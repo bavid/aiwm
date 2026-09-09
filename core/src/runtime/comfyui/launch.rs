@@ -58,6 +58,12 @@ impl ComfyDirs {
         self.base.join("aiwm-model-paths.yaml")
     }
 
+    /// ComfyUI's `input/` folder — where `LoadImage` reads from. Image→video
+    /// (4.2) stages a start frame here.
+    pub(super) fn input(&self) -> PathBuf {
+        self.base.join("input")
+    }
+
     /// Create the base + output directories and (re)write the model-paths YAML.
     /// Idempotent; called before every server start so a changed store path or
     /// a fresh install is picked up.

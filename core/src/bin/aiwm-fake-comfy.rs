@@ -8,7 +8,9 @@
 //! without a multi-GB Python install.
 //!
 //! A `SaveImage` node → a 1×1 PNG under the `images` key; a `SaveVideo` node → a
-//! tiny MP4 blob under the `videos` key.
+//! tiny MP4 blob under the `videos` key. A `LoadImage` node makes `/history`
+//! check that the referenced file exists under `<base-directory>/input/` —
+//! image→video staging (4.2) is only "done" if the start frame really landed.
 //!
 //! Fixture-only flags:
 //! - `--fake-ready-ms <n>`  — delay the socket bind by `n` ms (slow cold start).
@@ -18,6 +20,7 @@
 
 use std::collections::HashMap;
 use std::net::Ipv4Addr;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -47,6 +50,7 @@ const TINY_MP4: &[u8] = &[
 struct Fixture {
     render_delay: Duration,
     history_error: bool,
+    input_dir: PathBuf,
     prompts: Arc<Mutex<HashMap<String, Prompt>>>,
 }
 
@@ -54,6 +58,8 @@ struct Prompt {
     submitted_at: Instant,
     filename_prefix: String,
     is_video: bool,
+    /// `LoadImage`'s `image` input, if the graph has one (image→video).
+    load_image: Option<String>,
 }
 
 #[tokio::main]
@@ -62,12 +68,18 @@ async fn main() -> anyhow::Result<()> {
     let mut ready_ms = 0u64;
     let mut render_ms = 0u64;
     let mut history_error = false;
+    let mut base_dir = PathBuf::from(".");
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--port" => {
                 if let Some(v) = args.next() {
                     port = v.parse().unwrap_or(port);
+                }
+            }
+            "--base-directory" => {
+                if let Some(v) = args.next() {
+                    base_dir = PathBuf::from(v);
                 }
             }
             "--fake-ready-ms" => {
@@ -88,6 +100,7 @@ async fn main() -> anyhow::Result<()> {
     let state = Fixture {
         render_delay: Duration::from_millis(render_ms),
         history_error,
+        input_dir: base_dir.join("input"),
         prompts: Arc::new(Mutex::new(HashMap::new())),
     };
 
@@ -128,14 +141,23 @@ async fn ok() -> impl IntoResponse {
 }
 
 async fn submit_prompt(State(fx): State<Fixture>, Json(body): Json<Value>) -> Json<Value> {
-    // Find the SaveImage / SaveVideo node and its filename_prefix.
+    // Find the SaveImage / SaveVideo node and its filename_prefix, plus any
+    // LoadImage (image→video start frame).
     let mut prefix = "fake".to_string();
     let mut is_video = false;
+    let mut load_image = None;
     if let Some(nodes) = body.get("prompt").and_then(Value::as_object) {
         for node in nodes.values() {
             match node.get("class_type").and_then(Value::as_str) {
                 Some("SaveVideo") => is_video = true,
                 Some("SaveImage") => {}
+                Some("LoadImage") => {
+                    load_image = node
+                        .pointer("/inputs/image")
+                        .and_then(Value::as_str)
+                        .map(str::to_string);
+                    continue;
+                }
                 _ => continue,
             }
             if let Some(p) = node
@@ -154,6 +176,7 @@ async fn submit_prompt(State(fx): State<Fixture>, Json(body): Json<Value>) -> Js
                 submitted_at: Instant::now(),
                 filename_prefix: prefix,
                 is_video,
+                load_image,
             },
         );
     }
@@ -170,14 +193,23 @@ async fn history(State(fx): State<Fixture>, Path(id): Path<String>) -> Json<Valu
     if prompt.submitted_at.elapsed() < fx.render_delay {
         return Json(json!({})); // still rendering
     }
-    let entry = if fx.history_error {
+    // image→video: the staged start frame must be sitting in input/.
+    let missing_frame = prompt
+        .load_image
+        .as_deref()
+        .filter(|name| !fx.input_dir.join(name).is_file());
+    let entry = if fx.history_error || missing_frame.is_some() {
+        let msg = missing_frame.map_or_else(
+            || "fake render error".to_string(),
+            |name| format!("LoadImage: {name} is not in input/"),
+        );
         json!({
             "status": {
                 "status_str": "error",
                 "completed": false,
                 "messages": [
                     ["execution_start", {}],
-                    ["execution_error", { "exception_message": "fake render error" }]
+                    ["execution_error", { "exception_message": msg }]
                 ]
             }
         })
