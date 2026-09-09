@@ -88,7 +88,9 @@ mit Prompt/Seed/Modell, Scheduler koordiniert LLM ↔ Diffusion ums VRAM-Budget.
 
 - [x] 3.1 `ComfyUiAdapter` — ein langlebiger, lazy gestarteter Server; Spawn/
   Health/Attach/`/free`, `aiwm-fake-comfy`-Fixture (ADR-018)
-- [ ] 3.2 Installer (`uv`-venv, gepinnter Tag, ein Custom Node)
+- [~] 3.2 Installer — **3.2a ✅** `uv` + Quelle + venv + torch(cu130) + deps
+  (`CmdRunner`-getestet, `POST /runtimes/comfyui/install`); 3.2b: der eine
+  Custom Node (`ComfyUI-GGUF`)
 - [ ] 3.3 echte Junctions in `<comfy>/models/`
 - [ ] 3.4 `capability::image` (feste Pipeline, `/prompt` → `/history` → `/view`)
 - [ ] 3.5 UI-Tab „Image" + Galerie

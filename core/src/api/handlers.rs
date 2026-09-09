@@ -165,6 +165,34 @@ pub fn install_llamacpp(app: &App) -> Result<&'static str> {
     Ok("started")
 }
 
+/// Kick off the pinned ComfyUI install (uv + source + venv + torch + deps) in
+/// the background. Same contract as [`install_llamacpp`]: `"started"` /
+/// `"already_installed"`, errors up front on offline mode or an in-flight run.
+pub fn install_comfyui(app: &App) -> Result<&'static str> {
+    if app.offline() {
+        return Err(CoreError::Config(
+            "offline mode is on — cannot download ComfyUI".into(),
+        ));
+    }
+    if app.comfyui.is_installed() {
+        return Ok("already_installed");
+    }
+    if app.comfyui.is_installing() {
+        return Err(CoreError::Config(
+            "a ComfyUI install is already running".into(),
+        ));
+    }
+
+    let comfyui = app.comfyui.clone();
+    let offline = app.offline();
+    tokio::spawn(async move {
+        if let Err(e) = comfyui.install(offline).await {
+            tracing::error!(error = %e, "ComfyUI install failed");
+        }
+    });
+    Ok("started")
+}
+
 /// Tail of the current day's log file.
 pub fn recent_logs(app: &App, lines: usize) -> Result<Vec<String>> {
     let dir = app.paths.logs_dir();

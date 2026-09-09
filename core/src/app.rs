@@ -31,9 +31,11 @@ pub struct App {
     pub db: Database,
     pub telemetry: Arc<Sampler>,
     pub runtimes: RuntimeRegistry,
-    /// The llama.cpp adapter, also registered in [`runtimes`](Self::runtimes).
-    /// Held typed so handlers can drive its installer.
+    /// The llama.cpp and ComfyUI adapters, also registered in
+    /// [`runtimes`](Self::runtimes). Held typed so handlers can drive their
+    /// installers.
     pub llama: Arc<LlamaCppAdapter>,
+    pub comfyui: Arc<ComfyUiAdapter>,
     pub scheduler: Arc<HybridScheduler>,
     pub jobs: Arc<JobEngine>,
     /// Live offline switch (ADR-009). Seeded from `config.offline_mode`; the
@@ -60,14 +62,15 @@ impl App {
                 .with_options(config.llama.to_options()),
         );
         runtimes.register(llama.clone());
-        runtimes.register(Arc::new(ComfyUiAdapter::discover(
+        let comfyui = Arc::new(ComfyUiAdapter::discover(
             db.clone(),
             &paths.runtimes_dir(),
             ComfyDirs {
                 base: paths.comfyui_data_dir(),
                 output: paths.outputs_dir(),
             },
-        )));
+        ));
+        runtimes.register(comfyui.clone());
         let budget = resolve_vram_budget(&config, &telemetry);
         let scheduler = Arc::new(HybridScheduler::new(runtimes.clone(), budget));
         let jobs = Arc::new(JobEngine::new(
@@ -85,6 +88,7 @@ impl App {
             telemetry,
             runtimes,
             llama,
+            comfyui,
             scheduler,
             jobs,
             offline,

@@ -32,6 +32,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/models", get(list_models).post(import_model))
         .route("/runtimes", get(runtimes))
         .route("/runtimes/llamacpp/install", post(install_llamacpp))
+        .route("/runtimes/comfyui/install", post(install_comfyui))
         .route("/logs", get(logs))
         .route("/ws", get(ws_upgrade))
         .with_state(app)
@@ -182,7 +183,16 @@ async fn runtimes(State(app): AppState) -> Json<Vec<super::dto::RuntimeStatusDto
 async fn install_llamacpp(
     State(app): AppState,
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
-    let status = handlers::install_llamacpp(&app)?;
+    install_status(handlers::install_llamacpp(&app)?)
+}
+
+async fn install_comfyui(
+    State(app): AppState,
+) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    install_status(handlers::install_comfyui(&app)?)
+}
+
+fn install_status(status: &str) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
     let code = if status == "started" {
         StatusCode::ACCEPTED
     } else {

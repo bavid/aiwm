@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useAbout, useLogs, useRuntimes, useTelemetry } from "../../lib/hooks";
-import { installLlamacpp } from "../../lib/ipc";
+import { installComfyui, installLlamacpp } from "../../lib/ipc";
 import { getTheme } from "../../lib/theme";
 import "./diagnostics.css";
 
@@ -10,7 +10,7 @@ export function Diagnostics() {
   const { telemetry } = useTelemetry();
   const about = useAbout();
   const logRef = useRef<HTMLPreElement>(null);
-  const llamaDetail = runtimes?.find((r) => r.id === "llamacpp")?.detail ?? null;
+  const detailOf = (id: string) => runtimes?.find((r) => r.id === id)?.detail ?? null;
   const gpu = telemetry?.gpu;
   const processes = gpu?.state === "available" ? gpu.processes : [];
 
@@ -81,7 +81,18 @@ export function Diagnostics() {
         ) : (
           <p className="muted">No runtimes registered yet.</p>
         )}
-        <LlamaSetup detail={llamaDetail} />
+        <RuntimeSetup
+          detail={detailOf("llamacpp")}
+          label="llama.cpp"
+          sizeHint="about 645 MB"
+          install={installLlamacpp}
+        />
+        <RuntimeSetup
+          detail={detailOf("comfyui")}
+          label="ComfyUI"
+          sizeHint="several GB — PyTorch is a large download"
+          install={installComfyui}
+        />
       </section>
 
       <section className="card card--wide">
@@ -124,14 +135,24 @@ export function Diagnostics() {
   );
 }
 
+const INSTALL_PREFIXES = ["downloading", "extracting", "unpacking", "creating", "installing"];
 const isInstalling = (d: string | null) =>
-  d != null && (d.startsWith("downloading") || d.startsWith("extracting"));
+  d != null && INSTALL_PREFIXES.some((p) => d.startsWith(p));
 
-function LlamaSetup({ detail }: { detail: string | null }) {
+type RuntimeSetupProps = {
+  detail: string | null;
+  label: string;
+  sizeHint: string;
+  install: () => Promise<string>;
+};
+
+/** The "Set up <runtime>" affordance — shown only when a runtime is missing or
+ *  its last setup failed, plus the live progress line while it runs. */
+function RuntimeSetup({ detail, label, sizeHint, install }: RuntimeSetupProps) {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const installing = isInstalling(detail);
-  const actionable = detail === "not installed" || detail?.startsWith("setup failed");
+  const actionable = detail === "not installed" || (detail?.startsWith("setup failed") ?? false);
 
   if (!installing && !actionable) return null;
 
@@ -139,11 +160,11 @@ function LlamaSetup({ detail }: { detail: string | null }) {
     setBusy(true);
     setMessage(null);
     try {
-      const status = await installLlamacpp();
+      const status = await install();
       setMessage(
         status === "already_installed"
           ? "Already installed."
-          : "Download started — about 645 MB, this runs in the background.",
+          : `Setup started — ${sizeHint}. This runs in the background.`,
       );
     } catch (err) {
       setMessage(err instanceof Error ? err.message : String(err));
@@ -155,9 +176,9 @@ function LlamaSetup({ detail }: { detail: string | null }) {
   return (
     <div className="rt-setup">
       <button type="button" onClick={start} disabled={busy || installing}>
-        {installing ? "Setting up…" : busy ? "Starting…" : "Set up llama.cpp"}
+        {installing ? "Setting up…" : busy ? "Starting…" : `Set up ${label}`}
       </button>
-      {installing && <span className="muted">{detail}</span>}
+      {installing && detail && <span className="muted">{detail}</span>}
       {message && <span className="muted">{message}</span>}
     </div>
   );

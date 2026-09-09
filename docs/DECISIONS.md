@@ -504,14 +504,41 @@ passt hier nicht.
 - *`comfy-cli` als Laufzeit-Tool*: eigenes Pip-Tool, eigener Env-Zustand — wir
   kontrollieren die venv selbst (3.2), wie bei llama.cpp die Binärdatei.
 
+**Installer (3.2a) — eigene `uv`-getriebene Pipeline statt `comfy-cli`.**
+- **Weg:** `uv` als einzelne verifizierte Static-Binary bootstrappen →
+  ComfyUI-Quelle am gepinnten Tag (verifiziertes GitHub-`.zip`) → `uv venv
+  --python 3.13` (lädt Python) → `uv pip install torch … --index-url cu130` →
+  `uv pip install -r requirements.txt`. Alles unter
+  `<local_root>/runtimes/comfyui/`, „Repair" = löschen. Die `uv`-Subprozess-
+  Schritte hinter einem `CmdRunner`-Trait, damit die Orchestrierung ohne echtes
+  Python unit-testbar ist.
+- **Torch:** kein exakter Versions-Pin. ComfyUIs eigenes `requirements.txt` pinnt
+  torch auch nicht; die kuratierte Version ist „ComfyUI-Tag + cu130-Index +
+  Python 3.13". `cu130` = ComfyUIs aktuelle Empfehlung für RTX 20+; braucht einen
+  neueren NVIDIA-Treiber (Treiber-Kompatibilität wird bewiesen, wenn 3.4 ein Bild
+  rendert — der `#[ignore]`-Smoke prüft nur, dass `import torch` in der venv geht).
+- **`comfy-cli` verworfen als Laufzeit-*und* Installer-Tool:** es ist ein
+  eigenes Pip-Paket mit eigenem Env-Zustand, eigenem Workspace-Layout und einer
+  Wizard-Oberfläche. Für ein eingebettetes Control-Plane ist es eine zusätzliche
+  bewegliche Schicht ohne Gewinn — die ~6 `uv`-Schritte selbst zu besitzen ist
+  deterministischer und passt zu ADR-014 (llama.cpp: „wir kontrollieren den
+  Install"). Als *Referenz* für die Schritte ist `comfy-cli` nützlich.
+- **Source-Archiv-SHA:** GitHub publiziert für Source-Archive keinen Digest. Wir
+  pinnen die selbst berechnete SHA-256; eine Regeneration auf GitHubs Seite
+  surft als `SHA-256 mismatch` auf → von Hand prüfen, dann bumpen.
+
 **Konsequenzen:**
 - (+) Modellwechsel = ein `/free` + der nächste Workflow lädt neu — keine
   Server-Neustart-Latenz.
-- (+) Derselbe Supervisor/Attach/Health-Baukasten wie Phase 2.
+- (+) Derselbe Supervisor/Attach/Health-Baukasten wie Phase 2; dieselbe
+  Download-/Verify-/Extract-Maschinerie (`runtime::download`) wie der llama.cpp-
+  Installer.
 - (−) Der ComfyUI-Prozess belegt Basis-RAM (~1–2 GB), solange die App läuft, auch
   im Leerlauf nach dem ersten Bild. Akzeptiert; ein „Runtime stoppen" kommt in 3.7.
 - (−) Bis `capability::image` (3.4) reserviert `load_model` nur den Slot — die
   Verdrängung eines echten Checkpoints ist erst dann sichtbar.
+- (−) Ohne torch-Pin kann ein künftiger torch-Release ComfyUI brechen — dann
+  Pin nachziehen / ComfyUI-Tag bumpen.
 
 ---
 

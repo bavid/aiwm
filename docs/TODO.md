@@ -53,8 +53,12 @@ hierher, damit nichts verloren geht.
   §Research (SDXL/Flux/SD3.5/Qwen für 16 GB). Video-Modelle → vor Phase 4.
 - ~~ComfyUI: minimale Custom-Node-Menge~~ → ✅ PHASE_3_PLAN.md: genau
   `city96/ComfyUI-GGUF` (Slice 3.2b), Rest bewusst später
-- `uv`-verwaltete venv-Strategie pro Runtime + „Repair"-Funktion → Detail in
-  Slice 3.2a
+- ~~`uv`-verwaltete venv-Strategie + „Repair"~~ → ✅ 3.2a (`comfyui::install`,
+  ADR-018). Offen: Cleanup von `runtimes/comfyui/{<alter-tag>,uv-cache,python}`
+  beim Versions-Bump; freien Speicherplatz vor dem torch-Download prüfen
+- ComfyUI cu130-torch: GPU-**Treiber**-Kompatibilität auf der echten 4080 Super
+  verifizieren, sobald 3.4 ein Bild rendert (der 3.2a-Smoke prüft nur
+  `import torch`, nicht die CUDA-Laufzeit). Fällt es aus → cu128/cu126-Pin.
 
 ## Vor Phase 5 (Agents)
 - Hermes Agent auf der echten Windows-Maschine: `bash -l`-Abhängigkeit

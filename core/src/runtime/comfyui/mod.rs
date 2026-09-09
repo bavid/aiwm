@@ -14,6 +14,7 @@
 //! Installing the pinned ComfyUI (venv + one custom node) lands in 3.2.
 
 mod client;
+mod install;
 mod launch;
 
 use std::path::{Path, PathBuf};
@@ -25,24 +26,41 @@ use tokio::sync::Mutex as AsyncMutex;
 
 use self::client::ComfyClient;
 pub use self::client::SystemStats;
+use self::install::InstallPhase;
 use self::launch::{build_spawn_spec, resolve_launch};
 pub use self::launch::{ComfyDirs, ComfyLaunch};
 use super::{
     free_loopback_port, Health, LoadedModel, RuntimeAdapter, RuntimeKind, RuntimeSupervisor,
     SpawnSpec, SupervisorState,
 };
-use crate::db::Database;
+use crate::db::{runtime_state, Database};
 use crate::{CoreError, Result};
+
+use serde::Serialize;
 
 /// Adapter id — also the `runtimes` table key and the registry key.
 pub const RUNTIME_ID: &str = "comfyui";
 /// `runtimes.kind` value (matches `RuntimeKind::ComfyUi`'s serde name).
-#[allow(dead_code)] // used by the installer + RuntimeRepo in 3.2
 const RUNTIME_KIND: &str = "comfy_ui";
 
 const HEALTH_POLL_INTERVAL: Duration = Duration::from_millis(500);
 /// ComfyUI + torch import can take a while on a cold start.
 const SERVER_READY_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// Progress of [`ComfyUiAdapter::install`], mirrored to the UI status line.
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum InstallState {
+    Idle,
+    Running {
+        phase: InstallPhase,
+        done_bytes: u64,
+        total_bytes: u64,
+    },
+    Failed {
+        error: String,
+    },
+}
 
 pub(super) fn comfy_err(msg: impl std::fmt::Display) -> CoreError {
     CoreError::Runtime {
@@ -85,6 +103,9 @@ pub struct ComfyUiAdapter {
     resident: Mutex<Option<LoadedModel>>,
     /// Serialises whole `load` / `unload` / `attach` / `stop` operations.
     op_lock: AsyncMutex<()>,
+    install: Mutex<InstallState>,
+    /// Held for the duration of an install.
+    install_lock: AsyncMutex<()>,
 }
 
 impl ComfyUiAdapter {
@@ -109,7 +130,95 @@ impl ComfyUiAdapter {
             server: Mutex::new(Server::Down),
             resident: Mutex::new(None),
             op_lock: AsyncMutex::new(()),
+            install: Mutex::new(InstallState::Idle),
+            install_lock: AsyncMutex::new(()),
         }
+    }
+
+    /// Current install progress (drives the UI status line).
+    pub fn install_state(&self) -> InstallState {
+        self.install
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    /// Whether an install is running right now.
+    pub fn is_installing(&self) -> bool {
+        matches!(self.install_state(), InstallState::Running { .. })
+    }
+
+    fn set_install_state(&self, s: InstallState) {
+        *self.install.lock().unwrap_or_else(PoisonError::into_inner) = s;
+    }
+
+    /// Install the pinned ComfyUI into the managed runtimes dir: bootstrap `uv`,
+    /// fetch the source at the pinned tag, then build a self-contained venv
+    /// (Python 3.13 + the CUDA torch build + `requirements.txt`). Long-running —
+    /// callers spawn it and poll [`install_state`](Self::install_state). Errors
+    /// immediately when the adapter was built with a fixed launch (tests / a
+    /// config override).
+    pub async fn install(&self, offline: bool) -> Result<()> {
+        let LaunchSource::Scan(dir) = &self.launch else {
+            return Err(comfy_err(
+                "this adapter uses a fixed launch command; nothing to install",
+            ));
+        };
+        let dir = dir.clone();
+        let Ok(_guard) = self.install_lock.try_lock() else {
+            return Err(comfy_err("a ComfyUI install is already running"));
+        };
+
+        self.set_install_state(InstallState::Running {
+            phase: InstallPhase::Downloading,
+            done_bytes: 0,
+            total_bytes: install::TOOLCHAIN_DOWNLOAD_BYTES,
+        });
+        let _ = self
+            .db
+            .runtimes()
+            .set_state(RUNTIME_ID, RUNTIME_KIND, runtime_state::INSTALLING, None)
+            .await;
+
+        let result = install::install(
+            &dir,
+            offline,
+            &install::SystemRunner,
+            |phase, done_bytes, total_bytes| {
+                self.set_install_state(InstallState::Running {
+                    phase,
+                    done_bytes,
+                    total_bytes,
+                });
+            },
+        )
+        .await;
+
+        match &result {
+            Ok(()) => {
+                self.set_install_state(InstallState::Idle);
+                let _ = self
+                    .db
+                    .runtimes()
+                    .record_install(
+                        RUNTIME_ID,
+                        RUNTIME_KIND,
+                        install::PINNED_TAG,
+                        &install::comfy_home(&dir).to_string_lossy(),
+                    )
+                    .await;
+            }
+            Err(e) => {
+                let msg = e.to_string();
+                self.set_install_state(InstallState::Failed { error: msg.clone() });
+                let _ = self
+                    .db
+                    .runtimes()
+                    .set_state(RUNTIME_ID, RUNTIME_KIND, runtime_state::ERROR, Some(&msg))
+                    .await;
+            }
+        }
+        result
     }
 
     fn server(&self) -> std::sync::MutexGuard<'_, Server> {
@@ -299,6 +408,32 @@ impl RuntimeAdapter for ComfyUiAdapter {
     }
 
     fn detail(&self) -> Option<String> {
+        match self.install_state() {
+            InstallState::Running {
+                phase: InstallPhase::Downloading,
+                done_bytes,
+                total_bytes,
+            } => {
+                let pct = done_bytes
+                    .saturating_mul(100)
+                    .checked_div(total_bytes)
+                    .unwrap_or(0);
+                return Some(format!("downloading ComfyUI — {pct}%"));
+            }
+            InstallState::Running { phase, .. } => {
+                let step = match phase {
+                    InstallPhase::Downloading => unreachable!(),
+                    InstallPhase::Extracting => "unpacking ComfyUI",
+                    InstallPhase::CreatingVenv => "creating the Python environment",
+                    InstallPhase::InstallingTorch => "installing PyTorch (this is a big download)",
+                    InstallPhase::InstallingDeps => "installing ComfyUI dependencies",
+                };
+                return Some(format!("{step}…"));
+            }
+            InstallState::Failed { error } => return Some(format!("setup failed: {error}")),
+            InstallState::Idle => {}
+        }
+
         Some(match &*self.server() {
             Server::Down if !self.is_installed() => "not installed".to_string(),
             Server::Down => "installed · idle".to_string(),

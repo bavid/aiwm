@@ -177,6 +177,8 @@ export const saveConfig = (update: ConfigUpdate) =>
 export const getRuntimes = () => invoke<RuntimeStatus[]>("get_runtimes");
 /** Start the pinned llama.cpp download+install (background). Returns "started" or "already_installed". */
 export const installLlamacpp = () => invoke<string>("install_llamacpp");
+/** Start the pinned ComfyUI install — uv + source + venv + PyTorch + deps (background). */
+export const installComfyui = () => invoke<string>("install_comfyui");
 export const getRecentLogs = (lines = 200) =>
   invoke<string[]>("get_recent_logs", { lines });
 export const listJobs = (opts?: { states?: JobState[]; limit?: number }) =>

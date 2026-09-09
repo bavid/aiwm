@@ -13,8 +13,8 @@ manuelles Eingreifen → Netz trennen → das schon Installierte läuft weiter.
 | Scheibe | Inhalt | Status |
 |---|---|---|
 | **3.1** | `ComfyUiAdapter` (`RuntimeAdapter`): **ein** langlebiger Server, lazy beim ersten `load_model` gestartet (`--listen 127.0.0.1 --port … --base-directory … --output-directory … --disable-auto-launch --dont-print-server`), Health über `GET /system_stats`, Attach-Fallback, `unload_model` → `POST /free` (Server bleibt oben), `load_model` = Server hoch + VRAM-Slot reservieren + alten via `/free` verdrängen; `aiwm-fake-comfy`-Fixture | ✅ |
-| 3.2a | ComfyUI-**Installer** (Teil 1): `uv`-verwaltete venv unter `<local_root>/runtimes/comfyui/<tag>/`, ComfyUI am gepinnten Git-Tag (Clone/Tarball + Verify), Torch-CUDA-Wheel + gepinnte `requirements`, `offline_mode`-Hard-Refusal, „Repair" = venv neu, Fortschritt in `detail()` | offen |
-| 3.2b | ComfyUI-Installer (Teil 2): gepinnter Custom-Node-Satz — **exakt einer**: `city96/ComfyUI-GGUF` (an einem Commit), für Flux-GGUF. SHA/Commit fest im Code. SDXL-txt2img braucht **keine** Custom Nodes | offen |
+| **3.2a** | ComfyUI-**Installer** (Kern): `uv` bootstrappen (verifizierter Static-Binary), ComfyUI-Quelle am gepinnten Tag (verifiziertes GitHub-`.zip`, flach entpackt), `uv venv --python 3.13` (lädt Python) + `uv pip install torch … --index-url cu130` + `-r requirements.txt` — die `uv`-Schritte hinter einem `CmdRunner`-Trait (unit-getestet). `offline_mode`-Hard-Refusal, idempotent, `InstallState`/`detail()`, `RuntimeRepo`, `POST /runtimes/comfyui/install`, Diagnostics-„Set up"-Knopf | ✅ |
+| 3.2b | gepinnter Custom-Node-Satz — **exakt einer**: `city96/ComfyUI-GGUF` (an einem Commit; `gguf`/`sentencepiece`/`protobuf` in die venv). SDXL-txt2img braucht **keine** Custom Nodes | offen |
 | 3.3 | Link-Manager **echt**: neue Store-Struktur `E:\AI\models\image\{checkpoints,unet,vae,clip,loras}`; `core::link` junctioniert diese Ordner in ComfyUIs `models/…` (Directory-Junction, kein Admin — das, wofür 2.3 gebaut wurde); `import_model` nimmt `.safetensors`, routet per Rolle in den richtigen Unterordner; `model_links` = `comfyui`/`junction` | offen |
 | 3.4 | `capability::image`: `job_type=image`, Params (prompt, negative, w/h, steps, cfg, seed, model|Auto über Rolle); **feste Pipeline** = Workflow-JSON-Template + Param-Substitution (`core::pipeline`); `POST /prompt` → `/history/{id}` pollen → Bild via `/view` nach `<data>/outputs/<job_id>.png` → `jobs.output_path`; Cancel via `POST /interrupt`; VRAM-Schätzung pro Familie | offen |
 | 3.5 | UI: Tab „Image" — Prompt/Negativ, Größe/Steps/CFG/Seed, Model [Auto], „Generate"; Ergebnisbild; einfache **Galerie** (Bild-Jobs mit Thumbnail, Klick → Prompt/Seed/Modell); Dashboard-Button „Generate Image" aktiv | offen |
@@ -179,6 +179,63 @@ Bewusst **nicht** in 3.1: Installer (→ 3.2), echtes `POST /prompt` / Bild-Job
 (→ 3.4), `runtimes`-Tabellen-Zustand (kommt mit dem Installer), reale VRAM aus
 `/system_stats` fürs Scheduler-Accounting (aktuell die deklarierte Zahl, wie bei
 llama.cpp).
+
+---
+
+## 3.2a — Ergebnis (abgeschlossen)
+
+- **`core::runtime::download`** (neues geteiltes Modul): `download_verified`
+  (Streaming + mitlaufender SHA-256, Größe + Hash geprüft), `extract_zip` /
+  `extract_zip_flat` (Letzteres wirft das `<repo>-<ref>/`-Wrapper-Verzeichnis der
+  GitHub-Source-Archive weg), `hex`. `llamacpp::install` auf das Modul
+  umgestellt — verhaltensgleich, alle Bestandstests grün.
+- **`core::runtime::comfyui::install`**: `install(runtimes_dir, offline, runner,
+  on_progress)`:
+  1. **`uv`** bootstrappen — `uv-x86_64-pc-windows-msvc.zip` von den
+     `astral-sh/uv`-Releases (SHA-256 aus dem `.sha256`-Sidecar), nach
+     `<runtimes_dir>/comfyui/uv/uv.exe`.
+  2. **ComfyUI-Quelle** — `v0.34.0.zip` von `github.com/.../archive/refs/tags/`
+     (SHA-256 selbst berechnet — GitHub publiziert für Source-Archive keinen
+     Digest; eine Regeneration = `SHA-256 mismatch` + Pin-Bump), flach nach
+     `<runtimes_dir>/comfyui/v0.34.0/`.
+  3. **venv** — `uv venv --python 3.13` (lädt Python 3.13; `UV_PYTHON_INSTALL_DIR`
+     + `UV_CACHE_DIR` zeigen in den Install-Baum → „Repair" = ein `rm -rf`).
+  4. **torch** — `uv pip install torch torchvision torchaudio --index-url
+     https://download.pytorch.org/whl/cu130` (ComfyUIs aktuelle Empfehlung für
+     RTX 20+; kein Versions-Pin — ComfyUI selbst pinnt torch nicht).
+  5. **deps** — `uv pip install -r requirements.txt`.
+  - Die vier `uv`-Aufrufe gehen durch das **`CmdRunner`**-Trait (`SystemRunner`
+    real; ein aufzeichnender Fake im Test) — die Orchestrierung ist unit-getestet
+    ohne echtes Python.
+  - Idempotent (venv-Python + `main.py` vorhanden → sofort zurück).
+    `offline_mode` → Hard-Refusal. `InstallPhase` = `Downloading` / `Extracting`
+    / `CreatingVenv` / `InstallingTorch` / `InstallingDeps`.
+- **Adapter**: `InstallState` (`Idle`/`Running`/`Failed`), `install(offline)`
+  treibt `install::install` + schreibt `runtimes`-Zustand (`installing` →
+  `stopped`+Version bzw. `error`). `detail()` rendert die Phase
+  („downloading ComfyUI — 42%" / „installing PyTorch (this is a big download)…"
+  / „setup failed: …"). `App::comfyui` typisiert gehalten.
+- **API/UI**: `POST /runtimes/comfyui/install` (202/200) + Tauri-Command
+  `install_comfyui`. `LlamaSetup` → generisches **`RuntimeSetup`** in Diagnostics,
+  jetzt für llama.cpp *und* ComfyUI.
+
+Verifiziert:
+- 9 neue Unit-Tests (4 `download`: hex/extract/extract-flat/bad-hash; 5
+  `comfyui::install`: offline-refusal, idempotent, volle Pipeline mit
+  Runner-Reihenfolge + Phasen, fehlschlagender `uv`-Schritt, Source-Hash-Abbruch
+  vor den `uv`-Schritten). `check.ps1` grün (185 Unit + 17 Integ.).
+- **Smoke (`#[ignore]`, echt)**: `comfyui::install::tests::real_pinned_install`
+  zieht das echte `uv` + die echte ComfyUI-Quelle + einen **echten CUDA-torch-
+  Build** und importiert `torch` in der frischen venv — **grün in 73 s** (der
+  cu130-Wheel passt zu Python 3.13). GPU-Treiber-Kompatibilität wird endgültig
+  bewiesen, wenn 3.4 ein Bild rendert.
+- **Live** (`aiwm-cored`): `GET /runtimes` → `comfyui: not installed` →
+  `POST …/install` → 202 → `detail` zeigt „downloading ComfyUI — 0%" → erneuter
+  `POST` während des Laufs → 400.
+
+Bewusst **nicht** in 3.2a: der Custom Node (→ 3.2b), Speicherplatz-Check vor dem
+Download (Phase 6), Cleanup alter `<tag>/` + `uv-cache/` + `python/` beim
+Versions-Bump ([TODO.md](TODO.md)).
 
 ---
 

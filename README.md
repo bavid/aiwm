@@ -31,7 +31,7 @@ noch keine echte AI-Capability (die kommt ab Phase 2).
 | WP-9 | CI-Workflow, Git-Hooks (pre-commit fmt, pre-push voller Gate) |
 | WP-10 | ADRs finalisiert, Stub-Docs (MODELS/RUNTIMES/SECURITY/BENCHMARKS) |
 
-**179 Rust-Unit + 17 Integrationstests + 5 pytest** grün · `scripts/check.ps1` grün ·
+**185 Rust-Unit + 17 Integrationstests + 5 pytest** grün · `scripts/check.ps1` grün ·
 **null `unsafe`** im Produktivcode.
 
 **Phase 2 (MVP) ✅ abgeschlossen** — Scheiben 2.1–2.7 + durchgehender
@@ -43,6 +43,11 @@ Modell-Wechsel-Test (`core/tests/model_swap.rs`).
   Server (`RuntimeAdapter`): Spawn/Health (`/system_stats`) über
   `RuntimeSupervisor`, Attach-Fallback, `unload` = `POST /free` (Server bleibt
   oben), `aiwm-fake-comfy`-Fixture (ADR-018).
+- **3.2a** ✅ ComfyUI-**Installer**: `uv` bootstrappen (verifiziert) → Quelle am
+  gepinnten Tag → `uv venv` (Python 3.13) → torch (cu130) + `requirements.txt`;
+  `uv`-Schritte hinter `CmdRunner` (unit-getestet), echter End-to-End-Smoke in
+  73 s. `POST /runtimes/comfyui/install` + „Set up"-Knopf. Geteiltes
+  `runtime::download`-Modul.
 
 - **2.1** ✅ `ModelRepo`, eigener bounded GGUF-Header-Reader, manueller Import in
   den kanonischen Store, UI-Tab „Models".
