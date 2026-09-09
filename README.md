@@ -148,6 +148,8 @@ pnpm -C ui exec tauri dev                 # Desktop-App (aus E:\AI ausführen)
 | [docs/ROADMAP.md](docs/ROADMAP.md) | MVP-Definition und Phasenplan |
 | [docs/PHASE_1_PLAN.md](docs/PHASE_1_PLAN.md) | Detailplan + Ergebnisse aller Phase-1-Arbeitspakete |
 | [docs/PHASE_2_PLAN.md](docs/PHASE_2_PLAN.md) | Phase-2-Scheibenplan + Fortschritt |
+| [docs/PHASE_3_PLAN.md](docs/PHASE_3_PLAN.md) | Phase-3-Scheibenplan (Bild / ComfyUI) + Research + Ergebnisse |
+| [docs/PHASE_4_PLAN.md](docs/PHASE_4_PLAN.md) | Phase-4-Scheibenplan (Video) + Research |
 | [docs/DEV_SETUP.md](docs/DEV_SETUP.md) | Toolchain-Installation, Build-/Test-Befehle, Git-Hooks, CI |
 | [docs/DECISIONS.md](docs/DECISIONS.md) | Architecture Decision Records (ADRs) |
 | [docs/RISKS.md](docs/RISKS.md) | Risikoregister mit Gegenmaßnahmen |

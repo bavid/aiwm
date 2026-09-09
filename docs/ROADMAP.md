@@ -111,12 +111,23 @@ verproben — alle Smokes fuhren gegen `aiwm-fake-comfy` (siehe [TODO.md](TODO.m
 
 Nach dem txt2img-MVP: Image→Image, Inpaint, Upscale, Enhancement (eigene Slices).
 
-## Phase 4 — Video
+## Phase 4 — Video *(geplant)*
 
-- Wan 2.2 5B + LTX distilled als getestete Optionen (14B als „Advanced/langsam")
-- Capabilities: Image→Video, Text→Video, Frame-Interpolation, Video-Upscale
-- Klare Erwartungssteuerung in der UI (Dauer, Auflösung, Zeit)
-- RAM-Warnung wenn Offload-Budget kritisch
+**Scheibenplan + Research: [PHASE_4_PLAN.md](PHASE_4_PLAN.md).** MVP = Text→Video
+und Bild→Video über dieselbe gekapselte ComfyUI-Runtime. Wan 2.2 TI2V-5B zuerst
+(`Auto`-Default, ein Modell für T2V + I2V, native ComfyUI-Nodes, mp4 via
+`SaveVideo`), LTX-2 als zweites Template. ComfyUI kann Video nativ (`WanImageToVideo`
+→ `CreateVideo` → `SaveVideo`, `av` schon im Installer). Frame-Interpolation +
+Video-Upscale danach als eigene Slices.
+
+- [ ] 4.0 **die echte ComfyUI verproben** (Phase-3-Rest: cu130, Flux-GGUF-Graph,
+  `SaveVideo`) — Voraussetzung
+- [ ] 4.1 `capability::video` — `job_type=video`, feste `wan_ti2v`-Pipeline,
+  `generate_image` → `generate_media`
+- [ ] 4.2 Bild→Video (`start_image` aus einem Bild-Job / Pfad)
+- [ ] 4.3 UI-Tab „Video" + Erwartungssteuerung (Dauer!) + `<video>`-Player + Galerie
+- [ ] 4.4 LTX-2-GGUF als zweites Template + `docs/VIDEO_MODELS.md` + Katalog
+- [ ] 4.5 Politur: RAM-Warnung, Retention, Settings, Scheduler-Verprobung
 
 ## Phase 5 — Agents
 
