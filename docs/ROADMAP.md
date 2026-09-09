@@ -111,14 +111,15 @@ verproben — alle Smokes fuhren gegen `aiwm-fake-comfy` (siehe [TODO.md](TODO.m
 
 Nach dem txt2img-MVP: Image→Image, Inpaint, Upscale, Enhancement (eigene Slices).
 
-## Phase 4 — Video *(geplant)*
+## Phase 4 — Video *(4.1–4.5 ✅, 4.0 offen)*
 
 **Scheibenplan + Research: [PHASE_4_PLAN.md](PHASE_4_PLAN.md).** MVP = Text→Video
 und Bild→Video über dieselbe gekapselte ComfyUI-Runtime. Wan 2.2 TI2V-5B zuerst
 (`Auto`-Default, ein Modell für T2V + I2V, native ComfyUI-Nodes, mp4 via
-`SaveVideo`), LTX-2 als zweites Template. ComfyUI kann Video nativ (`WanImageToVideo`
-→ `CreateVideo` → `SaveVideo`, `av` schon im Installer). Frame-Interpolation +
-Video-Upscale danach als eigene Slices.
+`SaveVideo`), **LTX-Video 0.9.5 2B** als zweites Template (ADR-020, nicht LTX-2).
+Frame-Interpolation + Video-Upscale danach als eigene Slices. **4.1–4.5 stehen —
+alles gegen `aiwm-fake-comfy` gebaut; 4.0 (echte ComfyUI verproben) ist offen und
+läuft vermutlich an der echten Maschine.**
 
 - [ ] 4.0 **die echte ComfyUI verproben** (Phase-3-Rest: cu130, Flux-GGUF-Graph,
   `SaveVideo`) — Voraussetzung
@@ -130,7 +131,8 @@ Video-Upscale danach als eigene Slices.
   + „Start from image" (Galerie-Pick / Pfad) + `media-src` CSP
 - [x] 4.4 zweites Template **LTX-Video 0.9.5 2B** (Core-Nodes, ADR-020) +
   `docs/VIDEO_MODELS.md` + Wan/LTX-Katalog-Einträge (gegen Fake-ComfyUI)
-- [ ] 4.5 Politur: RAM-Warnung, Retention, Settings, Scheduler-Verprobung
+- [x] 4.5 Politur: RAM-Warnung (`capability::video`), `[comfyui]` `--reserve-vram`
+  + `extra_args`, `about.outputs_bytes` + „reveal", `core/tests/video_swap.rs`
 
 ## Phase 5 — Agents
 

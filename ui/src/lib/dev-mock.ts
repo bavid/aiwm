@@ -57,7 +57,15 @@ const RUNTIMES: AnyRecord[] = [
 
 const ABOUT: AnyRecord = {
   core_version: "0.0.1-dev", data_dir: "E:\\AI\\data", store_path: "E:\\AI\\models",
-  outputs_dir: "E:\\AI\\data\\outputs", core_api_port: 48096, vram_budget_mb: 14848, offline_mode: false,
+  outputs_dir: "E:\\AI\\data\\outputs", outputs_bytes: 4_812_300_000,
+  core_api_port: 48096, vram_budget_mb: 14848, offline_mode: false,
+};
+
+const CONFIG: AnyRecord = {
+  store_path: "E:\\AI\\models", core_api_port: 48096, offline_mode: false, log_filter: "info",
+  vram_budget_mb: 0,
+  llama: { gpu_layers: 999, ctx_size: 0, flash_attention: true, load_timeout_secs: 180 },
+  comfyui: { vram_mode: "auto", reserve_vram_mb: 0, extra_args: "" },
 };
 
 const TELEMETRY: AnyRecord = {
@@ -69,7 +77,6 @@ const TELEMETRY: AnyRecord = {
 let seq = 100;
 
 export function installDevMock(): void {
-  mockWindows("main");
   mockIPC(async (cmd, args): Promise<unknown> => {
     const a = (args ?? {}) as AnyRecord;
     switch (cmd) {
@@ -86,11 +93,12 @@ export function installDevMock(): void {
       case "list_jobs":
         return JOBS;
       case "get_config":
-        return {
-          store_path: "E:\\AI\\models", core_api_port: 48096, offline_mode: false, log_filter: "info",
-          vram_budget_mb: 0, llama: { gpu_layers: 999, ctx_size: 0, flash_attention: true, load_timeout_secs: 180 },
-          comfyui: { vram_mode: "auto" },
-        };
+        return CONFIG;
+      case "save_config": {
+        const u = (a.update ?? {}) as AnyRecord;
+        Object.assign(CONFIG, u);
+        return CONFIG;
+      }
       case "get_settings":
         return {};
       case "get_recent_logs":
@@ -112,8 +120,12 @@ export function installDevMock(): void {
       case "cancel_job":
         return true;
       default:
+        if (cmd.startsWith("plugin:")) return null; // opener plugin etc. — no-op
         console.warn("dev-mock: unhandled command", cmd);
         return null;
     }
-  });
+    // `shouldMockEvents` lets mockIPC handle `plugin:event|listen/unlisten`
+    // itself, so `listen()` (useTelemetry) resolves cleanly.
+  }, { shouldMockEvents: true });
+  mockWindows("main");
 }

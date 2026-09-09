@@ -99,6 +99,22 @@
   word-break: break-all;
 }
 
+.set-reveal {
+  margin-left: var(--space-2);
+  padding: 0 var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+
+.set-reveal:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
 .set-toggle {
   display: flex;
   align-items: flex-start;

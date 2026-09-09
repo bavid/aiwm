@@ -46,6 +46,10 @@ pub struct Config {
     pub comfyui: ComfyConfig,
 }
 
+/// Upper bound for `[comfyui].reserve_vram_mb` — reserving more than this on a
+/// 16 GB card leaves too little for the model.
+const MAX_RESERVE_VRAM_MB: u64 = 8192;
+
 /// The `[comfyui]` table — ComfyUI server options the Settings UI exposes.
 /// Applied at startup; a change needs a restart.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -54,12 +58,20 @@ pub struct ComfyConfig {
     /// VRAM mode: `auto` (let ComfyUI decide) | `highvram` | `normalvram` |
     /// `lowvram` | `novram`.
     pub vram_mode: String,
+    /// `--reserve-vram <GB>` — VRAM ComfyUI keeps free for the OS / other apps.
+    /// `0` omits the flag. Given in MB here; the flag takes GB.
+    pub reserve_vram_mb: u64,
+    /// Extra raw arguments appended to the ComfyUI command line, split on
+    /// whitespace (power users — e.g. `--fast --use-sage-attention`).
+    pub extra_args: String,
 }
 
 impl Default for ComfyConfig {
     fn default() -> Self {
         Self {
             vram_mode: "auto".to_string(),
+            reserve_vram_mb: 0,
+            extra_args: String::new(),
         }
     }
 }
@@ -67,9 +79,15 @@ impl Default for ComfyConfig {
 impl ComfyConfig {
     /// Build the runtime options the adapter launches with.
     pub fn to_options(&self) -> crate::runtime::ComfyOptions {
+        let mut extra_args: Vec<String> = Vec::new();
+        if self.reserve_vram_mb > 0 {
+            extra_args.push("--reserve-vram".to_string());
+            extra_args.push(format!("{:.2}", self.reserve_vram_mb as f64 / 1024.0));
+        }
+        extra_args.extend(self.extra_args.split_whitespace().map(str::to_string));
         crate::runtime::ComfyOptions {
             vram_mode: crate::runtime::VramMode::parse(&self.vram_mode).unwrap_or_default(),
-            extra_args: Vec::new(),
+            extra_args,
         }
     }
 
@@ -78,6 +96,12 @@ impl ComfyConfig {
             return Err(CoreError::Config(format!(
                 "comfyui.vram_mode {:?} must be auto / highvram / normalvram / lowvram / novram",
                 self.vram_mode
+            )));
+        }
+        if self.reserve_vram_mb > MAX_RESERVE_VRAM_MB {
+            return Err(CoreError::Config(format!(
+                "comfyui.reserve_vram_mb {} is above the {MAX_RESERVE_VRAM_MB} cap",
+                self.reserve_vram_mb
             )));
         }
         Ok(())
@@ -463,9 +487,11 @@ mod tests {
     fn comfyui_vram_mode_round_trips_and_is_validated() {
         let opts = ComfyConfig::default().to_options();
         assert_eq!(opts.vram_mode, crate::runtime::VramMode::Auto);
+        assert!(opts.extra_args.is_empty());
 
         let low = ComfyConfig {
             vram_mode: "lowvram".into(),
+            ..ComfyConfig::default()
         };
         assert_eq!(
             low.to_options().vram_mode,
@@ -474,7 +500,8 @@ mod tests {
         assert!(low.validate().is_ok());
 
         assert!(ComfyConfig {
-            vram_mode: "turbo".into()
+            vram_mode: "turbo".into(),
+            ..ComfyConfig::default()
         }
         .validate()
         .is_err());
@@ -490,6 +517,34 @@ mod tests {
             Config::read_from(&paths).unwrap().comfyui.vram_mode,
             "lowvram"
         );
+    }
+
+    #[test]
+    fn comfyui_reserve_vram_and_extra_args_become_command_line_flags() {
+        let cfg = ComfyConfig {
+            reserve_vram_mb: 1536,
+            extra_args: "  --fast   --use-sage-attention ".into(),
+            ..ComfyConfig::default()
+        };
+        assert_eq!(
+            cfg.to_options().extra_args,
+            vec!["--reserve-vram", "1.50", "--fast", "--use-sage-attention"]
+        );
+        assert!(cfg.validate().is_ok());
+
+        assert!(ComfyConfig {
+            reserve_vram_mb: 99_999,
+            ..ComfyConfig::default()
+        }
+        .validate()
+        .is_err());
+
+        // 0 → no reserve flag.
+        assert!(!ComfyConfig::default()
+            .to_options()
+            .extra_args
+            .iter()
+            .any(|a| a == "--reserve-vram"));
     }
 
     #[test]

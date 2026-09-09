@@ -12,8 +12,12 @@ pub struct AboutDto {
     pub core_version: String,
     pub data_dir: String,
     pub store_path: String,
-    /// Where generated images land (`GET /jobs/{id}/output` serves from here).
+    /// Where generated images + video land (`GET /jobs/{id}/output` serves from
+    /// here).
     pub outputs_dir: String,
+    /// Total bytes of the files in `outputs_dir` — the Settings retention card
+    /// shows it (video clips are large).
+    pub outputs_bytes: u64,
     pub core_api_port: u16,
     pub vram_budget_mb: u64,
     pub offline_mode: bool,

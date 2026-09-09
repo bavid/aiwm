@@ -56,6 +56,11 @@ const MAX_CFG: f64 = 15.0;
 /// rather than hanging forever.
 const VIDEO_TIMEOUT: Duration = Duration::from_secs(1800);
 
+/// ComfyUI offloads the text encoder (~6 GB) and spills model weights to system
+/// RAM. If free RAM is below `model size + this`, the render will thrash the
+/// pagefile — warn the user (non-blocking).
+const VIDEO_RAM_SLACK_MB: u64 = 6144;
+
 /// A resolved text/image-to-video request, pulled from a job's `params`. Every
 /// field has a default; only a non-empty `prompt` is required.
 #[derive(Debug, Clone, PartialEq)]
@@ -286,6 +291,19 @@ pub async fn run(
             )
             .await?;
     }
+    if let Some(short_by) = ram_shortfall_mb(model) {
+        db.jobs()
+            .append_event(
+                job_id,
+                EventLevel::Warn,
+                &format!(
+                    "system RAM is tight (~{short_by} MB short of the offload budget) \u{2014} \
+                     ComfyUI spills the encoder + model here, so a long clip may swap to disk \
+                     (very slow). Close other apps or lower the resolution / length.",
+                ),
+            )
+            .await?;
+    }
     db.jobs()
         .append_event(
             job_id,
@@ -486,6 +504,29 @@ fn name_is_t5(s: &str) -> bool {
     n.contains("t5") && !n.contains("umt5")
 }
 
+/// How many MB the video model's offload budget exceeds free system RAM by, or
+/// `None` when there is enough headroom. Reads live RAM via `sysinfo`.
+fn ram_shortfall_mb(model: &Model) -> Option<u64> {
+    let model_mb = u64::try_from(model.size_bytes).unwrap_or(0) / (1024 * 1024);
+    ram_shortfall(model_mb, available_ram_mb())
+}
+
+fn available_ram_mb() -> u64 {
+    use sysinfo::{MemoryRefreshKind, RefreshKind, System};
+    let sys = System::new_with_specifics(
+        RefreshKind::nothing().with_memory(MemoryRefreshKind::nothing().with_ram()),
+    );
+    sys.available_memory() / (1024 * 1024)
+}
+
+/// `model_mb + VIDEO_RAM_SLACK_MB` minus `available_mb`, when positive.
+fn ram_shortfall(model_mb: u64, available_mb: u64) -> Option<u64> {
+    model_mb
+        .saturating_add(VIDEO_RAM_SLACK_MB)
+        .checked_sub(available_mb)
+        .filter(|short| *short > 0)
+}
+
 /// Round a requested frame count to Wan's `4k + 1` and clamp.
 fn round_video_length(v: u32) -> u32 {
     let k = (v.saturating_sub(1) + 2) / 4;
@@ -612,6 +653,15 @@ mod tests {
             .contains("no image output"));
         // (a job id that resolves to a real output is covered end-to-end in
         // tests/video_job.rs)
+    }
+
+    #[test]
+    fn ram_shortfall_flags_a_tight_offload_budget() {
+        // 10 GB model + 6 GB slack, 32 GB free → fits.
+        assert_eq!(ram_shortfall(10_240, 32_768), None);
+        // same model, only 8 GB free → 8 GB short.
+        assert_eq!(ram_shortfall(10_240, 8_192), Some(10_240 + 6144 - 8_192));
+        assert_eq!(ram_shortfall(0, 0), Some(6144));
     }
 
     #[test]

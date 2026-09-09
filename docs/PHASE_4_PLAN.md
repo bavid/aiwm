@@ -25,7 +25,7 @@ schon Installierte läuft weiter.
 | 4.2 | **Bild→Video**: `init_image`-Param (Pfad oder Job-ID eines fertigen Bildes); der Startframe wird nach `<comfyui-data>/input/<job_id>.<ext>` kopiert und als `LoadImage` → `WanImageToVideo.start_image` verdrahtet. Ein Bild-Job-Output aus der Galerie als Quelle | ✅ |
 | 4.3 | UI-Tab „Video" — Prompt/Negativ, Auflösung/Länge/fps/Steps/CFG/Seed, Model [Auto], optional „Start from image" (Galerie-Pick oder Pfad), „Generate"; **Erwartungssteuerung** (geschätzte Dauer + „das dauert Minuten", Fortschritt); `<video>`-Player auf `GET /jobs/{id}/output` (CSP `media-src`); Galerie der Video-Jobs (Poster = erstes Frame). Dashboard-Button „Generate Video" aktiv | ✅ |
 | 4.4 | Zweites Template **LTX-2 / LTX 2.3 (GGUF)** über `ComfyUI-GGUF` (Node schon installiert); `docs/VIDEO_MODELS.md` (kuratierte Modelle: SHA256, HF-Quelle, Lizenz, Settings); Katalog-Einträge (`core::model::catalog`) | ✅ *(als **LTX-Video 0.9.5 2B**, Core-Nodes — ADR-020)* |
-| 4.5 | Politur: Erwartungssteuerung verfeinern (Zeit-Schätzung kalibrieren), **RAM-Warnung** wenn das Offload-Budget kritisch wird, Retention-Hinweis (Videos sind groß), Settings (Wan/LTX-Optionen, `--reserve-vram`), Diagnostics; Scheduler: Video-Slot neben LLM/Bild-Slot verproben (`core/tests/*_swap.rs`-Erweiterung) | offen |
+| 4.5 | Politur: Erwartungssteuerung verfeinern (Zeit-Schätzung kalibrieren), **RAM-Warnung** wenn das Offload-Budget kritisch wird, Retention-Hinweis (Videos sind groß), Settings (Wan/LTX-Optionen, `--reserve-vram`), Diagnostics; Scheduler: Video-Slot neben LLM/Bild-Slot verproben (`core/tests/*_swap.rs`-Erweiterung) | ✅ |
 
 Nach dem MVP (txt2vid + img2vid): **Frame-Interpolation** (RIFE / Wan-eigene
 Interpolation) und **Video-Upscale** — eigene Capabilities mit eigenen Modellen,
@@ -382,6 +382,56 @@ ADR-020), LTX-13B (zu groß), LTX-2-Audio, der `(frames-1) % 8`-Grid für LTX
 (die App klemmt auf `4k+1`, LTX rundet intern ab — für 4.0), UI-Änderungen (der
 Video-Tab von 4.3 dispatcht schon über `base_video`, egal welche Familie),
 Frame-Interpolation / Upscale (spätere Slices), echte ComfyUI (4.0).
+
+---
+
+## 4.5 — Ergebnis (abgeschlossen) · **Phase 4 damit fertig (bis auf 4.0)**
+
+Politur. Keine neue Capability — RAM-Warnung, Retention-Sichtbarkeit, zwei
+ComfyUI-Optionen, ein Video-Scheduler-Test.
+
+- **RAM-Vorabwarnung** (`capability::video`): vor dem Render ein `Warn`-Event,
+  wenn freies System-RAM (`sysinfo::available_memory`) unter
+  `Modellgröße + VIDEO_RAM_SLACK_MB (6144)` liegt — ComfyUI spillt Encoder +
+  Modell dorthin, sonst thrasht die Pagefile. **Nicht blockierend** (Offload
+  swappt zur Not auf Platte, nur langsam). Reine Formel-Heuristik (`ram_shortfall`
+  ist unit-getestet), an echten Läufen zu kalibrieren (TODO).
+- **`[comfyui]`-Config** um zwei Felder erweitert: `reserve_vram_mb` (→
+  `--reserve-vram <GB>`, `0` = aus, Cap 8192) und `extra_args` (roher String,
+  whitespace-gesplittet, an die ComfyUI-Kommandozeile angehängt).
+  `ComfyConfig::to_options()` baut die volle Arg-Liste; `validate()` klemmt den
+  Reserve-Wert. Settings-UI: „Reserve VRAM (GB)"-Feld + „Extra args"-Feld unter
+  „ComfyUI".
+- **Retention sichtbar**: `AboutDto.outputs_bytes` (Summe der Dateien im
+  Outputs-Ordner) neu. Settings-Karte „Generated images" → **„Generated media"**:
+  Ordner + Größe + „reveal"-Knopf (`@tauri-apps/plugin-opener revealItemInDir`),
+  Hinweistext nennt jetzt Video-Größen.
+- **Erwartungssteuerung** (`Video.tsx`): die Minuten-Schätzung heißt jetzt
+  ehrlich „very rough guess … (not yet calibrated)".
+- **`core/tests/video_swap.rs`** (neu): Chat resident → `job_type=video` evictet
+  das LLM und reserviert ComfyUI selbst → zweiter Chat evictet ComfyUI zurück,
+  alle drei `Completed`, kein `blocked`. Das Phase-4-Gegenstück zu
+  `llm_diffusion_swap.rs` — beweist, dass der Scheduler modalitäts-agnostisch
+  ist (Video nimmt den VRAM-Slot wie Bild).
+- **`lib/dev-mock.ts`**: `save_config` + `outputs_bytes` + die neuen
+  `[comfyui]`-Felder ergänzt, `shouldMockEvents` an (leiseres `listen()`).
+
+Verifiziert:
+- **+2 Unit-Tests** (`config` — Reserve/Extra-Args → Flags + Cap; `capability::
+  video` — `ram_shortfall`) → **248 Lib-Tests**. **+1 Integrationstest**
+  `tests/video_swap.rs` → **35 Integrationstests**. `check.ps1` grün,
+  `pnpm typecheck`/`lint`/`build` grün.
+- **Live** (`smoke_45.sh`): `[comfyui] reserve_vram_mb = 1536` + `extra_args`
+  → ComfyUI startet mit `--lowvram --reserve-vram 1.50 --fast
+  --use-sage-attention`. `GET /about.outputs_bytes` 0 → 32 nach einem Render.
+  `PUT /config` round-trippt beide Felder; `reserve_vram_mb = 99999` → 400.
+- **Visuell** (dev-mock): Settings zeigt die beiden neuen Felder + die
+  „Generated media"-Karte mit Größe + „reveal"; Save funktioniert.
+
+**Phase-4-DONE-Kriterium** (frisches Windows → Wan/LTX importieren → Text→Video
++ Bild→Video mit Erwartungssteuerung → Scheduler koordiniert Video ↔ LLM/Bild →
+offline weiter): **erreicht** — bis auf **4.0** (echte ComfyUI verproben, siehe
+unten). Alle Video-Smokes fuhren gegen `aiwm-fake-comfy`.
 
 ---
 

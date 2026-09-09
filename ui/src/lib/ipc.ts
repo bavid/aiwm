@@ -8,8 +8,10 @@ export interface AboutInfo {
   core_version: string;
   data_dir: string;
   store_path: string;
-  /** Where generated images land. */
+  /** Where generated images + video land. */
   outputs_dir: string;
+  /** Total bytes of the files in `outputs_dir` (the retention card shows it). */
+  outputs_bytes: number;
   core_api_port: number;
   vram_budget_mb: number;
   offline_mode: boolean;
@@ -29,6 +31,10 @@ export interface LlamaConfig {
 export interface ComfyConfig {
   /** VRAM mode: auto | highvram | normalvram | lowvram | novram. */
   vram_mode: string;
+  /** `--reserve-vram <GB>` — VRAM kept free for the OS. In MB; 0 = off. */
+  reserve_vram_mb: number;
+  /** Extra raw args appended to the ComfyUI command line (whitespace-split). */
+  extra_args: string;
 }
 
 /** The full config.toml as the core sees it. */

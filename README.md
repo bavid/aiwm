@@ -31,7 +31,7 @@ noch keine echte AI-Capability (die kommt ab Phase 2).
 | WP-9 | CI-Workflow, Git-Hooks (pre-commit fmt, pre-push voller Gate) |
 | WP-10 | ADRs finalisiert, Stub-Docs (MODELS/RUNTIMES/SECURITY/BENCHMARKS) |
 
-**246 Rust-Unit + 34 Integrationstests + 5 pytest** grün · `scripts/check.ps1` grün ·
+**248 Rust-Unit + 35 Integrationstests + 5 pytest** grün · `scripts/check.ps1` grün ·
 **null `unsafe`** im Produktivcode.
 
 **Phase 2 (MVP) ✅ abgeschlossen** — Scheiben 2.1–2.7 + durchgehender
@@ -40,8 +40,10 @@ Modell-Wechsel-Test (`core/tests/model_swap.rs`).
 Wechsel-Test (`core/tests/llm_diffusion_swap.rs`). Plan + Research:
 [docs/PHASE_3_PLAN.md](docs/PHASE_3_PLAN.md). Offen: cu130-Treiber-Check auf der
 echten 4080 (alle Smokes fuhren gegen die Fake-ComfyUI).
-**Phase 4 (Video / ComfyUI) — in Arbeit.** Plan + Research:
-[docs/PHASE_4_PLAN.md](docs/PHASE_4_PLAN.md).
+**Phase 4 (Video / ComfyUI) — Scheiben 4.1–4.5 ✅** (alles gegen `aiwm-fake-comfy`
+gebaut). **Offen: 4.0** — die echte ComfyUI auf der 4080 verproben (cu130-Treiber,
+GGUF-Ordner-Keys, `SaveVideo`/`av`, Zeit/VRAM kalibrieren) — läuft vermutlich an
+der echten Maschine. Plan + Research: [docs/PHASE_4_PLAN.md](docs/PHASE_4_PLAN.md).
 
 - **4.1** ✅ **`capability::video`**: `job_type=video` → feste `wan_ti2v`-Pipeline
   (`WanImageToVideo` → `KSampler` → `VAEDecode` → `CreateVideo` → `SaveVideo`,
@@ -78,6 +80,12 @@ echten 4080 (alle Smokes fuhren gegen die Fake-ComfyUI).
   Video-Einträge (Wan-Stack + LTX, echte HF-SHA-256) → `GET /models/known` ·
   [`docs/VIDEO_MODELS.md`](docs/VIDEO_MODELS.md) · **ADR-020** (Abweichung vom
   Plan: nicht LTX-2 GGUF). Gegen `aiwm-fake-comfy`.
+- **4.5** ✅ **Politur** (schließt Phase 4): RAM-Vorabwarnung (`Warn`-Event, wenn
+  freies RAM unter Modellgröße + 6 GB Offload-Slack liegt — nicht blockierend);
+  `[comfyui]` bekommt `reserve_vram_mb` (→ `--reserve-vram <GB>`) + `extra_args`
+  (Settings-UI); `about.outputs_bytes` + „Generated media"-Karte mit Größe +
+  „reveal"-Knopf; `core/tests/video_swap.rs` (Video nimmt den VRAM-Slot wie Bild
+  — Chat ↔ Video-Swap, kein Mensch nötig).
 
 - **3.1** ✅ `ComfyUiAdapter` — ComfyUI als **ein** langlebiger, lazy gestarteter
   Server (`RuntimeAdapter`): Spawn/Health (`/system_stats`) über

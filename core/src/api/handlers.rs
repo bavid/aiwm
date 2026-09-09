@@ -14,15 +14,31 @@ use crate::telemetry::SystemTelemetry;
 use crate::{App, CoreError, Result};
 
 pub fn about(app: &App) -> AboutDto {
+    let outputs_dir = app.paths.outputs_dir();
     AboutDto {
         core_version: crate::CORE_VERSION.to_string(),
         data_dir: app.paths.root().display().to_string(),
         store_path: app.config.store_path.display().to_string(),
-        outputs_dir: app.paths.outputs_dir().display().to_string(),
+        outputs_dir: outputs_dir.display().to_string(),
+        outputs_bytes: dir_file_bytes(&outputs_dir),
         core_api_port: app.config.core_api_port,
         vram_budget_mb: app.scheduler.budget_mb(),
         offline_mode: app.offline(),
     }
+}
+
+/// Sum of the regular files directly in `dir` (the outputs folder is flat —
+/// `<job_id>.png` / `.mp4`). Missing dir → 0.
+fn dir_file_bytes(dir: &std::path::Path) -> u64 {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return 0;
+    };
+    entries
+        .flatten()
+        .filter_map(|e| e.metadata().ok())
+        .filter(|m| m.is_file())
+        .map(|m| m.len())
+        .sum()
 }
 
 /// The current `config.toml` as it sits on disk, with the *live* offline flag

@@ -132,11 +132,17 @@ genutzt.
   `capability::video` löst die Begleiter pro Rezept auf (Wan: umt5 + Wan-VAE ·
   LTX: nur ein t5, VAE im Checkpoint). Feste Templates, keine user-editierbare
   Registry (PHASE_3_PLAN §C).
-- **Optionen (`[comfyui]`, 3.7):** `ComfyOptions { vram_mode, extra_args }` —
-  `vram_mode` (`auto` / `highvram` / `normalvram` / `lowvram` / `novram`) wird
-  zum `--<mode>vram`-Flag beim Spawn. Settings-UI, `config.toml`,
-  neustart-pflichtig (ADR-017). `detail()` zeigt bei laufendem Server die
-  ComfyUI-Version (aus dem `/system_stats`-Cache) + den Modus.
+- **Optionen (`[comfyui]`, 3.7 · 4.5):** `ComfyOptions { vram_mode, extra_args }`
+  — `vram_mode` (`auto` / `highvram` / `normalvram` / `lowvram` / `novram`) wird
+  zum `--<mode>vram`-Flag beim Spawn. **4.5:** `reserve_vram_mb` (→
+  `--reserve-vram <GB>`, `0` = aus, Cap 8 GB) und `extra_args` (roher String,
+  whitespace-gesplittet) kommen dazu — `ComfyConfig::to_options()` baut die
+  Arg-Liste. Settings-UI, `config.toml`, neustart-pflichtig (ADR-017).
+  `detail()` zeigt bei laufendem Server die ComfyUI-Version + den Modus.
+- **RAM-Vorabwarnung (4.5):** `capability::video` liest vor dem Render einmal
+  `sysinfo::available_memory`; liegt es unter Modellgröße + 6 GB Offload-Slack,
+  ein `Warn`-Event (ComfyUI spillt Encoder + Modell ins RAM). Nicht blockierend —
+  Heuristik, an echten Läufen zu kalibrieren.
 
 ## Link-Manager (`core::link`, ADR-007)
 

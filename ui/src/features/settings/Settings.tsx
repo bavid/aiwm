@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { useAbout } from "../../lib/hooks";
 import {
   getConfig,
@@ -10,6 +11,8 @@ import {
 } from "../../lib/ipc";
 import { getTheme, setTheme, type Theme } from "../../lib/theme";
 import "./settings.css";
+
+const gb = (bytes: number) => `${(bytes / 1024 ** 3).toFixed(2)} GB`;
 
 const THEME_OPTIONS: { value: Theme; label: string }[] = [
   { value: "system", label: "System" },
@@ -43,7 +46,9 @@ const sameForm = (a: Form, b: Form): boolean =>
   a.llama.ctx_size === b.llama.ctx_size &&
   a.llama.flash_attention === b.llama.flash_attention &&
   a.llama.load_timeout_secs === b.llama.load_timeout_secs &&
-  a.comfyui.vram_mode === b.comfyui.vram_mode;
+  a.comfyui.vram_mode === b.comfyui.vram_mode &&
+  a.comfyui.reserve_vram_mb === b.comfyui.reserve_vram_mb &&
+  a.comfyui.extra_args === b.comfyui.extra_args;
 
 export function Settings() {
   const about = useAbout();
@@ -271,20 +276,64 @@ export function Settings() {
             ))}
           </select>
         </label>
+        <div className="set-grid">
+          <label className="set-field set-field--inline">
+            <span>
+              Reserve VRAM (GB) — <code>--reserve-vram</code>, kept free for the
+              OS. <code>0</code> = off. Helps avoid OOM on long video clips.
+            </span>
+            <input
+              type="number"
+              min={0}
+              max={8}
+              step={0.5}
+              value={form.comfyui.reserve_vram_mb / 1024}
+              onChange={(e) =>
+                patchComfy({ reserve_vram_mb: Math.round(numeric(e.target.value, true) * 1024) })
+              }
+            />
+          </label>
+        </div>
+        <label className="set-field">
+          <span>
+            Extra args — appended verbatim (power users), e.g.{" "}
+            <code>--fast --use-sage-attention</code>
+          </span>
+          <input
+            type="text"
+            value={form.comfyui.extra_args}
+            spellCheck={false}
+            onChange={(e) => patchComfy({ extra_args: e.target.value })}
+          />
+        </label>
       </section>
 
       <section className="card set-group">
         <header className="card__head">
-          <h2>Generated images</h2>
+          <h2>Generated media</h2>
           <span className="card__sub">read-only</span>
         </header>
         <dl className="set-kv">
           <dt>Folder</dt>
           <dd>{about?.outputs_dir ?? "…"}</dd>
+          <dt>Size</dt>
+          <dd className="numeric">
+            {about ? gb(about.outputs_bytes) : "…"}
+            {about?.outputs_dir && (
+              <button
+                type="button"
+                className="set-reveal"
+                onClick={() => revealItemInDir(about.outputs_dir).catch(() => {})}
+              >
+                reveal
+              </button>
+            )}
+          </dd>
         </dl>
         <p className="muted">
-          Images are kept until you delete them — this folder grows over time.
-          Automatic cleanup / retention limits come later.
+          Images and video clips are kept until you delete them — video files are
+          large and this folder grows fast. Automatic cleanup / retention limits
+          come later; for now, open the folder and prune it yourself.
         </p>
       </section>
 
@@ -308,8 +357,10 @@ export function Settings() {
   );
 }
 
-/** Parse a number input, treating an empty / bad value as 0. */
-function numeric(raw: string): number {
+/** Parse a number input, treating an empty / bad value as 0. Integer unless
+ *  `allowFloat`. */
+function numeric(raw: string, allowFloat = false): number {
   const n = Number(raw);
-  return Number.isFinite(n) && n >= 0 ? Math.floor(n) : 0;
+  if (!Number.isFinite(n) || n < 0) return 0;
+  return allowFloat ? n : Math.floor(n);
 }

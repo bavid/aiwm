@@ -125,6 +125,24 @@ hierher, damit nichts verloren geht.
   gepatchte `ComfyUI-GGUF`-Loader (unveröffentlichter Commit) + `ComfyUI-KJNodes`
   → eigener ADR + Installer-Erweiterung, wenn der Weg stabil ist. Bringt Audio
   und höhere Qualität.
+- **RAM-Warnung (4.5) ist eine Formel-Heuristik** — `Modellgröße + 6 GB` gegen
+  `sysinfo::available_memory`, ein Schwellwert für alle Video-Modelle. Der echte
+  Offload-Footprint hängt von `vram_mode`, Encoder-Größe, Auflösung/Länge ab —
+  an echten Wan/LTX-Läufen (4.0) kalibrieren; evtl. pro Familie/Modell.
+- **Output-Retention (4.5 macht sie nur sichtbar):** `about.outputs_bytes` +
+  „reveal"-Knopf sind da, aber es gibt weiter **kein** automatisches Aufräumen,
+  Größenlimit oder „X löschen"-Knopf. Eigene kleine Slice bei Bedarf (mit dem
+  `GET /jobs/{id}/output`-Streaming zusammen).
+- **`[comfyui] extra_args` (4.5)** wird roh an die ComfyUI-Kommandozeile
+  angehängt (whitespace-gesplittet). Für den loopback-only-MVP + „Power-User"-
+  Feld ok; die Werte sind ungefiltert. Kein Shell-Risiko (`SpawnSpec` übergibt
+  Args einzeln, keine Shell), aber ein Tippfehler kann ComfyUI am Start hindern
+  → `detail()` zeigt dann „starting…"/Crash-Meldung.
+- **`lib/dev-mock.ts`:** beim Vite-Dev im Browser tauchen ein paar
+  `transformCallback`-Konsolenfehler auf (StrictMode-Doppelmount vs.
+  `@tauri-apps/api/event`-`listen()`). Rein kosmetisch, dev-only — die App
+  rendert + funktioniert. `shouldMockEvents` ist an; ein sauberer Fix wäre
+  `listen()` im `dev-mock` explizit zu handhaben.
 - **Verwaiste `input/`-Kopien (4.2):** der `StagedFrame`-`Drop`-Guard räumt den
   Normalfall (Erfolg / Fehler / Cancel) auf, aber nicht einen harten Absturz
   mitten im Render. Ein Sweep von `<base>/input/*` beim Server-Start (oder ein

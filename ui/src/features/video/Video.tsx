@@ -317,8 +317,9 @@ export function VideoStudio() {
           </fieldset>
 
           <p className={heavy ? "video__note video__note--warn" : "video__note"}>
-            ~{clipSecs.toFixed(1)}s clip · rough estimate {estLo}–{estHi} min on a 16 GB card.
-            Video is slow — minutes, not seconds. The window stays usable while it renders.
+            ~{clipSecs.toFixed(1)}s clip · very rough guess {estLo}–{estHi} min on a 16 GB card
+            (not yet calibrated). Video is slow — minutes, not seconds. The window stays usable
+            while it renders.
             {heavy && " Above 480p / 81 frames is much slower and can run out of VRAM."}
           </p>
 
