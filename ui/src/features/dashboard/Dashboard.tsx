@@ -6,16 +6,16 @@ import "./dashboard.css";
 
 const GB = 1024;
 const CANCELLABLE: JobState[] = ["queued", "scheduled", "blocked", "preparing", "running"];
-const CAPABILITIES: { key: string; label: string; hint: string; active?: boolean }[] = [
-  { key: "chat", label: "Chat", hint: "ready", active: true },
+const CAPABILITIES: { key: string; label: string; hint: string; tab?: string }[] = [
+  { key: "chat", label: "Chat", hint: "ready", tab: "chat" },
+  { key: "image", label: "Generate Image", hint: "ready", tab: "image" },
   { key: "code", label: "Coding", hint: "Phase 5" },
-  { key: "image", label: "Generate Image", hint: "Phase 3" },
   { key: "video", label: "Generate Video", hint: "Phase 4" },
 ];
 
 const gb = (mb: number) => (mb / GB).toFixed(1);
 
-export function Dashboard({ onOpenChat }: { onOpenChat: () => void }) {
+export function Dashboard({ onNavigate }: { onNavigate: (tab: string) => void }) {
   const { telemetry, error } = useTelemetry();
   const { data: jobs, refetch: refetchJobs } = useJobs();
   const about = useAbout();
@@ -104,9 +104,9 @@ export function Dashboard({ onOpenChat }: { onOpenChat: () => void }) {
             <button
               key={c.key}
               className="capability"
-              disabled={!c.active}
-              onClick={c.active ? onOpenChat : undefined}
-              title={c.active ? "Open chat" : `Available in ${c.hint}`}
+              disabled={!c.tab}
+              onClick={c.tab ? () => onNavigate(c.tab as string) : undefined}
+              title={c.tab ? `Open ${c.label}` : `Available in ${c.hint}`}
             >
               <span className="capability__label">{c.label}</span>
               <span className="capability__hint">{c.hint}</span>

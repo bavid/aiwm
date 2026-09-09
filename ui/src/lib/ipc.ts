@@ -190,6 +190,25 @@ export const jobDetail = (id: string) => invoke<JobDetail | null>("job_detail", 
 
 export const listModels = () => invoke<Model[]>("list_models");
 
+/** The parameters of a `job_type=image` job. After the engine runs, `params`
+ *  holds these resolved values (a random seed is pinned back). */
+export interface ImageParams {
+  prompt: string;
+  negative: string;
+  width: number;
+  height: number;
+  steps: number;
+  cfg: number;
+  sampler: string;
+  scheduler: string;
+  seed: number;
+}
+
+/** URL the loopback core serves a finished image job's picture from. Used as an
+ *  `<img>` src — the CSP allows `http://127.0.0.1:*` for images. */
+export const imageOutputUrl = (coreApiPort: number, jobId: string) =>
+  `http://127.0.0.1:${coreApiPort}/jobs/${jobId}/output`;
+
 /** What kind of file is being imported. `chat` → GGUF LLM for llama.cpp; the
  *  rest are ComfyUI image models routed to their typed store folder. */
 export type ModelType =

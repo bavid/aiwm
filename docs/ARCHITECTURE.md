@@ -264,6 +264,10 @@ Historie.
   Automatisierung/Skripting und um dieselbe API-Fläche einheitlich zu halten.
   Kein LAN-Listener im MVP.
 - WS-Events: Job-Fortschritt, Runtime-Health, GPU/RAM-Telemetrie (1 Hz).
+- **Binär-Auslieferung nur über HTTP:** generierte Bilder holt die UI per
+  `GET /jobs/{id}/output` (Tauri-IPC serialisiert JSON, nicht gut für Bytes).
+  Der `<img>`-Tag zeigt direkt auf die Loopback-URL; die CSP erlaubt dafür
+  `img-src http://127.0.0.1:*` (3.5).
 
 ---
 

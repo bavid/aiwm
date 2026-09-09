@@ -78,11 +78,18 @@ hierher, damit nichts verloren geht.
   **nächsten** ComfyUI-Start in der laufenden Runtime. Bei laufendem Server nach
   einer Store-Pfad-Änderung wäre ein Neu-Schreiben + `POST /free` oder ein
   Server-Neustart sauberer — für den MVP ok (Settings sagt „Neustart nötig").
-- Bild-Job (3.4): MVP pollt `/history` (750 ms). `/ws`-Fortschritt
-  (`progress` / `executing` / `executed`) an die UI streamen — sinnvoll ab 3.5,
-  wenn eine Fortschrittsanzeige nötig ist. Auch: SDXL-Refiner-Pass,
-  Batch-Größe > 1, ein HTTP-Endpunkt der das fertige Bild ausliefert (3.5 liest
-  es sonst direkt von der Platte).
+- Bild-Job (3.4/3.5): MVP pollt `/history` (750 ms) + die UI pollt `jobDetail`
+  (700 ms). `/ws`-Fortschritt (`progress` / `executing` / `executed`) an die UI
+  streamen → echter Fortschrittsbalken statt nur „preparing…". Auch:
+  SDXL-Refiner-Pass, Batch-Größe > 1.
+- Image-UI (3.5): Galerie hat keine Paginierung / kein Löschen / keinen
+  Download-Button, kein Bild-Zoom/Lightbox, keine Prompt-History, keine
+  Style-Presets. Der Download-Button ist heikel im Tauri-Sandbox (`<a download>`
+  inert) — bräuchte einen `save`-Dialog-Command. Alles eigene kleine Slices bei
+  Bedarf.
+- `GET /jobs/{id}/output` (3.5) liest die ganze Datei in den RAM und serviert
+  sie am Stück — ok für einzelne SDXL-PNGs (~1–3 MB); bei großen Bildern /
+  Video später auf `tokio_util::io::ReaderStream` + `Content-Length` umstellen.
 
 ## Vor Phase 5 (Agents)
 - Hermes Agent auf der echten Windows-Maschine: `bash -l`-Abhängigkeit

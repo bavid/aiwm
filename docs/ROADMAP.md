@@ -99,7 +99,8 @@ LLM ↔ Diffusion ums VRAM-Budget.
 - [x] 3.4 `capability::image` — `job_type=image`, feste SDXL-txt2img-Pipeline
   (`core::pipeline`), `/prompt` → `/history` → `/view` → `<outputs>/<job_id>.png`,
   Cancel via `/interrupt`, `Auto` über Rolle `base_diffusion`
-- [ ] 3.5 UI-Tab „Image" + Galerie
+- [x] 3.5 UI-Tab „Image" — Prompt/Negativ, Größe/Steps/CFG/Seed, Model [Auto],
+  „Generate", Ergebnisbild, Galerie; Bild via `GET /jobs/{id}/output`
 - [ ] 3.6 Flux-Template + `IMAGE_MODELS.md`
 - [ ] 3.7 Politur (Settings, Diagnostics, Scheduler-Verprobung)
 

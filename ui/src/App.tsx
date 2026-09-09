@@ -2,15 +2,17 @@ import { useState } from "react";
 import { Chat } from "./features/chat/Chat";
 import { Dashboard } from "./features/dashboard/Dashboard";
 import { Diagnostics } from "./features/diagnostics/Diagnostics";
+import { ImageStudio } from "./features/image/Image";
 import { Models } from "./features/models/Models";
 import { Settings } from "./features/settings/Settings";
 import { useAbout } from "./lib/hooks";
 
-type Tab = "dashboard" | "chat" | "models" | "diagnostics" | "settings";
+type Tab = "dashboard" | "chat" | "image" | "models" | "diagnostics" | "settings";
 
 const TABS: { id: Tab; label: string }[] = [
   { id: "dashboard", label: "Dashboard" },
   { id: "chat", label: "Chat" },
+  { id: "image", label: "Image" },
   { id: "models", label: "Models" },
   { id: "diagnostics", label: "Diagnostics" },
   { id: "settings", label: "Settings" },
@@ -43,8 +45,9 @@ export default function App() {
       </header>
 
       <main className="main">
-        {tab === "dashboard" && <Dashboard onOpenChat={() => setTab("chat")} />}
+        {tab === "dashboard" && <Dashboard onNavigate={(t) => setTab(t as Tab)} />}
         {tab === "chat" && <Chat />}
+        {tab === "image" && <ImageStudio />}
         {tab === "models" && <Models />}
         {tab === "diagnostics" && <Diagnostics />}
         {tab === "settings" && <Settings />}

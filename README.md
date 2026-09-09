@@ -31,7 +31,7 @@ noch keine echte AI-Capability (die kommt ab Phase 2).
 | WP-9 | CI-Workflow, Git-Hooks (pre-commit fmt, pre-push voller Gate) |
 | WP-10 | ADRs finalisiert, Stub-Docs (MODELS/RUNTIMES/SECURITY/BENCHMARKS) |
 
-**211 Rust-Unit + 23 Integrationstests + 5 pytest** grün · `scripts/check.ps1` grün ·
+**212 Rust-Unit + 23 Integrationstests + 5 pytest** grün · `scripts/check.ps1` grün ·
 **null `unsafe`** im Produktivcode.
 
 **Phase 2 (MVP) ✅ abgeschlossen** — Scheiben 2.1–2.7 + durchgehender
@@ -64,6 +64,11 @@ Modell-Wechsel-Test (`core/tests/model_swap.rs`).
   `base_diffusion`-Modell, der zufällige Seed wird in die Job-Params
   zurückgeschrieben. Der Scheduler tauscht LLM ↔ Diffusion ums VRAM-Budget (wie
   beim Modell-Wechsel).
+- **3.5** ✅ **Image-UI**: Tab „Image" — Prompt/Negativ, Größe-Presets +
+  W/H/Steps/CFG/Seed, Model [Auto], „Generate"; Ergebnisbild live gepollt (wie
+  Chat); einfache **Galerie** (fertige Bild-Jobs, Klick → Prompt/Seed/Modell/
+  Größe). Das Bild kommt über eine neue Loopback-Route `GET /jobs/{id}/output`
+  (CSP `img-src` erweitert). Dashboard-Button „Generate Image" aktiv.
 
 - **2.1** ✅ `ModelRepo`, eigener bounded GGUF-Header-Reader, manueller Import in
   den kanonischen Store, UI-Tab „Models".

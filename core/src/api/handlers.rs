@@ -3,6 +3,7 @@
 //! wrappers over these.
 
 use std::collections::BTreeMap;
+use std::path::PathBuf;
 
 use super::dto::{AboutDto, ConfigUpdate, JobDetailDto, RuntimeStatusDto, SubmitJobDto};
 use crate::config::Config;
@@ -109,6 +110,29 @@ pub async fn cancel_job(app: &App, id: &str) -> Result<Option<bool>> {
 /// Run the next queued job now (used by tests and the daemon loop).
 pub async fn run_next_job(app: &App) -> Result<Option<JobOutcome>> {
     app.jobs.run_next().await
+}
+
+/// The on-disk file a finished image job produced (`GET /jobs/{id}/output`
+/// serves it). `None` when the job has no output, or its recorded path is
+/// missing or — defensively — escaped the outputs directory.
+pub async fn job_output_path(app: &App, id: &str) -> Result<Option<PathBuf>> {
+    let Some(job) = app.db.jobs().get(id).await? else {
+        return Ok(None);
+    };
+    let Some(raw) = job.output_path else {
+        return Ok(None);
+    };
+
+    let path = PathBuf::from(&raw);
+    let (Ok(canonical), Ok(root)) = (path.canonicalize(), app.paths.outputs_dir().canonicalize())
+    else {
+        return Ok(None); // file gone, or the outputs dir was never created
+    };
+    if canonical.starts_with(&root) && canonical.is_file() {
+        Ok(Some(canonical))
+    } else {
+        Ok(None)
+    }
 }
 
 pub async fn list_models(app: &App) -> Result<Vec<Model>> {

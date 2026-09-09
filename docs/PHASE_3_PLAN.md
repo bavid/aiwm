@@ -17,7 +17,7 @@ manuelles Eingreifen → Netz trennen → das schon Installierte läuft weiter.
 | **3.2b** | gepinnter Custom-Node-Satz — **exakt einer**: `city96/ComfyUI-GGUF` am Commit `6ea2651e` (verifiziertes `.zip` → `custom_nodes/ComfyUI-GGUF/`, `uv pip install -r <node>/requirements.txt` = `gguf`/`sentencepiece`/`protobuf` in die venv). Idempotenz + „installed" verlangen jetzt auch den Node. SDXL-txt2img braucht **keine** Custom Nodes | ✅ |
 | **3.3** | Getypter Bild-Store `<store>/image/{checkpoints,diffusion_models,vae,loras,text_encoders}/`; `ModelKind` + `import_model` nimmt `.safetensors` (+ Pickle-Ablehnung), routet per Typ-Hint/Endung; ComfyUI-Zugriff über **`extra_model_paths.yaml`** statt Junction (Store auf `E:`, Runtime auf `C:` → Junction unmöglich; ADR-019); `model_links` = `comfyui`/`extra_path`; UI-Typ-Dropdown | ✅ |
 | 3.4 | `capability::image`: `job_type=image`, Params (prompt, negative, w/h, steps, cfg, seed, model|Auto über Rolle `base_diffusion`); **feste Pipeline** = Workflow-JSON-Template + Param-Substitution (`core::pipeline`); `POST /prompt` → `/history/{id}` pollen → Bild via `/view` nach `<outputs>/<job_id>.png` → `jobs.output_path`; Cancel via `POST /interrupt`; VRAM-Schätzung pro Familie (Import-Zeit, Namens-Heuristik) | ✅ |
-| 3.5 | UI: Tab „Image" — Prompt/Negativ, Größe/Steps/CFG/Seed, Model [Auto], „Generate"; Ergebnisbild; einfache **Galerie** (Bild-Jobs mit Thumbnail, Klick → Prompt/Seed/Modell); Dashboard-Button „Generate Image" aktiv | offen |
+| 3.5 | UI: Tab „Image" — Prompt/Negativ, Größe/Steps/CFG/Seed, Model [Auto], „Generate"; Ergebnisbild; einfache **Galerie** (Bild-Jobs mit Thumbnail, Klick → Prompt/Seed/Modell); Dashboard-Button „Generate Image" aktiv; Bild via `GET /jobs/{id}/output` | ✅ |
 | 3.6 | Zweites Template **Flux.1-dev (GGUF Q8)** über `ComfyUI-GGUF`; `docs/IMAGE_MODELS.md` (kuratierte Modelle: SHA256, Quelle HF, Lizenz, empfohlene Settings); kuratierte „Known models"-Liste für den assistierten Import | offen |
 | 3.7 | Politur: ComfyUI-Optionen in Settings (`--lowvram`-Schalter / VRAM-Modus), Diagnostics-Statuszeile, Output-Retention-Hinweis; Scheduler: Diffusion-Slot neben LLM-Slot sauber verproben | offen |
 
@@ -357,9 +357,9 @@ Nodes.
   Tests.
 
 Bewusst **nicht** in 3.4: die UI (→ 3.5), `/ws`-Fortschritt (MVP pollt), SDXL-
-Refiner-Pass, Batch > 1, ein HTTP-Endpunkt fürs Bild (die UI liest die Datei
-direkt, 3.5), echte per-Familie-VRAM-Zahlen (brauchen Header-Inspektion +
-Kalibrierung, Phase 6).
+Refiner-Pass, Batch > 1, echte per-Familie-VRAM-Zahlen (brauchen
+Header-Inspektion + Kalibrierung, Phase 6). Ein HTTP-Endpunkt fürs Bild kam
+dann doch in 3.5 (siehe unten).
 
 Verifiziert:
 - 16 neue Unit-Tests (`pipeline` 2, `capability::image` 6, `ComfyClient` 5,
@@ -374,6 +374,50 @@ Verifiziert:
   `output_path` = `<outputs>/<job_id>.png` (echte PNG-Bytes), `params.seed`
   konkret; zweiter Job mit langsamem `/history` → `POST …/cancel` →
   `cancelled`, keine Datei.
+
+---
+
+## 3.5 — Ergebnis (abgeschlossen)
+
+- **Bild-Auslieferung:** neue Loopback-Route **`GET /jobs/{id}/output`** →
+  `handlers::job_output_path` (validiert: Job existiert, hat `output_path`, Datei
+  liegt kanonisiert **innerhalb** `outputs_dir`, sonst 404) → serviert die Bytes
+  mit `image/png` + `Cache-Control: no-store`. Kein Tauri-Command — die UI setzt
+  `<img src="http://127.0.0.1:<port>/jobs/<id>/output">`. `about.core_api_port`
+  liefert den Port; die **CSP** in `tauri.conf.json` bekam
+  `img-src 'self' data: http://127.0.0.1:* http://localhost:*`.
+- **UI-Tab „Image"** (`ui/src/features/image/`): Sidebar-Formular
+  (Prompt, Negativ, Größe-Presets Square/Portrait/Landscape + ↔-Swap,
+  W/H/Steps/CFG als Zahlenfelder, Seed-Feld mit „random"-Default, Model-Select
+  „Auto" + alle `base_diffusion`-Checkpoints), „Generate". Danach `jobDetail`-
+  Polling (700 ms, wie Chat) → Result-Panel zeigt Zustand, dann das Bild + Meta
+  (Prompt / Negativ / Modell-Name / Größe·Steps·CFG / Seed mit „reuse"). „Stop"
+  während des Renderns. Der aufgelöste Seed steht in `job.params` (3.4), also
+  zeigt die UI konkrete Zahlen und kann sie wieder einreihen.
+- **Galerie**: aus `useJobs()` gefiltert (`job_type=image`, `completed`,
+  `output_path`), Thumbnail-Grid (`object-fit: cover`, 1:1), Klick → Result-Panel
+  mit den Params dieses Jobs. Aktualisiert sich über das 2-s-Job-Polling.
+- **Dashboard**: `onOpenChat` → generisches `onNavigate(tab)`; „Generate Image"
+  ist aktiv und springt in den Image-Tab. Neuer Tab in der Top-Nav.
+- `ipc.ts`: `ImageParams`-Typ + `imageOutputUrl(port, jobId)`.
+
+Verifiziert:
+- 1 neuer Integrationstest (`api::tests` — `GET /jobs/{id}/output` serviert die
+  PNG mit `image/png`, 404 für einen Chat-Job / eine unbekannte id).
+  `check.ps1` grün (212 Unit + 23 Integ.), `tsc` + `eslint` sauber.
+- **Live** (`aiwm-cored` + Fake-ComfyUI): Image-Job über `POST /jobs` →
+  `GET /jobs/<id>/output` liefert `200 image/png` an genau der URL, die der
+  `<img>`-Tag baut; `job.params` trägt prompt/negative/w/h/steps/cfg/seed;
+  Chat-Job → 404.
+- **UI** (Vite-Dev-Server, Browser): der Image-Tab rendert vollständig — Sidebar-
+  Formular, Presets schalten W/H, „Generate" aktiviert sich mit einem Prompt,
+  Result-Panel + Galerie-Platzhalter; Layout zweispaltig ab ~860 px, darunter
+  gestapelt. (Der Live-Roundtrip braucht das echte Tauri-Fenster — die
+  `invoke`-Aufrufe laufen nicht im reinen Browser.)
+
+Bewusst **nicht** in 3.5: `/ws`-Fortschrittsbalken (MVP pollt), Galerie-
+Paginierung / Löschen / Download-Button, Bild-Zoom/Lightbox, Prompt-History,
+Style-Presets. Kommen bei Bedarf als eigene kleine Slices.
 
 ---
 

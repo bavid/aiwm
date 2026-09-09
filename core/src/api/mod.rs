@@ -346,6 +346,66 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn job_output_serves_the_image_and_404s_otherwise() {
+        use crate::db::{JobPatch, NewJob};
+        use crate::orchestrator::JobState;
+
+        let (app, _tmp) = test_app().await;
+        let server = ApiServer::bind(app.clone(), SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
+            .await
+            .unwrap();
+        let base = format!("http://{}", server.addr);
+
+        // A job with no output → 404.
+        let job = app.jobs.submit(NewJob::new("image")).await.unwrap();
+        let none = reqwest::get(format!("{base}/jobs/{}/output", job.id))
+            .await
+            .unwrap();
+        assert_eq!(none.status(), 404);
+        assert_eq!(
+            reqwest::get(format!("{base}/jobs/ghost/output"))
+                .await
+                .unwrap()
+                .status(),
+            404
+        );
+
+        // Walk it to Completed with a real PNG at output_path.
+        let png: &[u8] = &[0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+        std::fs::create_dir_all(app.paths.outputs_dir()).unwrap();
+        let out = app.paths.outputs_dir().join(format!("{}.png", job.id));
+        std::fs::write(&out, png).unwrap();
+
+        let r = app.db.jobs();
+        for st in [
+            JobState::Scheduled,
+            JobState::Preparing,
+            JobState::Running,
+            JobState::Post,
+        ] {
+            r.set_state(&job.id, st, JobPatch::default()).await.unwrap();
+        }
+        r.set_state(
+            &job.id,
+            JobState::Completed,
+            JobPatch {
+                output_path: Some(out.to_string_lossy().into_owned()),
+                set_finished_at: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        let ok = reqwest::get(format!("{base}/jobs/{}/output", job.id))
+            .await
+            .unwrap();
+        assert_eq!(ok.status(), 200);
+        assert_eq!(ok.headers()["content-type"].to_str().unwrap(), "image/png");
+        assert_eq!(ok.bytes().await.unwrap().as_ref(), png);
+    }
+
+    #[tokio::test]
     async fn job_loop_drains_the_queue() {
         let (app, _tmp) = test_app().await;
         app.runtimes

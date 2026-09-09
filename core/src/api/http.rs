@@ -29,6 +29,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/jobs", get(list_jobs).post(submit_job))
         .route("/jobs/{id}", get(job_detail))
         .route("/jobs/{id}/cancel", post(cancel_job))
+        .route("/jobs/{id}/output", get(job_output))
         .route("/models", get(list_models).post(import_model))
         .route("/runtimes", get(runtimes))
         .route("/runtimes/llamacpp/install", post(install_llamacpp))
@@ -157,6 +158,33 @@ async fn cancel_job(State(app): AppState, Path(id): Path<String>) -> Result<Resp
         )
             .into_response()),
     }
+}
+
+/// Serve the image a finished `job_type=image` job produced. Loopback only
+/// (ADR-008); the Image tab points an `<img>` here.
+async fn job_output(State(app): AppState, Path(id): Path<String>) -> Result<Response, ApiError> {
+    let Some(path) = handlers::job_output_path(&app, &id).await? else {
+        return Ok((
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "no output for this job" })),
+        )
+            .into_response());
+    };
+    let bytes = tokio::fs::read(&path).await.map_err(CoreError::Io)?;
+    let content_type = match path.extension().and_then(|e| e.to_str()) {
+        Some("png") => "image/png",
+        Some("jpg" | "jpeg") => "image/jpeg",
+        Some("webp") => "image/webp",
+        _ => "application/octet-stream",
+    };
+    Ok((
+        [
+            (axum::http::header::CONTENT_TYPE, content_type),
+            (axum::http::header::CACHE_CONTROL, "no-store"),
+        ],
+        bytes,
+    )
+        .into_response())
 }
 
 async fn list_models(State(app): AppState) -> Result<Json<Vec<crate::db::Model>>, ApiError> {
