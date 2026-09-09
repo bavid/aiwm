@@ -1,9 +1,11 @@
 //! Model files: GGUF header inspection and importing into the canonical store.
 
+pub mod catalog;
 mod gguf;
 mod import;
 mod kind;
 
+pub use catalog::{KnownModel, KNOWN_MODELS};
 pub use gguf::{read_gguf_info, GgufInfo};
 pub use import::{import_model, ImportOutcome, ImportRequest};
 pub use kind::ModelKind;

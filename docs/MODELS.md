@@ -31,9 +31,9 @@ Endung: `.gguf`→`chat`, `.safetensors`→`checkpoint`) das Ziel:
 | `Chat` | `llm/<slug>/` | — (llama.cpp) | — (User wählt) |
 | `Checkpoint` | `image/checkpoints/` | `checkpoints` | `base_diffusion` |
 | `DiffusionModel` | `image/diffusion_models/` | `diffusion_models` | `base_diffusion` |
-| `Vae` | `image/vae/` | `vae` | — |
+| `Vae` | `image/vae/` | `vae` | `vae` |
 | `Lora` | `image/loras/` | `loras` | — |
-| `TextEncoder` | `image/text_encoders/` | `text_encoders` | — |
+| `TextEncoder` | `image/text_encoders/` | `text_encoders` | `text_encoder` |
 
 `import_model` nimmt `.gguf` **und** `.safetensors`; `.ckpt`/`.bin`/`.pt`/`.pth`
 werden mit Klartext abgelehnt (Pickle kann beim Laden Code ausführen — erst nach
@@ -42,12 +42,22 @@ werden mit Klartext abgelehnt (Pickle kann beim Laden Code ausführen — erst n
 Modelle landen flach im Typ-Ordner (ComfyUI-Konvention), Namens-Kollision →
 `-<hash8>`-Suffix.
 
-Bild-Modelle bekommen die Rolle aus dem Typ (`ModelKind::default_role`, 3.4), so
-dass `Auto` bei einem `job_type=image` das `base_diffusion`-Modell findet
-(most-recently-used). `family` + VRAM-Headroom kommen aus einer Datei-Namens-
-Heuristik: `flux`/`sd3` → +3 GB (großer T5-Text-Encoder), sonst +2 GB. Ein
-echter Wert wartet auf die `.safetensors`-Header-Inspektion + Kalibrierung
-(Phase 6).
+Bild-Modelle bekommen die Rolle aus dem Typ (`ModelKind::default_role`), so dass
+`Auto` das `base_diffusion`-Modell findet und `capability::image` die Flux-
+Begleiter (`text_encoder` / `vae`) auflösen kann (3.4/3.6). `family` +
+VRAM-Headroom aus einer Datei-Namens-Heuristik: `flux`/`sd3` → +2,5 GB (der T5
+wird beim Sampling ausgelagert), sonst +2 GB. Ein echter Wert wartet auf die
+`.safetensors`-Header-Inspektion + Kalibrierung (Phase 6).
+
+## Katalog — „Known models" (3.6)
+
+`core::model::catalog::KNOWN_MODELS` — eine kuratierte Liste (SDXL + der
+Flux-Stack: Diffusions-GGUF, T5, CLIP-L, VAE) mit HF-Quelle, **SHA-256**, Größe,
+Lizenz. `GET /models/known` / `list_known_models` speist den **„Known
+models"**-Abschnitt im Models-Tab. Kein Download-Manager im MVP (Phase 6) — man
+lädt selbst und importiert; bei SHA-256-Treffer stempelt `import_model`
+`publisher`/`family`/`source_revision = catalog:<id>`. Details + empfohlene
+Settings: [IMAGE_MODELS.md](IMAGE_MODELS.md).
 
 ## Status
 
@@ -59,6 +69,7 @@ echter Wert wartet auf die `.safetensors`-Header-Inspektion + Kalibrierung
 | `Auto`-Modellwahl (Rolle → zuletzt/meist genutzt → Name) | ✅ 2.4a `chat` (ADR-015) · 3.4 `base_diffusion` für `job_type=image`; benchmark-gestützt erst Phase 6 |
 | Kanonischer Store + Link-Manager | ✅ Store 2.1 · `core::link` 2.3 (Passthrough/Junction/Hardlink/Copy, `model_links`, ADR-007) · `ExtraPath` 3.3 (ADR-019). GGUF → llama.cpp = `passthrough`; Bild → ComfyUI = `extra_path` |
 | VRAM-Fit-Schätzung vor dem Load (`core::compat`) | ✅ 2.6 (ADR-016): Gewichte + KV-Cache aus GGUF-Arch-Dims + flacher Overhead, geschätzt für `min(ctx_max, 8192)`; Scheduler plant dagegen; passt es nicht → `blocked` mit Klartext. Kalibrierung → Phase 6 |
+| Kuratierter „Known models"-Katalog (SHA-256, HF-Quelle, Lizenz) | ✅ 3.6 (`core::model::catalog`, `GET /models/known`); Auto-Download → Phase 6 |
 | Online-Discovery (HF Hub, Ollama-Library) | Phase 6 |
 | Download-Manager (Queue, Resume, Verify, Speicherplan) | Phase 6 |
 | Kompatibilitäts-Engine (🟢/🟡/🔴 vor Download) | Phase 6 (baut auf `core::compat` auf) |

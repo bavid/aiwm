@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use super::{read_gguf_info, slugify, ModelKind, MIB};
+use super::{catalog, read_gguf_info, slugify, ModelKind, MIB};
 use crate::compat::{self, ModelDims};
 use crate::db::{Database, Model, NewModel};
 use crate::{CoreError, Result};
@@ -15,8 +15,9 @@ use crate::{CoreError, Result};
 /// activations + VAE + CUDA/compute buffers. Rough; a real per-family answer
 /// waits for `.safetensors` header inspection + calibration (Phase 6).
 const IMAGE_HEADROOM_MB: i64 = 2048;
-/// Flux / SD3 carry a large T5 text encoder — reserve more.
-const HEAVY_IMAGE_HEADROOM_MB: i64 = 3072;
+/// Flux / SD3 carry a large T5 text encoder. ComfyUI offloads it after
+/// encoding, so this is a touch more than a checkpoint, not the full encoder.
+const HEAVY_IMAGE_HEADROOM_MB: i64 = 2560;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct ImportRequest {
@@ -101,10 +102,19 @@ pub async fn import_model(
         .await
         .map_err(|e| CoreError::Other(anyhow::anyhow!("copy worker panicked: {e}")))??;
 
-    let new = match &gguf {
-        Some(g) => gguf_new_model(g, &name, &dest, sha256, size_bytes, req.roles),
-        None => image_new_model(kind, &name, &dest, &ext, sha256, size_bytes),
+    let mut new = match &gguf {
+        Some(g) => gguf_new_model(g, &name, &dest, sha256.clone(), size_bytes, req.roles),
+        None => image_new_model(kind, &name, &dest, &ext, sha256.clone(), size_bytes),
     };
+    if let Some(known) = catalog::find_by_sha256(&sha256) {
+        // A verified match to the curated list: take its authoritative metadata.
+        tracing::info!(catalog = known.id, "import recognized a known model");
+        new.publisher = Some(known.publisher.to_string());
+        new.source_revision = Some(format!("catalog:{}", known.id));
+        if let Some(family) = known.family {
+            new.family = Some(family.to_string());
+        }
+    }
 
     let model = db.models().insert(new).await?;
     link_for_kind(db, &model, kind, store_root).await?;

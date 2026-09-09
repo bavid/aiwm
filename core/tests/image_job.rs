@@ -102,6 +102,30 @@ async fn harness_with(with_model: bool, extra_args: &[&str]) -> Harness {
     }
 }
 
+impl Harness {
+    /// Register a model file with a role (companion models for Flux tests).
+    async fn add_model(&self, name: &str, family: Option<&str>, role: &str) -> String {
+        let path = self._tmp.path().join(name);
+        std::fs::write(&path, b"fixture").unwrap();
+        self.db
+            .models()
+            .insert(NewModel {
+                name: name.into(),
+                family: family.map(str::to_string),
+                format: "safetensors".into(),
+                file_path: path.to_string_lossy().into_owned(),
+                size_bytes: 1_000,
+                vram_estimate_mb: Some(9_000),
+                source: "manual".into(),
+                roles: vec![role.into()],
+                ..NewModel::default()
+            })
+            .await
+            .unwrap()
+            .id
+    }
+}
+
 fn is_png(path: &Path) -> bool {
     std::fs::read(path)
         .map(|b| b.starts_with(&[0x89, 0x50, 0x4e, 0x47]))
@@ -218,6 +242,74 @@ async fn a_comfyui_execution_error_fails_the_job() {
     }
     let stored = h.db.jobs().get(&job.id).await.unwrap().unwrap();
     assert_eq!(stored.state, JobState::Failed);
+}
+
+#[tokio::test]
+async fn a_flux_job_without_its_companion_models_fails_with_a_clear_message() {
+    let h = harness(false).await;
+    h.add_model("flux1-dev-Q8_0.gguf", Some("flux"), "base_diffusion")
+        .await;
+
+    let job = h.engine.submit(image_job("a flux render")).await.unwrap();
+    match h.engine.run_next().await.unwrap().unwrap() {
+        JobOutcome::Failed { error, .. } => {
+            assert!(
+                error.contains("T5") && error.contains("Models tab"),
+                "{error}"
+            );
+        }
+        other => panic!("expected Failed, got {other:?}"),
+    }
+    assert!(h
+        .db
+        .jobs()
+        .get(&job.id)
+        .await
+        .unwrap()
+        .unwrap()
+        .output_path
+        .is_none());
+}
+
+#[tokio::test]
+async fn a_flux_job_with_all_companions_completes() {
+    let h = harness(false).await;
+    h.add_model("flux1-dev-Q8_0.gguf", Some("flux"), "base_diffusion")
+        .await;
+    h.add_model("t5xxl_fp8_e4m3fn.safetensors", None, "text_encoder")
+        .await;
+    h.add_model("clip_l.safetensors", None, "text_encoder")
+        .await;
+    h.add_model("ae.safetensors", Some("flux"), "vae").await;
+
+    let job = h
+        .engine
+        .submit(image_job("a fox, flux style"))
+        .await
+        .unwrap();
+    let outcome = h.engine.run_next().await.unwrap().unwrap();
+    assert!(
+        matches!(outcome, JobOutcome::Completed { .. }),
+        "got {outcome:?}"
+    );
+
+    let stored = h.db.jobs().get(&job.id).await.unwrap().unwrap();
+    assert!(is_png(Path::new(stored.output_path.as_ref().unwrap())));
+
+    let events: Vec<String> =
+        h.db.jobs()
+            .events(&job.id)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|e| e.message)
+            .collect();
+    assert!(
+        events
+            .iter()
+            .any(|m| m.contains("Flux") && m.contains("T5")),
+        "{events:?}"
+    );
 }
 
 #[tokio::test]

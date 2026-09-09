@@ -310,6 +310,27 @@ impl<'a> ModelRepo<'a> {
         }
     }
 
+    /// Every model carrying `role`, name-sorted. Used when one role can have
+    /// several members that must be told apart (Flux's T5 + CLIP-L encoders).
+    pub async fn for_role(&self, role: &str) -> Result<Vec<Model>> {
+        let ids: Vec<(String,)> = sqlx::query_as(
+            "SELECT m.id FROM models m
+             JOIN model_roles r ON r.model_id = m.id
+             WHERE r.role = $1
+             ORDER BY m.name COLLATE NOCASE",
+        )
+        .bind(role)
+        .fetch_all(self.pool)
+        .await?;
+        let mut out = Vec::with_capacity(ids.len());
+        for (id,) in ids {
+            if let Some(m) = self.get(&id).await? {
+                out.push(m);
+            }
+        }
+        Ok(out)
+    }
+
     pub async fn mark_used(&self, id: &str) -> Result<()> {
         sqlx::query("UPDATE models SET use_count = use_count + 1, last_used_at = $1 WHERE id = $2")
             .bind(now_rfc3339())
@@ -560,6 +581,33 @@ mod tests {
             .unwrap()
             .runtimes
             .is_empty());
+    }
+
+    #[tokio::test]
+    async fn for_role_returns_all_members_name_sorted() {
+        let db = Database::connect_in_memory().await.unwrap();
+        assert!(db
+            .models()
+            .for_role("text_encoder")
+            .await
+            .unwrap()
+            .is_empty());
+
+        for (name, sha) in [("t5xxl_fp8", "h1"), ("clip_l", "h2")] {
+            let mut m = gguf_model(name, sha);
+            m.format = "safetensors".into();
+            m.roles = vec!["text_encoder".into()];
+            db.models().insert(m).await.unwrap();
+        }
+        let names: Vec<_> = db
+            .models()
+            .for_role("text_encoder")
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|m| m.name)
+            .collect();
+        assert_eq!(names, ["clip_l", "t5xxl_fp8"]);
     }
 
     #[tokio::test]

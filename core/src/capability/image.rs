@@ -13,7 +13,7 @@ use serde_json::Value;
 use tokio::sync::watch;
 
 use crate::db::{Database, EventLevel, Model};
-use crate::pipeline::{self, Txt2ImgInputs};
+use crate::pipeline::{self, FluxModels, Recipe, Txt2ImgInputs};
 use crate::runtime::ComfyUiAdapter;
 use crate::{CoreError, Result};
 
@@ -161,24 +161,31 @@ pub async fn run(
     req: ImageRequest,
     cancel: watch::Receiver<bool>,
 ) -> Result<ImageOutcome> {
-    let checkpoint = Path::new(&model.file_path)
-        .file_name()
-        .and_then(|f| f.to_str())
-        .ok_or_else(|| image_err("the model file has no name"))?;
+    let model_file = file_name(&model.file_path)?;
+    let recipe = Recipe::for_family(model.family.as_deref());
 
     db.jobs()
         .append_event(
             job_id,
             EventLevel::Info,
             &format!(
-                "rendering {}\u{00d7}{}, {} steps, cfg {:.1}, seed {} \u{2014} {}",
-                req.width, req.height, req.steps, req.cfg, req.seed, model.name
+                "rendering {}\u{00d7}{}, {} steps, {} {:.1}, seed {} \u{2014} {}",
+                req.width,
+                req.height,
+                req.steps,
+                if recipe == Recipe::FluxGguf {
+                    "guidance"
+                } else {
+                    "cfg"
+                },
+                req.cfg,
+                req.seed,
+                model.name
             ),
         )
         .await?;
 
-    let workflow = pipeline::sdxl_txt2img(&Txt2ImgInputs {
-        checkpoint,
+    let inputs = Txt2ImgInputs {
         positive: &req.prompt,
         negative: &req.negative,
         width: req.width,
@@ -189,7 +196,32 @@ pub async fn run(
         scheduler: &req.scheduler,
         seed: req.seed,
         filename_prefix: job_id,
-    });
+    };
+    let workflow = match recipe {
+        Recipe::Checkpoint => pipeline::checkpoint_txt2img(&inputs, model_file),
+        Recipe::FluxGguf => {
+            let c = resolve_flux_companions(db).await?;
+            db.jobs()
+                .append_event(
+                    job_id,
+                    EventLevel::Info,
+                    &format!(
+                        "Flux — T5 “{}”, CLIP-L “{}”, VAE “{}”",
+                        c.t5, c.clip_l, c.vae
+                    ),
+                )
+                .await?;
+            pipeline::flux_txt2img(
+                &inputs,
+                &FluxModels {
+                    unet: model_file,
+                    t5: &c.t5,
+                    clip_l: &c.clip_l,
+                    vae: &c.vae,
+                },
+            )
+        }
+    };
 
     let Some(image) = comfyui.generate_image(&workflow, cancel).await? else {
         return Ok(ImageOutcome::Cancelled);
@@ -221,6 +253,65 @@ pub async fn run(
         width: req.width,
         height: req.height,
     }))
+}
+
+/// The bare file name as ComfyUI sees it in its model folders.
+fn file_name(path: &str) -> Result<&str> {
+    Path::new(path)
+        .file_name()
+        .and_then(|f| f.to_str())
+        .ok_or_else(|| image_err("the model file has no name"))
+}
+
+/// Flux's three companion files, resolved from the library by role + name.
+#[derive(Debug)]
+struct FluxCompanionFiles {
+    t5: String,
+    clip_l: String,
+    vae: String,
+}
+
+/// Find the T5 encoder, the CLIP-L encoder and the VAE a Flux job needs. Each
+/// missing piece is a plain-language "import this" error rather than a cryptic
+/// ComfyUI node failure.
+async fn resolve_flux_companions(db: &Database) -> Result<FluxCompanionFiles> {
+    let encoders = db.models().for_role("text_encoder").await?;
+    let t5 = encoders
+        .iter()
+        .find(|m| name_is_t5(&m.name) || name_is_t5(&m.file_path))
+        .ok_or_else(|| {
+            image_err(
+                "Flux needs a T5 text encoder — import a t5xxl file (safetensors or GGUF) as \
+                 \u{201c}Text encoder / CLIP\u{201d} on the Models tab",
+            )
+        })?;
+    let clip_l = encoders
+        .iter()
+        .find(|m| name_is_clip_l(&m.name) || name_is_clip_l(&m.file_path))
+        .ok_or_else(|| {
+            image_err(
+                "Flux needs the CLIP-L text encoder — import clip_l.safetensors as \
+                 \u{201c}Text encoder / CLIP\u{201d}",
+            )
+        })?;
+    let vae = db.models().pick_for_role("vae").await?.ok_or_else(|| {
+        image_err("Flux needs a VAE — import ae.safetensors as \u{201c}VAE\u{201d}")
+    })?;
+
+    Ok(FluxCompanionFiles {
+        t5: file_name(&t5.file_path)?.to_string(),
+        clip_l: file_name(&clip_l.file_path)?.to_string(),
+        vae: file_name(&vae.file_path)?.to_string(),
+    })
+}
+
+fn name_is_t5(s: &str) -> bool {
+    s.to_ascii_lowercase().contains("t5")
+}
+
+fn name_is_clip_l(s: &str) -> bool {
+    let n = s.to_ascii_lowercase();
+    n.contains("clip") && !n.contains("t5")
 }
 
 fn str_param(params: &Value, key: &str, default: &str) -> String {
@@ -315,5 +406,66 @@ mod tests {
         let b = random_seed();
         assert!(a >= 0 && b >= 0);
         assert_ne!(a, b, "two draws should differ");
+    }
+
+    #[test]
+    fn encoder_name_heuristics_split_t5_from_clip_l() {
+        assert!(name_is_t5("t5xxl_fp8_e4m3fn.safetensors"));
+        assert!(name_is_t5("t5-v1_1-xxl-encoder-Q8_0.gguf"));
+        assert!(!name_is_t5("clip_l.safetensors"));
+
+        assert!(name_is_clip_l("clip_l.safetensors"));
+        assert!(name_is_clip_l("CLIP-L.safetensors"));
+        assert!(!name_is_clip_l("t5xxl_fp8.safetensors"));
+        // A combined-name file must not be claimed as CLIP-L.
+        assert!(!name_is_clip_l("clip_t5_combined.safetensors"));
+    }
+
+    #[tokio::test]
+    async fn resolve_flux_companions_needs_all_three() {
+        use crate::db::{Database, NewModel};
+
+        let db = Database::connect_in_memory().await.unwrap();
+        let add = |name: &str, role: &str| {
+            let (name, role) = (name.to_string(), role.to_string());
+            let db = db.clone();
+            async move {
+                db.models()
+                    .insert(NewModel {
+                        name: name.clone(),
+                        format: "safetensors".into(),
+                        file_path: format!("E:\\AI\\models\\image\\x\\{name}"),
+                        size_bytes: 1_000,
+                        source: "manual".into(),
+                        roles: vec![role],
+                        ..NewModel::default()
+                    })
+                    .await
+                    .unwrap();
+            }
+        };
+
+        let err = resolve_flux_companions(&db).await.unwrap_err();
+        assert!(err.to_string().contains("T5"), "{err}");
+
+        add("t5xxl_fp8.safetensors", "text_encoder").await;
+        assert!(resolve_flux_companions(&db)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("CLIP-L"));
+
+        add("clip_l.safetensors", "text_encoder").await;
+        assert!(resolve_flux_companions(&db)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("VAE"));
+
+        add("ae.safetensors", "vae").await;
+        let c = resolve_flux_companions(&db).await.unwrap();
+        assert_eq!(c.t5, "t5xxl_fp8.safetensors");
+        assert_eq!(c.clip_l, "clip_l.safetensors");
+        assert_eq!(c.vae, "ae.safetensors");
     }
 }

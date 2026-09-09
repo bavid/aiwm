@@ -6,9 +6,11 @@ import {
   getRuntimes,
   getTelemetry,
   listJobs,
+  listKnownModels,
   listModels,
   type AboutInfo,
   type Job,
+  type KnownModel,
   type Model,
   type RuntimeStatus,
   type SystemTelemetry,
@@ -37,6 +39,15 @@ export function useAbout() {
     about().then(setInfo).catch(() => setInfo(null));
   }, []);
   return info;
+}
+
+/** The curated image-model catalogue. Static — fetched once. */
+export function useKnownModels() {
+  const [data, setData] = useState<KnownModel[] | null>(null);
+  useEffect(() => {
+    listKnownModels().then(setData).catch(() => setData([]));
+  }, []);
+  return data;
 }
 
 function usePolled<T>(key: string, fetcher: () => Promise<T>, intervalMs: number) {

@@ -1,6 +1,6 @@
 import { useState } from "react";
-import { useModels } from "../../lib/hooks";
-import { importModel, type Model, type ModelType } from "../../lib/ipc";
+import { useKnownModels, useModels } from "../../lib/hooks";
+import { importModel, type KnownModel, type Model, type ModelType } from "../../lib/ipc";
 import "./models.css";
 
 const ROLES = ["chat", "coding", "reasoning", "embedding"];
@@ -15,16 +15,18 @@ const MODEL_TYPES: { value: ModelType; label: string; ext: string }[] = [
 ];
 
 const gb = (mb: number | null) => (mb == null ? "—" : `${(mb / 1024).toFixed(1)} GB`);
+const gbBytes = (b: number) => `${(b / 1024 ** 3).toFixed(2)} GB`;
 const params = (n: number | null) =>
   n == null ? "—" : n >= 1e9 ? `${(n / 1e9).toFixed(1)} B` : `${(n / 1e6).toFixed(0)} M`;
 const ctx = (n: number | null) => (n == null ? "—" : n >= 1024 ? `${Math.round(n / 1024)}K` : `${n}`);
 
 export function Models() {
   const { data: models, error, refetch } = useModels();
+  const [modelType, setModelType] = useState<ModelType>("chat");
 
   return (
     <div className="models">
-      <ImportForm onImported={refetch} />
+      <ImportForm modelType={modelType} setModelType={setModelType} onImported={refetch} />
 
       <section className="card card--wide">
         <header className="card__head">
@@ -34,50 +36,61 @@ export function Models() {
         {error && <p className="muted">Could not load models: {error}</p>}
         {models && models.length === 0 && <p className="muted">No models yet — import a .gguf above.</p>}
         {models && models.length > 0 && (
-          <table className="model-table">
-            <thead>
-              <tr>
-                <th>Name</th>
-                <th>Arch</th>
-                <th>Quant</th>
-                <th>Params</th>
-                <th>Size</th>
-                <th>Ctx</th>
-                <th>VRAM est.</th>
-                <th>Roles</th>
-                <th>Runtimes</th>
-              </tr>
-            </thead>
-            <tbody>
-              {models.map((m: Model) => (
-                <tr key={m.id}>
-                  <td title={m.file_path}>{m.name}</td>
-                  <td className="muted">{m.arch ?? "—"}</td>
-                  <td>{m.quant ?? "—"}</td>
-                  <td className="numeric">{params(m.param_count)}</td>
-                  <td className="numeric">{gb(m.size_bytes / (1024 * 1024))}</td>
-                  <td className="numeric">{ctx(m.ctx_max)}</td>
-                  <td
-                    className="numeric"
-                    title="Estimate at the default chat context — weights + KV cache + runtime overhead"
-                  >
-                    {gb(m.vram_estimate_mb)}
-                  </td>
-                  <td className="muted">{m.roles.join(", ") || "—"}</td>
-                  <td className="muted">{m.runtimes.join(", ") || "—"}</td>
+          <div className="model-table__scroll">
+            <table className="model-table">
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>Family</th>
+                  <th>Quant</th>
+                  <th>Params</th>
+                  <th>Size</th>
+                  <th>Ctx</th>
+                  <th>VRAM est.</th>
+                  <th>Roles</th>
+                  <th>Runtimes</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {models.map((m: Model) => (
+                  <tr key={m.id}>
+                    <td title={m.file_path}>{m.name}</td>
+                    <td className="muted">{m.family ?? m.arch ?? "—"}</td>
+                    <td>{m.quant ?? "—"}</td>
+                    <td className="numeric">{params(m.param_count)}</td>
+                    <td className="numeric">{gb(m.size_bytes / (1024 * 1024))}</td>
+                    <td className="numeric">{ctx(m.ctx_max)}</td>
+                    <td
+                      className="numeric"
+                      title="Estimate at load — weights + KV cache / activations + runtime overhead"
+                    >
+                      {gb(m.vram_estimate_mb)}
+                    </td>
+                    <td className="muted">{m.roles.join(", ") || "—"}</td>
+                    <td className="muted">{m.runtimes.join(", ") || "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
       </section>
+
+      <KnownModels onUseType={setModelType} />
     </div>
   );
 }
 
-function ImportForm({ onImported }: { onImported: () => void }) {
+function ImportForm({
+  modelType,
+  setModelType,
+  onImported,
+}: {
+  modelType: ModelType;
+  setModelType: (t: ModelType) => void;
+  onImported: () => void;
+}) {
   const [path, setPath] = useState("");
-  const [modelType, setModelType] = useState<ModelType>("chat");
   const [roles, setRoles] = useState<string[]>(["chat"]);
   const [keepOriginal, setKeepOriginal] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -169,5 +182,65 @@ function ImportForm({ onImported }: { onImported: () => void }) {
       </form>
       {message && <p className={message.kind === "ok" ? "import__ok" : "import__err"}>{message.text}</p>}
     </section>
+  );
+}
+
+function KnownModels({ onUseType }: { onUseType: (t: ModelType) => void }) {
+  const known = useKnownModels();
+  if (!known || known.length === 0) return null;
+
+  return (
+    <section className="card card--wide">
+      <header className="card__head">
+        <h2>Known models</h2>
+        <span className="card__sub">download from Hugging Face, then import above</span>
+      </header>
+      <p className="muted">
+        A Flux job needs all four pieces: the diffusion GGUF, a T5 encoder, CLIP-L, and the VAE.
+        The importer recognizes these by their SHA-256 and fills in the metadata.
+      </p>
+      <ul className="known">
+        {known.map((m) => (
+          <KnownRow key={m.id} model={m} onUseType={onUseType} />
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+function KnownRow({ model, onUseType }: { model: KnownModel; onUseType: (t: ModelType) => void }) {
+  const [copied, setCopied] = useState(false);
+  const copyLink = async () => {
+    try {
+      await navigator.clipboard.writeText(model.url);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      /* clipboard blocked — the link is still visible below */
+    }
+  };
+
+  return (
+    <li className="known__row">
+      <div className="known__main">
+        <span className="known__name">{model.name}</span>
+        <span className="known__badges">
+          <span className="badge">{model.kind.replace("_", " ")}</span>
+          {model.family && <span className="badge">{model.family}</span>}
+        </span>
+        <span className="known__note">{model.note}</span>
+        <span className="known__file numeric">
+          {model.file} · {gbBytes(model.size_bytes)} · {model.license}
+        </span>
+      </div>
+      <div className="known__actions">
+        <button type="button" onClick={() => onUseType(model.kind)}>
+          Set import type
+        </button>
+        <button type="button" onClick={copyLink}>
+          {copied ? "Copied ✓" : "Copy link"}
+        </button>
+      </div>
+    </li>
   );
 }

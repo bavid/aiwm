@@ -190,6 +190,24 @@ export const jobDetail = (id: string) => invoke<JobDetail | null>("job_detail", 
 
 export const listModels = () => invoke<Model[]>("list_models");
 
+/** One entry of the curated image-model catalogue (`GET /models/known`). */
+export interface KnownModel {
+  id: string;
+  name: string;
+  kind: ModelType;
+  family: string | null;
+  publisher: string;
+  repo: string;
+  file: string;
+  url: string;
+  sha256: string;
+  size_bytes: number;
+  license: string;
+  note: string;
+}
+
+export const listKnownModels = () => invoke<KnownModel[]>("list_known_models");
+
 /** The parameters of a `job_type=image` job. After the engine runs, `params`
  *  holds these resolved values (a random seed is pinned back). */
 export interface ImageParams {

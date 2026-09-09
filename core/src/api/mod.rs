@@ -346,6 +346,27 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn known_models_lists_the_catalogue_over_http() {
+        let (app, _tmp) = test_app().await;
+        let server = ApiServer::bind(app, SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
+            .await
+            .unwrap();
+
+        let list: serde_json::Value = reqwest::get(format!("http://{}/models/known", server.addr))
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let arr = list.as_array().unwrap();
+        assert!(arr.len() >= 4);
+        assert!(arr.iter().any(|m| m["id"] == "flux1-dev-q8"));
+        assert!(arr
+            .iter()
+            .all(|m| m["sha256"].as_str().unwrap().len() == 64));
+    }
+
+    #[tokio::test]
     async fn job_output_serves_the_image_and_404s_otherwise() {
         use crate::db::{JobPatch, NewJob};
         use crate::orchestrator::JobState;

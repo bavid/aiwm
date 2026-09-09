@@ -55,6 +55,9 @@ export function ImageStudio() {
   const [modelId, setModelId] = useState("auto");
   const [sendError, setSendError] = useState<string | null>(null);
 
+  const isFlux =
+    modelId !== "auto" && checkpoints.find((m) => m.id === modelId)?.family === "flux";
+
   const [pendingId, setPendingId] = useState<string | null>(null);
   const [detail, setDetail] = useState<JobDetail | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -205,8 +208,18 @@ export function ImageStudio() {
             <NumField label="Width" value={width} step={DIM_STEP} min={MIN_DIM} max={MAX_DIM} onChange={setWidth} />
             <NumField label="Height" value={height} step={DIM_STEP} min={MIN_DIM} max={MAX_DIM} onChange={setHeight} />
             <NumField label="Steps" value={steps} step={1} min={1} max={60} onChange={setSteps} />
-            <NumField label="CFG" value={cfg} step={0.5} min={1} max={15} onChange={setCfg} />
+            <NumField
+              label={isFlux ? "Guidance" : "CFG"}
+              value={cfg}
+              step={0.5}
+              min={1}
+              max={isFlux ? 10 : 15}
+              onChange={setCfg}
+            />
           </div>
+          {isFlux && (
+            <p className="muted">Flux runs at CFG 1 — this sets FluxGuidance (≈ 3–4 is typical).</p>
+          )}
 
           <div className="imgform__grid">
             <label className="imgform__field">

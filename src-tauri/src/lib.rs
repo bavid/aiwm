@@ -110,6 +110,11 @@ async fn list_models(app: tauri::State<'_, Arc<App>>) -> Result<Vec<Model>, Stri
 }
 
 #[tauri::command]
+fn list_known_models(app: tauri::State<'_, Arc<App>>) -> &'static [aiwm_core::model::KnownModel] {
+    handlers::known_models(&app)
+}
+
+#[tauri::command]
 async fn import_model(
     app: tauri::State<'_, Arc<App>>,
     request: ImportRequest,
@@ -171,6 +176,7 @@ fn try_run() -> anyhow::Result<()> {
             get_runtimes,
             get_recent_logs,
             list_models,
+            list_known_models,
             import_model,
             install_llamacpp,
             install_comfyui,

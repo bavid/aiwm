@@ -101,7 +101,9 @@ LLM ↔ Diffusion ums VRAM-Budget.
   Cancel via `/interrupt`, `Auto` über Rolle `base_diffusion`
 - [x] 3.5 UI-Tab „Image" — Prompt/Negativ, Größe/Steps/CFG/Seed, Model [Auto],
   „Generate", Ergebnisbild, Galerie; Bild via `GET /jobs/{id}/output`
-- [ ] 3.6 Flux-Template + `IMAGE_MODELS.md`
+- [x] 3.6 Flux.1-dev-GGUF als zweites Template (`ComfyUI-GGUF`-Nodes, Companion-
+  Auflösung T5/CLIP-L/VAE), `docs/IMAGE_MODELS.md`, `core::model::catalog` +
+  `GET /models/known` + „Known models"-Panel
 - [ ] 3.7 Politur (Settings, Diagnostics, Scheduler-Verprobung)
 
 Nach dem txt2img-MVP: Image→Image, Inpaint, Upscale, Enhancement (eigene Slices).

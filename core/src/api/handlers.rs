@@ -139,6 +139,12 @@ pub async fn list_models(app: &App) -> Result<Vec<Model>> {
     app.db.models().list().await
 }
 
+/// The curated "known models" list the Models tab shows for assisted import
+/// (`GET /models/known`). Static — no `App` needed, but kept here for symmetry.
+pub fn known_models(_app: &App) -> &'static [crate::model::KnownModel] {
+    crate::model::KNOWN_MODELS
+}
+
 pub async fn import_model(app: &App, req: ImportRequest) -> Result<ImportOutcome> {
     crate::model::import_model(&app.db, &app.config.store_path, req).await
 }

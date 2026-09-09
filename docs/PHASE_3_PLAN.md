@@ -18,7 +18,7 @@ manuelles Eingreifen → Netz trennen → das schon Installierte läuft weiter.
 | **3.3** | Getypter Bild-Store `<store>/image/{checkpoints,diffusion_models,vae,loras,text_encoders}/`; `ModelKind` + `import_model` nimmt `.safetensors` (+ Pickle-Ablehnung), routet per Typ-Hint/Endung; ComfyUI-Zugriff über **`extra_model_paths.yaml`** statt Junction (Store auf `E:`, Runtime auf `C:` → Junction unmöglich; ADR-019); `model_links` = `comfyui`/`extra_path`; UI-Typ-Dropdown | ✅ |
 | 3.4 | `capability::image`: `job_type=image`, Params (prompt, negative, w/h, steps, cfg, seed, model|Auto über Rolle `base_diffusion`); **feste Pipeline** = Workflow-JSON-Template + Param-Substitution (`core::pipeline`); `POST /prompt` → `/history/{id}` pollen → Bild via `/view` nach `<outputs>/<job_id>.png` → `jobs.output_path`; Cancel via `POST /interrupt`; VRAM-Schätzung pro Familie (Import-Zeit, Namens-Heuristik) | ✅ |
 | 3.5 | UI: Tab „Image" — Prompt/Negativ, Größe/Steps/CFG/Seed, Model [Auto], „Generate"; Ergebnisbild; einfache **Galerie** (Bild-Jobs mit Thumbnail, Klick → Prompt/Seed/Modell); Dashboard-Button „Generate Image" aktiv; Bild via `GET /jobs/{id}/output` | ✅ |
-| 3.6 | Zweites Template **Flux.1-dev (GGUF Q8)** über `ComfyUI-GGUF`; `docs/IMAGE_MODELS.md` (kuratierte Modelle: SHA256, Quelle HF, Lizenz, empfohlene Settings); kuratierte „Known models"-Liste für den assistierten Import | offen |
+| 3.6 | Zweites Template **Flux.1-dev (GGUF)** über `ComfyUI-GGUF` (`UnetLoaderGGUF` + `DualCLIPLoaderGGUF` + `VAELoader`, `FluxGuidance`, SD3-Latent); Companion-Auflösung (T5/CLIP-L/VAE per Rolle + Name); `docs/IMAGE_MODELS.md`; `core::model::catalog` + `GET /models/known` + „Known models"-Panel im Models-Tab | ✅ |
 | 3.7 | Politur: ComfyUI-Optionen in Settings (`--lowvram`-Schalter / VRAM-Modus), Diagnostics-Statuszeile, Output-Retention-Hinweis; Scheduler: Diffusion-Slot neben LLM-Slot sauber verproben | offen |
 
 ---
@@ -418,6 +418,65 @@ Verifiziert:
 Bewusst **nicht** in 3.5: `/ws`-Fortschrittsbalken (MVP pollt), Galerie-
 Paginierung / Löschen / Download-Button, Bild-Zoom/Lightbox, Prompt-History,
 Style-Presets. Kommen bei Bedarf als eigene kleine Slices.
+
+---
+
+## 3.6 — Ergebnis (abgeschlossen)
+
+Zweites Template + der Katalog. `core::pipeline` trägt jetzt zwei Templates —
+die TOML-*Registry* (user-editierbare Definitionen) bleibt bewusst draußen.
+
+- **`core::pipeline`** umgebaut: `sdxl_txt2img` → **`checkpoint_txt2img`**
+  (jedes Single-File-Checkpoint, nicht SDXL-spezifisch) +
+  **`flux_txt2img`**. `Recipe::for_family(family) -> Checkpoint | FluxGguf`
+  wählt. `Txt2ImgInputs` trägt nur noch Prompt/Sampling-Params; Modell-Dateien
+  kommen getrennt (`checkpoint: &str` bzw. `FluxModels { unet, t5, clip_l, vae }`).
+- **Flux-Graph** (recherchiert gegen `city96/ComfyUI-GGUF` + HF): `UnetLoaderGGUF`
+  + `DualCLIPLoaderGGUF` (type `flux`, T5 + CLIP-L; ComfyUI mappt den
+  `clip`-Ordner-Key auf `text_encoders`) + `VAELoader`; `FluxGuidance` auf der
+  positiven Conditioning; `EmptySD3LatentImage`; `KSampler` bei **CFG 1**,
+  Sampler `euler`, Scheduler `simple`. Das UI-„CFG"-Feld wird für Flux zu
+  **Guidance** (1–10, ≈ 3–4), der Sampler läuft immer bei 1.
+- **Companion-Auflösung** (`capability::image::resolve_flux_companions`): über
+  Rolle (`text_encoder` / `vae`) + Namens-Heuristik (`t5` → T5, `clip` ohne
+  `t5` → CLIP-L). Fehlt eine Datei → Klartext-Fehler statt kryptischem
+  Node-Fail. `ModelKind::default_role()` → `Vae` → `vae`, `TextEncoder` →
+  `text_encoder` (damit `for_role` sie findet — neue `ModelRepo::for_role`).
+- **`core::model::catalog`** (neu): `KnownModel` (id, name, kind, family,
+  publisher, repo, file, url, sha256, size, license, note) + `KNOWN_MODELS`
+  (SDXL + Flux-Stack, 7 Einträge, echte HF-SHA-256/Größen) +
+  `find_by_sha256`. `import_model`: bei SHA-Treffer werden
+  `publisher`/`family`/`source_revision = catalog:<id>` gestempelt.
+  `GET /models/known` + Tauri-Command `list_known_models`.
+- **UI**: Models-Tab bekommt einen **„Known models"**-Abschnitt (Name, Badges
+  Typ/Familie, Notiz, Datei·Größe·Lizenz, „Set import type" + „Copy link").
+  `modelType`-State nach `Models()` hochgezogen. Image-Tab: „CFG" → „Guidance"
+  + Hinweis, wenn ein Flux-Modell explizit gewählt ist. Model-Library-Tabelle:
+  Spalte „Arch" → „Family", horizontal scrollbar.
+- **`import`-VRAM**: `HEAVY_IMAGE_HEADROOM_MB` 3072 → **2560** (der T5 wird
+  ausgelagert, ist beim Sampling nicht resident) — Flux Q8 (~12,1 GiB + 2560)
+  passt jetzt unter das 14 848-MB-Budget.
+
+Verifiziert:
+- 15 neue Unit-Tests (`pipeline` 6 — Recipe + beide Graphen + Guidance-Clamp;
+  `catalog` 3; `capability::image` 3 — Encoder-Heuristik + Companion-Auflösung;
+  `ModelKind::default_role` erweitert; `ModelRepo::for_role` 1; `api` 1 —
+  `GET /models/known`). 2 neue Integrationstests `tests/image_job.rs` (Flux ohne
+  Companions → Klartext-Fehler; Flux mit allen vieren → `Completed`).
+  `check.ps1` grün (**223 Unit + 25 Integ.**), `tsc` + `eslint` sauber.
+- **Live** (`aiwm-cored` + Fake-ComfyUI): `GET /models/known` liefert die 7
+  Einträge mit 64-Hex-SHAs; Flux-Stack importiert (`family=flux`,
+  `roles=[base_diffusion]` / `text_encoder` / `vae`); Image-Job → `auto-selected
+  flux1-dev-Q8_0` → Event „Flux — T5 … CLIP-L … VAE …" + „guidance 3.5" →
+  `completed`, PNG über `/jobs/<id>/output`; Flux-Job ohne T5 → `failed` mit
+  „Flux needs a T5 text encoder — import …".
+- **UI** (Vite-Dev-Server): „Known models"-Panel rendert (Badges, Aktionen,
+  Datei-Zeile) im App-Stil.
+
+Bewusst **nicht** in 3.6: TOML-Pipeline-Registry (2 Templates reichen noch
+hartkodiert), `.safetensors`-Flux ohne GGUF, echte Verprobung des
+`DualCLIPLoaderGGUF`-Ordner-Key-Mappings gegen die **echte** ComfyUI (mit dem
+cu130-Treiber-Check zusammen, Phase 3.7 / real), SD 3.5.
 
 ---
 

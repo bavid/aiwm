@@ -62,9 +62,20 @@ hierher, damit nichts verloren geht.
   ADR-018). Offen: Cleanup von `runtimes/comfyui/{<alter-tag>,uv-cache,python}`
   beim Versions-Bump; freien Speicherplatz vor dem torch-Download prüfen
 - ComfyUI cu130-torch: GPU-**Treiber**-Kompatibilität auf der echten 4080 Super
-  verifizieren — **weiterhin offen**: der 3.4-Smoke fährt gegen die
-  Fake-ComfyUI, nicht die echte CUDA-Laufzeit. Sobald die echte ComfyUI ein
+  verifizieren — **weiterhin offen**: alle Bild-Smokes (3.4–3.6) fahren gegen
+  die Fake-ComfyUI, nicht die echte CUDA-Laufzeit. Sobald die echte ComfyUI ein
   Bild rendert prüfen; fällt es aus → cu128/cu126-Pin.
+- **Flux-Graph gegen die echte ComfyUI verproben** (mit dem cu130-Check
+  zusammen): (a) dass `DualCLIPLoaderGGUF`s `get_full_path("clip", …)` unsere
+  `text_encoders`-Ordner-Konfig aus `extra_model_paths.yaml` findet
+  (ComfyUIs `map_legacy` sollte `clip`→`text_encoders` mappen — geprüft im Code,
+  nicht live); (b) dass `UnetLoaderGGUF` das GGUF in `diffusion_models/` sieht;
+  (c) Steps/Scheduler/Guidance-Defaults an einem echten Flux-Render kalibrieren.
+- Flux-Companion-Auflösung (3.6) nutzt eine Namens-Heuristik (`t5` / `clip`).
+  Robuster wäre ein `.safetensors`-Header-Check (Tensor-Namen verraten T5 vs
+  CLIP-L eindeutig) — hängt an der ohnehin vertagten Header-Inspektion. Bis
+  dahin: klappt für die kuratierten Dateinamen, kann bei exotischen Umbenennungen
+  daneben greifen.
 - `.safetensors`-Header-Inspektion (3.3 vertagt): der JSON-Header am Dateianfang
   trägt Tensor-Namen/Shapes/dtype — daraus ließen sich Arch-Familie (SDXL/Flux/
   SD3.5), Precision (fp16/fp8) und ein besserer VRAM-Estimate ableiten, statt

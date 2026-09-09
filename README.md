@@ -31,7 +31,7 @@ noch keine echte AI-Capability (die kommt ab Phase 2).
 | WP-9 | CI-Workflow, Git-Hooks (pre-commit fmt, pre-push voller Gate) |
 | WP-10 | ADRs finalisiert, Stub-Docs (MODELS/RUNTIMES/SECURITY/BENCHMARKS) |
 
-**212 Rust-Unit + 23 Integrationstests + 5 pytest** grün · `scripts/check.ps1` grün ·
+**223 Rust-Unit + 25 Integrationstests + 5 pytest** grün · `scripts/check.ps1` grün ·
 **null `unsafe`** im Produktivcode.
 
 **Phase 2 (MVP) ✅ abgeschlossen** — Scheiben 2.1–2.7 + durchgehender
@@ -69,6 +69,13 @@ Modell-Wechsel-Test (`core/tests/model_swap.rs`).
   Chat); einfache **Galerie** (fertige Bild-Jobs, Klick → Prompt/Seed/Modell/
   Größe). Das Bild kommt über eine neue Loopback-Route `GET /jobs/{id}/output`
   (CSP `img-src` erweitert). Dashboard-Button „Generate Image" aktiv.
+- **3.6** ✅ **Flux als zweites Template**: `core::pipeline` trägt jetzt
+  `checkpoint_txt2img` **und** `flux_txt2img` (`UnetLoaderGGUF` +
+  `DualCLIPLoaderGGUF` + `VAELoader` + `FluxGuidance`, via `ComfyUI-GGUF`);
+  `Recipe::for_family` wählt. Companion-Modelle (T5 / CLIP-L / VAE) werden per
+  Rolle + Namen aufgelöst, fehlende mit Klartext-Fehler.
+  `core::model::catalog` (SDXL + Flux-Stack, echte SHA-256) · `GET /models/known`
+  · „Known models"-Panel im Models-Tab · [`docs/IMAGE_MODELS.md`](docs/IMAGE_MODELS.md).
 
 - **2.1** ✅ `ModelRepo`, eigener bounded GGUF-Header-Reader, manueller Import in
   den kanonischen Store, UI-Tab „Models".
@@ -137,6 +144,7 @@ pnpm -C ui exec tauri dev                 # Desktop-App (aus E:\AI ausführen)
 | [docs/DECISIONS.md](docs/DECISIONS.md) | Architecture Decision Records (ADRs) |
 | [docs/RISKS.md](docs/RISKS.md) | Risikoregister mit Gegenmaßnahmen |
 | [docs/MODELS.md](docs/MODELS.md) | Modell-Verwaltung: Stand + Plan |
+| [docs/IMAGE_MODELS.md](docs/IMAGE_MODELS.md) | Kuratierte Bild-Modelle (SDXL, Flux-Stack): Quelle, SHA-256, Lizenz, Settings |
 | [docs/RUNTIMES.md](docs/RUNTIMES.md) | Runtime-Abstraktion + Integrationsstand |
 | [docs/SECURITY.md](docs/SECURITY.md) | Sicherheitsmodell (Loopback-only, Prozess-Isolation, Agent-Sandbox) |
 | [docs/BENCHMARKS.md](docs/BENCHMARKS.md) | Benchmark-Konzept (Phase 6) |

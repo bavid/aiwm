@@ -63,14 +63,17 @@ impl ModelKind {
         self == Self::Chat
     }
 
-    /// The model role the importer assigns so `Auto` capability selection can
-    /// find this model. Chat models get their roles from the user; image models
-    /// are typed, so the kind implies the role.
+    /// The model role the importer assigns so `Auto` capability + companion
+    /// resolution can find this model. Chat models get their roles from the
+    /// user; image models are typed, so the kind implies the role.
     pub fn default_role(self) -> Option<&'static str> {
         match self {
             // The checkpoint / diffusion transformer a text-to-image job needs.
             Self::Checkpoint | Self::DiffusionModel => Some("base_diffusion"),
-            Self::Chat | Self::Vae | Self::Lora | Self::TextEncoder => None,
+            // Flux companions, resolved by role in `capability::image`.
+            Self::Vae => Some("vae"),
+            Self::TextEncoder => Some("text_encoder"),
+            Self::Chat | Self::Lora => None,
         }
     }
 
@@ -169,13 +172,15 @@ mod tests {
     }
 
     #[test]
-    fn checkpoints_carry_the_base_diffusion_role() {
+    fn image_kinds_carry_a_role_for_auto_and_companion_resolution() {
         assert_eq!(ModelKind::Checkpoint.default_role(), Some("base_diffusion"));
         assert_eq!(
             ModelKind::DiffusionModel.default_role(),
             Some("base_diffusion")
         );
-        assert_eq!(ModelKind::Vae.default_role(), None);
+        assert_eq!(ModelKind::Vae.default_role(), Some("vae"));
+        assert_eq!(ModelKind::TextEncoder.default_role(), Some("text_encoder"));
+        assert_eq!(ModelKind::Lora.default_role(), None);
         assert_eq!(ModelKind::Chat.default_role(), None);
     }
 }

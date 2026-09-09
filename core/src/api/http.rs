@@ -31,6 +31,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/jobs/{id}/cancel", post(cancel_job))
         .route("/jobs/{id}/output", get(job_output))
         .route("/models", get(list_models).post(import_model))
+        .route("/models/known", get(known_models))
         .route("/runtimes", get(runtimes))
         .route("/runtimes/llamacpp/install", post(install_llamacpp))
         .route("/runtimes/comfyui/install", post(install_comfyui))
@@ -189,6 +190,10 @@ async fn job_output(State(app): AppState, Path(id): Path<String>) -> Result<Resp
 
 async fn list_models(State(app): AppState) -> Result<Json<Vec<crate::db::Model>>, ApiError> {
     Ok(Json(handlers::list_models(&app).await?))
+}
+
+async fn known_models(State(app): AppState) -> Json<&'static [crate::model::KnownModel]> {
+    Json(handlers::known_models(&app))
 }
 
 async fn import_model(
