@@ -635,4 +635,39 @@ mod tests {
             .unwrap();
         assert_eq!(stop.status(), 204);
     }
+
+    #[tokio::test]
+    async fn agent_runtimes_lists_opencode_and_hermes() {
+        let (app, _tmp) = test_app().await;
+        let server = ApiServer::bind(app, SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
+            .await
+            .unwrap();
+        let list: serde_json::Value =
+            reqwest::get(format!("http://{}/agent-runtimes", server.addr))
+                .await
+                .unwrap()
+                .json()
+                .await
+                .unwrap();
+        let arr = list.as_array().unwrap();
+        assert_eq!(arr.len(), 2);
+        let hermes = arr.iter().find(|r| r["id"] == "hermes").unwrap();
+        assert_eq!(hermes["installed"], false); // nothing installed in a test app
+        assert_eq!(hermes["install"]["state"], "idle");
+        // opencode has no AIWM installer → no `install` field.
+        let opencode = arr.iter().find(|r| r["id"] == "opencode").unwrap();
+        assert!(opencode.get("install").is_none());
+    }
+
+    #[tokio::test]
+    async fn install_hermes_refuses_in_offline_mode() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = crate::AppPaths::rooted(tmp.path());
+        std::fs::create_dir_all(paths.root()).unwrap();
+        std::fs::write(paths.config_file(), "offline_mode = true\n").unwrap();
+        let app = Arc::new(App::load(paths).await.unwrap());
+
+        let err = handlers::install_hermes(&app).unwrap_err();
+        assert!(err.to_string().contains("offline mode"));
+    }
 }

@@ -3,7 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::agent::PermissionDecision;
+use crate::agent::{HermesInstallStatus, PermissionDecision};
 use crate::config::{ComfyConfig, LlamaConfig};
 use crate::db::{AgentSession, AgentSessionEvent, Job, JobEvent};
 use crate::runtime::{Health, RuntimeKind};
@@ -122,4 +122,15 @@ pub struct AgentSessionDetailDto {
     pub events: Vec<AgentSessionEvent>,
     /// Whether this process is currently driving the session.
     pub live: bool,
+}
+
+/// One agent runtime's availability — `GET /agent-runtimes`. Only Hermes has an
+/// AIWM-driven installer; OpenCode's `install` is `null` (bring your own).
+#[derive(Debug, Clone, Serialize)]
+pub struct AgentRuntimeDto {
+    /// `"opencode"` | `"hermes"`.
+    pub id: String,
+    pub installed: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub install: Option<HermesInstallStatus>,
 }

@@ -404,3 +404,27 @@ export const agentSessionPermission = (
   });
 export const stopAgentSession = (id: string) =>
   invoke<void>("stop_agent_session", { id });
+
+/** Hermes install progress (`GET /agent-runtimes` → `install`). */
+export type AgentInstallStatus =
+  | { state: "idle" }
+  | {
+      state: "running";
+      phase: "downloading" | "creating_venv" | "installing_hermes" | "post_install";
+      done_bytes: number;
+      total_bytes: number;
+    }
+  | { state: "failed"; error: string };
+
+/** One agent runtime's availability. Only Hermes has an AIWM installer;
+ *  OpenCode's `install` is absent (bring your own `opencode`). */
+export interface AgentRuntime {
+  id: "opencode" | "hermes";
+  installed: boolean;
+  install?: AgentInstallStatus;
+}
+
+export const listAgentRuntimes = () =>
+  invoke<AgentRuntime[]>("list_agent_runtimes");
+/** Start the Hermes install (background). "started" | "already_installed". */
+export const installHermes = () => invoke<string>("install_hermes");

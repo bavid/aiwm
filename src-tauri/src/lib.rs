@@ -90,6 +90,18 @@ async fn install_comfyui(app: tauri::State<'_, Arc<App>>) -> Result<String, Stri
 }
 
 #[tauri::command]
+async fn install_hermes(app: tauri::State<'_, Arc<App>>) -> Result<String, String> {
+    to_ipc(handlers::install_hermes(&app).map(str::to_string))
+}
+
+#[tauri::command]
+async fn list_agent_runtimes(
+    app: tauri::State<'_, Arc<App>>,
+) -> Result<Vec<aiwm_core::api::dto::AgentRuntimeDto>, String> {
+    Ok(handlers::agent_runtimes(&app))
+}
+
+#[tauri::command]
 async fn cancel_job(app: tauri::State<'_, Arc<App>>, id: String) -> Result<Option<bool>, String> {
     to_ipc(handlers::cancel_job(&app, &id).await)
 }
@@ -239,6 +251,8 @@ fn try_run() -> anyhow::Result<()> {
             import_model,
             install_llamacpp,
             install_comfyui,
+            install_hermes,
+            list_agent_runtimes,
             cancel_job,
             submit_job,
             job_detail,

@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use tracing_appender::non_blocking::WorkerGuard;
 
-use crate::agent::OpenCodeAdapter;
+use crate::agent::{HermesAgentAdapter, OpenCodeAdapter};
 use crate::capability::agent::{AgentSessions, LlamaCodingRuntime};
 use crate::config::{Config, FALLBACK_VRAM_BUDGET_MB};
 use crate::db::{now_rfc3339, Database};
@@ -42,6 +42,10 @@ pub struct App {
     pub jobs: Arc<JobEngine>,
     /// Long-running agent sessions (Phase 5.1c) — its own subsystem, not a job.
     pub agents: Arc<AgentSessions>,
+    /// The agent adapters, also registered on [`agents`](Self::agents). Held
+    /// typed so handlers can report install state and drive Hermes' installer.
+    pub opencode: Arc<OpenCodeAdapter>,
+    pub hermes: Arc<HermesAgentAdapter>,
     /// Live offline switch (ADR-009). Seeded from `config.offline_mode`; the
     /// Settings UI flips it without a restart, and every outbound-call site
     /// checks [`offline`](Self::offline) rather than `config.offline_mode`.
@@ -94,9 +98,12 @@ impl App {
             scheduler.clone(),
             llama.clone(),
         ));
+        let opencode = Arc::new(OpenCodeAdapter::discover(&paths.runtimes_dir()));
+        let hermes = Arc::new(HermesAgentAdapter::discover(&paths.runtimes_dir()));
         let agents = Arc::new(
             AgentSessions::new(db.clone(), coding)
-                .with_adapter(Arc::new(OpenCodeAdapter::discover(&paths.runtimes_dir()))),
+                .with_adapter(opencode.clone())
+                .with_adapter(hermes.clone()),
         );
         let offline = Arc::new(AtomicBool::new(config.offline_mode));
 
@@ -111,6 +118,8 @@ impl App {
             scheduler,
             jobs,
             agents,
+            opencode,
+            hermes,
             offline,
         })
     }

@@ -37,6 +37,8 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/runtimes", get(runtimes))
         .route("/runtimes/llamacpp/install", post(install_llamacpp))
         .route("/runtimes/comfyui/install", post(install_comfyui))
+        .route("/runtimes/hermes/install", post(install_hermes))
+        .route("/agent-runtimes", get(agent_runtimes))
         .route("/agents", get(list_agents).post(create_agent))
         .route("/agents/{id}", axum::routing::delete(delete_agent))
         .route("/agent-sessions", post(open_agent_session))
@@ -225,6 +227,16 @@ async fn import_model(
 
 async fn runtimes(State(app): AppState) -> Json<Vec<super::dto::RuntimeStatusDto>> {
     Json(handlers::runtimes(&app).await)
+}
+
+async fn install_hermes(
+    State(app): AppState,
+) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    install_status(handlers::install_hermes(&app)?)
+}
+
+async fn agent_runtimes(State(app): AppState) -> Json<Vec<super::dto::AgentRuntimeDto>> {
+    Json(handlers::agent_runtimes(&app))
 }
 
 // --- agents (Phase 5.1c) ---------------------------------------------------

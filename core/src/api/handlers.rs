@@ -244,6 +244,52 @@ pub fn install_comfyui(app: &App) -> Result<&'static str> {
     Ok("started")
 }
 
+/// Kick off the pinned Hermes install (`uv` venv + `hermes-agent` + a
+/// best-effort `hermes postinstall`) in the background. Same contract as
+/// [`install_comfyui`].
+pub fn install_hermes(app: &App) -> Result<&'static str> {
+    if app.offline() {
+        return Err(CoreError::Config(
+            "offline mode is on — cannot download Hermes".into(),
+        ));
+    }
+    if app.hermes.is_installed() {
+        return Ok("already_installed");
+    }
+    if app.hermes.is_installing() {
+        return Err(CoreError::Config(
+            "a Hermes install is already running".into(),
+        ));
+    }
+
+    let hermes = app.hermes.clone();
+    let offline = app.offline();
+    tokio::spawn(async move {
+        if let Err(e) = hermes.install(offline).await {
+            tracing::error!(error = %e, "Hermes install failed");
+        }
+    });
+    Ok("started")
+}
+
+/// Availability of the agent runtimes (`GET /agent-runtimes`). The UI's profile
+/// form uses `installed` to enable each runtime option.
+pub fn agent_runtimes(app: &App) -> Vec<crate::api::dto::AgentRuntimeDto> {
+    use crate::api::dto::AgentRuntimeDto;
+    vec![
+        AgentRuntimeDto {
+            id: "opencode".into(),
+            installed: app.opencode.is_installed(),
+            install: None,
+        },
+        AgentRuntimeDto {
+            id: "hermes".into(),
+            installed: app.hermes.is_installed(),
+            install: Some(app.hermes.install_state()),
+        },
+    ]
+}
+
 // --- agents (Phase 5.1c) ---------------------------------------------------
 
 pub async fn create_agent(app: &App, body: NewAgentDto) -> Result<Agent> {

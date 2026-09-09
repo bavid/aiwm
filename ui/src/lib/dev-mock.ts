@@ -71,6 +71,7 @@ type DevSession = {
   firstMessage?: string | null;
 };
 let DEV_SESSION: DevSession | null = null;
+let HERMES_INSTALLED = false;
 
 function devSession(): AnyRecord {
   const s = DEV_SESSION!;
@@ -165,6 +166,14 @@ export function installDevMock(): void {
         return true;
       case "list_agents":
         return AGENTS;
+      case "list_agent_runtimes":
+        return [
+          { id: "opencode", installed: true },
+          { id: "hermes", installed: HERMES_INSTALLED, install: { state: "idle" } },
+        ];
+      case "install_hermes":
+        HERMES_INSTALLED = true;
+        return "started";
       case "create_agent": {
         const body = (a.body ?? {}) as AnyRecord;
         const agent = {
