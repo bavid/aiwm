@@ -6,10 +6,13 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
-use aiwm_core::api::dto::{AboutDto, ConfigUpdate, JobDetailDto, RuntimeStatusDto, SubmitJobDto};
+use aiwm_core::api::dto::{
+    AboutDto, AgentPermissionDto, AgentSessionDetailDto, ConfigUpdate, JobDetailDto, NewAgentDto,
+    OpenAgentSessionDto, RuntimeStatusDto, SubmitJobDto,
+};
 use aiwm_core::api::handlers;
 use aiwm_core::config::Config;
-use aiwm_core::db::{Job, JobFilter, Model};
+use aiwm_core::db::{Agent, AgentSession, Job, JobFilter, Model};
 use aiwm_core::model::{ImportOutcome, ImportRequest};
 use aiwm_core::orchestrator::JobState;
 use aiwm_core::telemetry::SystemTelemetry;
@@ -130,6 +133,62 @@ fn get_recent_logs(
     to_ipc(handlers::recent_logs(&app, lines.unwrap_or(200)))
 }
 
+// --- agents (Phase 5.1c) ---
+
+#[tauri::command]
+async fn list_agents(app: tauri::State<'_, Arc<App>>) -> Result<Vec<Agent>, String> {
+    to_ipc(handlers::list_agents(&app).await)
+}
+
+#[tauri::command]
+async fn create_agent(app: tauri::State<'_, Arc<App>>, body: NewAgentDto) -> Result<Agent, String> {
+    to_ipc(handlers::create_agent(&app, body).await)
+}
+
+#[tauri::command]
+async fn delete_agent(app: tauri::State<'_, Arc<App>>, id: String) -> Result<(), String> {
+    to_ipc(handlers::delete_agent(&app, &id).await)
+}
+
+#[tauri::command]
+async fn open_agent_session(
+    app: tauri::State<'_, Arc<App>>,
+    body: OpenAgentSessionDto,
+) -> Result<AgentSession, String> {
+    to_ipc(handlers::open_agent_session(&app, body).await)
+}
+
+#[tauri::command]
+async fn agent_session_detail(
+    app: tauri::State<'_, Arc<App>>,
+    id: String,
+) -> Result<Option<AgentSessionDetailDto>, String> {
+    to_ipc(handlers::agent_session_detail(&app, &id).await)
+}
+
+#[tauri::command]
+async fn agent_session_message(
+    app: tauri::State<'_, Arc<App>>,
+    id: String,
+    text: String,
+) -> Result<(), String> {
+    to_ipc(handlers::agent_session_message(&app, &id, &text).await)
+}
+
+#[tauri::command]
+async fn agent_session_permission(
+    app: tauri::State<'_, Arc<App>>,
+    id: String,
+    body: AgentPermissionDto,
+) -> Result<(), String> {
+    to_ipc(handlers::agent_session_permission(&app, &id, body).await)
+}
+
+#[tauri::command]
+async fn stop_agent_session(app: tauri::State<'_, Arc<App>>, id: String) -> Result<(), String> {
+    to_ipc(handlers::stop_agent_session(&app, &id).await)
+}
+
 pub fn run() {
     if let Err(err) = try_run() {
         eprintln!("aiwm-tauri: fatal: {err}");
@@ -182,7 +241,15 @@ fn try_run() -> anyhow::Result<()> {
             install_comfyui,
             cancel_job,
             submit_job,
-            job_detail
+            job_detail,
+            list_agents,
+            create_agent,
+            delete_agent,
+            open_agent_session,
+            agent_session_detail,
+            agent_session_message,
+            agent_session_permission,
+            stop_agent_session
         ])
         .build(tauri::generate_context!())?
         .run(|handle, event| {

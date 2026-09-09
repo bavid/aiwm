@@ -70,6 +70,11 @@ importiert; bei SHA-256-Treffer stempelt `import_model`
 `publisher`/`family`/`source_revision = catalog:<id>`. Details + empfohlene
 Settings: [IMAGE_MODELS.md](IMAGE_MODELS.md) / [VIDEO_MODELS.md](VIDEO_MODELS.md).
 
+Für **Agent-Sessions** (Phase 5) braucht es ein Chat-GGUF mit der zusätzlichen
+Rolle **`coding`** und verlässlichem Tool-Calling (`llama-server --jinja`).
+Kandidaten + Import + Smoke: [AGENT_MODELS.md](AGENT_MODELS.md). Noch nicht im
+`KNOWN_MODELS`-Katalog (Phase 6).
+
 ## Status
 
 | Feature | Stand |

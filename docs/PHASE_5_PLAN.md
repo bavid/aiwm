@@ -36,7 +36,7 @@ Export/Import bringt Config + DB + Agent-Profil auf eine zweite Maschine.
 | **5.1a** | **Agent-Fundament**: `core::agent` (`AgentAdapter`-Trait, `AgentEvent`/`SessionSpec`/`PermissionDecision`, `FakeAgentAdapter`), Migration `0005` (`agents`, `agent_sessions`, `agent_session_events`) + `db::AgentRepo`. `LlamaServerOptions.jinja`/`chat_template` (+ `[llama]`-Config, Settings-UI) — `--jinja` default an (Tool-Calls). | ✅ |
 | **5.1b** | **OpenCode-Adapter** (nur der Adapter, gegen ein Fixture): `opencode serve --port … --hostname 127.0.0.1` unter `RuntimeSupervisor`, **ein Prozess pro Session**, `cwd` = Workspace; Config **erzwungen** über `OPENCODE_CONFIG_CONTENT` (custom provider → `spec.endpoint.base_url`, `enabled_providers: ["local"]` + `disabled_providers: ["opencode",…]`, `permission` alles `ask`, `webfetch: deny`, `tools.webfetch: false`). `AgentAdapter` für OpenCode: `open_session` / `send` (`POST /session/:id/prompt_async`) / `events` (`GET /event` SSE → `AgentEvent`, mit `roles`-Cache gegen Echo) / `reply_permission` (`POST /permission/{id}/reply`) / `interrupt` (`abort`) / `close_session` (`DELETE /session/:id`). `aiwm-fake-opencode`-Fixture + Integrationstest (open → send → approve → idle, sowie deny). | ✅ |
 | **5.1ca** | **Agent-Subsystem (Core, ohne API)**: `capability::agent::AgentSessions` — eigenes Subsystem, **kein** Job (läuft nicht im Job-Loop). `open` → Coding-Modell auflösen (`coding`-Rolle \| explizit) → `CodingRuntime`-Trait platziert+pinnt es (`HybridScheduler::plan` → load/evict → `pin`, `LlamaCppAdapter::base_url()` neu+public) → `adapter.open_session` gegen `<llama>/v1` → Event-Drain-Task (`AgentEvent` → `agent_session_events` + `agent_sessions.state`). `message`/`reply`/`interrupt`/`stop` (stop = `close_session` + unpin + unload). MVP: **eine Session gleichzeitig**. Integrationstest `agent_session.rs` (fake-llama + fake-opencode, open→send→approve→idle→stop). | ✅ |
-| **5.1cb** | **Agent-Vertikale (API/UI-Anbindung)**: `App` hält `AgentSessions` + Adapter-Registry (`OpenCodeAdapter::discover`); API `POST /agents`, `GET /agents`, `POST /agent-sessions`, `GET /agent-sessions/:id`, `POST /agent-sessions/:id/message`, `POST /agent-sessions/:id/permission`, `POST /agent-sessions/:id/stop` + Tauri-Commands + DTOs. `docs/AGENT_MODELS.md` + **Smoke mit echtem Qwen2.5-Coder-GGUF**. | offen |
+| **5.1cb** | **Agent-Vertikale (API/UI-Anbindung)**: `App.agents` = `AgentSessions` + `OpenCodeAdapter::discover`; API `GET/POST /agents`, `DELETE /agents/:id`, `POST /agent-sessions`, `GET /agent-sessions/:id`, `POST /agent-sessions/:id/{message,permission,stop}` + DTOs + 8 Tauri-Commands + `ipc.ts`/dev-mock. `docs/AGENT_MODELS.md` mit kuratierten Kandidaten + manueller Smoke-Prozedur. Echter Qwen2.5-Coder-GGUF-Lauf = manuell (dokumentiert, wie 4.0). | ✅ |
 | 5.2 | **Sandkasten**: Approval-Fluss — der SSE-Stream trägt `permission`-Events → Core reicht sie durch → UI „Agent will ausführen: `<cmd>` — Allow / Deny / Always" → Core `POST`t die Entscheidung. **Pfad-Allowlist**: `cwd` + OpenCode-`permission` verbietet Edits außerhalb; Lese-Extras optional read-only. **Offline erzwungen**: `offline_mode` → Netz-Tools hart aus, dokumentiert dass echte Prozess-Isolation vertagt ist. Secrets: kein `.env` / keine Keys in der Agent-Env (Dummy-`apiKey`). | offen |
 | 5.3 | **Agents-UI-Tab**: Profil-Liste + „New profile" (Runtime, Modell [Auto über `coding`], Workspace-Ordner-Picker, erlaubte Pfade, Toolset); Session-Ansicht — Transkript mit Tool-Call-Karten (Datei-Diffs, Shell-Output), Approval-Prompts inline, „Stop"; „Coding"-Dashboard-Button aktiv. Workspace-Registry (Pfad + Label) im Core. | offen |
 | 5.4 | **Hermes-Agent-Adapter**: `uv`-Installer (gepinnte Version) → gemanagtes Profil unter `<data>/agents/hermes/` (`HERMES_HOME`/`-p <profil>`); `config.yaml` **erzwungen** (`provider: custom`, `base_url` = `llama-server`, `security.redact_secrets`, Workspace, `HERMES_STREAM_READ_TIMEOUT=1800`). Treiben über Hermes' HTTP-Server (`/v1/responses` / `/api/jobs`) **oder** `hermes chat -q` pro Turn. Memory (`MEMORY.md`) + Skills leben im Profil-Ordner → Backup (5.5). `bash -l` per 5.0-Entscheidung. | offen |
@@ -335,6 +335,49 @@ Verifiziert:
   → `permission`-Event parkt die Session → approve → `tool`/`text`/`idle` → stop
   entpinnt + entlädt; plus Deny-Variante. **40 Integrationstests.**
 - `check.ps1` grün.
+
+---
+
+## 5.1cb — Ergebnis (abgeschlossen)
+
+Die Anbindung — `AgentSessions` hängt jetzt in `App`, ist über beide Transporte
+erreichbar. Kein UI-Tab (das ist 5.3); die Smoke ist eine dokumentierte
+`curl`-Prozedur.
+
+- **`App.agents`**: `App::load` baut `LlamaCodingRuntime` + `AgentSessions::new`
+  `.with_adapter(OpenCodeAdapter::discover(&paths.runtimes_dir()))`. Kein Job-Loop
+  nötig (die Drain-Tasks sind selbständig); `Services`/`spawn` unverändert.
+- **DTOs** (`api/dto.rs`): `NewAgentDto`, `OpenAgentSessionDto`, `AgentMessageDto`,
+  `AgentPermissionDto` (`decision` = `PermissionDecision` serde), `AgentSessionDetailDto`
+  (`{ session, events, live }`).
+- **Handlers** (`api/handlers.rs`): `create_agent` (trim + `AgentKind::from_adapter`
+  validiert → 400), `list_agents`, `delete_agent`, `open_agent_session`,
+  `agent_session_detail` (`None` → 404), `agent_session_message` (leerer Text →
+  400), `agent_session_permission`, `stop_agent_session`.
+- **HTTP** (`api/http.rs`): `GET/POST /agents`, `DELETE /agents/{id}`,
+  `POST /agent-sessions`, `GET /agent-sessions/{id}`,
+  `POST /agent-sessions/{id}/{message,permission,stop}`. `ApiError` mappt jetzt
+  `CoreError::SchedulerBlocked` → 400 (VRAM-Klartext ist client-actionable);
+  „already running" / „no coding model" sind `CoreError::Config` → 400.
+- **Tauri** (`src-tauri/src/lib.rs`): 8 `#[tauri::command]`s + `generate_handler!`.
+- **UI-Bindings** (`ui/src/lib/ipc.ts`): `Agent` / `AgentSession` /
+  `AgentSessionEvent` / `AgentSessionDetail` / `PermissionDecision` Typen +
+  `listAgents` / `createAgent` / `deleteAgent` / `openAgentSession` /
+  `agentSessionDetail` / `agentSessionMessage` / `agentSessionPermission` /
+  `stopAgentSession`. `dev-mock.ts` beantwortet alle acht (skriptet eine
+  `awaiting_approval`-Session für den späteren Tab).
+- **`docs/AGENT_MODELS.md`** (neu): `coding`-Rolle, Auflösungsreihenfolge,
+  kuratierte GGUF-Kandidaten (Qwen2.5-Coder-7B als `Auto`-Empfehlung), Import-
+  Schritte, die manuelle Smoke-Prozedur + Kalibrier-Checkliste.
+
+Verifiziert:
+- **+4 Lib-Tests** (`api::tests` — Profil-CRUD über HTTP inkl. Trim; `create_agent`
+  lehnt leeren Namen + unbekannten Adapter mit 400 ab; `open_agent-session` ohne
+  Coding-Modell = 400 mit „coding" im Body; `GET /agent-sessions/nope` = 404 +
+  `stop` idempotent 204) → **270 Lib-Tests**. `check.ps1` grün (inkl.
+  `pnpm typecheck`/`lint`).
+- **Der echte GGUF-Lauf ist manuell** (dokumentiert) — kein persistentes
+  `opencode`+Coding-Modell-Setup im Repo, analog Slice 4.0.
 
 ---
 

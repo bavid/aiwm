@@ -293,3 +293,92 @@ export const importModel = (
       model_type: modelType,
     },
   });
+
+// --- agents (Phase 5.1c) ---------------------------------------------------
+
+/** A stored agent profile (`GET /agents`). */
+export interface Agent {
+  id: string;
+  name: string;
+  /** `"opencode"` (Hermes lands in 5.4). */
+  adapter: string;
+  /** Explicit coding model, or `null` for Auto over the `coding` role. */
+  model_id: string | null;
+  workspace_path: string;
+  allowed_paths: string[];
+  toolset: string[] | null;
+  created_at: string;
+}
+
+export interface NewAgentBody {
+  name: string;
+  adapter: string;
+  model_id?: string | null;
+  workspace_path: string;
+  allowed_paths?: string[];
+  toolset?: string[] | null;
+}
+
+export type AgentSessionState =
+  | "starting"
+  | "idle"
+  | "working"
+  | "awaiting_approval"
+  | "stopped"
+  | "failed";
+
+export interface AgentSession {
+  id: string;
+  agent_id: string;
+  adapter_session_id: string | null;
+  state: AgentSessionState;
+  error_text: string | null;
+  checkpoint_path: string | null;
+  started_at: string;
+  ended_at: string | null;
+}
+
+/** One transcript entry. `payload` shape depends on `kind` — see the Rust
+ *  `AgentEvent` (`text` / `tool` / `permission` / `idle` / `error`). */
+export interface AgentSessionEvent {
+  ts: string;
+  kind: string;
+  payload: unknown;
+}
+
+export interface AgentSessionDetail {
+  session: AgentSession;
+  events: AgentSessionEvent[];
+  /** Whether the core is currently driving this session in-process. */
+  live: boolean;
+}
+
+export type PermissionDecision = "allow_once" | "allow_always" | "deny";
+
+export const listAgents = () => invoke<Agent[]>("list_agents");
+export const createAgent = (body: NewAgentBody) =>
+  invoke<Agent>("create_agent", { body });
+export const deleteAgent = (id: string) =>
+  invoke<void>("delete_agent", { id });
+
+/** Open a session for a profile and (optionally) send the first turn. The
+ *  coding model is placed + pinned before this returns. */
+export const openAgentSession = (agentId: string, firstMessage?: string) =>
+  invoke<AgentSession>("open_agent_session", {
+    body: { agent_id: agentId, first_message: firstMessage ?? null },
+  });
+export const agentSessionDetail = (id: string) =>
+  invoke<AgentSessionDetail | null>("agent_session_detail", { id });
+export const agentSessionMessage = (id: string, text: string) =>
+  invoke<void>("agent_session_message", { id, text });
+export const agentSessionPermission = (
+  id: string,
+  requestId: string,
+  decision: PermissionDecision,
+) =>
+  invoke<void>("agent_session_permission", {
+    id,
+    body: { request_id: requestId, decision },
+  });
+export const stopAgentSession = (id: string) =>
+  invoke<void>("stop_agent_session", { id });

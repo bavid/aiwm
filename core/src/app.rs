@@ -6,6 +6,8 @@ use std::sync::Arc;
 
 use tracing_appender::non_blocking::WorkerGuard;
 
+use crate::agent::OpenCodeAdapter;
+use crate::capability::agent::{AgentSessions, LlamaCodingRuntime};
 use crate::config::{Config, FALLBACK_VRAM_BUDGET_MB};
 use crate::db::{now_rfc3339, Database};
 use crate::orchestrator::JobEngine;
@@ -38,6 +40,8 @@ pub struct App {
     pub comfyui: Arc<ComfyUiAdapter>,
     pub scheduler: Arc<HybridScheduler>,
     pub jobs: Arc<JobEngine>,
+    /// Long-running agent sessions (Phase 5.1c) — its own subsystem, not a job.
+    pub agents: Arc<AgentSessions>,
     /// Live offline switch (ADR-009). Seeded from `config.offline_mode`; the
     /// Settings UI flips it without a restart, and every outbound-call site
     /// checks [`offline`](Self::offline) rather than `config.offline_mode`.
@@ -85,6 +89,15 @@ impl App {
             comfyui.clone(),
             paths.outputs_dir(),
         ));
+        let coding = Arc::new(LlamaCodingRuntime::new(
+            runtimes.clone(),
+            scheduler.clone(),
+            llama.clone(),
+        ));
+        let agents = Arc::new(
+            AgentSessions::new(db.clone(), coding)
+                .with_adapter(Arc::new(OpenCodeAdapter::discover(&paths.runtimes_dir()))),
+        );
         let offline = Arc::new(AtomicBool::new(config.offline_mode));
 
         Ok(Self {
@@ -97,6 +110,7 @@ impl App {
             comfyui,
             scheduler,
             jobs,
+            agents,
             offline,
         })
     }

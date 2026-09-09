@@ -55,6 +55,13 @@ const RUNTIMES: AnyRecord[] = [
   { id: "comfyui", kind: "comfy_ui", health: "healthy", vram_used_mb: 0, detail: "running on :48096 · ComfyUI 0.34.0 · model reserved" },
 ];
 
+const AGENTS: AnyRecord[] = [
+  {
+    id: "a-coder", name: "Repo coder", adapter: "opencode", model_id: null,
+    workspace_path: "E:\\AI", allowed_paths: [], toolset: null, created_at: now(),
+  },
+];
+
 const ABOUT: AnyRecord = {
   core_version: "0.0.1-dev", data_dir: "E:\\AI\\data", store_path: "E:\\AI\\models",
   outputs_dir: "E:\\AI\\data\\outputs", outputs_bytes: 4_812_300_000,
@@ -122,6 +129,46 @@ export function installDevMock(): void {
       }
       case "cancel_job":
         return true;
+      case "list_agents":
+        return AGENTS;
+      case "create_agent": {
+        const body = (a.body ?? {}) as AnyRecord;
+        const agent = {
+          id: `a-dev-${seq++}`, name: String(body.name ?? "Agent"),
+          adapter: String(body.adapter ?? "opencode"), model_id: body.model_id ?? null,
+          workspace_path: String(body.workspace_path ?? "E:\\AI"),
+          allowed_paths: body.allowed_paths ?? [], toolset: body.toolset ?? null,
+          created_at: now(),
+        };
+        AGENTS.unshift(agent);
+        return agent;
+      }
+      case "delete_agent":
+        return null;
+      case "open_agent_session":
+        return {
+          id: `s-dev-${seq++}`, agent_id: String((a.body as AnyRecord)?.agent_id ?? "a-coder"),
+          adapter_session_id: "ses_dev", state: "working", error_text: null,
+          checkpoint_path: null, started_at: now(), ended_at: null,
+        };
+      case "agent_session_detail":
+        return {
+          session: {
+            id: String(a.id), agent_id: "a-coder", adapter_session_id: "ses_dev",
+            state: "awaiting_approval", error_text: null, checkpoint_path: null,
+            started_at: now(), ended_at: null,
+          },
+          events: [
+            { ts: now(), kind: "text", payload: { type: "text", text: "I'll read the README first." } },
+            { ts: now(), kind: "tool", payload: { type: "tool", id: "c1", name: "bash", status: "running", input: { command: "cat README.md" } } },
+            { ts: now(), kind: "permission", payload: { type: "permission", id: "per_1", kind: "bash", summary: "cat README.md", always_pattern: "cat *" } },
+          ],
+          live: true,
+        };
+      case "agent_session_message":
+      case "agent_session_permission":
+      case "stop_agent_session":
+        return null;
       default:
         if (cmd.startsWith("plugin:")) return null; // opener plugin etc. — no-op
         console.warn("dev-mock: unhandled command", cmd);

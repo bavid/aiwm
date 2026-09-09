@@ -174,8 +174,8 @@ impl AgentSessions {
     /// as the opening turn once the session is live.
     pub async fn open(&self, agent_id: &str, first_message: Option<&str>) -> Result<AgentSession> {
         if !lock(&self.live).is_empty() {
-            return Err(agent_err(
-                "an agent session is already running — stop it before starting another",
+            return Err(CoreError::Config(
+                "an agent session is already running — stop it before starting another".into(),
             ));
         }
 
@@ -297,17 +297,20 @@ impl AgentSessions {
 
     async fn resolve_model(&self, explicit: Option<&str>) -> Result<Model> {
         match explicit {
-            Some(id) => self
+            Some(id) => self.db.models().get(id).await?.ok_or_else(|| {
+                CoreError::Config(format!("the profile's model {id} is not in the library"))
+            }),
+            None => self
                 .db
                 .models()
-                .get(id)
+                .pick_for_role("coding")
                 .await?
-                .ok_or_else(|| agent_err(format!("the profile's model {id} is not in the library"))),
-            None => self.db.models().pick_for_role("coding").await?.ok_or_else(|| {
-                agent_err(
-                    "no model carries the 'coding' role — import a coding GGUF and mark it 'coding'",
+                .ok_or_else(|| {
+                    CoreError::Config(
+                    "no model carries the 'coding' role — import a coding GGUF and mark it 'coding'"
+                        .into(),
                 )
-            }),
+                }),
         }
     }
 
@@ -368,7 +371,11 @@ impl AgentSessions {
         lock(&self.live)
             .get(session_id)
             .map(|l| (l.kind, l.adapter_session_id.clone()))
-            .ok_or_else(|| agent_err(format!("session {session_id} is not running")))
+            .ok_or_else(|| {
+                CoreError::Config(format!(
+                    "session {session_id} is not running — open a new one"
+                ))
+            })
     }
 }
 

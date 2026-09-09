@@ -31,7 +31,7 @@ noch keine echte AI-Capability (die kommt ab Phase 2).
 | WP-9 | CI-Workflow, Git-Hooks (pre-commit fmt, pre-push voller Gate) |
 | WP-10 | ADRs finalisiert, Stub-Docs (MODELS/RUNTIMES/SECURITY/BENCHMARKS) |
 
-**266 Rust-Unit + 40 Integrationstests + 5 pytest** grün · `scripts/check.ps1` grün ·
+**270 Rust-Unit + 40 Integrationstests + 5 pytest** grün · `scripts/check.ps1` grün ·
 **null `unsafe`** im Produktivcode.
 
 **Phase 2 (MVP) ✅ abgeschlossen** — Scheiben 2.1–2.7 + durchgehender
@@ -44,7 +44,7 @@ echten 4080 (alle Smokes fuhren gegen die Fake-ComfyUI).
 gebaut). **Offen: 4.0** — die echte ComfyUI auf der 4080 verproben (cu130-Treiber,
 GGUF-Ordner-Keys, `SaveVideo`/`av`, Zeit/VRAM kalibrieren) — läuft vermutlich an
 der echten Maschine. Plan + Research: [docs/PHASE_4_PLAN.md](docs/PHASE_4_PLAN.md).
-**Phase 5 (Agents) — Plan + 5.0 + 5.1a + 5.1b + 5.1ca ✅:** [docs/PHASE_5_PLAN.md](docs/PHASE_5_PLAN.md),
+**Phase 5 (Agents) — Plan + 5.0 + 5.1a + 5.1b + 5.1c ✅:** [docs/PHASE_5_PLAN.md](docs/PHASE_5_PLAN.md),
 **ADR-021**. Nicht selbst bauen — **OpenCode** (`opencode serve`, Adapter 1) +
 **Hermes Agent** (Nous Research, Adapter 2) orchestrieren und sandboxen,
 Endpoint = lokaler `llama-server --jinja`. Sandkasten = Pfad-Allowlist +
@@ -70,7 +70,13 @@ Command-Approval (UI) + erzwungene Offline-Config.
   `LlamaCppAdapter::base_url()`), dann `adapter.open_session` gegen `<llama>/v1`;
   ein Drain-Task schreibt `AgentEvent`s in `agent_session_events` und führt
   `agent_sessions.state`. `stop` = entpinnen + entladen. MVP: eine Session
-  gleichzeitig. Integrationstest fake-llama + fake-opencode. API/UI = 5.1cb.
+  gleichzeitig. Integrationstest fake-llama + fake-opencode.
+- **5.1cb** ✅ **Agent-API**: `App.agents` + API `GET/POST /agents`,
+  `POST /agent-sessions`, `GET /agent-sessions/:id`,
+  `POST /agent-sessions/:id/{message,permission,stop}` + 8 Tauri-Commands +
+  `ipc.ts`-Bindings. [`docs/AGENT_MODELS.md`](docs/AGENT_MODELS.md) — kuratierte
+  Coding-GGUFs (Qwen2.5-Coder-7B als `Auto`) + manuelle Smoke-Prozedur. Der echte
+  GGUF-Lauf ist manuell (wie 4.0). UI-Tab = 5.3.
 
 - **4.1** ✅ **`capability::video`**: `job_type=video` → feste `wan_ti2v`-Pipeline
   (`WanImageToVideo` → `KSampler` → `VAEDecode` → `CreateVideo` → `SaveVideo`,
@@ -225,6 +231,7 @@ pnpm -C ui exec tauri dev                 # Desktop-App (aus E:\AI ausführen)
 | [docs/PHASE_4_PLAN.md](docs/PHASE_4_PLAN.md) | Phase-4-Scheibenplan (Video) + Research |
 | [docs/PHASE_5_PLAN.md](docs/PHASE_5_PLAN.md) | Phase-5-Scheibenplan (Agents: OpenCode + Hermes) + Research |
 | [docs/VIDEO_MODELS.md](docs/VIDEO_MODELS.md) | Video-Modelle — kuratierte Liste (Wan 2.2, LTX-Video) |
+| [docs/AGENT_MODELS.md](docs/AGENT_MODELS.md) | Agent-Coding-GGUFs (`coding`-Rolle, Tool-Calling) + manuelle Smoke-Prozedur |
 | [docs/DEV_SETUP.md](docs/DEV_SETUP.md) | Toolchain-Installation, Build-/Test-Befehle, Git-Hooks, CI |
 | [docs/DECISIONS.md](docs/DECISIONS.md) | Architecture Decision Records (ADRs) |
 | [docs/RISKS.md](docs/RISKS.md) | Risikoregister mit Gegenmaßnahmen |

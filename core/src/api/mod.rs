@@ -502,4 +502,137 @@ mod tests {
         }
         panic!("job loop did not complete the job");
     }
+
+    // --- agents (Phase 5.1c) ---
+
+    #[tokio::test]
+    async fn agent_profiles_crud_over_http() {
+        let (app, _tmp) = test_app().await;
+        let server = ApiServer::bind(app, SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
+            .await
+            .unwrap();
+        let base = format!("http://{}", server.addr);
+        let http = reqwest::Client::new();
+
+        let created: serde_json::Value = http
+            .post(format!("{base}/agents"))
+            .json(&serde_json::json!({
+                "name": "  Repo coder  ",
+                "adapter": "opencode",
+                "workspace_path": "E:\\proj",
+            }))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(created["name"], "Repo coder"); // trimmed
+        assert_eq!(created["adapter"], "opencode");
+        assert!(created["model_id"].is_null());
+        let id = created["id"].as_str().unwrap().to_string();
+
+        let list: serde_json::Value = reqwest::get(format!("{base}/agents"))
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(list.as_array().unwrap().len(), 1);
+
+        let del = http
+            .delete(format!("{base}/agents/{id}"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(del.status(), 204);
+        let list: serde_json::Value = reqwest::get(format!("{base}/agents"))
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert!(list.as_array().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn create_agent_rejects_a_blank_name_and_an_unknown_adapter() {
+        let (app, _tmp) = test_app().await;
+        let server = ApiServer::bind(app, SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
+            .await
+            .unwrap();
+        let base = format!("http://{}", server.addr);
+        let http = reqwest::Client::new();
+
+        let blank = http
+            .post(format!("{base}/agents"))
+            .json(&serde_json::json!({ "name": "  ", "adapter": "opencode", "workspace_path": "E:\\p" }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(blank.status(), 400);
+
+        let bad_adapter = http
+            .post(format!("{base}/agents"))
+            .json(
+                &serde_json::json!({ "name": "x", "adapter": "cursor", "workspace_path": "E:\\p" }),
+            )
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(bad_adapter.status(), 400);
+    }
+
+    #[tokio::test]
+    async fn opening_a_session_without_a_coding_model_is_a_400() {
+        let (app, _tmp) = test_app().await;
+        let agent = app
+            .db
+            .agents()
+            .create(crate::db::NewAgent {
+                name: "Coder".into(),
+                adapter: "opencode".into(),
+                model_id: None,
+                workspace_path: "E:\\proj".into(),
+                allowed_paths: vec![],
+                toolset: None,
+            })
+            .await
+            .unwrap();
+        let server = ApiServer::bind(app, SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
+            .await
+            .unwrap();
+        let base = format!("http://{}", server.addr);
+
+        let resp = reqwest::Client::new()
+            .post(format!("{base}/agent-sessions"))
+            .json(&serde_json::json!({ "agent_id": agent.id }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 400);
+        let body: serde_json::Value = resp.json().await.unwrap();
+        assert!(body["error"].as_str().unwrap().contains("coding"), "{body}");
+    }
+
+    #[tokio::test]
+    async fn agent_session_detail_404s_and_stop_is_idempotent() {
+        let (app, _tmp) = test_app().await;
+        let server = ApiServer::bind(app, SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
+            .await
+            .unwrap();
+        let base = format!("http://{}", server.addr);
+
+        let missing = reqwest::get(format!("{base}/agent-sessions/nope"))
+            .await
+            .unwrap();
+        assert_eq!(missing.status(), 404);
+
+        let stop = reqwest::Client::new()
+            .post(format!("{base}/agent-sessions/nope/stop"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(stop.status(), 204);
+    }
 }

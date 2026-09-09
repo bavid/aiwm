@@ -202,9 +202,10 @@ hierher, damit nichts verloren geht.
   `chat_template` → `--jinja` / `--chat-template` im Spawn, `[llama]`-Config +
   Settings-Toggle. **Offen:** ein echter Coding-Modell-Lauf (Qwen2.5-Coder-GGUF)
   → verlässliche `tool_calls`? + KV-Cache nicht zu hart quantisieren
-  (`-ctk q4_0` schadet) → **5.1cb-Smoke** (Adapter + Subsystem sind gegen
-  Fixtures verprobt — `capability::agent` in 5.1ca, `LlamaCodingRuntime` platziert
-  + pinnt; der echte Modell-Lauf hängt nur noch an der API/Tauri-Anbindung).
+  (`-ctk q4_0` schadet) → **manueller Agent-Smoke** — Prozedur + Kalibrier-
+  Checkliste in [AGENT_MODELS.md](AGENT_MODELS.md) (`curl` gegen die Loopback-API,
+  echter Qwen2.5-Coder-GGUF + echtes `opencode`). Adapter/Subsystem/API sind
+  gegen Fixtures verprobt; offen ist nur der echte Modell-Lauf (wie Slice 4.0).
   `--jinja` global default-an ändert Chats das Template (embedded statt
   Heuristik — sollte besser sein; falls eine GGUF-Template kaputt ist:
   `jinja = false` + `chat_template` setzen).

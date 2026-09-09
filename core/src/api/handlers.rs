@@ -5,9 +5,12 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use super::dto::{AboutDto, ConfigUpdate, JobDetailDto, RuntimeStatusDto, SubmitJobDto};
+use super::dto::{
+    AboutDto, AgentPermissionDto, AgentSessionDetailDto, ConfigUpdate, JobDetailDto, NewAgentDto,
+    OpenAgentSessionDto, RuntimeStatusDto, SubmitJobDto,
+};
 use crate::config::Config;
-use crate::db::{Job, JobFilter, Model, NewJob};
+use crate::db::{Agent, AgentSession, Job, JobFilter, Model, NewAgent, NewJob};
 use crate::model::{ImportOutcome, ImportRequest};
 use crate::orchestrator::JobOutcome;
 use crate::telemetry::SystemTelemetry;
@@ -239,6 +242,78 @@ pub fn install_comfyui(app: &App) -> Result<&'static str> {
         }
     });
     Ok("started")
+}
+
+// --- agents (Phase 5.1c) ---------------------------------------------------
+
+pub async fn create_agent(app: &App, body: NewAgentDto) -> Result<Agent> {
+    if body.name.trim().is_empty() {
+        return Err(CoreError::Config("agent name must not be empty".into()));
+    }
+    if body.workspace_path.trim().is_empty() {
+        return Err(CoreError::Config("workspace path must not be empty".into()));
+    }
+    if crate::AgentKind::from_adapter(body.adapter.trim()).is_none() {
+        return Err(CoreError::Config(format!(
+            "unknown agent adapter {:?}",
+            body.adapter
+        )));
+    }
+    app.db
+        .agents()
+        .create(NewAgent {
+            name: body.name.trim().to_string(),
+            adapter: body.adapter.trim().to_string(),
+            model_id: body.model_id.filter(|s| !s.trim().is_empty()),
+            workspace_path: body.workspace_path.trim().to_string(),
+            allowed_paths: body.allowed_paths,
+            toolset: body.toolset,
+        })
+        .await
+}
+
+pub async fn list_agents(app: &App) -> Result<Vec<Agent>> {
+    app.db.agents().list().await
+}
+
+pub async fn delete_agent(app: &App, id: &str) -> Result<()> {
+    app.db.agents().delete(id).await
+}
+
+/// Open a session and (optionally) send the first turn. The coding model is
+/// placed + pinned before the runtime session opens.
+pub async fn open_agent_session(app: &App, body: OpenAgentSessionDto) -> Result<AgentSession> {
+    app.agents
+        .open(&body.agent_id, body.first_message.as_deref())
+        .await
+}
+
+/// A session plus its transcript. `None` = no such session.
+pub async fn agent_session_detail(app: &App, id: &str) -> Result<Option<AgentSessionDetailDto>> {
+    let Some(session) = app.db.agents().session(id).await? else {
+        return Ok(None);
+    };
+    let events = app.db.agents().session_events(id).await?;
+    Ok(Some(AgentSessionDetailDto {
+        live: app.agents.is_live(id),
+        session,
+        events,
+    }))
+}
+
+pub async fn agent_session_message(app: &App, id: &str, text: &str) -> Result<()> {
+    if text.trim().is_empty() {
+        return Err(CoreError::Config("message must not be empty".into()));
+    }
+    app.agents.message(id, text).await
+}
+
+pub async fn agent_session_permission(app: &App, id: &str, body: AgentPermissionDto) -> Result<()> {
+    app.agents.reply(id, &body.request_id, body.decision).await
+}
+
+pub async fn stop_agent_session(app: &App, id: &str) -> Result<()> {
+    app.agents.stop(id).await
 }
 
 /// Tail of the current day's log file.

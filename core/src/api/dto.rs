@@ -3,8 +3,9 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::agent::PermissionDecision;
 use crate::config::{ComfyConfig, LlamaConfig};
-use crate::db::{Job, JobEvent};
+use crate::db::{AgentSession, AgentSessionEvent, Job, JobEvent};
 use crate::runtime::{Health, RuntimeKind};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -71,4 +72,54 @@ pub struct SubmitJobDto {
     pub agent_session: bool,
     #[serde(default)]
     pub params: serde_json::Value,
+}
+
+/// Body for `POST /agents` / `create_agent` — a new agent profile.
+#[derive(Debug, Clone, Deserialize)]
+pub struct NewAgentDto {
+    pub name: String,
+    /// `"opencode"` (Hermes lands in 5.4).
+    pub adapter: String,
+    /// Explicit coding model, or omitted for `Auto` over the `coding` role.
+    #[serde(default)]
+    pub model_id: Option<String>,
+    pub workspace_path: String,
+    /// Extra read roots beyond the workspace.
+    #[serde(default)]
+    pub allowed_paths: Vec<String>,
+    /// `null` = the adapter's default toolset.
+    #[serde(default)]
+    pub toolset: Option<Vec<String>>,
+}
+
+/// Body for `POST /agent-sessions` / `open_agent_session`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct OpenAgentSessionDto {
+    pub agent_id: String,
+    /// Sent as the opening turn once the session is live.
+    #[serde(default)]
+    pub first_message: Option<String>,
+}
+
+/// Body for `POST /agent-sessions/{id}/message`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct AgentMessageDto {
+    pub text: String,
+}
+
+/// Body for `POST /agent-sessions/{id}/permission`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct AgentPermissionDto {
+    pub request_id: String,
+    /// `"allow_once"` | `"allow_always"` | `"deny"`.
+    pub decision: PermissionDecision,
+}
+
+/// A session plus its transcript — `GET /agent-sessions/{id}`.
+#[derive(Debug, Clone, Serialize)]
+pub struct AgentSessionDetailDto {
+    pub session: AgentSession,
+    pub events: Vec<AgentSessionEvent>,
+    /// Whether this process is currently driving the session.
+    pub live: bool,
 }

@@ -11,7 +11,9 @@ use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use serde::Deserialize;
 
-use super::dto::SubmitJobDto;
+use super::dto::{
+    AgentMessageDto, AgentPermissionDto, NewAgentDto, OpenAgentSessionDto, SubmitJobDto,
+};
 use super::handlers;
 use crate::db::JobFilter;
 use crate::orchestrator::JobState;
@@ -35,6 +37,16 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/runtimes", get(runtimes))
         .route("/runtimes/llamacpp/install", post(install_llamacpp))
         .route("/runtimes/comfyui/install", post(install_comfyui))
+        .route("/agents", get(list_agents).post(create_agent))
+        .route("/agents/{id}", axum::routing::delete(delete_agent))
+        .route("/agent-sessions", post(open_agent_session))
+        .route("/agent-sessions/{id}", get(agent_session_detail))
+        .route("/agent-sessions/{id}/message", post(agent_session_message))
+        .route(
+            "/agent-sessions/{id}/permission",
+            post(agent_session_permission),
+        )
+        .route("/agent-sessions/{id}/stop", post(stop_agent_session))
         .route("/logs", get(logs))
         .route("/ws", get(ws_upgrade))
         .with_state(app)
@@ -53,9 +65,9 @@ impl From<CoreError> for ApiError {
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let status = match &self.0 {
-            CoreError::Config(_) | CoreError::InvalidJobTransition { .. } => {
-                StatusCode::BAD_REQUEST
-            }
+            CoreError::Config(_)
+            | CoreError::InvalidJobTransition { .. }
+            | CoreError::SchedulerBlocked(_) => StatusCode::BAD_REQUEST,
             _ => StatusCode::INTERNAL_SERVER_ERROR,
         };
         tracing::warn!(error = %self.0, %status, "api error");
@@ -213,6 +225,80 @@ async fn import_model(
 
 async fn runtimes(State(app): AppState) -> Json<Vec<super::dto::RuntimeStatusDto>> {
     Json(handlers::runtimes(&app).await)
+}
+
+// --- agents (Phase 5.1c) ---------------------------------------------------
+
+async fn list_agents(State(app): AppState) -> Result<Json<Vec<crate::db::Agent>>, ApiError> {
+    Ok(Json(handlers::list_agents(&app).await?))
+}
+
+async fn create_agent(
+    State(app): AppState,
+    Json(body): Json<NewAgentDto>,
+) -> Result<(StatusCode, Json<crate::db::Agent>), ApiError> {
+    Ok((
+        StatusCode::CREATED,
+        Json(handlers::create_agent(&app, body).await?),
+    ))
+}
+
+async fn delete_agent(
+    State(app): AppState,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    handlers::delete_agent(&app, &id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn open_agent_session(
+    State(app): AppState,
+    Json(body): Json<OpenAgentSessionDto>,
+) -> Result<(StatusCode, Json<crate::db::AgentSession>), ApiError> {
+    Ok((
+        StatusCode::CREATED,
+        Json(handlers::open_agent_session(&app, body).await?),
+    ))
+}
+
+async fn agent_session_detail(
+    State(app): AppState,
+    Path(id): Path<String>,
+) -> Result<Response, ApiError> {
+    match handlers::agent_session_detail(&app, &id).await? {
+        Some(detail) => Ok(Json(detail).into_response()),
+        None => Ok((
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "no such agent session" })),
+        )
+            .into_response()),
+    }
+}
+
+async fn agent_session_message(
+    State(app): AppState,
+    Path(id): Path<String>,
+    Json(body): Json<AgentMessageDto>,
+) -> Result<StatusCode, ApiError> {
+    handlers::agent_session_message(&app, &id, &body.text).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn agent_session_permission(
+    State(app): AppState,
+    Path(id): Path<String>,
+    Json(body): Json<AgentPermissionDto>,
+) -> Result<StatusCode, ApiError> {
+    handlers::agent_session_permission(&app, &id, body).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn stop_agent_session(
+    State(app): AppState,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    handlers::stop_agent_session(&app, &id).await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn install_llamacpp(
