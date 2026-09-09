@@ -62,6 +62,40 @@ const AGENTS: AnyRecord[] = [
   },
 ];
 
+type DevSession = {
+  id: string;
+  agent_id: string;
+  state: string;
+  answered: boolean;
+  stopped: boolean;
+  firstMessage?: string | null;
+};
+let DEV_SESSION: DevSession | null = null;
+
+function devSession(): AnyRecord {
+  const s = DEV_SESSION!;
+  return {
+    id: s.id, agent_id: s.agent_id, adapter_session_id: "ses_dev", state: s.state,
+    error_text: null, checkpoint_path: null, started_at: now(),
+    ended_at: s.stopped ? now() : null,
+  };
+}
+
+function devEvents(): AnyRecord[] {
+  const s = DEV_SESSION!;
+  const events: AnyRecord[] = [
+    { ts: now(), kind: "text", payload: { type: "text", text: "I'll read the README to get oriented." } },
+    { ts: now(), kind: "tool", payload: { type: "tool", id: "c1", name: "bash", status: s.answered ? "done" : "running", input: { command: "cat README.md" }, output: s.answered ? "AI Workstation Manager — a local control plane…\n" : null } },
+  ];
+  if (!s.answered) {
+    events.push({ ts: now(), kind: "permission", payload: { type: "permission", id: "per_1", kind: "bash", summary: "cat README.md", always_pattern: "cat *" } });
+  } else {
+    events.push({ ts: now(), kind: "text", payload: { type: "text", text: "The README says it's an offline-first orchestrator for local AI runtimes." } });
+    events.push({ ts: now(), kind: "idle", payload: { type: "idle" } });
+  }
+  return events;
+}
+
 const ABOUT: AnyRecord = {
   core_version: "0.0.1-dev", data_dir: "E:\\AI\\data", store_path: "E:\\AI\\models",
   outputs_dir: "E:\\AI\\data\\outputs", outputs_bytes: 4_812_300_000,
@@ -145,29 +179,36 @@ export function installDevMock(): void {
       }
       case "delete_agent":
         return null;
-      case "open_agent_session":
-        return {
-          id: `s-dev-${seq++}`, agent_id: String((a.body as AnyRecord)?.agent_id ?? "a-coder"),
-          adapter_session_id: "ses_dev", state: "working", error_text: null,
-          checkpoint_path: null, started_at: now(), ended_at: null,
+      case "open_agent_session": {
+        DEV_SESSION = {
+          id: `s-dev-${seq++}`,
+          agent_id: String((a.body as AnyRecord)?.agent_id ?? "a-coder"),
+          state: "awaiting_approval",
+          answered: false,
+          stopped: false,
         };
+        const first = (a.body as AnyRecord)?.first_message;
+        DEV_SESSION.firstMessage = typeof first === "string" ? first : null;
+        return devSession();
+      }
       case "agent_session_detail":
-        return {
-          session: {
-            id: String(a.id), agent_id: "a-coder", adapter_session_id: "ses_dev",
-            state: "awaiting_approval", error_text: null, checkpoint_path: null,
-            started_at: now(), ended_at: null,
-          },
-          events: [
-            { ts: now(), kind: "text", payload: { type: "text", text: "I'll read the README first." } },
-            { ts: now(), kind: "tool", payload: { type: "tool", id: "c1", name: "bash", status: "running", input: { command: "cat README.md" } } },
-            { ts: now(), kind: "permission", payload: { type: "permission", id: "per_1", kind: "bash", summary: "cat README.md", always_pattern: "cat *" } },
-          ],
-          live: true,
-        };
+        return DEV_SESSION && DEV_SESSION.id === String(a.id)
+          ? { session: devSession(), events: devEvents(), live: !DEV_SESSION.stopped }
+          : null;
       case "agent_session_message":
+        if (DEV_SESSION) DEV_SESSION.state = "working";
+        return null;
       case "agent_session_permission":
+        if (DEV_SESSION) {
+          DEV_SESSION.answered = true;
+          DEV_SESSION.state = "idle";
+        }
+        return null;
       case "stop_agent_session":
+        if (DEV_SESSION) {
+          DEV_SESSION.stopped = true;
+          DEV_SESSION.state = "stopped";
+        }
         return null;
       default:
         if (cmd.startsWith("plugin:")) return null; // opener plugin etc. — no-op

@@ -10,7 +10,7 @@ const CAPABILITIES: { key: string; label: string; hint: string; tab?: string }[]
   { key: "chat", label: "Chat", hint: "ready", tab: "chat" },
   { key: "image", label: "Generate Image", hint: "ready", tab: "image" },
   { key: "video", label: "Generate Video", hint: "ready", tab: "video" },
-  { key: "code", label: "Coding", hint: "Phase 5" },
+  { key: "code", label: "Coding", hint: "agents", tab: "agents" },
 ];
 
 const gb = (mb: number) => (mb / GB).toFixed(1);

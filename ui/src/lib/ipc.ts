@@ -338,12 +338,34 @@ export interface AgentSession {
   ended_at: string | null;
 }
 
-/** One transcript entry. `payload` shape depends on `kind` — see the Rust
- *  `AgentEvent` (`text` / `tool` / `permission` / `idle` / `error`). */
+export type ToolStatus = "pending" | "running" | "done" | "error";
+
+/** One event from a running session — the Rust `AgentEvent`, tag = `type`. */
+export type AgentEventPayload =
+  | { type: "text"; text: string }
+  | {
+      type: "tool";
+      id: string;
+      name: string;
+      status: ToolStatus;
+      input: unknown;
+      output?: string | null;
+    }
+  | {
+      type: "permission";
+      id: string;
+      kind: string;
+      summary: string;
+      always_pattern?: string | null;
+    }
+  | { type: "idle" }
+  | { type: "error"; message: string; terminal: boolean };
+
+/** One transcript entry. `payload.type` matches `kind`. */
 export interface AgentSessionEvent {
   ts: string;
   kind: string;
-  payload: unknown;
+  payload: AgentEventPayload;
 }
 
 export interface AgentSessionDetail {

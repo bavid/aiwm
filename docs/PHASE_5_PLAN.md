@@ -38,7 +38,7 @@ Export/Import bringt Config + DB + Agent-Profil auf eine zweite Maschine.
 | **5.1ca** | **Agent-Subsystem (Core, ohne API)**: `capability::agent::AgentSessions` — eigenes Subsystem, **kein** Job (läuft nicht im Job-Loop). `open` → Coding-Modell auflösen (`coding`-Rolle \| explizit) → `CodingRuntime`-Trait platziert+pinnt es (`HybridScheduler::plan` → load/evict → `pin`, `LlamaCppAdapter::base_url()` neu+public) → `adapter.open_session` gegen `<llama>/v1` → Event-Drain-Task (`AgentEvent` → `agent_session_events` + `agent_sessions.state`). `message`/`reply`/`interrupt`/`stop` (stop = `close_session` + unpin + unload). MVP: **eine Session gleichzeitig**. Integrationstest `agent_session.rs` (fake-llama + fake-opencode, open→send→approve→idle→stop). | ✅ |
 | **5.1cb** | **Agent-Vertikale (API/UI-Anbindung)**: `App.agents` = `AgentSessions` + `OpenCodeAdapter::discover`; API `GET/POST /agents`, `DELETE /agents/:id`, `POST /agent-sessions`, `GET /agent-sessions/:id`, `POST /agent-sessions/:id/{message,permission,stop}` + DTOs + 8 Tauri-Commands + `ipc.ts`/dev-mock. `docs/AGENT_MODELS.md` mit kuratierten Kandidaten + manueller Smoke-Prozedur. Echter Qwen2.5-Coder-GGUF-Lauf = manuell (dokumentiert, wie 4.0). | ✅ |
 | 5.2 | **Sandkasten** (config-level, ADR-010): erzwungene OpenCode-`permission` — `edit`/`write` = `{"*":"deny","<ws>/**":"ask"}` (Edits nur im Workspace), `external_directory` = `{"*":"deny","<extra>/**":"allow"}` (Profil-Extras read-only), `bash` = `ask` (Approval-Fluss steht schon), `webfetch`/`websearch` = `deny` + `tools` beide `false` (Netz immer aus). `SpawnSpec.env_remove` + `SCRUBBED_ENV` strippt Cloud-Credentials aus dem `opencode`-Kind. Echte Prozess-Isolation + Toolset-Whitelisting vertagt. | ✅ |
-| 5.3 | **Agents-UI-Tab**: Profil-Liste + „New profile" (Runtime, Modell [Auto über `coding`], Workspace-Ordner-Picker, erlaubte Pfade, Toolset); Session-Ansicht — Transkript mit Tool-Call-Karten (Datei-Diffs, Shell-Output), Approval-Prompts inline, „Stop"; „Coding"-Dashboard-Button aktiv. Workspace-Registry (Pfad + Label) im Core. | offen |
+| 5.3 | **Agents-UI-Tab** (`ui/src/features/agents/`): Profil-Liste + „New profile" (Runtime, Modell [Auto über `coding` \| Pick], Workspace-Pfad-Feld, erlaubte Pfade); Session-View — Transkript (`text` gefaltet, `tool`-Karten mit Command + Output + Status, `permission` inline mit Allow once / Always / Deny), Zustands-Badge, Composer (nur bei `idle`), „Stop". „Coding"-Dashboard-Button → Tab. Kein nativer Ordner-Picker (kein `plugin-dialog`) → Text-Feld wie im Models-Tab; Workspace-Registry im Core vertagt (das Profil *ist* die Bindung). | ✅ |
 | 5.4 | **Hermes-Agent-Adapter**: `uv`-Installer (gepinnte Version) → gemanagtes Profil unter `<data>/agents/hermes/` (`HERMES_HOME`/`-p <profil>`); `config.yaml` **erzwungen** (`provider: custom`, `base_url` = `llama-server`, `security.redact_secrets`, Workspace, `HERMES_STREAM_READ_TIMEOUT=1800`). Treiben über Hermes' HTTP-Server (`/v1/responses` / `/api/jobs`) **oder** `hermes chat -q` pro Turn. Memory (`MEMORY.md`) + Skills leben im Profil-Ordner → Backup (5.5). `bash -l` per 5.0-Entscheidung. | offen |
 | 5.5 | **Session-Persistenz + Backup/Restore**: `agent_sessions.checkpoint_path`, Wiederaufnahme nach Absturz/Neustart (OpenCode `/session` list + resume, Hermes `/resume`); Kontext-Kompaktierung: die Agents machen sie selbst, wir zeigen sie an. **Export/Import** — ein Archiv aus `config.toml` + `aiwm.db` + `<data>/agents/<profil>/` (+ Modell-Manifest, **nicht** die Modell-Dateien). Politur: Pin/Unpin-Lebenszyklus, „Agent pausieren?"-Fluss (R8), Diagnostics-Zeile pro Agent. | offen |
 
@@ -415,6 +415,49 @@ Verifiziert:
   die Config, aber der Serde-Aufbau muss valide sein). `check.ps1` grün.
 - **`docs/SECURITY.md`** Agent-Sandbox-Abschnitt neu geschrieben (config-level,
   die vier Hebel, was vertagt ist).
+
+---
+
+## 5.3 — Ergebnis (abgeschlossen)
+
+Der Agents-Tab — reine UI gegen die 5.1cb-Bindings. Keine Rust-Änderung.
+
+- **`ui/src/features/agents/Agents.tsx`** (`AgentsWorkbench`) + `agents.css`.
+  Zwei-Spalten-Layout (Profile links, Session rechts; einspaltig < 900 px).
+- **Profile:** `useAgents()` (neuer 4 s-Poll-Hook). Karte je Profil (Name,
+  Adapter-Badge, Modell-Badge „Auto · coding" \| Modellname, Workspace,
+  Extra-Reads), „New session" / „Delete". `NewProfileForm` (aufklappbar):
+  Name, Runtime (OpenCode, Hermes disabled), Coding-Modell (Auto \| die
+  `coding`-Rollen-Modelle), Workspace-Pfad, Extra-Read-Pfade (Komma), + ein
+  Klartext-Hinweis auf die Sandbox-Regeln. „No coding model"-Hinweis wenn
+  keins die Rolle trägt.
+- **Session:** `openAgentSession(profileId)` → poll `agentSessionDetail` alle
+  700 ms bis terminal. `groupEvents()` faltet den rohen Event-Stream:
+  aufeinanderfolgende `text`-Deltas mergen, `tool` aktualisiert per `id` in
+  place (Status pending→running→done, Output angehängt), `permission` einmal.
+  Rendering: Text-Blöcke, `tool`-Karten (mono Command + Output, Status-Farbe
+  am Rahmen), `permission`-Karte inline (Allow once / Always [wenn
+  `always_pattern`] / Deny → `agentSessionPermission`), `idle`-Marker,
+  Fehler-Block. Composer nur bei `state === "idle"` aktiv, sonst mit
+  „Agent is working…"-Placeholder disabled. „Stop" solange nicht terminal.
+  Beantwortete Permissions per lokalem `Set<request_id>` gemerkt (dedupe +
+  Optimistic).
+- **`ipc.ts`**: `ToolStatus` + `AgentEventPayload` (diskriminierte Union über
+  `type`), `AgentSessionEvent.payload` jetzt typisiert.
+- **`App.tsx`** „Agents"-Tab (zwischen Video und Models). **`Dashboard.tsx`**
+  „Coding"-Karte → `tab: "agents"`, Hinweis „agents".
+- **`dev-mock.ts`**: eine In-Memory-`DevSession` — `open` → `awaiting_approval`
+  mit Text + Bash-Tool + Permission; `permission` → Tool `done` + Output +
+  Abschlusstext + `idle`; `stop` → `stopped`. Reicht zum Durchklicken in
+  `pnpm dev`.
+
+Verifiziert:
+- `pnpm typecheck` / `pnpm lint` / `pnpm build` grün. Rust unverändert
+  (**272 lib + 40 integ**). `check.ps1` grün.
+- **Browser-Smoke** (dev-mock): New session → Transkript (Text, Tool-Karte
+  „running", Approval-Karte) → „Allow once" → Tool „done" + Output +
+  Abschlusstext + idle → Composer aktiv → „Stop" → „stopped" + „Close
+  transcript". Keine Konsolenfehler.
 
 ---
 

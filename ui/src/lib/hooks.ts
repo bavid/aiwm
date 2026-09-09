@@ -5,10 +5,12 @@ import {
   getRecentLogs,
   getRuntimes,
   getTelemetry,
+  listAgents,
   listJobs,
   listKnownModels,
   listModels,
   type AboutInfo,
+  type Agent,
   type Job,
   type KnownModel,
   type Model,
@@ -83,3 +85,4 @@ export const useJobs = () => usePolled<Job[]>("jobs", () => listJobs({ limit: 50
 export const useRuntimes = () => usePolled<RuntimeStatus[]>("runtimes", getRuntimes, 3000);
 export const useLogs = () => usePolled<string[]>("logs", () => getRecentLogs(300), 3000);
 export const useModels = () => usePolled<Model[]>("models", listModels, 3000);
+export const useAgents = () => usePolled<Agent[]>("agents", listAgents, 4000);

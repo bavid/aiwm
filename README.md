@@ -44,7 +44,7 @@ echten 4080 (alle Smokes fuhren gegen die Fake-ComfyUI).
 gebaut). **Offen: 4.0** — die echte ComfyUI auf der 4080 verproben (cu130-Treiber,
 GGUF-Ordner-Keys, `SaveVideo`/`av`, Zeit/VRAM kalibrieren) — läuft vermutlich an
 der echten Maschine. Plan + Research: [docs/PHASE_4_PLAN.md](docs/PHASE_4_PLAN.md).
-**Phase 5 (Agents) — Plan + 5.0 + 5.1a + 5.1b + 5.1c + 5.2 ✅:** [docs/PHASE_5_PLAN.md](docs/PHASE_5_PLAN.md),
+**Phase 5 (Agents) — Plan + 5.0 + 5.1a + 5.1b + 5.1c + 5.2 + 5.3 ✅:** [docs/PHASE_5_PLAN.md](docs/PHASE_5_PLAN.md),
 **ADR-021**. Nicht selbst bauen — **OpenCode** (`opencode serve`, Adapter 1) +
 **Hermes Agent** (Nous Research, Adapter 2) orchestrieren und sandboxen,
 Endpoint = lokaler `llama-server --jinja`. Sandkasten = Pfad-Allowlist +
@@ -84,6 +84,12 @@ Command-Approval (UI) + erzwungene Offline-Config.
   `SCRUBBED_ENV` strippt Cloud-Credentials (`ANTHROPIC_API_KEY`, `AWS_*`,
   `GITHUB_TOKEN`, …) aus dem `opencode`-Kind. Echte Prozess-Isolation vertagt.
   [`docs/SECURITY.md`](docs/SECURITY.md).
+- **5.3** ✅ **Agents-UI-Tab** (`ui/src/features/agents/`): Profil-Liste + „New
+  profile" (Runtime, Coding-Modell [Auto/Pick], Workspace-Pfad, Extra-Reads);
+  Session-View — Transkript (Text gefaltet, `tool`-Karten mit Command/Output/Status,
+  `permission` inline mit Allow once / Always / Deny), Zustands-Badge, Composer
+  (nur bei `idle`), „Stop". „Coding"-Dashboard-Button → Tab. UI-only, gegen die
+  5.1cb-Bindings + dev-mock.
 
 - **4.1** ✅ **`capability::video`**: `job_type=video` → feste `wan_ti2v`-Pipeline
   (`WanImageToVideo` → `KSampler` → `VAEDecode` → `CreateVideo` → `SaveVideo`,

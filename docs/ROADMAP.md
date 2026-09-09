@@ -161,7 +161,10 @@ erzwingbar, kein `bash -l` — Empfehlung, dreht die Reihenfolge unten um),
   (`edit`/`write` auf den Workspace, `external_directory` read-only, `bash` ask,
   Netz-Tools aus) + `SpawnSpec.env_remove`/`SCRUBBED_ENV` gegen Cloud-Credentials.
   Echte Prozess-Isolation vertagt. `docs/SECURITY.md` aktualisiert
-- 5.3 Agents-UI-Tab (Profile, Transkript mit Tool-Calls + Approvals, Workspace-Picker)
+- [x] 5.3 **Agents-UI-Tab** (`ui/src/features/agents/`) — Profil-Liste + „New
+  profile", Session-View: Transkript mit Tool-Call-Karten + inline Approval-Prompts
+  (Allow once / Always / Deny) + „Stop"; „Coding"-Dashboard-Button → Tab.
+  Workspace-Registry im Core vertagt (das Profil ist die Bindung)
 - 5.4 **Hermes-Adapter** (`uv`-Installer, gemanagtes Profil, erzwungene `config.yaml`)
 - 5.5 Session-Persistenz + Checkpoints + **Export/Import** (config + DB + Agent-Profil)
 - Post-MVP: `aider`, lokaler Repository-Index, MCP-Verwaltung, parallele Sessions
