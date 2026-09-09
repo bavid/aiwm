@@ -128,7 +128,8 @@ Video-Upscale danach als eigene Slices.
   `WanImageToVideo.start_image`; gegen Fake-ComfyUI)
 - [x] 4.3 UI-Tab „Video" + Erwartungssteuerung (Dauer!) + `<video>`-Player + Galerie
   + „Start from image" (Galerie-Pick / Pfad) + `media-src` CSP
-- [ ] 4.4 LTX-2-GGUF als zweites Template + `docs/VIDEO_MODELS.md` + Katalog
+- [x] 4.4 zweites Template **LTX-Video 0.9.5 2B** (Core-Nodes, ADR-020) +
+  `docs/VIDEO_MODELS.md` + Wan/LTX-Katalog-Einträge (gegen Fake-ComfyUI)
 - [ ] 4.5 Politur: RAM-Warnung, Retention, Settings, Scheduler-Verprobung
 
 ## Phase 5 — Agents

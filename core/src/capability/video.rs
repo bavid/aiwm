@@ -2,13 +2,13 @@
 //!
 //! By the time this runs the engine has put the video model's VRAM slot on the
 //! GPU (scheduler → `ComfyUiAdapter::load_model`, which starts the server). Here
-//! we turn the job's params into a fixed Wan 2.2 workflow ([`crate::pipeline`]),
-//! hand it to ComfyUI, wait for the clip, and write it to
-//! `<outputs>/<job_id>.mp4`.
+//! we turn the job's params into a fixed workflow ([`crate::pipeline`]) — Wan 2.2
+//! or LTX-Video, picked from the model's family — hand it to ComfyUI, wait for
+//! the clip, and write it to `<outputs>/<job_id>.mp4`.
 //!
 //! With `init_image` (a finished job's id, or a path to an image) the frame is
-//! copied into ComfyUI's `input/` folder and wired to `WanImageToVideo` as the
-//! start frame (image→video, 4.2); the copy is removed after the render.
+//! copied into ComfyUI's `input/` folder and wired as the start frame
+//! (image→video, 4.2); the copy is removed after the render.
 //!
 //! Video is **slow** — minutes per clip. The event trail says so, and the UI
 //! (4.3) sets expectations up front.
@@ -22,7 +22,7 @@ use tokio::sync::watch;
 
 use super::media::{comfy_err as video_err, file_name, resolve_seed, round_to, write_output};
 use crate::db::{Database, EventLevel, Model};
-use crate::pipeline::{self, VideoInputs, WanModels};
+use crate::pipeline::{self, LtxModels, VideoInputs, VideoRecipe, WanModels};
 use crate::runtime::ComfyUiAdapter;
 use crate::Result;
 
@@ -191,8 +191,8 @@ pub async fn run(
     req: VideoRequest,
     cancel: watch::Receiver<bool>,
 ) -> Result<VideoOutcome> {
-    let unet = file_name(&model.file_path)?;
-    let c = resolve_wan_companions(db).await?;
+    let base_model = file_name(&model.file_path)?;
+    let recipe = VideoRecipe::for_family(model.family.as_deref());
 
     // image→video: resolve the start frame and stage it in ComfyUI's `input/`
     // folder. The guard removes the copy when this function returns. Do it first
@@ -200,6 +200,59 @@ pub async fn run(
     let frame = match &req.init_image {
         Some(spec) => Some(stage_start_frame(db, comfyui, job_id, spec).await?),
         None => None,
+    };
+
+    let inputs = VideoInputs {
+        positive: &req.prompt,
+        negative: &req.negative,
+        width: req.width,
+        height: req.height,
+        length: req.length,
+        fps: req.fps,
+        steps: req.steps,
+        cfg: req.cfg,
+        seed: req.seed,
+        start_image: frame.as_ref().map(|f| f.name.as_str()),
+        filename_prefix: job_id,
+    };
+
+    // Pick the template + resolve its companion files, and describe them for the
+    // event trail.
+    let (workflow, companions) = match recipe {
+        VideoRecipe::Wan => {
+            let c = resolve_wan_companions(db).await?;
+            let g = pipeline::wan_ti2v(
+                &inputs,
+                &WanModels {
+                    unet: base_model,
+                    clip: &c.clip,
+                    vae: &c.vae,
+                },
+            );
+            (
+                g,
+                format!(
+                    "Wan \u{2014} encoder \u{201c}{}\u{201d}, VAE \u{201c}{}\u{201d}",
+                    c.clip, c.vae
+                ),
+            )
+        }
+        VideoRecipe::Ltx => {
+            let t5 = resolve_ltx_encoder(db).await?;
+            let g = pipeline::ltx_video(
+                &inputs,
+                &LtxModels {
+                    checkpoint: base_model,
+                    t5: &t5,
+                },
+            );
+            (
+                g,
+                format!(
+                    "LTX-Video \u{2014} T5 encoder \u{201c}{t5}\u{201d}, VAE from the checkpoint"
+                ),
+            )
+        }
     };
 
     db.jobs()
@@ -237,34 +290,9 @@ pub async fn run(
         .append_event(
             job_id,
             EventLevel::Info,
-            &format!(
-                "Wan \u{2014} encoder \u{201c}{}\u{201d}, VAE \u{201c}{}\u{201d} \u{2014} this takes \
-                 several minutes",
-                c.clip, c.vae
-            ),
+            &format!("{companions} \u{2014} this takes several minutes"),
         )
         .await?;
-
-    let workflow = pipeline::wan_ti2v(
-        &VideoInputs {
-            positive: &req.prompt,
-            negative: &req.negative,
-            width: req.width,
-            height: req.height,
-            length: req.length,
-            fps: req.fps,
-            steps: req.steps,
-            cfg: req.cfg,
-            seed: req.seed,
-            start_image: frame.as_ref().map(|f| f.name.as_str()),
-            filename_prefix: job_id,
-        },
-        &WanModels {
-            unet,
-            clip: &c.clip,
-            vae: &c.vae,
-        },
-    );
 
     let Some(media) = comfyui
         .generate_media(&workflow, cancel, VIDEO_TIMEOUT)
@@ -427,12 +455,35 @@ async fn resolve_wan_companions(db: &Database) -> Result<WanCompanionFiles> {
     })
 }
 
+/// LTX-Video needs a plain `t5xxl` encoder (its VAE rides in the checkpoint).
+/// Resolved by role + name — `t5` in the name, but not Wan's `umt5`.
+async fn resolve_ltx_encoder(db: &Database) -> Result<String> {
+    let t5 = db
+        .models()
+        .for_role("text_encoder")
+        .await?
+        .into_iter()
+        .find(|m| name_is_t5(&m.name) || name_is_t5(&m.file_path))
+        .ok_or_else(|| {
+            video_err(
+                "LTX-Video needs a T5 text encoder \u{2014} import t5xxl_… as \
+                 \u{201c}Text encoder / CLIP\u{201d} on the Models tab",
+            )
+        })?;
+    Ok(file_name(&t5.file_path)?.to_string())
+}
+
 fn name_is_umt5(s: &str) -> bool {
     s.to_ascii_lowercase().contains("umt5")
 }
 
 fn name_is_wan(s: &str) -> bool {
     s.to_ascii_lowercase().contains("wan")
+}
+
+fn name_is_t5(s: &str) -> bool {
+    let n = s.to_ascii_lowercase();
+    n.contains("t5") && !n.contains("umt5")
 }
 
 /// Round a requested frame count to Wan's `4k + 1` and clamp.
@@ -569,6 +620,46 @@ mod tests {
         assert!(!name_is_umt5("t5xxl_fp8.safetensors"));
         assert!(name_is_wan("wan2.2_vae.safetensors"));
         assert!(!name_is_wan("ae.safetensors"));
+        // LTX's T5 is `t5…` but Wan's `umt5…` must not match it.
+        assert!(name_is_t5("t5xxl_fp8_e4m3fn.safetensors"));
+        assert!(!name_is_t5("umt5_xxl_fp8_e4m3fn_scaled.safetensors"));
+        assert!(!name_is_t5("clip_l.safetensors"));
+    }
+
+    #[tokio::test]
+    async fn resolve_ltx_encoder_finds_the_t5_but_not_wans_umt5() {
+        use crate::db::{Database, NewModel};
+        let db = Database::connect_in_memory().await.unwrap();
+        let add = |name: &str| {
+            let name = name.to_string();
+            let db = db.clone();
+            async move {
+                db.models()
+                    .insert(NewModel {
+                        name: name.clone(),
+                        format: "safetensors".into(),
+                        file_path: format!("E:\\AI\\models\\image\\text_encoders\\{name}"),
+                        size_bytes: 1,
+                        source: "manual".into(),
+                        roles: vec!["text_encoder".into()],
+                        ..NewModel::default()
+                    })
+                    .await
+                    .unwrap();
+            }
+        };
+
+        add("umt5_xxl_fp8_e4m3fn_scaled.safetensors").await;
+        assert!(resolve_ltx_encoder(&db)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("T5 text encoder"));
+        add("t5xxl_fp8_e4m3fn.safetensors").await;
+        assert_eq!(
+            resolve_ltx_encoder(&db).await.unwrap(),
+            "t5xxl_fp8_e4m3fn.safetensors"
+        );
     }
 
     #[tokio::test]

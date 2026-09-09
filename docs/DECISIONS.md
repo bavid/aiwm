@@ -598,6 +598,56 @@ passt hier nicht.
 
 ---
 
+## ADR-020 — Zweites Video-Template: LTX-Video 0.9.5 (2B), nicht LTX-2
+
+**Status:** Entschieden — umgesetzt (4.4). **Weicht bewusst von PHASE_4_PLAN
+§A / Scheibe 4.4 ab** („LTX-2 / LTX 2.3 GGUF über ComfyUI-GGUF").
+
+**Kontext:** Der Plan nannte LTX-2 als zweites Template, GGUF über den schon
+installierten `city96/ComfyUI-GGUF`-Node. Die Recherche (2026-09) zeigt drei
+Blocker:
+1. **LTX-2 / 2.3 ist groß.** 22B fp8 ≈ 22 GB, passt nicht in 16 GB. Nur GGUF
+   Q4 (~12 GB) käme in Frage — und dann sehr knapp neben dem gemma-3-12B-Encoder.
+2. **LTX-2-GGUF ist nicht im offiziellen `ComfyUI-GGUF`.** Der Loader braucht
+   manuelle `loader.py`/`nodes.py`-Patches (unveröffentlichter Commit) **plus**
+   `ComfyUI-KJNodes`. Das widerspricht ADR-002 („eine kuratierte, getestete
+   Version, ein Custom Node").
+3. **LTX-2.3 nativ** nutzt einen `.safetensors`-fp8-Checkpoint (kein GGUF),
+   passt aber wegen (1) trotzdem nicht.
+
+**Entscheidung:** Das zweite Video-Template ist **LTX-Video 0.9.5 (2B)** als
+einzelnes `.safetensors` (`ltx-video-2b-v0.9.5.safetensors`, 6,3 GB, Model +
+VAE gebündelt) + ein separater `t5xxl`-Encoder (`CLIPLoader type="ltxv"` — der
+fp8-T5 aus dem Katalog reicht). **Alles Core-ComfyUI-Nodes**
+(`CheckpointLoaderSimple`, `LTXVConditioning`, `EmptyLTXVLatentVideo` /
+`LTXVImgToVideo`, `LTXVScheduler` → `SamplerCustom`, `CreateVideo`,
+`SaveVideo`) — **kein neuer Custom Node**. `pipeline::VideoRecipe::for_family`
+wählt: `family == "ltx"` → `ltx_video`, sonst `wan_ti2v`. `capability::video`
+löst die Begleiter pro Rezept auf (Wan: umt5 + Wan-VAE; LTX: nur T5).
+
+Das ist exakt das Muster SDXL→Flux aus Phase 3: ein zweites festes Template,
+Familien-Dispatch, gleiche `VideoInputs`.
+
+**Alternativen:**
+- *LTX-2 19B GGUF (Plan):* neuer/gepatchter GGUF-Node + KJNodes → eigener ADR,
+  verworfen für den MVP.
+- *LTX-13B 0.9.8:* 28 GB / fp8 15 GB — zu groß für komfortable 16 GB.
+- *Kein zweites Video-Template:* dann bleibt die `VideoRecipe`-Abstraktion
+  ungetestet — der ganze Sinn von 4.4.
+
+**Konsequenzen:**
+- (+) Passt bequem in 16 GB, schneller als Wan 5B, kein Setup-Aufwand.
+- (+) `VideoRecipe` + Familien-Dispatch bewiesen (2 Templates).
+- (−) LTX-Video 0.9.x wants **`(frames-1) % 8 == 0`**; unser `4k+1`-Snap
+  erfüllt das nicht immer — die LTX-Nodes runden intern ab (weniger Frames als
+  gewünscht). Für 4.0 zu kalibrieren; TODO.
+- (−) LTX-2 (Audio, höhere Qualität) bleibt außen vor bis der GGUF-Node-Weg
+  stabil ist. Post-MVP.
+- (−) Wie alles in Phase 4 (außer 4.0): gegen `aiwm-fake-comfy` + recherchierte
+  Node-Namen gebaut, nicht an der echten ComfyUI verprobt.
+
+---
+
 ## Offene Entscheidungen
 
 | # | Frage | Status |

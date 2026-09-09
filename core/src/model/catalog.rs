@@ -1,11 +1,13 @@
-//! A small curated catalogue of image models the tool knows how to run:
-//! SDXL and the FLUX.1-dev GGUF stack (diffusion model + encoders + VAE).
+//! A small curated catalogue of image **and video** models the tool knows how to
+//! run: SDXL, the FLUX.1-dev GGUF stack, the Wan 2.2 TI2V-5B video stack, and
+//! LTX-Video 0.9.x.
 //!
 //! The MVP has no download manager (that is Phase 6), so "assisted import"
 //! means: the UI shows this list with the Hugging Face source and the expected
 //! SHA-256, the user downloads the file themselves, and [`import`](super::import)
 //! stamps the catalogue metadata onto the model when the hash matches. Details
-//! and recommended settings live in `docs/IMAGE_MODELS.md`.
+//! and recommended settings live in `docs/IMAGE_MODELS.md` /
+//! `docs/VIDEO_MODELS.md`.
 
 /// One curated model. All fields are compile-time constants — this is a
 /// hand-maintained list, not user data.
@@ -131,6 +133,63 @@ pub const KNOWN_MODELS: &[KnownModel] = &[
         size_bytes: 335_304_388,
         license: "FLUX.1 [dev] Non-Commercial License",
         note: "The Flux autoencoder. Byte-identical across every Flux re-upload.",
+    },
+    // --- video (Phase 4) ---
+    KnownModel {
+        id: "wan22-ti2v-5b",
+        name: "Wan 2.2 TI2V-5B — fp16 (video, default)",
+        kind: "video",
+        family: Some("wan"),
+        publisher: "Alibaba / Comfy-Org",
+        repo: "Comfy-Org/Wan_2.2_ComfyUI_Repackaged",
+        file: "wan2.2_ti2v_5B_fp16.safetensors",
+        url: "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/diffusion_models/wan2.2_ti2v_5B_fp16.safetensors",
+        sha256: "456f901338bd9eadbded3828b819109a9b68e8a525ca5cf8d0049a69fcfeca1e",
+        size_bytes: 9_999_658_848,
+        license: "Apache-2.0 (commercial use allowed)",
+        note: "The default video model. One model for text→video and image→video. Needs the umt5 encoder and the Wan VAE below.",
+    },
+    KnownModel {
+        id: "wan-umt5-xxl-fp8",
+        name: "umt5-XXL — fp8 (Wan text encoder)",
+        kind: "text_encoder",
+        family: None,
+        publisher: "Comfy-Org",
+        repo: "Comfy-Org/Wan_2.2_ComfyUI_Repackaged",
+        file: "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
+        url: "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors",
+        sha256: "c3355d30191f1f066b26d93fba017ae9809dce6c627dda5f6a66eaa651204f68",
+        size_bytes: 6_735_906_897,
+        license: "Apache-2.0",
+        note: "Wan's prompt encoder (multilingual T5). Offloaded to the CPU during sampling.",
+    },
+    KnownModel {
+        id: "wan22-vae",
+        name: "Wan 2.2 VAE",
+        kind: "vae",
+        family: Some("wan"),
+        publisher: "Alibaba / Comfy-Org",
+        repo: "Comfy-Org/Wan_2.2_ComfyUI_Repackaged",
+        file: "wan2.2_vae.safetensors",
+        url: "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/vae/wan2.2_vae.safetensors",
+        sha256: "e40321bd36b9709991dae2530eb4ac303dd168276980d3e9bc4b6e2b75fed156",
+        size_bytes: 1_409_400_960,
+        license: "Apache-2.0",
+        note: "The Wan 2.2 autoencoder. Import as VAE.",
+    },
+    KnownModel {
+        id: "ltx-video-2b-095",
+        name: "LTX-Video 2B v0.9.5 (video, second template)",
+        kind: "video",
+        family: Some("ltx"),
+        publisher: "Lightricks",
+        repo: "Lightricks/LTX-Video",
+        file: "ltx-video-2b-v0.9.5.safetensors",
+        url: "https://huggingface.co/Lightricks/LTX-Video/resolve/main/ltx-video-2b-v0.9.5.safetensors",
+        sha256: "720d15c9f19f7d0f6b2a92bbbc34410e2cfb2f6856a100b38f734fbf973d4adf",
+        size_bytes: 6_340_729_500,
+        license: "LTXV License (OpenRAIL-M-style; check the repo for commercial terms)",
+        note: "Fast, light. One .safetensors carries model + VAE — only needs a t5xxl encoder (the fp8 one above works). Wants long, descriptive prompts.",
     },
 ];
 

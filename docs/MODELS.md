@@ -58,15 +58,17 @@ VRAM-Headroom aus einer Datei-Namens-Heuristik: `flux`/`sd3`/`wan`/`ltx` →
 +2,5 GB (der T5/umt5 wird beim Sampling ausgelagert), sonst +2 GB. Ein echter
 Wert wartet auf die `.safetensors`-Header-Inspektion + Kalibrierung (Phase 6).
 
-## Katalog — „Known models" (3.6)
+## Katalog — „Known models" (3.6 · Video 4.4)
 
-`core::model::catalog::KNOWN_MODELS` — eine kuratierte Liste (SDXL + der
-Flux-Stack: Diffusions-GGUF, T5, CLIP-L, VAE) mit HF-Quelle, **SHA-256**, Größe,
-Lizenz. `GET /models/known` / `list_known_models` speist den **„Known
-models"**-Abschnitt im Models-Tab. Kein Download-Manager im MVP (Phase 6) — man
-lädt selbst und importiert; bei SHA-256-Treffer stempelt `import_model`
+`core::model::catalog::KNOWN_MODELS` — eine kuratierte Liste mit HF-Quelle,
+**SHA-256**, Größe, Lizenz. Bild: SDXL + der Flux-Stack (Diffusions-GGUF, T5,
+CLIP-L, VAE). Video (4.4): der **Wan 2.2 TI2V-5B**-Stack (Modell + umt5 + VAE)
+und **LTX-Video 0.9.5 2B** (Modell + VAE gebündelt, T5 = der Flux-T5-Eintrag).
+`GET /models/known` / `list_known_models` speist den **„Known models"**-Abschnitt
+im Models-Tab. Kein Download-Manager im MVP (Phase 6) — man lädt selbst und
+importiert; bei SHA-256-Treffer stempelt `import_model`
 `publisher`/`family`/`source_revision = catalog:<id>`. Details + empfohlene
-Settings: [IMAGE_MODELS.md](IMAGE_MODELS.md).
+Settings: [IMAGE_MODELS.md](IMAGE_MODELS.md) / [VIDEO_MODELS.md](VIDEO_MODELS.md).
 
 ## Status
 

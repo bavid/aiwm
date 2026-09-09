@@ -27,7 +27,7 @@ genutzt.
 |---|---|---|
 | Fake | `FakeRuntimeAdapter` | ✅ vollständig (Tests) |
 | llama.cpp / llama-server | `LlamaCppAdapter` | ✅ Adapter (2.2a) + Installer (2.2b): Download/Verify/Entpacken des gepinnten CUDA-Builds |
-| ComfyUI | `ComfyUiAdapter` | ✅ Adapter (3.1) + Installer (3.2) + getypter Store via `extra_model_paths.yaml` (3.3) + Bild-Job (3.4) + UI/Galerie (3.5) + Flux-Template (3.6) + Politur (3.7) + **Video-Job** (`wan_ti2v`, `generate_media`, 4.1) + **Bild→Video** (`init_image` → `input/`-Staging, 4.2). Offen: echte ComfyUI verproben (4.0), Video-UI (4.3) |
+| ComfyUI | `ComfyUiAdapter` | ✅ Adapter (3.1) + Installer (3.2) + getypter Store (3.3) + Bild-Job (3.4) + UI/Galerie (3.5) + Flux-Template (3.6) + Politur (3.7) + **Video-Job** (`wan_ti2v`, `generate_media`, 4.1) + **Bild→Video** (4.2) + **Video-UI** (4.3) + **LTX-Template** (`ltx_video`, `VideoRecipe`, 4.4). Offen: echte ComfyUI verproben (4.0) |
 | Ollama | `OllamaAdapter` | optional, Phase 3+ (Duplikate transparent, ADR-006) |
 | LM Studio | — | vorerst nicht (proprietär, GUI-zentriert); wenn doch, `strategy_for` → `Junction` |
 
@@ -123,10 +123,14 @@ genutzt.
   (`UnetLoaderGGUF` + `DualCLIPLoaderGGUF` + `VAELoader` + `FluxGuidance`,
   SD3-Latent, Sampler bei CFG 1). Für Flux löst `capability::image` die drei
   Begleiter (T5 / CLIP-L / VAE) über Rolle + Namen auf; fehlt einer → Klartext-
-  Fehler. **Video:** `wan_ti2v` = `UNETLoader` + `CLIPLoader type="wan"` +
-  `VAELoader` → `ModelSamplingSD3` (Shift 8) → `WanImageToVideo` (ohne
-  `start_image` = T2V) → `KSampler` (`uni_pc`/`simple`) → `VAEDecode` →
-  `CreateVideo` → `SaveVideo` (mp4). Feste Templates, keine user-editierbare
+  Fehler. **Video:** `VideoRecipe::for_family` wählt `wan_ti2v` (`UNETLoader` +
+  `CLIPLoader type="wan"` + `VAELoader` → `ModelSamplingSD3` Shift 8 →
+  `WanImageToVideo` → `KSampler` `uni_pc`/`simple`) oder `ltx_video` (LTX-Video
+  0.9.5 — `CheckpointLoaderSimple` + `CLIPLoader type="ltxv"` → `LTXVConditioning`
+  → `EmptyLTXVLatentVideo` bzw. `LTXVImgToVideo` → `LTXVScheduler` →
+  `SamplerCustom`), beide → `VAEDecode` → `CreateVideo` → `SaveVideo`.
+  `capability::video` löst die Begleiter pro Rezept auf (Wan: umt5 + Wan-VAE ·
+  LTX: nur ein t5, VAE im Checkpoint). Feste Templates, keine user-editierbare
   Registry (PHASE_3_PLAN §C).
 - **Optionen (`[comfyui]`, 3.7):** `ComfyOptions { vram_mode, extra_args }` —
   `vram_mode` (`auto` / `highvram` / `normalvram` / `lowvram` / `novram`) wird

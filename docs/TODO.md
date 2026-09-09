@@ -111,7 +111,20 @@ hierher, damit nichts verloren geht.
   1800-s-Timeout gegen echte Clip-Zeiten prüfen; (f) **Bild→Video (4.2):** dass
   `LoadImage` den nach `<base>/input/` kopierten Frame findet und
   `WanImageToVideo.start_image` ihn ohne `clip_vision` akzeptiert (5B TI2V);
-  ob der Startframe vorab auf die Zielauflösung skaliert werden muss.
+  ob der Startframe vorab auf die Zielauflösung skaliert werden muss; (g)
+  **LTX-Template (4.4):** `CLIPLoader type="ltxv"` mit dem fp8-t5 lädt,
+  `LTXVScheduler` → `SamplerCustom` produziert Sigmas/Latents wie erwartet,
+  `LTXVImgToVideo` mit Startframe, LTX-Settings (max_shift/base_shift/terminal,
+  Steps, CFG) an einem echten 2B-Render kalibrieren.
+- **LTX-Frame-Grid (4.4):** LTX-Video will `(frames-1) % 8 == 0`, `capability::
+  video` klemmt aber universell auf Wans `4k+1`. Die LTX-Nodes runden intern ab
+  (weniger Frames als angefragt). Optionen: pro Rezept snappen (bräuchte den
+  Recipe schon in `from_params` — hat nur die Params, nicht das Modell), oder
+  universell auf `8k+1` (Superset von `4k+1`, kostet Wan etwas Granularität).
+- **LTX-2 / LTX-2.3 (19B/22B)** bleibt draußen (ADR-020): GGUF braucht
+  gepatchte `ComfyUI-GGUF`-Loader (unveröffentlichter Commit) + `ComfyUI-KJNodes`
+  → eigener ADR + Installer-Erweiterung, wenn der Weg stabil ist. Bringt Audio
+  und höhere Qualität.
 - **Verwaiste `input/`-Kopien (4.2):** der `StagedFrame`-`Drop`-Guard räumt den
   Normalfall (Erfolg / Fehler / Cancel) auf, aber nicht einen harten Absturz
   mitten im Render. Ein Sweep von `<base>/input/*` beim Server-Start (oder ein

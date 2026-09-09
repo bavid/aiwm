@@ -31,7 +31,7 @@ noch keine echte AI-Capability (die kommt ab Phase 2).
 | WP-9 | CI-Workflow, Git-Hooks (pre-commit fmt, pre-push voller Gate) |
 | WP-10 | ADRs finalisiert, Stub-Docs (MODELS/RUNTIMES/SECURITY/BENCHMARKS) |
 
-**242 Rust-Unit + 32 Integrationstests + 5 pytest** grün · `scripts/check.ps1` grün ·
+**246 Rust-Unit + 34 Integrationstests + 5 pytest** grün · `scripts/check.ps1` grün ·
 **null `unsafe`** im Produktivcode.
 
 **Phase 2 (MVP) ✅ abgeschlossen** — Scheiben 2.1–2.7 + durchgehender
@@ -69,6 +69,15 @@ echten 4080 (alle Smokes fuhren gegen die Fake-ComfyUI).
   stummes `<video>` mit „▶". „Video model" als Import-Typ auf dem Models-Tab,
   „Generate Video" auf dem Dashboard aktiv. Neu: `components/NumField`,
   `lib/dev-mock` (dev-only IPC-Bridge für den Browser).
+- **4.4** ✅ **Zweites Video-Template**: `pipeline::ltx_video` — **LTX-Video 0.9.5
+  (2B)**, nur Core-ComfyUI-Nodes (`CheckpointLoaderSimple` + `CLIPLoader ltxv` +
+  `LTXVConditioning` + `LTXVScheduler` → `SamplerCustom` + `CreateVideo` +
+  `SaveVideo`; `LTXVImgToVideo` mit Startframe). `VideoRecipe::for_family`
+  (`ltx` → LTX, sonst Wan). `capability::video` löst die Begleiter je Rezept auf
+  (Wan: umt5 + Wan-VAE · LTX: nur ein t5). **Katalog** bekommt die ersten
+  Video-Einträge (Wan-Stack + LTX, echte HF-SHA-256) → `GET /models/known` ·
+  [`docs/VIDEO_MODELS.md`](docs/VIDEO_MODELS.md) · **ADR-020** (Abweichung vom
+  Plan: nicht LTX-2 GGUF). Gegen `aiwm-fake-comfy`.
 
 - **3.1** ✅ `ComfyUiAdapter` — ComfyUI als **ein** langlebiger, lazy gestarteter
   Server (`RuntimeAdapter`): Spawn/Health (`/system_stats`) über

@@ -363,3 +363,68 @@ async fn auto_video_job_fails_cleanly_without_a_video_model() {
         other => panic!("expected Failed, got {other:?}"),
     }
 }
+
+#[tokio::test]
+async fn an_ltx_video_model_uses_the_ltx_template_and_only_needs_a_t5() {
+    let h = harness().await;
+    // family "ltx" → the LTX template; the checkpoint carries its own VAE, so no
+    // Wan VAE and no umt5 — just a t5xxl encoder.
+    h.add_model("ltx-video-2b-v0.9.5.safetensors", Some("ltx"), "base_video")
+        .await;
+    h.add_model("t5xxl_fp8_e4m3fn.safetensors", None, "text_encoder")
+        .await;
+
+    let job = h
+        .engine
+        .submit(video_job("a long descriptive shot of a fox"))
+        .await
+        .unwrap();
+    assert!(matches!(
+        h.engine.run_next().await.unwrap().unwrap(),
+        JobOutcome::Completed { job_id } if job_id == job.id
+    ));
+
+    let stored = h.db.jobs().get(&job.id).await.unwrap().unwrap();
+    assert_eq!(stored.state, JobState::Completed);
+    assert!(is_mp4(Path::new(&stored.output_path.unwrap())));
+
+    let events: Vec<String> =
+        h.db.jobs()
+            .events(&job.id)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|e| e.message)
+            .collect();
+    assert!(
+        events
+            .iter()
+            .any(|m| m.contains("LTX-Video") && m.contains("T5 encoder")),
+        "{events:?}"
+    );
+}
+
+#[tokio::test]
+async fn an_ltx_video_job_without_a_t5_fails_with_a_clear_message() {
+    let h = harness().await;
+    h.add_model("ltx-video-2b-v0.9.5.safetensors", Some("ltx"), "base_video")
+        .await;
+    // only an umt5 in the library — LTX must not accept it as its T5.
+    h.add_model(
+        "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
+        None,
+        "text_encoder",
+    )
+    .await;
+
+    h.engine.submit(video_job("x")).await.unwrap();
+    match h.engine.run_next().await.unwrap().unwrap() {
+        JobOutcome::Failed { error, .. } => {
+            assert!(
+                error.contains("T5 text encoder") && error.contains("Models tab"),
+                "{error}"
+            );
+        }
+        other => panic!("expected Failed, got {other:?}"),
+    }
+}

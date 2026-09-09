@@ -24,7 +24,7 @@ schon Installierte läuft weiter.
 | 4.1 | `capability::video`: `job_type=video`, Params (prompt, negative, w/h, length in Frames, fps, steps, cfg, seed, model\|Auto über Rolle `base_video`); **feste Pipeline** `wan_ti2v` (`core::pipeline`) = `WanImageToVideo` (ohne `start_image` = T2V) → `KSampler` → `VAEDecode` → `CreateVideo` → `SaveVideo` (mp4/h264). `generate_image` → `generate_media` verallgemeinern (VIDEO-Output-Key in `/history`, `/view` für `.mp4`). `ModelKind::VideoModel` + Familie `wan`. Output nach `<outputs>/<job_id>.mp4` → `jobs.output_path`. VRAM-Schätzung pro Familie. Cancel via `/interrupt` | ✅ |
 | 4.2 | **Bild→Video**: `init_image`-Param (Pfad oder Job-ID eines fertigen Bildes); der Startframe wird nach `<comfyui-data>/input/<job_id>.<ext>` kopiert und als `LoadImage` → `WanImageToVideo.start_image` verdrahtet. Ein Bild-Job-Output aus der Galerie als Quelle | ✅ |
 | 4.3 | UI-Tab „Video" — Prompt/Negativ, Auflösung/Länge/fps/Steps/CFG/Seed, Model [Auto], optional „Start from image" (Galerie-Pick oder Pfad), „Generate"; **Erwartungssteuerung** (geschätzte Dauer + „das dauert Minuten", Fortschritt); `<video>`-Player auf `GET /jobs/{id}/output` (CSP `media-src`); Galerie der Video-Jobs (Poster = erstes Frame). Dashboard-Button „Generate Video" aktiv | ✅ |
-| 4.4 | Zweites Template **LTX-2 / LTX 2.3 (GGUF)** über `ComfyUI-GGUF` (Node schon installiert); `docs/VIDEO_MODELS.md` (kuratierte Modelle: SHA256, HF-Quelle, Lizenz, Settings); Katalog-Einträge (`core::model::catalog`) | offen |
+| 4.4 | Zweites Template **LTX-2 / LTX 2.3 (GGUF)** über `ComfyUI-GGUF` (Node schon installiert); `docs/VIDEO_MODELS.md` (kuratierte Modelle: SHA256, HF-Quelle, Lizenz, Settings); Katalog-Einträge (`core::model::catalog`) | ✅ *(als **LTX-Video 0.9.5 2B**, Core-Nodes — ADR-020)* |
 | 4.5 | Politur: Erwartungssteuerung verfeinern (Zeit-Schätzung kalibrieren), **RAM-Warnung** wenn das Offload-Budget kritisch wird, Retention-Hinweis (Videos sind groß), Settings (Wan/LTX-Optionen, `--reserve-vram`), Diagnostics; Scheduler: Video-Slot neben LLM/Bild-Slot verproben (`core/tests/*_swap.rs`-Erweiterung) | offen |
 
 Nach dem MVP (txt2vid + img2vid): **Frame-Interpolation** (RIFE / Wan-eigene
@@ -325,6 +325,63 @@ Fortschritt — 4.5), echtes Poster-Frame (erstes Frame per ffmpeg extrahieren �
 bei langen Clips (TODO, hängt am `GET /jobs/{id}/output`-Streaming), Lightbox /
 Download / Retention-Aufräumen der Galerie (eigene kleine Slices bei Bedarf),
 Registry der Größe-Presets.
+
+---
+
+## 4.4 — Ergebnis (abgeschlossen) · **Plan-Abweichung, siehe ADR-020**
+
+Zweites Video-Template. Der Plan nannte LTX-2 GGUF über den installierten
+`ComfyUI-GGUF`-Node — die Recherche zeigt, dass LTX-2/2.3 dafür gepatchte Loader
++ KJNodes braucht und selbst als GGUF kaum in 16 GB passt. Gewählt:
+**LTX-Video 0.9.5 (2B)** als einzelnes `.safetensors`, **nur Core-ComfyUI-Nodes**
+(ADR-020). Weiter gegen `aiwm-fake-comfy`.
+
+- **`core::pipeline`**: neu `ltx_video(i, m)` — `CheckpointLoaderSimple`
+  (Model + VAE) + `CLIPLoader type="ltxv"` → `CLIPTextEncode`×2 →
+  `LTXVConditioning` (frame_rate) → `EmptyLTXVLatentVideo` → `LTXVScheduler`
+  (max_shift 2.05 / base_shift 0.95 / terminal 0.1) → `KSamplerSelect euler` →
+  **`SamplerCustom`** (Sigmas vom Scheduler, kein `KSampler`) → `VAEDecode` →
+  `CreateVideo` → `SaveVideo`. Mit Startframe: `EmptyLTXVLatentVideo` wird durch
+  `LoadImage` + `LTXVImgToVideo` ersetzt (produziert Conditioning + Start-Latent,
+  wie `WanImageToVideo`). Graph aus dem offiziellen
+  `Comfy-Org/workflow_templates`-JSON verifiziert.
+- **`VideoRecipe { Wan, Ltx }`** + `for_family` (`"ltx"` → Ltx, sonst Wan) —
+  spiegelt `Recipe::for_family` (Bild). `LtxModels { checkpoint, t5 }`.
+- **`capability::video::run`** umgebaut: baut `(workflow, companion_note)` je
+  Rezept. Wan → `resolve_wan_companions` (umt5 + Wan-VAE). LTX →
+  `resolve_ltx_encoder` (ein `t5…`, **nicht** `umt5`; VAE steckt im Checkpoint).
+  Fehlt der T5 → „LTX-Video needs a T5 text encoder — import t5xxl_… on the
+  Models tab". `name_is_t5` = enthält „t5", nicht „umt5".
+- **`core::model::catalog`**: +4 Einträge (die ersten Video-Einträge) —
+  `wan22-ti2v-5b`, `wan-umt5-xxl-fp8`, `wan22-vae`, `ltx-video-2b-095`. Echte
+  HF-SHA-256 (gegen die HF-LFS-Pointer geprüft). `KNOWN_MODELS` jetzt 11
+  Einträge; `GET /models/known` liefert sie mit; „Known models"-Panel zeigt sie
+  (LTX-T5 = der schon gelistete `t5xxl-fp8`).
+- **`docs/VIDEO_MODELS.md`** (neu): Wan-Stack + LTX, SHA-256, HF-Quelle, Lizenz,
+  Settings, Companion-Auflösung, „bewusst nicht". Katalog-Doc-Kommentar +
+  `docs/MODELS.md` verweisen darauf.
+- **`wan_ti2v`**: `SaveVideo` bekommt `codec: "auto"` (matcht die echte
+  Node-Signatur; fake-comfy ignoriert es) — Konsistenz mit `ltx_video`.
+
+Verifiziert:
+- **+4 Unit-Tests** (`pipeline` — `VideoRecipe`-Wahl, LTX-Graph T2V + I2V;
+  `capability::video` — `resolve_ltx_encoder` T5-nicht-umt5) → **246 Lib-Tests**.
+  **+2 Integrationstests** `tests/video_job.rs`: `family "ltx"` → LTX-Template,
+  nur T5 nötig, rendert `.mp4`, Event „LTX-Video — T5 encoder …"; LTX ohne T5
+  (nur umt5 da) → `Failed` „T5 text encoder" → **34 Integrationstests**.
+  `check.ps1` grün.
+- **Live** (`smoke_44.sh`): `GET /models/known` trägt die 4 Video-Einträge
+  (64-Hex-SHAs, `ltx-video-2b-095` family `ltx`). LTX-Checkpoint importiert nach
+  `models/video/diffusion_models/`. Video-Job (`length: 49`) → `auto-selected
+  ltx-video-2b-v0.9.5` → Event „LTX-Video — T5 encoder „t5xxl_fp8…", VAE from
+  the checkpoint" → `completed`, `.mp4` über `/jobs/<id>/output` (`video/mp4`).
+  LTX-Job mit nur einem umt5 → `failed`: „LTX-Video needs a T5 text encoder …".
+
+Bewusst **nicht** in 4.4: LTX-2 / 2.3 (19B/22B — GGUF-Node-Patch + KJNodes,
+ADR-020), LTX-13B (zu groß), LTX-2-Audio, der `(frames-1) % 8`-Grid für LTX
+(die App klemmt auf `4k+1`, LTX rundet intern ab — für 4.0), UI-Änderungen (der
+Video-Tab von 4.3 dispatcht schon über `base_video`, egal welche Familie),
+Frame-Interpolation / Upscale (spätere Slices), echte ComfyUI (4.0).
 
 ---
 

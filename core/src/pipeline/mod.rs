@@ -9,9 +9,11 @@
 //!
 //! Image: [`checkpoint_txt2img`] (SDXL and any single-file SD checkpoint — core
 //! nodes) and [`flux_txt2img`] (FLUX.1-dev GGUF + dual CLIP + VAE, via
-//! `ComfyUI-GGUF`); [`Recipe::for_family`] picks. Video:
-//! [`wan_ti2v`] (Wan 2.2 TI2V — text→video, and image→video when a start frame
-//! is given; core video nodes). A TOML pipeline *registry* stays out of the MVP.
+//! `ComfyUI-GGUF`); [`Recipe::for_family`] picks. Video: [`wan_ti2v`] (Wan 2.2
+//! TI2V — three separate files) and [`ltx_video`] (LTX-Video 0.9.x — a bundled
+//! checkpoint + a T5); [`VideoRecipe::for_family`] picks. Both do text→video and
+//! image→video (a start frame in ComfyUI's `input/`). A TOML pipeline *registry*
+//! stays out of the MVP.
 
 use serde_json::{json, Value};
 
@@ -185,7 +187,8 @@ pub struct VideoInputs<'a> {
     pub negative: &'a str,
     pub width: u32,
     pub height: u32,
-    /// Frames. Wan wants `(length - 1) % 4 == 0`.
+    /// Frames. Wan wants `(length - 1) % 4 == 0`; LTX-Video wants `% 8 == 0` and
+    /// rounds down internally if it isn't.
     pub length: u32,
     pub fps: u32,
     pub steps: u32,
@@ -275,7 +278,12 @@ pub fn wan_ti2v(i: &VideoInputs, m: &WanModels) -> Value {
         },
         "59": {
             "class_type": "SaveVideo",
-            "inputs": { "video": ["58", 0], "filename_prefix": i.filename_prefix, "format": "mp4" }
+            "inputs": {
+                "video": ["58", 0],
+                "filename_prefix": i.filename_prefix,
+                "format": "mp4",
+                "codec": "auto"
+            }
         }
     });
 
@@ -285,6 +293,150 @@ pub fn wan_ti2v(i: &VideoInputs, m: &WanModels) -> Value {
             "inputs": { "image": frame }
         });
         g["55"]["inputs"]["start_image"] = json!(["60", 0]);
+    }
+    g
+}
+
+/// Which video template a model needs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VideoRecipe {
+    /// Wan 2.2 TI2V — three separate files ([`wan_ti2v`]).
+    Wan,
+    /// LTX-Video 0.9.x — a bundled checkpoint + a separate T5 ([`ltx_video`]).
+    Ltx,
+}
+
+impl VideoRecipe {
+    /// `family == "ltx"` → [`VideoRecipe::Ltx`]; everything else is Wan (the
+    /// default video template).
+    pub fn for_family(family: Option<&str>) -> Self {
+        match family {
+            Some(f) if f.eq_ignore_ascii_case("ltx") => Self::Ltx,
+            _ => Self::Wan,
+        }
+    }
+}
+
+/// LTX-Video's two files: the 2B checkpoint (bundles the diffusion model **and**
+/// the VAE) and a T5 text encoder loaded separately (`CLIPLoader type="ltxv"`).
+#[derive(Debug, Clone, Copy)]
+pub struct LtxModels<'a> {
+    /// `ltx-video-2b-v0.9.x.safetensors` — model + VAE.
+    pub checkpoint: &'a str,
+    /// A `t5xxl` encoder (the fp8 one already in the catalogue works).
+    pub t5: &'a str,
+}
+
+/// LTX-Video 0.9.x text/image-to-video. All core ComfyUI nodes (no custom pack):
+/// `CheckpointLoaderSimple` (model + VAE) + `CLIPLoader type="ltxv"` →
+/// `CLIPTextEncode` ×2 → `LTXVConditioning` → `EmptyLTXVLatentVideo`
+/// (or `LTXVImgToVideo` when a start frame is given) → `LTXVScheduler` sigmas →
+/// `SamplerCustom` (`KSamplerSelect euler`) → `VAEDecode` → `CreateVideo` →
+/// `SaveVideo`.
+pub fn ltx_video(i: &VideoInputs, m: &LtxModels) -> Value {
+    // LTXVScheduler defaults from ComfyUI's own LTXV template.
+    const MAX_SHIFT: f64 = 2.05;
+    const BASE_SHIFT: f64 = 0.95;
+    const TERMINAL: f64 = 0.1;
+    // LTXVImgToVideo: how strongly the start frame constrains the first frames.
+    const IMG_STRENGTH: f64 = 0.15;
+
+    let mut g = json!({
+        "44": {
+            "class_type": "CheckpointLoaderSimple",
+            "inputs": { "ckpt_name": m.checkpoint }
+        },
+        "38": {
+            "class_type": "CLIPLoader",
+            "inputs": { "clip_name": m.t5, "type": "ltxv", "device": "default" }
+        },
+        "6": {
+            "class_type": "CLIPTextEncode",
+            "inputs": { "text": i.positive, "clip": ["38", 0] }
+        },
+        "7": {
+            "class_type": "CLIPTextEncode",
+            "inputs": { "text": i.negative, "clip": ["38", 0] }
+        },
+        "69": {
+            "class_type": "LTXVConditioning",
+            "inputs": { "positive": ["6", 0], "negative": ["7", 0], "frame_rate": i.fps }
+        },
+        "70": {
+            "class_type": "EmptyLTXVLatentVideo",
+            "inputs": { "width": i.width, "height": i.height, "length": i.length, "batch_size": 1 }
+        },
+        "71": {
+            "class_type": "LTXVScheduler",
+            "inputs": {
+                "steps": i.steps,
+                "max_shift": MAX_SHIFT,
+                "base_shift": BASE_SHIFT,
+                "stretch": true,
+                "terminal": TERMINAL,
+                "latent": ["70", 0]
+            }
+        },
+        "73": {
+            "class_type": "KSamplerSelect",
+            "inputs": { "sampler_name": "euler" }
+        },
+        "72": {
+            "class_type": "SamplerCustom",
+            "inputs": {
+                "add_noise": true,
+                "noise_seed": i.seed,
+                "cfg": i.cfg,
+                "model": ["44", 0],
+                "positive": ["69", 0],
+                "negative": ["69", 1],
+                "sampler": ["73", 0],
+                "sigmas": ["71", 0],
+                "latent_image": ["70", 0]
+            }
+        },
+        "8": {
+            "class_type": "VAEDecode",
+            "inputs": { "samples": ["72", 0], "vae": ["44", 2] }
+        },
+        "58": {
+            "class_type": "CreateVideo",
+            "inputs": { "images": ["8", 0], "fps": i.fps }
+        },
+        "59": {
+            "class_type": "SaveVideo",
+            "inputs": {
+                "video": ["58", 0],
+                "filename_prefix": i.filename_prefix,
+                "format": "mp4",
+                "codec": "auto"
+            }
+        }
+    });
+
+    if let Some(frame) = i.start_image {
+        // I2V: LTXVImgToVideo produces the conditioning + the start latent,
+        // replacing EmptyLTXVLatentVideo.
+        g.as_object_mut().and_then(|o| o.remove("70"));
+        g["78"] = json!({ "class_type": "LoadImage", "inputs": { "image": frame } });
+        g["77"] = json!({
+            "class_type": "LTXVImgToVideo",
+            "inputs": {
+                "positive": ["6", 0],
+                "negative": ["7", 0],
+                "vae": ["44", 2],
+                "image": ["78", 0],
+                "width": i.width,
+                "height": i.height,
+                "length": i.length,
+                "batch_size": 1,
+                "strength": IMG_STRENGTH
+            }
+        });
+        g["69"]["inputs"]["positive"] = json!(["77", 0]);
+        g["69"]["inputs"]["negative"] = json!(["77", 1]);
+        g["71"]["inputs"]["latent"] = json!(["77", 2]);
+        g["72"]["inputs"]["latent_image"] = json!(["77", 2]);
     }
     g
 }
@@ -466,5 +618,65 @@ mod tests {
         assert_eq!(g["60"]["class_type"], "LoadImage");
         assert_eq!(g["60"]["inputs"]["image"], "job-src.png");
         assert_eq!(g["55"]["inputs"]["start_image"], json!(["60", 0]));
+    }
+
+    #[test]
+    fn video_recipe_selects_ltx_for_the_family() {
+        assert_eq!(VideoRecipe::for_family(Some("ltx")), VideoRecipe::Ltx);
+        assert_eq!(VideoRecipe::for_family(Some("LTX")), VideoRecipe::Ltx);
+        assert_eq!(VideoRecipe::for_family(Some("wan")), VideoRecipe::Wan);
+        assert_eq!(VideoRecipe::for_family(None), VideoRecipe::Wan);
+    }
+
+    fn ltx_models() -> LtxModels<'static> {
+        LtxModels {
+            checkpoint: "ltx-video-2b-v0.9.5.safetensors",
+            t5: "t5xxl_fp8_e4m3fn.safetensors",
+        }
+    }
+
+    #[test]
+    fn ltx_graph_wires_the_scheduler_driven_sampler_for_text_to_video() {
+        let g = ltx_video(&video_inputs(), &ltx_models());
+        assert_eq!(g["44"]["class_type"], "CheckpointLoaderSimple");
+        assert_eq!(
+            g["44"]["inputs"]["ckpt_name"],
+            "ltx-video-2b-v0.9.5.safetensors"
+        );
+        assert_eq!(g["38"]["inputs"]["type"], "ltxv");
+        assert_eq!(g["69"]["class_type"], "LTXVConditioning");
+        assert_eq!(g["69"]["inputs"]["frame_rate"], 24);
+        assert_eq!(g["70"]["class_type"], "EmptyLTXVLatentVideo");
+        assert_eq!(g["70"]["inputs"]["length"], 81);
+        // SamplerCustom is driven by the LTXVScheduler sigmas + a picked sampler.
+        assert_eq!(g["72"]["class_type"], "SamplerCustom");
+        assert_eq!(g["72"]["inputs"]["noise_seed"], 7);
+        assert_eq!(g["72"]["inputs"]["cfg"], 5.0);
+        assert_eq!(g["72"]["inputs"]["model"], json!(["44", 0]));
+        assert_eq!(g["72"]["inputs"]["sigmas"], json!(["71", 0]));
+        assert_eq!(g["72"]["inputs"]["sampler"], json!(["73", 0]));
+        assert_eq!(g["72"]["inputs"]["latent_image"], json!(["70", 0]));
+        assert_eq!(g["71"]["inputs"]["latent"], json!(["70", 0]));
+        assert_eq!(g["8"]["inputs"]["vae"], json!(["44", 2]));
+        assert_eq!(g["58"]["class_type"], "CreateVideo");
+        assert_eq!(g["59"]["inputs"]["filename_prefix"], "job-vid");
+        assert!(g.get("77").is_none(), "T2V: no LTXVImgToVideo");
+    }
+
+    #[test]
+    fn ltx_graph_swaps_in_img_to_video_for_a_start_frame() {
+        let mut i = video_inputs();
+        i.start_image = Some("job-src.png");
+        let g = ltx_video(&i, &ltx_models());
+        assert!(g.get("70").is_none(), "EmptyLTXVLatentVideo is replaced");
+        assert_eq!(g["78"]["class_type"], "LoadImage");
+        assert_eq!(g["78"]["inputs"]["image"], "job-src.png");
+        assert_eq!(g["77"]["class_type"], "LTXVImgToVideo");
+        assert_eq!(g["77"]["inputs"]["image"], json!(["78", 0]));
+        assert_eq!(g["77"]["inputs"]["vae"], json!(["44", 2]));
+        // conditioning + the start latent now come from LTXVImgToVideo
+        assert_eq!(g["69"]["inputs"]["positive"], json!(["77", 0]));
+        assert_eq!(g["71"]["inputs"]["latent"], json!(["77", 2]));
+        assert_eq!(g["72"]["inputs"]["latent_image"], json!(["77", 2]));
     }
 }
