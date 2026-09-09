@@ -63,6 +63,13 @@ pub struct LlamaServerOptions {
     pub ctx_size: Option<u32>,
     /// Pass `--flash-attn on`.
     pub flash_attention: bool,
+    /// Pass `--jinja` — use the GGUF's embedded chat template. Needed for
+    /// reliable OpenAI tool-call parsing (agents, 5.1 / ADR-021); harmless for
+    /// plain chat (the embedded template is the correct one). Default on.
+    pub jinja: bool,
+    /// `--chat-template <name>` — override when the embedded template isn't
+    /// tool-aware. `None` = use whatever the GGUF ships.
+    pub chat_template: Option<String>,
     /// How long a freshly started server has to answer `/health`.
     pub load_timeout: Duration,
     /// Extra raw arguments, appended verbatim.
@@ -75,6 +82,8 @@ impl Default for LlamaServerOptions {
             gpu_layers: DEFAULT_GPU_LAYERS,
             ctx_size: None,
             flash_attention: true,
+            jinja: true,
+            chat_template: None,
             load_timeout: DEFAULT_LOAD_TIMEOUT,
             extra_args: Vec::new(),
         }

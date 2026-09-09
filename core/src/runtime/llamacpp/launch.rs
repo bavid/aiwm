@@ -39,6 +39,12 @@ pub(super) fn build_spawn_spec(
     if opts.flash_attention {
         spec = spec.arg("--flash-attn").arg("on");
     }
+    if opts.jinja {
+        spec = spec.arg("--jinja");
+    }
+    if let Some(template) = &opts.chat_template {
+        spec = spec.arg("--chat-template").arg(template.clone());
+    }
     for extra in &opts.extra_args {
         spec = spec.arg(extra.clone());
     }
@@ -120,16 +126,22 @@ mod tests {
         assert!(joined.contains("-ngl 999"));
         assert!(joined.contains("-c 8192"));
         assert!(joined.contains("--flash-attn on"));
+        assert!(
+            joined.contains("--jinja"),
+            "jinja is on by default (tool calls)"
+        );
     }
 
     #[test]
-    fn build_spawn_spec_uses_the_given_ctx_and_can_drop_flash_attn() {
+    fn build_spawn_spec_uses_the_given_ctx_and_can_drop_flash_attn_and_jinja() {
         let spec = build_spawn_spec(
             Path::new("s"),
             Path::new("m.gguf"),
             1,
             &LlamaServerOptions {
                 flash_attention: false,
+                jinja: false,
+                chat_template: Some("qwen2.5-coder".into()),
                 ..opts()
             },
             4096,
@@ -137,6 +149,8 @@ mod tests {
         let joined = spec.args.join(" ");
         assert!(joined.contains("-c 4096"));
         assert!(!joined.contains("--flash-attn"));
+        assert!(!joined.contains("--jinja"));
+        assert!(joined.contains("--chat-template qwen2.5-coder"));
     }
 
     #[test]

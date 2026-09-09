@@ -120,6 +120,13 @@ pub struct LlamaConfig {
     pub ctx_size: u32,
     /// Pass `--flash-attn on`.
     pub flash_attention: bool,
+    /// Pass `--jinja` (the GGUF's embedded chat template). Needed for reliable
+    /// tool-call parsing — agents (5.1 / ADR-021) — and correct for plain chat.
+    /// Default on; turn off + set `chat_template` if a GGUF's embedded template
+    /// misbehaves.
+    pub jinja: bool,
+    /// `--chat-template <name>`; empty = use the GGUF's own.
+    pub chat_template: String,
     /// Seconds a freshly started server has to answer `/health`.
     pub load_timeout_secs: u64,
 }
@@ -130,6 +137,8 @@ impl Default for LlamaConfig {
             gpu_layers: 999,
             ctx_size: 0,
             flash_attention: true,
+            jinja: true,
+            chat_template: String::new(),
             load_timeout_secs: 180,
         }
     }
@@ -138,10 +147,13 @@ impl Default for LlamaConfig {
 impl LlamaConfig {
     /// Build the runtime options the adapter actually launches with.
     pub fn to_options(&self) -> crate::runtime::LlamaServerOptions {
+        let chat_template = self.chat_template.trim();
         crate::runtime::LlamaServerOptions {
             gpu_layers: self.gpu_layers,
             ctx_size: (self.ctx_size > 0).then_some(self.ctx_size),
             flash_attention: self.flash_attention,
+            jinja: self.jinja,
+            chat_template: (!chat_template.is_empty()).then(|| chat_template.to_string()),
             load_timeout: std::time::Duration::from_secs(self.load_timeout_secs),
             extra_args: Vec::new(),
         }
@@ -443,14 +455,20 @@ mod tests {
         assert_eq!(opts.gpu_layers, 999);
         assert_eq!(opts.ctx_size, None); // 0 => auto
         assert!(opts.flash_attention);
+        assert!(opts.jinja, "jinja on by default (tool calls)");
+        assert_eq!(opts.chat_template, None);
         assert_eq!(opts.load_timeout.as_secs(), 180);
 
         let opts = LlamaConfig {
             ctx_size: 4096,
+            jinja: false,
+            chat_template: "  qwen2.5-coder  ".into(),
             ..LlamaConfig::default()
         }
         .to_options();
         assert_eq!(opts.ctx_size, Some(4096));
+        assert!(!opts.jinja);
+        assert_eq!(opts.chat_template.as_deref(), Some("qwen2.5-coder"));
     }
 
     #[test]
@@ -464,6 +482,7 @@ mod tests {
                 ctx_size: 16_384,
                 flash_attention: false,
                 load_timeout_secs: 90,
+                ..LlamaConfig::default()
             },
             ..Config::default()
         };

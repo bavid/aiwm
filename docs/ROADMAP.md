@@ -146,8 +146,10 @@ erzwingbar, kein `bash -l` — Empfehlung, dreht die Reihenfolge unten um),
   config + Approval-API OK; Hermes 0.19 nativ Windows (Git-Bash, kein WSL-Zwang,
   aber ~120 Deps + node/Browser/ripgrep/ffmpeg); `llama-server --jinja` emittiert
   OpenAI-`tool_calls` (Qwen2.5-Coder/Hermes/Llama3.x) — echter Modell-Lauf = 5.1
-- [ ] 5.1 `core::agent` + `AgentAdapter` + Migration `0005` + **OpenCode-Adapter**
-  (supervised `serve`, erzwungene Config, Scheduler-Pin, SSE-Proxy, `--jinja`)
+- [x] 5.1a Agent-Fundament — `core::agent` (`AgentAdapter`-Trait, `AgentEvent`,
+  `FakeAgentAdapter`), Migration `0005` + `db::AgentRepo`, `LlamaServerOptions.jinja`
+- [ ] 5.1b **OpenCode-Adapter** (supervised `serve`, erzwungene Config,
+  Scheduler-Pin, SSE-Proxy, `capability::agent`, API + Tauri, Smoke mit echtem GGUF)
 - 5.2 Sandkasten: Command-Approval-Fluss (UI), Pfad-Allowlist, Offline erzwungen
 - 5.3 Agents-UI-Tab (Profile, Transkript mit Tool-Calls + Approvals, Workspace-Picker)
 - 5.4 **Hermes-Adapter** (`uv`-Installer, gemanagtes Profil, erzwungene `config.yaml`)

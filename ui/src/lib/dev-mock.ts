@@ -64,7 +64,10 @@ const ABOUT: AnyRecord = {
 const CONFIG: AnyRecord = {
   store_path: "E:\\AI\\models", core_api_port: 48096, offline_mode: false, log_filter: "info",
   vram_budget_mb: 0,
-  llama: { gpu_layers: 999, ctx_size: 0, flash_attention: true, load_timeout_secs: 180 },
+  llama: {
+    gpu_layers: 999, ctx_size: 0, flash_attention: true,
+    jinja: true, chat_template: "", load_timeout_secs: 180,
+  },
   comfyui: { vram_mode: "auto", reserve_vram_mb: 0, extra_args: "" },
 };
 

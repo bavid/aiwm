@@ -4,11 +4,13 @@
 //! consumers (settings, jobs; runtimes in WP-4, models with the Phase-2 model
 //! importer) rather than all up front.
 
+mod agents;
 mod jobs;
 mod models;
 mod runtimes;
 mod settings;
 
+pub use agents::{Agent, AgentRepo, AgentSession, AgentSessionEvent, AgentSessionState, NewAgent};
 pub use jobs::{EventLevel, Job, JobEvent, JobFilter, JobPatch, JobRepo, NewJob};
 pub use models::{Model, ModelLink, ModelRepo, NewModel};
 pub use runtimes::{state as runtime_state, RuntimeRecord, RuntimeRepo};
@@ -82,6 +84,10 @@ impl Database {
 
     pub fn runtimes(&self) -> RuntimeRepo<'_> {
         RuntimeRepo::new(&self.pool)
+    }
+
+    pub fn agents(&self) -> AgentRepo<'_> {
+        AgentRepo::new(&self.pool)
     }
 
     /// Names of the application tables (excludes SQLite internals). Test helper.

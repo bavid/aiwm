@@ -16,7 +16,8 @@
 //! - [`db`]           — sqlx pool, migrations, repositories (WP-2)
 //! - [`runtime`]      — `RuntimeAdapter` trait, supervisor, llama.cpp (2.2) + ComfyUI (3.1) adapters
 //! - [`orchestrator`] — job state machine + engine (WP-5)
-//! - [`capability`]   — capability-specific job bodies (chat 2.4, image 3.4)
+//! - [`capability`]   — capability-specific job bodies (chat 2.4, image 3.4, video 4.1)
+//! - [`agent`]        — `AgentAdapter` trait + types for the OpenCode/Hermes runtimes (5.1)
 //! - [`pipeline`]     — fixed image workflow-JSON templates (3.4)
 //! - [`compat`]        — VRAM / KV-cache fit estimate before a model load (2.6)
 //! - [`link`]         — canonical model file ↔ runtime layout (junction/copy, 2.3)
@@ -24,6 +25,7 @@
 //! - [`sidecar`]      — JSON-RPC client for the Python sidecar (WP-8)
 //! - [`api`]          — handlers shared by Tauri IPC and the loopback HTTP/WS API (WP-6)
 
+pub mod agent;
 pub mod api;
 pub mod app;
 pub mod capability;
@@ -42,6 +44,9 @@ pub mod scheduler;
 pub mod sidecar;
 pub mod telemetry;
 
+pub use agent::{
+    AgentAdapter, AgentEvent, AgentKind, EndpointConfig, PermissionDecision, SessionSpec,
+};
 pub use api::{ApiServer, Services};
 pub use app::App;
 pub use compat::{estimate as estimate_vram, ModelDims, VramEstimate};

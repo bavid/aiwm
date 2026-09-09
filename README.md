@@ -31,7 +31,7 @@ noch keine echte AI-Capability (die kommt ab Phase 2).
 | WP-9 | CI-Workflow, Git-Hooks (pre-commit fmt, pre-push voller Gate) |
 | WP-10 | ADRs finalisiert, Stub-Docs (MODELS/RUNTIMES/SECURITY/BENCHMARKS) |
 
-**248 Rust-Unit + 35 Integrationstests + 5 pytest** grün · `scripts/check.ps1` grün ·
+**254 Rust-Unit + 35 Integrationstests + 5 pytest** grün · `scripts/check.ps1` grün ·
 **null `unsafe`** im Produktivcode.
 
 **Phase 2 (MVP) ✅ abgeschlossen** — Scheiben 2.1–2.7 + durchgehender
@@ -44,13 +44,20 @@ echten 4080 (alle Smokes fuhren gegen die Fake-ComfyUI).
 gebaut). **Offen: 4.0** — die echte ComfyUI auf der 4080 verproben (cu130-Treiber,
 GGUF-Ordner-Keys, `SaveVideo`/`av`, Zeit/VRAM kalibrieren) — läuft vermutlich an
 der echten Maschine. Plan + Research: [docs/PHASE_4_PLAN.md](docs/PHASE_4_PLAN.md).
-**Phase 5 (Agents) — Plan + 5.0 ✅:** [docs/PHASE_5_PLAN.md](docs/PHASE_5_PLAN.md),
+**Phase 5 (Agents) — Plan + 5.0 + 5.1a ✅:** [docs/PHASE_5_PLAN.md](docs/PHASE_5_PLAN.md),
 **ADR-021**. Nicht selbst bauen — **OpenCode** (`opencode serve`, Adapter 1) +
 **Hermes Agent** (Nous Research, Adapter 2) orchestrieren und sandboxen,
 Endpoint = lokaler `llama-server --jinja`. Sandkasten = Pfad-Allowlist +
-Command-Approval (UI) + erzwungene Offline-Config. 5.0 hat verprobt: `opencode
-serve` + erzwungene Config + der Approval-Zyklus laufen; `--jinja` emittiert
-OpenAI-`tool_calls`; Hermes 0.19 läuft nativ auf Windows (Git-Bash, kein WSL).
+Command-Approval (UI) + erzwungene Offline-Config.
+
+- **5.0** ✅ Voraussetzungen verprobt (ADR-021): `opencode serve` + erzwungene
+  Config + der Approval-Zyklus laufen; `--jinja` emittiert OpenAI-`tool_calls`;
+  Hermes 0.19 läuft nativ auf Windows (Git-Bash, kein WSL).
+- **5.1a** ✅ Fundament: `core::agent` (`AgentAdapter`-Trait, `AgentEvent`,
+  `SessionSpec`, `PermissionDecision`, `FakeAgentAdapter`), Migration `0005`
+  (`agents` / `agent_sessions` / `agent_session_events`) + `db::AgentRepo`.
+  `LlamaServerOptions.jinja` (default an) + `chat_template` — `--jinja` /
+  `--chat-template` im Spawn, `[llama]`-Config + Settings-Toggle.
 
 - **4.1** ✅ **`capability::video`**: `job_type=video` → feste `wan_ti2v`-Pipeline
   (`WanImageToVideo` → `KSampler` → `VAEDecode` → `CreateVideo` → `SaveVideo`,

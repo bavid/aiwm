@@ -33,7 +33,8 @@ Export/Import bringt Config + DB + Agent-Profil auf eine zweite Maschine.
 | Scheibe | Inhalt | Status |
 |---|---|---|
 | **5.0** | **Windows-Voraussetzungen verproben**: (a) `opencode` installieren + `opencode serve` + API; (b) Hermes installieren + `bash -l`-Frage klären; (c) **`llama-server`-Tool-Calling** (`--jinja` + Coding-Modell). Ergebnis + Fixes dokumentieren. **Voraussetzung.** | ✅ *(bis auf den echten Coding-Modell-Render — siehe „## 5.0 — Ergebnis" + ADR-021)* |
-| 5.1 | **Agent-Framework + OpenCode-Adapter**: `core::agent` (`AgentAdapter`-Trait, `AgentProfile`, `AgentSession`), Migration `0005` (`agents`, `agent_sessions`). `OpenCodeAdapter` — `opencode serve --port … --hostname 127.0.0.1` unter `RuntimeSupervisor`; Config **erzwungen** über `OPENCODE_CONFIG_CONTENT` (custom provider → `http://127.0.0.1:<llama-port>/v1`, `enabled_providers: [local]`, `permission` alles `ask`, `webfetch: deny`), `cwd` = Workspace. Scheduler: `reserve + pin` fürs Session-Modell (`coding`-Rolle \| explizit). HTTP-Proxy: `POST /session`, `POST /session/:id/message`, `GET /global/event` (SSE) → Core-Events. `POST /agents`, `POST /agent-sessions`, `POST /agent-sessions/:id/message`, `GET /agent-sessions/:id` + Tauri-Commands. `capability::agent` treibt eine Session. | offen |
+| **5.1a** | **Agent-Fundament**: `core::agent` (`AgentAdapter`-Trait, `AgentEvent`/`SessionSpec`/`PermissionDecision`, `FakeAgentAdapter`), Migration `0005` (`agents`, `agent_sessions`, `agent_session_events`) + `db::AgentRepo`. `LlamaServerOptions.jinja`/`chat_template` (+ `[llama]`-Config, Settings-UI) — `--jinja` default an (Tool-Calls). | ✅ |
+| **5.1b** | **OpenCode-Adapter**: `opencode serve --port … --hostname 127.0.0.1` unter `RuntimeSupervisor`; Config **erzwungen** über `OPENCODE_CONFIG_CONTENT` (custom provider → `http://127.0.0.1:<llama-port>/v1`, `enabled_providers: ["local"]` + `disabled_providers: ["opencode",…]`, `permission` alles `ask`, `webfetch: deny`), `cwd` = Workspace. Scheduler: `reserve + pin` fürs Session-Modell (`coding`-Rolle \| explizit). HTTP-Proxy: `POST /session`, `POST /session/:id/prompt_async`, `GET /event` (SSE) → `agent_session_events`; `permission.asked` → `GET /permission` → `POST /permission/{id}/reply`. `capability::agent` treibt eine Session. `POST /agents`, `POST /agent-sessions`, `POST /agent-sessions/:id/message`, `GET /agent-sessions/:id` + Tauri-Commands. **5.1b-Smoke** mit einem echten Qwen2.5-Coder-GGUF. | offen |
 | 5.2 | **Sandkasten**: Approval-Fluss — der SSE-Stream trägt `permission`-Events → Core reicht sie durch → UI „Agent will ausführen: `<cmd>` — Allow / Deny / Always" → Core `POST`t die Entscheidung. **Pfad-Allowlist**: `cwd` + OpenCode-`permission` verbietet Edits außerhalb; Lese-Extras optional read-only. **Offline erzwungen**: `offline_mode` → Netz-Tools hart aus, dokumentiert dass echte Prozess-Isolation vertagt ist. Secrets: kein `.env` / keine Keys in der Agent-Env (Dummy-`apiKey`). | offen |
 | 5.3 | **Agents-UI-Tab**: Profil-Liste + „New profile" (Runtime, Modell [Auto über `coding`], Workspace-Ordner-Picker, erlaubte Pfade, Toolset); Session-Ansicht — Transkript mit Tool-Call-Karten (Datei-Diffs, Shell-Output), Approval-Prompts inline, „Stop"; „Coding"-Dashboard-Button aktiv. Workspace-Registry (Pfad + Label) im Core. | offen |
 | 5.4 | **Hermes-Agent-Adapter**: `uv`-Installer (gepinnte Version) → gemanagtes Profil unter `<data>/agents/hermes/` (`HERMES_HOME`/`-p <profil>`); `config.yaml` **erzwungen** (`provider: custom`, `base_url` = `llama-server`, `security.redact_secrets`, Workspace, `HERMES_STREAM_READ_TIMEOUT=1800`). Treiben über Hermes' HTTP-Server (`/v1/responses` / `/api/jobs`) **oder** `hermes chat -q` pro Turn. Memory (`MEMORY.md`) + Skills leben im Profil-Ordner → Backup (5.5). `bash -l` per 5.0-Entscheidung. | offen |
@@ -198,6 +199,46 @@ Verifiziert (Scratchpad-Probes, keine Repo-Änderung außer Docs):
   doctor` / `config` lesen unsere `config.yaml` (custom endpoint).
 - Research: llama.cpp `docs/function-calling.md`, OpenCode `/docs/server` +
   `/docs/config`, Hermes FAQ/Docs.
+
+---
+
+## 5.1a — Ergebnis (abgeschlossen)
+
+Das Fundament — Datenmodell, Trait, Fake, `--jinja`. Kein realer Adapter, keine
+API, kein `capability::agent` (das ist 5.1b).
+
+- **Migration `0005_agents.sql`**: `agents` (id, name, adapter, model_id NULL,
+  workspace_path, allowed_paths_json, toolset_json, created_at) · `agent_sessions`
+  (adapter_session_id, state, error_text, checkpoint_path, started/ended_at,
+  FK cascade) · `agent_session_events` (session_id, ts, kind, payload_json —
+  append-only wie `job_events`). `db::AgentRepo` (`db.agents()`): Profil-CRUD,
+  `create_session` / `set_session_state` (terminal → `ended_at`) /
+  `bind_adapter_session` / `set_checkpoint` / `append_event` / `session_events` /
+  `live_sessions` (Crash-Recovery, 5.5).
+- **`core::agent`** (`agent/mod.rs` + `fake.rs`): `AgentAdapter`-Trait
+  (`open_session(SessionSpec) → String`, `send`, `events → mpsc::UnboundedReceiver
+  <AgentEvent>`, `reply_permission`, `interrupt`, `close_session`, `health`).
+  `AgentKind {OpenCode, Hermes, Fake}`. `SessionSpec { workspace, allowed_paths,
+  toolset, endpoint: EndpointConfig { base_url, model } }`. `AgentEvent`
+  (`#[serde(tag="type")]`): `Text` / `Tool {status, input, output}` /
+  `Permission {id, kind, summary, always_pattern}` / `Idle` / `Error {terminal}`
+  — serialisiert ganz nach `payload_json`, `kind()` = die grobe Spalte.
+  `PermissionDecision {AllowOnce, AllowAlways, Deny}`. `FakeAgentAdapter`
+  (`with_script(events)` → `send` replayt; `replies()` / `last_spec()` für
+  Assertions).
+- **`--jinja`**: `LlamaServerOptions` bekommt `jinja: bool` (**default `true`** —
+  korrekt für Chat, nötig für Tool-Calls) + `chat_template: Option<String>` →
+  `--jinja` / `--chat-template <n>` im Spawn. `[llama]`-Config `jinja` +
+  `chat_template`; Settings-UI: „Jinja chat template"-Toggle + Override-Feld.
+
+Verifiziert:
+- **+6 Unit-Tests** (`agent` — Event-Serde + `kind`; `agent::fake` — Script-
+  Replay + Reply-Recording + Fehler ohne Subscriber; `db::agents` — Profil-
+  Round-Trip inkl. JSON-Spalten, Session-Lebenszyklus + Transkript, Cascade-
+  Delete) → **254 Lib-Tests**. `config` + `launch`-Tests um `jinja` erweitert.
+  `check.ps1` grün, `pnpm typecheck`/`lint` grün.
+- **Live** (Boot-Smoke): `aiwm-cored` startet, Migration `0005` legt
+  `agents` / `agent_sessions` / `agent_session_events` an.
 
 ---
 

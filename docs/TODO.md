@@ -197,11 +197,14 @@ hierher, damit nichts verloren geht.
   + Git-Bash-Behandlung, **kein WSL2-Zwang**. Offen: Hermes ist schwer (~120
   Deps + `hermes postinstall` = node/Browser/ripgrep/ffmpeg) — Installer-Umfang
   in 5.4 klären; evtl. wird Hermes „Advanced/optional".
-- ~~`llama-server`-Tool-Calling~~ → ✅ 5.0 (ADR-021): `--jinja` emittiert
-  OpenAI-`tool_calls`, OpenCode parst sie (Stub-Test). **Offen:** ein echter
-  Coding-Modell-Lauf (Qwen2.5-Coder-GGUF) → verlässliche `tool_calls`? + KV-Cache
-  nicht zu hart quantisieren → **5.1-Smoke**. `LlamaCppAdapter` braucht ein
-  `--jinja`-Flag (+ optional `--chat-template`) fürs Agent-Modell → 5.1.
+- `llama-server`-Tool-Calling: `--jinja` emittiert OpenAI-`tool_calls`, OpenCode
+  parst sie (5.0-Stub-Test). ✅ 5.1a: `LlamaServerOptions.jinja` (default an) +
+  `chat_template` → `--jinja` / `--chat-template` im Spawn, `[llama]`-Config +
+  Settings-Toggle. **Offen:** ein echter Coding-Modell-Lauf (Qwen2.5-Coder-GGUF)
+  → verlässliche `tool_calls`? + KV-Cache nicht zu hart quantisieren
+  (`-ctk q4_0` schadet) → **5.1b-Smoke**. `--jinja` global default-an ändert
+  Chats das Template (embedded statt Heuristik — sollte besser sein; falls eine
+  GGUF-Template kaputt ist: `jinja = false` + `chat_template` setzen).
 - Agent-Sandbox-Niveau: ✅ festgelegt (Plan §B) — Pfad-Allowlist + Command-
   Approval + erzwungene Config; echte FS-/Prozess-Isolation opt-in + später
   (eigener ADR).

@@ -46,6 +46,8 @@ const sameForm = (a: Form, b: Form): boolean =>
   a.llama.ctx_size === b.llama.ctx_size &&
   a.llama.flash_attention === b.llama.flash_attention &&
   a.llama.load_timeout_secs === b.llama.load_timeout_secs &&
+  a.llama.jinja === b.llama.jinja &&
+  a.llama.chat_template === b.llama.chat_template &&
   a.comfyui.vram_mode === b.comfyui.vram_mode &&
   a.comfyui.reserve_vram_mb === b.comfyui.reserve_vram_mb &&
   a.comfyui.extra_args === b.comfyui.extra_args;
@@ -253,6 +255,30 @@ export function Settings() {
           <span>
             <strong>Flash attention</strong> — <code>--flash-attn on</code>
           </span>
+        </label>
+        <label className="set-toggle">
+          <input
+            type="checkbox"
+            checked={form.llama.jinja}
+            onChange={(e) => patchLlama({ jinja: e.target.checked })}
+          />
+          <span>
+            <strong>Jinja chat template</strong> — <code>--jinja</code>. Needed for
+            tool calls (agents); correct for chat. Turn off only if a model's
+            embedded template misbehaves.
+          </span>
+        </label>
+        <label className="set-field">
+          <span>
+            Chat template override — <code>--chat-template</code>, e.g.{" "}
+            <code>qwen2.5-coder</code>. Empty = the GGUF's own.
+          </span>
+          <input
+            type="text"
+            value={form.llama.chat_template}
+            spellCheck={false}
+            onChange={(e) => patchLlama({ chat_template: e.target.value })}
+          />
         </label>
       </section>
 

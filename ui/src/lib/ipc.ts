@@ -24,6 +24,10 @@ export interface LlamaConfig {
   /** `-c` — context window; 0 lets the core cap the model's trained context. */
   ctx_size: number;
   flash_attention: boolean;
+  /** `--jinja` — the GGUF's embedded chat template. Needed for tool calls (agents). */
+  jinja: boolean;
+  /** `--chat-template <name>`; empty = use the GGUF's own. */
+  chat_template: string;
   load_timeout_secs: number;
 }
 
