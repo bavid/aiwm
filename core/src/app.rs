@@ -148,6 +148,13 @@ impl App {
         if recovered > 0 {
             tracing::warn!(count = recovered, "recovered interrupted jobs as failed");
         }
+        let orphaned = db.agents().recover_orphaned().await?;
+        if orphaned > 0 {
+            tracing::warn!(
+                count = orphaned,
+                "closed orphaned agent sessions from a previous run"
+            );
+        }
         Ok(())
     }
 }

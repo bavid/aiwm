@@ -294,6 +294,23 @@ impl<'a> AgentRepo<'a> {
         rows.into_iter().map(AgentSession::try_from).collect()
     }
 
+    /// On startup: any session still `starting|idle|working|awaiting_approval`
+    /// is orphaned — its runtime process died with the previous app. Mark them
+    /// `failed` so the UI shows the truth (5.5). Returns how many were closed.
+    pub async fn recover_orphaned(&self) -> Result<u64> {
+        let res = sqlx::query(
+            "UPDATE agent_sessions
+             SET state = 'failed',
+                 error_text = COALESCE(error_text, 'the agent runtime did not survive an app restart'),
+                 ended_at = COALESCE(ended_at, $1)
+             WHERE state NOT IN ('stopped', 'failed')",
+        )
+        .bind(now_rfc3339())
+        .execute(self.pool)
+        .await?;
+        Ok(res.rows_affected())
+    }
+
     pub async fn bind_adapter_session(&self, id: &str, adapter_session_id: &str) -> Result<()> {
         sqlx::query("UPDATE agent_sessions SET adapter_session_id = $1 WHERE id = $2")
             .bind(adapter_session_id)
@@ -476,5 +493,39 @@ mod tests {
         db.agents().delete(&a.id).await.unwrap();
         assert!(db.agents().session(&s.id).await.unwrap().is_none());
         assert!(db.agents().session_events(&s.id).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn recover_orphaned_fails_the_unfinished_and_leaves_the_rest() {
+        let db = Database::connect_in_memory().await.unwrap();
+        let a = db.agents().create(new_agent()).await.unwrap();
+        let working = db.agents().create_session(&a.id).await.unwrap();
+        db.agents()
+            .set_session_state(&working.id, AgentSessionState::Working, None)
+            .await
+            .unwrap();
+        let stopped = db.agents().create_session(&a.id).await.unwrap();
+        db.agents()
+            .set_session_state(&stopped.id, AgentSessionState::Stopped, None)
+            .await
+            .unwrap();
+
+        assert_eq!(db.agents().recover_orphaned().await.unwrap(), 1);
+
+        let w = db.agents().session(&working.id).await.unwrap().unwrap();
+        assert_eq!(w.state, AgentSessionState::Failed);
+        assert!(w.error_text.unwrap().contains("app restart"));
+        assert!(w.ended_at.is_some());
+        assert_eq!(
+            db.agents()
+                .session(&stopped.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .state,
+            AgentSessionState::Stopped
+        );
+        // A second sweep is a no-op.
+        assert_eq!(db.agents().recover_orphaned().await.unwrap(), 0);
     }
 }

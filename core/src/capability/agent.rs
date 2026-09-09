@@ -20,7 +20,7 @@
 use std::collections::HashMap;
 use std::fmt;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 
 use async_trait::async_trait;
 
@@ -137,13 +137,17 @@ impl Drop for Live {
     }
 }
 
+type LiveMap = Arc<Mutex<HashMap<String, Live>>>;
+
 /// The agent subsystem. One per [`App`](crate::App).
 #[derive(Debug)]
 pub struct AgentSessions {
     db: Database,
     coding: Arc<dyn CodingRuntime>,
     adapters: HashMap<AgentKind, Arc<dyn AgentAdapter>>,
-    live: Mutex<HashMap<String, Live>>,
+    /// Behind an `Arc` so a session's drain task can finalise itself (unpin the
+    /// model, mark the row `Failed`) if the runtime dies without a `stop`.
+    live: LiveMap,
 }
 
 impl AgentSessions {
@@ -152,7 +156,7 @@ impl AgentSessions {
             db,
             coding,
             adapters: HashMap::new(),
-            live: Mutex::new(HashMap::new()),
+            live: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -341,7 +345,14 @@ impl AgentSessions {
             .await?;
 
         let rx = adapter.events(&adapter_session_id).await?;
-        let drain = tokio::spawn(drain_events(self.db.clone(), session_id.to_string(), rx));
+        let drain = tokio::spawn(drain_events(
+            self.db.clone(),
+            Arc::clone(&self.coding),
+            model.id.clone(),
+            session_id.to_string(),
+            Arc::downgrade(&self.live),
+            rx,
+        ));
         lock(&self.live).insert(
             session_id.to_string(),
             Live {
@@ -380,8 +391,17 @@ impl AgentSessions {
 }
 
 /// Append every event to the transcript and move the session state with it.
-/// Ends when the stream closes or a terminal error arrives.
-async fn drain_events(db: Database, session_id: String, mut rx: EventStream) {
+/// Ends when the stream closes or a terminal error arrives — and then, unless a
+/// `stop()` already took the live entry, releases the pinned model and marks the
+/// row `Failed` so a dead runtime never leaves VRAM held (5.5).
+async fn drain_events(
+    db: Database,
+    coding: Arc<dyn CodingRuntime>,
+    model_id: String,
+    session_id: String,
+    live: Weak<Mutex<HashMap<String, Live>>>,
+    mut rx: EventStream,
+) {
     while let Some(ev) = rx.recv().await {
         if let Ok(payload) = serde_json::to_value(&ev) {
             let _ = db
@@ -395,7 +415,28 @@ async fn drain_events(db: Database, session_id: String, mut rx: EventStream) {
                 .set_session_state(&session_id, state, error.as_deref())
                 .await;
             if state == AgentSessionState::Failed {
-                return;
+                break;
+            }
+        }
+    }
+
+    // We own the wind-down only if `stop()` hasn't already removed the entry.
+    let owned = live
+        .upgrade()
+        .and_then(|m| lock(&m).remove(&session_id))
+        .is_some();
+    if owned {
+        coding.release(&model_id).await;
+        if let Ok(Some(s)) = db.agents().session(&session_id).await {
+            if !s.state.is_terminal() {
+                let _ = db
+                    .agents()
+                    .set_session_state(
+                        &session_id,
+                        AgentSessionState::Failed,
+                        Some("the agent runtime ended unexpectedly"),
+                    )
+                    .await;
             }
         }
     }
@@ -645,6 +686,46 @@ mod tests {
         let _first = s.open(&agent_id, None).await.unwrap();
         let err = s.open(&agent_id, None).await.unwrap_err();
         assert!(err.to_string().contains("already running"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn a_terminal_error_releases_the_model_without_a_stop() {
+        let db = Database::connect_in_memory().await.unwrap();
+        let model_id = coding_model(&db, "coding").await;
+        let agent_id = profile(&db, "fake").await;
+
+        let fake = Arc::new(FakeAgentAdapter::new().with_script(vec![
+            AgentEvent::Text {
+                text: "working".into(),
+            },
+            AgentEvent::Error {
+                message: "the model server crashed".into(),
+                terminal: true,
+            },
+        ]));
+        let coding = Arc::<StubCoding>::default();
+        let s = sessions(&db, coding.clone(), fake);
+
+        let session = s.open(&agent_id, Some("go")).await.unwrap();
+
+        // The drain task finalises the session on its own: model released, row
+        // failed, no longer live — the "one at a time" gate reopens.
+        wait_for_state(&db, &session.id, AgentSessionState::Failed).await;
+        for _ in 0..50 {
+            if !s.is_live(&session.id) {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        assert!(!s.is_live(&session.id));
+        assert_eq!(
+            lock(&coding.released).as_slice(),
+            std::slice::from_ref(&model_id)
+        );
+
+        // A second session can now start.
+        s.stop(&session.id).await.unwrap(); // still terminal, no-op
+        let _next = s.open(&agent_id, None).await.unwrap();
     }
 
     async fn wait_for_state(
