@@ -212,8 +212,14 @@ suchen, verifiziert laden, lokal messen, Upgrade-Check. Alles offline-first
   6.3b bounded `.safetensors`-Header-Reader (Param-Count/Precision/`__metadata__`)
   im Import, familien-bewusste `media_headroom_mb`. Konstanten in `HARDWARE.md`
   dokumentiert; echte Messkalibrierung wartet auf 4.0
-- 6.4 **Download-Manager** — `downloads`-Tabelle, Queue, Range/Resume, Verify →
-  `import_model`, Speicherplanung (ADR-023)
+- [x] 6.4 **Download-Manager** (ADR-023) — `downloads`-Tabelle (Migration `0006`),
+  `core::download::DownloadManager` mit einer Queue / einem aktiven Slot,
+  **HTTP-Range-Resume** (Retry bis 5×), Verify gegen die SHA-256 aus 6.1 →
+  `import_model`. `GET/POST /downloads` + `{pause,resume,cancel}` + Tauri.
+  Fortschritt ist ein gepolltes Feld (kein Event-Stream). „Download & import"
+  pro Datei-Zeile in `Discover.tsx` (Split-GGUF / Gated deaktiviert) + eine
+  `Downloads.tsx`-Liste. `offline_mode` sperrt `enqueue`/`resume`. Recovery →
+  `queued`. Speicherplanung noch offen (→ 6.8)
 - 6.5 **`core::bench`** — lokale Mikro-Benchmarks (tok/s, Ladezeit, VRAM/RAM-
   Peak), optionaler externer Score, gewichtete Heuristik
 - 6.6 **Benchmark-gestützte `Auto`-Auswahl** — `pick_for_role` nutzt Fit +

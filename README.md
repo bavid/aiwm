@@ -31,7 +31,7 @@ noch keine echte AI-Capability (die kommt ab Phase 2).
 | WP-9 | CI-Workflow, Git-Hooks (pre-commit fmt, pre-push voller Gate) |
 | WP-10 | ADRs finalisiert, Stub-Docs (MODELS/RUNTIMES/SECURITY/BENCHMARKS) |
 
-**329 Rust-Unit + 49 Integrationstests + 5 pytest** grün · `scripts/check.ps1` grün ·
+**333 Rust-Unit + 55 Integrationstests + 5 pytest** grün · `scripts/check.ps1` grün ·
 **null `unsafe`** im Produktivcode.
 
 **Phase 2 (MVP) ✅ abgeschlossen** — Scheiben 2.1–2.7 + durchgehender
@@ -119,7 +119,7 @@ Command-Approval (UI) + erzwungene Offline-Config.
   Tauri + Settings-Karte „Backup & restore". Politur (Kompaktierungs-Anzeige,
   Pause-Fluss, Diagnostics-Zeile) = 5.5c, vertagt.
 
-**Phase 6 (Automatisierung & Model-Manager v2) — Plan + 6.0 + 6.1 + 6.2 + 6.3 ✅:** [docs/PHASE_6_PLAN.md](docs/PHASE_6_PLAN.md).
+**Phase 6 (Automatisierung & Model-Manager v2) — Plan + 6.0 + 6.1 + 6.2 + 6.3 + 6.4 ✅:** [docs/PHASE_6_PLAN.md](docs/PHASE_6_PLAN.md).
 Aus dem manuellen Modell-Umgang wird ein Model-Manager: online suchen, verifiziert
 laden, lokal messen, Upgrade-Check, Dedup-/Unused-Reports. Alles offline-first
 (ADR-009).
@@ -151,6 +151,15 @@ laden, lokal messen, Upgrade-Check, Dedup-/Unused-Reports. Alles offline-first
   der seit 3.3 vertagte TODO), im Import verdrahtet; familien-bewusstes
   VRAM-Polster (`media_headroom_mb`) statt der `+2,5 GB`-Faustregel. Konstanten +
   Kalibrierungs-Plan in `docs/HARDWARE.md` (echte Messungen = 4.0).
+- **6.4** ✅ **Download-Manager** (**ADR-023**) — `core::download::DownloadManager`:
+  eine Queue, ein aktiver Slot. Ein Download streamt nach `<data>/.downloads/`
+  mit **HTTP-Range-Resume** (Retry bis 5×), wird gegen die SHA-256 aus 6.1
+  verifiziert, dann übernimmt `import_model` (in den Store). `downloads`-Tabelle
+  (Migration `0006`), Recovery → `queued`. `GET/POST /downloads` +
+  `{pause,resume,cancel}` + Tauri; Fortschritt = gepolltes `bytes_done`-Feld
+  (kein Event-Stream). „Download & import" pro Datei-Zeile in `Discover.tsx`
+  (Split-GGUF / Gated deaktiviert) + `Downloads.tsx`-Liste im Models-Tab.
+  `offline_mode` sperrt `enqueue`/`resume`. Speicherplanung → 6.8.
 
 - **4.1** ✅ **`capability::video`**: `job_type=video` → feste `wan_ti2v`-Pipeline
   (`WanImageToVideo` → `KSampler` → `VAEDecode` → `CreateVideo` → `SaveVideo`,

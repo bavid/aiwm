@@ -41,6 +41,10 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/agent-runtimes", get(agent_runtimes))
         .route("/registry/search", get(registry_search))
         .route("/registry/models/{*id}", get(registry_details))
+        .route("/downloads", get(list_downloads).post(enqueue_download))
+        .route("/downloads/{id}/pause", post(pause_download))
+        .route("/downloads/{id}/resume", post(resume_download))
+        .route("/downloads/{id}/cancel", post(cancel_download))
         .route("/agents", get(list_agents).post(create_agent))
         .route("/agents/{id}", axum::routing::delete(delete_agent))
         .route("/agent-sessions", post(open_agent_session))
@@ -255,6 +259,44 @@ async fn registry_details(
     Path(id): Path<String>,
 ) -> Result<Json<super::dto::RegistryDetailsDto>, ApiError> {
     Ok(Json(handlers::registry_details(&app, &id).await?))
+}
+
+async fn list_downloads(State(app): AppState) -> Result<Json<Vec<crate::db::Download>>, ApiError> {
+    Ok(Json(handlers::list_downloads(&app).await?))
+}
+
+async fn enqueue_download(
+    State(app): AppState,
+    Json(body): Json<super::dto::EnqueueDownloadDto>,
+) -> Result<(StatusCode, Json<crate::db::Download>), ApiError> {
+    Ok((
+        StatusCode::CREATED,
+        Json(handlers::enqueue_download(&app, body).await?),
+    ))
+}
+
+async fn pause_download(
+    State(app): AppState,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    handlers::pause_download(&app, &id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn resume_download(
+    State(app): AppState,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    handlers::resume_download(&app, &id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn cancel_download(
+    State(app): AppState,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    handlers::cancel_download(&app, &id).await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn export_backup(State(app): AppState) -> Result<Response, ApiError> {

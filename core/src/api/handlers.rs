@@ -6,13 +6,14 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use super::dto::{
-    AboutDto, AgentPermissionDto, AgentSessionDetailDto, ConfigUpdate, JobDetailDto, NewAgentDto,
-    OpenAgentSessionDto, RegistryDetailsDto, RegistryFileDto, RegistrySearchDto, RuntimeStatusDto,
-    SubmitJobDto,
+    AboutDto, AgentPermissionDto, AgentSessionDetailDto, ConfigUpdate, EnqueueDownloadDto,
+    JobDetailDto, NewAgentDto, OpenAgentSessionDto, RegistryDetailsDto, RegistryFileDto,
+    RegistrySearchDto, RuntimeStatusDto, SubmitJobDto,
 };
 use crate::compat::FitVerdict;
 use crate::config::Config;
-use crate::db::{Agent, AgentSession, Job, JobFilter, Model, NewAgent, NewJob};
+use crate::db::{Agent, AgentSession, Download, Job, JobFilter, Model, NewAgent, NewJob};
+use crate::download::EnqueueRequest;
 use crate::model::{ImportOutcome, ImportRequest};
 use crate::orchestrator::JobOutcome;
 use crate::registry::{Fetched, RemoteFile, RemoteFormat, RemoteModel};
@@ -466,6 +467,43 @@ fn enrich_file(
         vram_estimate_mb,
         fit,
     }
+}
+
+// --- downloads (Phase 6.4) --------------------------------------------------
+
+pub async fn list_downloads(app: &App) -> Result<Vec<Download>> {
+    app.downloads.list().await
+}
+
+/// Queue a model download (from a Discover card). Refused in offline mode.
+pub async fn enqueue_download(app: &App, dto: EnqueueDownloadDto) -> Result<Download> {
+    let filename = std::path::Path::new(dto.filename.trim())
+        .file_name()
+        .and_then(|n| n.to_str())
+        .filter(|n| !n.is_empty())
+        .ok_or_else(|| CoreError::Config("download needs a filename".into()))?
+        .to_string();
+    app.downloads
+        .enqueue(EnqueueRequest {
+            url: dto.url,
+            filename,
+            model_type: dto.model_type.filter(|s| !s.trim().is_empty()),
+            sha256: dto.sha256.filter(|s| !s.trim().is_empty()),
+            size_bytes: dto.size_bytes,
+        })
+        .await
+}
+
+pub async fn pause_download(app: &App, id: &str) -> Result<()> {
+    app.downloads.pause(id).await
+}
+
+pub async fn resume_download(app: &App, id: &str) -> Result<()> {
+    app.downloads.resume(id).await
+}
+
+pub async fn cancel_download(app: &App, id: &str) -> Result<()> {
+    app.downloads.cancel(id).await
 }
 
 /// Tail of the current day's log file.

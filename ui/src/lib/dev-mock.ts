@@ -73,6 +73,8 @@ type DevSession = {
 let DEV_SESSION: DevSession | null = null;
 let HERMES_INSTALLED = false;
 
+const DOWNLOADS: AnyRecord[] = [];
+
 const DISCOVER_MODELS: AnyRecord[] = [
   {
     id: "Qwen/Qwen2.5-Coder-7B-Instruct-GGUF", author: "Qwen", downloads: 1_780_676, likes: 436,
@@ -229,6 +231,50 @@ export function installDevMock(): void {
             },
           ],
         };
+      }
+      case "list_downloads":
+        // Nudge any running download forward so the progress bar moves.
+        for (const d of DOWNLOADS) {
+          if (d.state === "running") {
+            const size = Number(d.size_bytes);
+            const next = Math.min(size, Number(d.bytes_done) + 6e8);
+            d.bytes_done = next;
+            if (next >= size) {
+              d.state = "done";
+              d.model_id = `m-dl-${seq++}`;
+            }
+          }
+        }
+        // Fresh array + fresh rows every poll — the real core serializes a new
+        // Vec each call, and `usePolled` needs a changed reference to re-render.
+        return DOWNLOADS.map((d) => ({ ...d }));
+      case "enqueue_download": {
+        const body = (a.body ?? {}) as AnyRecord;
+        const d: AnyRecord = {
+          id: `dl-${seq++}`, url: String(body.url ?? ""),
+          filename: String(body.filename ?? "model.gguf").split("/").pop(),
+          model_type: body.model_type ?? null, sha256: body.sha256 ?? null,
+          size_bytes: body.size_bytes ?? 4_683_073_536, bytes_done: 0, retries: 0,
+          state: "running", error_text: null, model_id: null,
+          created_at: now(), updated_at: now(),
+        };
+        DOWNLOADS.unshift(d);
+        return d;
+      }
+      case "pause_download": {
+        const d = DOWNLOADS.find((x) => x.id === a.id);
+        if (d && d.state === "running") d.state = "paused";
+        return null;
+      }
+      case "resume_download": {
+        const d = DOWNLOADS.find((x) => x.id === a.id);
+        if (d && (d.state === "paused" || d.state === "failed")) d.state = "running";
+        return null;
+      }
+      case "cancel_download": {
+        const i = DOWNLOADS.findIndex((x) => x.id === a.id);
+        if (i >= 0) DOWNLOADS.splice(i, 1);
+        return null;
       }
       case "export_backup":
         return "E:\\AI\\data\\exports\\aiwm-export-2026-01-01T00-00-00Z.zip";

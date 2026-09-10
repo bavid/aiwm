@@ -40,7 +40,7 @@ den letzten Cache + „offline" statt Fehler.
 | **6.1** | **`core::registry` — HF-Hub-Quellen-Adapter** (read-only, gegen ein Fixture): `ModelSource`-Trait + `HuggingFaceSource`, `Registry`-Wrapper mit TTL-JSON-Cache (`<data>/cache/registry/`) + `Freshness` (Live/Stale/Offline). SHA-256 aus `lfs.oid`. `aiwm-fake-hfhub`-Fixture + Integrationstest + `#[ignore]`-Live-Test. | ✅ *(siehe „## 6.1 — Ergebnis")* |
 | **6.2** | **Discovery-UI** — `App.registry` + `GET /registry/search` + `GET /registry/models/{*id}` + 2 Tauri-Commands + DTOs (`FitLevel`, `RegistryFileDto` mit Fit + Download-Link, `RegistryDetailsDto`). „Discover"-Panel im Models-Tab (`Discover.tsx`): Suchfeld, „GGUF only", Sort; Ergebnis-Karten (id, Params, Downloads/Likes, Lizenz, Gated-Badge, `base_model`); „Files" → Dateiliste mit Quant + Größe + `🟢/🟡/🔴`-Fit-Punkt (via `core::compat`) + „Copy link" + „Set import type". `Freshness`-Banner bei Stale/Offline. `useRegistrySearch` (400 ms debounced). | ✅ *(siehe „## 6.2 — Ergebnis")* |
 | **6.3** | **Kompatibilitäts-Engine v2** (`core::compat` + `core::model` erweitert — verlängert ADR-016). **6.3a**: `compat::verdict(dims, ctx, vram_budget, free_ram) -> FitVerdict { Green \| Yellow{reason} \| Red{reason} \| Unknown }` (Gewichte + KV + Overhead vs. VRAM-Budget **und** freier System-RAM für den Offload-Fall), in der „Discover"-Dateiliste. **6.3b**: bounded `.safetensors`-Header-Reader (`read_safetensors_info` — Param-Count + dominante Precision + `__metadata__`, der seit 3.3 vertagte TODO), im Import verdrahtet (nicht-lesbarer Header failt nicht); familien-bewusste `media_headroom_mb` statt der `+2,5 GB`-Faustregel. Konstanten in `HARDWARE.md` dokumentiert, echte Messkalibrierung wartet auf 4.0. | ✅ *(siehe „## 6.3 — Ergebnis")* |
-| **6.4** | **Download-Manager** (`core::download` erweitert — ADR-023): `downloads`-Tabelle (Migration `0006`: id, url, dest, sha256, size, bytes_done, state {queued\|running\|paused\|verifying\|done\|failed}), Queue mit einem aktiven Slot, **Resume über HTTP-Range**, Verify gegen die erwartete SHA-256 (aus 6.1), dann Übergabe an `import_model`. `GET/POST /downloads`, `POST /downloads/{id}/{pause,resume,cancel}`, Fortschritts-Events (`job_events`-Muster). `offline_mode` → Ablehnung. UI: „Download & import"-Knopf auf den Discovery-Karten + eine Downloads-Liste. Speicherplanung: freier Platz auf dem Store-Volume vs. Download-Größe, Klartext-Warnung. | offen |
+| **6.4** | **Download-Manager** (`core::download` erweitert — ADR-023): `downloads`-Tabelle (Migration `0006`: id, url, dest, sha256, size, bytes_done, state {queued\|running\|paused\|verifying\|done\|failed}), Queue mit einem aktiven Slot, **Resume über HTTP-Range**, Verify gegen die erwartete SHA-256 (aus 6.1), dann Übergabe an `import_model`. `GET/POST /downloads`, `POST /downloads/{id}/{pause,resume,cancel}`, Fortschritts-Events (`job_events`-Muster). `offline_mode` → Ablehnung. UI: „Download & import"-Knopf auf den Discovery-Karten + eine Downloads-Liste. Speicherplanung: freier Platz auf dem Store-Volume vs. Download-Größe, Klartext-Warnung. | ✅ *(siehe „## 6.4 — Ergebnis")* |
 | **6.5** | **`core::bench` — lokale Mikro-Benchmarks**: `benchmarks`-Tabelle (Migration `0006`: model_id, ts, tokens_per_sec, load_ms, vram_peak_mb, ram_peak_mb, stability_score, notes), ein „Test model"-Job pro Modell (kurzer Prompt → tok/s Prompt+Gen, Ladezeit vom Adapter, VRAM-Peak via NVML, RAM-Peak via sysinfo). Für Bild/Video analog: Generierungszeit + VRAM. Optionaler Fetch der externen Benchmark-Scores (Quelle aus 6.0), lokal gecacht. `Overall Score` = klar gekennzeichnete gewichtete Heuristik (lokale Perf + externer Score + Stabilität). UI: „Test"-Knopf + eine Score-Spalte in der Model Library. | offen |
 | **6.6** | **Benchmark-gestützte `Auto`-Auswahl**: `ModelRepo::pick_for_role` bezieht Benchmark-Daten ein (statt nur `last_used_at` / `use_count`) — Fit zuerst, dann Score, dann Nutzung. Gewichtung + „bevorzuge schnell / bevorzuge Qualität" in `[models]`-Config. Betrifft Chat, Coding, `base_diffusion`, `base_video`. Regelbasierter Fallback bleibt, wenn keine Benchmark-Daten da sind. | offen |
 | **6.7** | **Upgrade-Check** (die Backlog-Idee — `core::registry` + `core::compat` + lokales LLM): Knopf „Gibt es was Besseres?" pro installiertem Modell **und** pro Rolle. Ablauf: HF-Hub nach neueren/populäreren Modellen derselben Rolle+Familie fragen → `core::compat`-Fit-Filter auf „läuft in `vram_budget_mb`" **vor** der LLM-Bewertung (spart Tokens, hält die Liste ehrlich) → das lokale LLM (Rolle `chat`/`coding`) rankt die **echten API-Treffer** als JSON, schreibt eine Ein-Satz-Begründung, **darf keinen Modellnamen erfinden** (Antwort gegen die Kandidaten-IDs validieren) → Ausgabe: kurze Liste + „Download & import" (→ 6.4). „Besser" misst sich in der MVP-Fassung an **objektiven, abrufbaren** Signalen (Release-Datum, Downloads/Likes, größere/neuere Basis in der Familie, Fit) + ggf. externem Score (6.5); das LLM markiert „Qualität nicht lokal verifizierbar". HF-Query = externer Call → **per-Aktion-Consent**, im `offline_mode` gesperrt. ADR-025. | offen |
@@ -413,3 +413,76 @@ vertagte TODO).
   `HybridScheduler` trifft die Block/Allow-Entscheidung schon, mit
   `VramEstimate::describe()` als Grund; `verdict`s RAM-Offload-Logik ist rein
   advisory für die „soll ich das laden"-Frage vor dem Download (ADR-016-Zusatz).
+
+---
+
+## 6.4 — Ergebnis (abgeschlossen, a + b)
+
+Der Download-Manager: von der „Files"-Liste in der Discovery mit einem Klick in
+den Store — Range-Resume, Verify gegen die SHA-256 aus 6.1, dann `import_model`.
+**ADR-023.**
+
+**6.4a** (`f61af65`) — `core::download`:
+- **Migration `0006`** — `downloads` (STRICT): `url`, `filename`, `dest_path`,
+  `model_type`, `sha256`, `size_bytes`, `bytes_done`, `retries`, `state`
+  (`queued|running|paused|verifying|done|failed`), `error_text`, `model_id`,
+  `created_at`/`updated_at` + Index `(state, created_at)`.
+- **`db::DownloadRepo`** — `create` (dest = `<staging>/<id>/<filename>`) / `get`
+  / `list` (neueste zuerst) / `next_actionable` (ein `queued`/`running`,
+  recovertes `running` zuerst) / `set_state` / `set_progress` (COALESCE Größe)
+  / `bump_retries` (RETURNING) / `set_model_id` / `delete` / `recover_interrupted`
+  (`running` + `verifying` → `queued`; `paused` bleibt).
+- **`DownloadManager`** (`Arc`, `Notify`-Wakeup) — `enqueue` (offline-gated),
+  `list` / `get`, `pause` (`running`/`queued` → `paused`), `resume`
+  (`paused`/`failed` → `queued`, offline-gated, weckt den Worker), `cancel`
+  (→ `failed` + Staging-Verzeichnis weg), `run()` = die Ein-Slot-Worker-Schleife.
+- **`transfer()`** — On-Disk-Offset lesen, `Range: bytes=<off>-` bei > 0; `206`
+  anhängen · `200` neu · `416` fertig. Sauberes Ende unter Soll-Größe **oder**
+  Stream-Fehler → Transport-Fehler → Retry mit Resume bis `MAX_RETRIES = 5`. Zeile
+  alle `TICK = 400 ms` neu gelesen → Pause / Cancel greift im Stream. **`verify()`**
+  = voller Re-Hash (`spawn_blocking`) + Größen-Check; Mismatch → löschen + `failed`.
+- **`App.downloads`** + `App::seed` ruft `recover_interrupted`; der Worker wird
+  von `api::spawn` gestartet (`Services.download_worker`, `Drop` bricht ab).
+  `AppPaths::downloads_dir()` = `<local_root>/.downloads`.
+- **+4 DB-Unit + 5 Integration** (`core/tests/download.rs`, In-Process-Datei-
+  Server): Verify-+-Import-Fluss, Resume aus vorgeseedeter Teil-Datei mit
+  `Range`-Request, Pause hält die Teil-Datei, SHA-256-Mismatch → `failed` +
+  Datei weg, `enqueue` im Offline-Modus abgelehnt.
+
+**6.4b** (dieser Commit) — API / Tauri / UI:
+- **DTOs** (`api::dto`): `EnqueueDownloadDto { url, filename, model_type?,
+  sha256?, size_bytes? }`.
+- **Handler** (`api::handlers`, transport-agnostisch): `list_downloads`,
+  `enqueue_download` (behält nur den Basename des `filename`), `pause_download`
+  / `resume_download` / `cancel_download`.
+- **HTTP** (`api::http`): `GET`/`POST /downloads`, `POST /downloads/{id}/pause`
+  · `/resume` · `/cancel` (`201` / `204`).
+- **Tauri**: `list_downloads`, `enqueue_download`, `pause_download`,
+  `resume_download`, `cancel_download` in `generate_handler!`.
+- **UI** (`ui/src/features/models/`): `Downloads.tsx` — die Downloads-Liste
+  (Fortschrittsbalken, Pause/Resume/Cancel, „Importiert"), oben im Models-Tab,
+  versteckt wenn leer, `useDownloads` pollt `GET /downloads` (1,5 s).
+  `Discover.tsx` — „Download & import" pro Datei-Zeile (deaktiviert für Split-
+  GGUFs und Gated-Repos), ruft `enqueueDownload({ url, filename, model_type,
+  sha256, size_bytes })`.
+- **+1 Integration** (`download_endpoints_over_http`: echtes `App::load` +
+  `ApiServer::bind`, `POST /downloads` mit `filename: "sub/dir/x.gguf"` →
+  Basename bleibt, pollt `GET /downloads` bis `state == "done"` + `model_id`).
+- **dev-mock-Fix**: `list_downloads` gab die `DOWNLOADS`-Array-**Referenz**
+  zurück und mutierte sie in-place → `usePolled`s `setData(sameRef)` lief in
+  Reacts `Object.is`-Bailout, das Panel re-renderte nie. Jetzt frische Kopie pro
+  Poll (der echte Core serialisiert ohnehin einen neuen `Vec`).
+- **Smoke** (dev-mock): Enqueue → Zeile erscheint, Balken animiert, Pause →
+  Paused, Resume → Downloading, Cancel → weg, Fertigstellung → „Importiert".
+  Konsole fehlerfrei.
+
+**→ 333 Lib + 55 integ + 5 pytest.** `check.ps1` grün.
+
+**Nicht in 6.4 (bewusst verschoben):**
+- **Speicherplanung** — freier Platz auf dem Store-Volume vs. Download-Größe,
+  Klartext-Warnung *vor* dem Enqueue. Gehört in die „Storage"-Ansicht (6.8);
+  aktuell scheitert ein zu großer Download erst beim Schreiben.
+- **Split-GGUF-Sets** als Ganzes laden + **Gated-Repos** mit `HF_TOKEN` — der
+  Knopf ist für beide deaktiviert (6.9).
+- **Streaming-Hash** während des Transfers — Verify bleibt ein separater
+  Re-Hash, weil Resume den Zwischenstand nicht mitführt.

@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import {
+  enqueueDownload,
   registryModel,
   type FitVerdict,
   type Freshness,
@@ -10,6 +11,11 @@ import {
   type RemoteModel,
 } from "../../lib/ipc";
 import { useRegistrySearch } from "../../lib/hooks";
+
+/** `RemoteModel.format` → the `import_model` type (a first guess; the user can
+ *  change the role on the Models table afterwards). */
+const importTypeFor = (format: RemoteModel["format"]): ModelType =>
+  format === "gguf" ? "chat" : "checkpoint";
 
 const SORTS: { value: NonNullable<RegistrySearchParams["sort"]>; label: string }[] = [
   { value: "downloads", label: "Most downloaded" },
@@ -46,8 +52,9 @@ function freshnessNote(f: Freshness): string | null {
     : `Hugging Face was unreachable — showing a cached result from ~${mins} min ago.`;
 }
 
-/** The "Discover" panel: search the Hugging Face Hub. No download manager yet
- *  (6.4) — actions are "Copy link" and "Set import type". */
+/** The "Discover" panel: search the Hugging Face Hub. Per file row: "Download &
+ *  import" (the 6.4 download manager — disabled for split GGUFs and gated repos),
+ *  "Copy link", and "Set import type". */
 export function Discover({ onUseType }: { onUseType: (t: ModelType) => void }) {
   const [text, setText] = useState("");
   const [gguf, setGguf] = useState(true);
@@ -158,7 +165,12 @@ function ResultCard({ model, onUseType }: { model: RemoteModel; onUseType: (t: M
             {details?.files
               .filter((f) => f.quant || f.vram_estimate_mb != null)
               .map((f) => (
-                <FileRow key={f.path} file={f} gated={model.gated !== "no"} />
+                <FileRow
+                  key={f.path}
+                  file={f}
+                  gated={model.gated !== "no"}
+                  modelType={importTypeFor(model.format)}
+                />
               ))}
             {details && details.files.every((f) => !f.quant && f.vram_estimate_mb == null) && (
               <p className="muted">No weight files detected in this repo.</p>
@@ -171,10 +183,7 @@ function ResultCard({ model, onUseType }: { model: RemoteModel; onUseType: (t: M
         <button type="button" onClick={toggle}>
           {open ? "Hide files" : "Files"}
         </button>
-        <button
-          type="button"
-          onClick={() => onUseType(model.format === "gguf" ? "chat" : "checkpoint")}
-        >
+        <button type="button" onClick={() => onUseType(importTypeFor(model.format))}>
           Set import type
         </button>
       </div>
@@ -182,8 +191,18 @@ function ResultCard({ model, onUseType }: { model: RemoteModel; onUseType: (t: M
   );
 }
 
-function FileRow({ file, gated }: { file: RegistryFile; gated: boolean }) {
+function FileRow({
+  file,
+  gated,
+  modelType,
+}: {
+  file: RegistryFile;
+  gated: boolean;
+  modelType: ModelType;
+}) {
   const [copied, setCopied] = useState(false);
+  const [dl, setDl] = useState<"idle" | "queued" | "error">("idle");
+
   const copy = async () => {
     try {
       await navigator.clipboard.writeText(file.download_url);
@@ -193,7 +212,26 @@ function FileRow({ file, gated }: { file: RegistryFile; gated: boolean }) {
       /* clipboard blocked — the link is in the title attr */
     }
   };
+
+  const download = async () => {
+    setDl("idle");
+    try {
+      await enqueueDownload({
+        url: file.download_url,
+        filename: file.path,
+        model_type: modelType,
+        sha256: file.sha256 ?? undefined,
+        size_bytes: file.size_bytes,
+      });
+      setDl("queued");
+    } catch {
+      setDl("error");
+    }
+  };
+
   const warn = file.fit.level === "yellow" || file.fit.level === "red";
+  // Split files need every part — no one-click for those yet (6.4).
+  const canDownload = !file.shard && !gated;
 
   return (
     <div className="discover__file">
@@ -213,6 +251,16 @@ function FileRow({ file, gated }: { file: RegistryFile; gated: boolean }) {
         </span>
       )}
       {gated && <span className="badge badge--warn">accept licence on HF</span>}
+      {canDownload && (
+        <button
+          type="button"
+          className="discover__dlbtn"
+          disabled={dl === "queued"}
+          onClick={download}
+        >
+          {dl === "queued" ? "Queued ✓" : dl === "error" ? "Failed — retry" : "Download & import"}
+        </button>
+      )}
       <button type="button" className="discover__copy" title={file.download_url} onClick={copy}>
         {copied ? "Copied ✓" : "Copy link"}
       </button>

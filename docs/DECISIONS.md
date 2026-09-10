@@ -798,6 +798,72 @@ reicht anonym, wie sieht der Offline-Fallback aus.
 
 ---
 
+## ADR-023 — Download-Manager: eine Queue, Range-Resume, Verify → `import_model`
+
+**Status:** Entschieden — Slice 6.4 (**6.4a** `core::download` Kern, `f61af65`;
+**6.4b** API / Tauri / „Download & import"-Knopf + Downloads-Liste, dieser Commit).
+
+**Kontext:** Discovery (6.1/6.2) zeigt Remote-Modelle mit Datei-Liste, SHA-256
+(`lfs.oid`) und Fit-Verdikt. Der Brief will „One-Click" — der Nutzer soll nicht
+den Link kopieren, im Browser laden und den Pfad von Hand in den Import tippen.
+Frage: eigener Job-Typ oder eigenes Subsystem, parallele Downloads oder nicht,
+wie Fortschritt melden, wie mit Abbruch / Netzabriss / falschem Hash umgehen.
+
+**Entscheidung:**
+- **Eigenes Subsystem `core::download::DownloadManager`, kein `job`-Typ.** Ein
+  Download belegt kein VRAM und darf nicht um den Scheduler-Modell-Slot
+  konkurrieren; er hat einen anderen Lebenszyklus (resumebar, tag­elang pausierbar).
+  Eigene Tabelle `downloads` (Migration `0006`), eigener Worker, **einmal** von
+  `api::spawn` gestartet (neben der Job-Schleife), `Drop` bricht ihn ab.
+- **Eine Queue, ein aktiver Slot.** `next_actionable()` nimmt genau einen
+  `queued`/`running`-Eintrag (recovertes `running` zuerst, sonst `created_at ASC`).
+  Kein Parallel-Download: eine Leitung, ein Fortschrittsbalken, keine
+  Bandbreiten-Teilung; die Modelle sind groß (GB), seriell ist ehrlicher.
+- **Staging → `import_model`.** Der Stream landet in
+  `<local_root>/.downloads/<id>/<filename>` (nicht im Modell-Store — halb geladene
+  Dateien haben da nichts verloren). Nach Verify übernimmt der bestehende
+  `import_model`-Pfad (verschiebt in den Store, GGUF/`.safetensors`-Header,
+  Rollen, `media_*`). Der Download-Manager dupliziert **nichts** vom Import.
+- **HTTP-Range-Resume.** `transfer()` liest den On-Disk-Offset, schickt
+  `Range: bytes=<offset>-` wenn > 0 → `206` anhängen · `200` neu · `416` schon
+  komplett. Ein sauberes Ende **unter** der erwarteten Größe **oder** ein
+  Stream-Fehler = Transport-Fehler → Retry (mit Resume) bis `MAX_RETRIES = 5`,
+  dann `failed`. Die Zeile wird alle 400 ms neu gelesen → Pause / Cancel greift
+  mitten im Stream.
+- **Verify = voller Re-Hash** (blocking, `spawn_blocking`) gegen die SHA-256 aus
+  6.1 + Größen-Check. Mismatch → Datei löschen + `failed` (kein Halb-Import).
+  Ohne erwarteten Hash (`sha256: None`) wird nur die Größe geprüft.
+- **Fortschritt ist ein gepolltes Feld, kein Event-Stream.** Der Plan-Entwurf
+  nannte „Fortschritts-Events (`job_events`-Muster)" — verworfen: `bytes_done` /
+  `state` auf der Zeile, alle 400 ms geflusht, die UI pollt `GET /downloads`
+  (1,5 s). Ein Event-Kanal (SSE / Tauri-Event) für einen Zahlenwert lohnt nicht;
+  `job_events` bleibt für die Job-Transkripte.
+- **Recovery → `queued`, nicht `failed`.** Beim Start werden `running` + `verifying`
+  auf `queued` zurückgesetzt (der Worker nimmt sie per Range wieder auf); `paused`
+  bleibt `paused`. Jobs recovern zu `failed` — ein Download ist idempotent
+  fortsetzbar, ein Job nicht.
+- **`offline_mode` sperrt `enqueue` + `resume`** (ADR-009). Laufende Downloads
+  laufen weiter (der Switch ist für neue ausgehende Calls).
+- **Nicht one-click im MVP:** Split-GGUF-Sets (`…-00001-of-00003`) und Gated-Repos
+  — der Knopf ist in `Discover.tsx` deaktiviert, mit Hinweis („Lizenz auf HF
+  akzeptieren"). Multi-Datei-Sets + Token-Fluss kommen später (6.9).
+
+**Konsequenzen:**
+- (+) One-Click von der Discovery-Karte bis in den Store; Verify gratis aus 6.1.
+- (+) Netzabriss ist unkritisch — Resume aus der Teil-Datei, über Neustart hinweg.
+- (+) Kein Scheduler-Eingriff, kein VRAM-Konflikt; der Worker ist ein schlanker
+  `tokio`-Loop mit `Notify`-Wakeup + 5-s-Idle-Poll.
+- (−) Seriell: zwei Modelle laden dauert nacheinander. Bewusst.
+- (−) **Speicherplanung fehlt noch** (freier Platz auf dem Store-Volume vs.
+  Download-Größe, Klartext-Warnung *vor* dem Enqueue) — verschoben in die
+  „Storage"-Ansicht (6.8). Aktuell scheitert ein zu großer Download erst beim
+  Schreiben / Import.
+- (−) Verify ist ein voller Re-Hash nach dem Download (I/O-Kosten ~einmal die
+  Dateigröße lesen) — kein Streaming-Hash während des Transfers, weil Resume den
+  Zwischenstand nicht mitführt.
+
+---
+
 ## ADR-024 — Quality-Score: keine gebündelte externe Benchmark-Quelle im MVP
 
 **Status:** Entschieden — Slice 6.0. **Verfeinert** die BENCHMARKS.md-Skizze und

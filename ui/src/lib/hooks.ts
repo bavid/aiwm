@@ -9,11 +9,13 @@ import {
   listAgents,
   listJobs,
   listKnownModels,
+  listDownloads,
   listModels,
   registrySearch,
   type AboutInfo,
   type Agent,
   type AgentRuntime,
+  type Download,
   type Job,
   type KnownModel,
   type Model,
@@ -93,6 +95,8 @@ export const useModels = () => usePolled<Model[]>("models", listModels, 3000);
 export const useAgents = () => usePolled<Agent[]>("agents", listAgents, 4000);
 export const useAgentRuntimes = () =>
   usePolled<AgentRuntime[]>("agent-runtimes", listAgentRuntimes, 3000);
+export const useDownloads = () =>
+  usePolled<Download[]>("downloads", listDownloads, 1500);
 
 /** Debounced Hugging Face search for the Discover panel. Runs when `params`
  *  change (400 ms after the last one) and `enabled`; not polled. */

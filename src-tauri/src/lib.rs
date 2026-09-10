@@ -7,12 +7,13 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 use aiwm_core::api::dto::{
-    AboutDto, AgentPermissionDto, AgentSessionDetailDto, ConfigUpdate, JobDetailDto, NewAgentDto,
-    OpenAgentSessionDto, RegistryDetailsDto, RegistrySearchDto, RuntimeStatusDto, SubmitJobDto,
+    AboutDto, AgentPermissionDto, AgentSessionDetailDto, ConfigUpdate, EnqueueDownloadDto,
+    JobDetailDto, NewAgentDto, OpenAgentSessionDto, RegistryDetailsDto, RegistrySearchDto,
+    RuntimeStatusDto, SubmitJobDto,
 };
 use aiwm_core::api::handlers;
 use aiwm_core::config::Config;
-use aiwm_core::db::{Agent, AgentSession, Job, JobFilter, Model};
+use aiwm_core::db::{Agent, AgentSession, Download, Job, JobFilter, Model};
 use aiwm_core::model::{ImportOutcome, ImportRequest};
 use aiwm_core::orchestrator::JobState;
 use aiwm_core::registry::{Fetched, RemoteModel};
@@ -116,6 +117,34 @@ async fn registry_model(
     id: String,
 ) -> Result<RegistryDetailsDto, String> {
     to_ipc(handlers::registry_details(&app, &id).await)
+}
+
+#[tauri::command]
+async fn list_downloads(app: tauri::State<'_, Arc<App>>) -> Result<Vec<Download>, String> {
+    to_ipc(handlers::list_downloads(&app).await)
+}
+
+#[tauri::command]
+async fn enqueue_download(
+    app: tauri::State<'_, Arc<App>>,
+    body: EnqueueDownloadDto,
+) -> Result<Download, String> {
+    to_ipc(handlers::enqueue_download(&app, body).await)
+}
+
+#[tauri::command]
+async fn pause_download(app: tauri::State<'_, Arc<App>>, id: String) -> Result<(), String> {
+    to_ipc(handlers::pause_download(&app, &id).await)
+}
+
+#[tauri::command]
+async fn resume_download(app: tauri::State<'_, Arc<App>>, id: String) -> Result<(), String> {
+    to_ipc(handlers::resume_download(&app, &id).await)
+}
+
+#[tauri::command]
+async fn cancel_download(app: tauri::State<'_, Arc<App>>, id: String) -> Result<(), String> {
+    to_ipc(handlers::cancel_download(&app, &id).await)
 }
 
 #[tauri::command]
@@ -285,6 +314,11 @@ fn try_run() -> anyhow::Result<()> {
             list_agent_runtimes,
             registry_search,
             registry_model,
+            list_downloads,
+            enqueue_download,
+            pause_download,
+            resume_download,
+            cancel_download,
             export_backup,
             import_backup,
             cancel_job,

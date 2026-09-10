@@ -254,7 +254,8 @@ Die Spike-Punkte unten sind jetzt **Scheibe 6.0** (Voraussetzung).
   festlegen** (HF Open LLM Leaderboard eingestellt), Quant-Erkennung → Ergebnisse
   in RUNTIMES.md / MODELS.md / BENCHMARKS.md, ADR-022 / ADR-024
 - Kompatibilitäts-/VRAM-Estimator: `.safetensors`-Header + Kalibrierung gegen
-  echte Messungen → Scheibe 6.3 (ADR-023)
+  echte Messungen → Scheibe 6.3 ✅ (ADR-016-Zusatz); Download-Manager → 6.4 ✅
+  (ADR-023)
 - Quality-Score-Gewichtung: lokale Mikro-Benchmarks (6.5) + optionaler externer
   Score, klar als Heuristik gekennzeichnet
 - Upgrade-Check → Scheibe 6.7 (Design-Fragen im Plan: Rolle→HF-Filter-Mapping,

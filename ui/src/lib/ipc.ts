@@ -500,7 +500,7 @@ export interface RegistryFile {
   quant: string | null;
   /** `[index, total]` for a split file. */
   shard: [number, number] | null;
-  /** Opens in the browser — the app has no download manager yet (6.4). */
+  /** The HF `/resolve/` URL — fed to `enqueueDownload` (6.4) or "Copy link". */
   download_url: string;
   vram_estimate_mb: number | null;
   fit: FitVerdict;
@@ -532,3 +532,48 @@ export const registrySearch = (params: RegistrySearchParams) =>
 /** One repo with every file (size, SHA-256, quant, fit). `id` is `owner/repo`. */
 export const registryModel = (id: string) =>
   invoke<RegistryDetails>("registry_model", { id });
+
+// --- download manager (Phase 6.4) ---
+
+export type DownloadState =
+  | "queued"
+  | "running"
+  | "paused"
+  | "verifying"
+  | "done"
+  | "failed";
+
+/** One queued / in-flight / finished model download (`GET /downloads`). */
+export interface Download {
+  id: string;
+  url: string;
+  filename: string;
+  model_type: string | null;
+  sha256: string | null;
+  size_bytes: number | null;
+  bytes_done: number;
+  retries: number;
+  state: DownloadState;
+  error_text: string | null;
+  /** Set to the store model id after a successful import. */
+  model_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface EnqueueDownloadBody {
+  url: string;
+  filename: string;
+  model_type?: string;
+  sha256?: string;
+  size_bytes?: number;
+}
+
+export const listDownloads = () => invoke<Download[]>("list_downloads");
+/** Queue a download → verify against the SHA-256 → import into the store.
+ *  Offline-gated. */
+export const enqueueDownload = (body: EnqueueDownloadBody) =>
+  invoke<Download>("enqueue_download", { body });
+export const pauseDownload = (id: string) => invoke<void>("pause_download", { id });
+export const resumeDownload = (id: string) => invoke<void>("resume_download", { id });
+export const cancelDownload = (id: string) => invoke<void>("cancel_download", { id });

@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useKnownModels, useModels } from "../../lib/hooks";
 import { importModel, type KnownModel, type Model, type ModelType } from "../../lib/ipc";
 import { Discover } from "./Discover";
+import { Downloads } from "./Downloads";
 import "./models.css";
 
 const ROLES = ["chat", "coding", "reasoning", "embedding"];
@@ -77,6 +78,8 @@ export function Models() {
           </div>
         )}
       </section>
+
+      <Downloads />
 
       <Discover onUseType={setModelType} />
 

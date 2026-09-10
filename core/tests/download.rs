@@ -315,6 +315,75 @@ async fn a_sha_mismatch_fails_the_download_and_removes_the_file() {
     assert!(!std::path::Path::new(&d.dest_path).exists());
 }
 
+/// `POST /downloads` + `GET /downloads` over the real loopback HTTP server.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn download_endpoints_over_http() {
+    use std::net::SocketAddr;
+    let tmp = tempfile::tempdir().unwrap();
+    let body = gguf_body();
+    let server = start_server(body.clone()).await;
+
+    let app = std::sync::Arc::new(
+        aiwm_core::App::load(aiwm_core::AppPaths::rooted(tmp.path()))
+            .await
+            .unwrap(),
+    );
+    let api = aiwm_core::ApiServer::bind(app.clone(), SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
+        .await
+        .unwrap();
+    tokio::spawn(app.downloads.clone().run());
+    let base = format!("http://{}", api.addr);
+
+    let created: serde_json::Value = reqwest::Client::new()
+        .post(format!("{base}/downloads"))
+        .json(&serde_json::json!({
+            "url": format!("{}/model.gguf", server.base),
+            "filename": "sub/dir/qwen.Q4_K_M.gguf",
+            "model_type": "chat",
+            "sha256": sha256_hex(&body),
+            "size_bytes": body.len(),
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(created["state"], "queued");
+    assert_eq!(
+        created["filename"], "qwen.Q4_K_M.gguf",
+        "only the basename is kept"
+    );
+    let id = created["id"].as_str().unwrap().to_string();
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let list: serde_json::Value = reqwest::get(format!("{base}/downloads"))
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let d = list
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|d| d["id"] == id)
+            .unwrap();
+        if d["state"] == "done" {
+            assert!(d["model_id"].is_string());
+            break;
+        }
+        assert_ne!(d["state"], "failed", "{:?}", d["error_text"]);
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "stuck: {}",
+            d["state"]
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
 #[tokio::test]
 async fn enqueue_is_refused_in_offline_mode() {
     let tmp = tempfile::tempdir().unwrap();

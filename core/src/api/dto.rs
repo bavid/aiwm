@@ -204,3 +204,20 @@ pub struct RegistryDetailsDto {
     pub files: Vec<RegistryFileDto>,
     pub freshness: Freshness,
 }
+
+/// Body for `POST /downloads` — queue a model download (a Discover card's
+/// "Download & import").
+#[derive(Debug, Clone, Deserialize)]
+pub struct EnqueueDownloadDto {
+    pub url: String,
+    /// A path or basename; only the basename is kept.
+    pub filename: String,
+    /// `chat` | `checkpoint` | … — passed to `import_model` on completion.
+    #[serde(default)]
+    pub model_type: Option<String>,
+    /// Expected SHA-256 (from the registry) — verified before the import.
+    #[serde(default)]
+    pub sha256: Option<String>,
+    #[serde(default)]
+    pub size_bytes: Option<u64>,
+}

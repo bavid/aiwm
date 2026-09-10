@@ -68,10 +68,11 @@ den Hands-on-ComfyUI-Lauf (4.0).
 CLIP-L, VAE). Video (4.4): der **Wan 2.2 TI2V-5B**-Stack (Modell + umt5 + VAE)
 und **LTX-Video 0.9.5 2B** (Modell + VAE gebündelt, T5 = der Flux-T5-Eintrag).
 `GET /models/known` / `list_known_models` speist den **„Known models"**-Abschnitt
-im Models-Tab. Kein Download-Manager im MVP (Phase 6) — man lädt selbst und
-importiert; bei SHA-256-Treffer stempelt `import_model`
-`publisher`/`family`/`source_revision = catalog:<id>`. Details + empfohlene
-Settings: [IMAGE_MODELS.md](IMAGE_MODELS.md) / [VIDEO_MODELS.md](VIDEO_MODELS.md).
+im Models-Tab — dort weiterhin „Copy link" (man lädt selbst und importiert);
+der Download-Manager (6.4) hängt an der **„Discover"**-Suche. Bei SHA-256-Treffer
+stempelt `import_model` `publisher`/`family`/`source_revision = catalog:<id>`.
+Details + empfohlene Settings:
+[IMAGE_MODELS.md](IMAGE_MODELS.md) / [VIDEO_MODELS.md](VIDEO_MODELS.md).
 
 Für **Agent-Sessions** (Phase 5) braucht es ein Chat-GGUF mit der zusätzlichen
 Rolle **`coding`** und verlässlichem Tool-Calling (`llama-server --jinja`).
@@ -91,7 +92,7 @@ Kandidaten + Import + Smoke: [AGENT_MODELS.md](AGENT_MODELS.md). Noch nicht im
 | Kompatibilitäts-Engine (🟢/🟡/🔴 vor Download) | ✅ 6.3 `compat::verdict` in der „Discover"-Dateiliste + `.safetensors`-Header-Reader (Param-Count/Precision) im Import |
 | Kuratierter „Known models"-Katalog (SHA-256, HF-Quelle, Lizenz) | ✅ 3.6 (`core::model::catalog`, `GET /models/known`); Auto-Download → Phase 6 |
 | Online-Discovery (HF Hub, Ollama-Library) | ✅ 6.1 `core::registry` + 6.2 „Discover"-Panel im Models-Tab (`GET /registry/{search,models/{id}}`, Fit-Ampel via `core::compat`, „Copy link"); Ollama später |
-| Download-Manager (Queue, Resume, Verify, Speicherplan) | Phase 6 (6.4) |
+| Download-Manager (Queue, Resume, Verify, Speicherplan) | ✅ 6.4 (ADR-023) `core::download::DownloadManager` — eine Queue / ein Slot, HTTP-Range-Resume (Retry 5×), Verify gegen die SHA-256 aus 6.1 → `import_model`. `downloads`-Tabelle (Migr. `0006`), Recovery → `queued`. `GET/POST /downloads` + `{pause,resume,cancel}` + Tauri; „Download & import" in `Discover.tsx` (Split-GGUF/Gated aus) + `Downloads.tsx`. `offline_mode` sperrt `enqueue`/`resume`. **Speicherplan noch offen → 6.8** |
 | Dedup-/Unused-/Versions-Reports | Phase 6 |
 | Benchmark-gestützte Auto-Auswahl | Phase 6 (braucht [BENCHMARKS.md](BENCHMARKS.md)) |
 
