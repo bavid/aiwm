@@ -91,8 +91,11 @@ Dedizierte Modell-Research-Aufgabe vor Phase 3/4/6 (Brief 10.24, 31, 38).
 Rate-Limits, Token-Pflicht, Revision-Handling, Quant-Erkennung können anders sein
 als angenommen.
 
-**Gegenmaßnahmen:** Spike vor Phase 6: HF-Hub- + Ollama-Registry-API real testen,
-Ergebnisse in `RUNTIMES.md`/`MODELS.md`. Download-Manager mit Backoff + Resume.
+**Gegenmaßnahmen:** **Scheibe 6.0** (`PHASE_6_PLAN.md`) = expliziter Spike: HF-
+Hub-API + Ollama real testen, Ergebnisse in `RUNTIMES.md`/`MODELS.md`. Erste
+Befunde (09/26): Anon-Limit 500 API-Calls/5 min/IP reicht; `lfs.oid` liefert die
+Verify-SHA-256 vorab; Ollama hat kein offizielles Such-API. Download-Manager mit
+Backoff + Resume + `RateLimit`-Header-Auswertung.
 
 ## R11 — Windows-Prozess-/Firewall-Verhalten *(Niedrig/Mittel)*
 

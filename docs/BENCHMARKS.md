@@ -1,6 +1,13 @@
 # Benchmarks
 
-Konzept für die Modell-Bewertung. **Noch nicht implementiert** — Phase 6.
+Konzept für die Modell-Bewertung. **Noch nicht implementiert** — Phase 6,
+Scheibe 6.5 ([PHASE_6_PLAN.md](PHASE_6_PLAN.md)).
+
+> **Achtung (2026-09):** Das **HF Open LLM Leaderboard ist eingestellt** — es
+> gibt keine einzelne kanonische, frei abrufbare Score-Quelle mehr. Der 6.0-Spike
+> legt fest, ob überhaupt eine externe Quelle gebündelt wird (Kandidaten:
+> Artificial Analysis, LMArena, llm-stats, SWE-bench-JSON) oder ob der MVP nur
+> mit lokalen Mikro-Benchmarks + Katalog-Notizen fährt (Empfehlung: Letzteres).
 
 ## Zweck
 

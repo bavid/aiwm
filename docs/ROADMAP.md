@@ -187,23 +187,34 @@ erzwingbar, kein `bash -l` — Empfehlung, dreht die Reihenfolge unten um),
 
 ## Phase 6 — Automatisierung & Model-Manager v2
 
-- **Online-Discovery:** HF-Hub- + Ollama-Library-Quellen-Adapter, Suche mit Filtern
-- **Download-Manager:** Queue, Pause/Resume, Verify, Speicherplanung
-- **Kompatibilitäts-Engine:** 🟢/🟡/🔴 vor Download
-- **Dedup-/Unused-/Alte-Versionen-Reports**
-- **Benchmark-System** + gewichteter Quality-Score
-- **Auto-Model-Auswahl** nutzt jetzt Benchmark-Daten
-- **Auto-Pipeline-Auswahl** verfeinert
-- **Collections**, Model-Versionen, Update-Checks
-- **Upgrade-Check (Modell-Explorer-Knopf):** „Gibt es inzwischen was Besseres?" pro
-  installiertem Modell / pro Rolle. Fragt den HF-Hub nach neueren/populäreren
-  Modellen derselben Rolle+Familie, das **lokale LLM** bewertet die Kandidaten
-  gegen das aktuelle Modell (Qualität, Alter, Downloads/Likes) — darf nur aus den
-  echten API-Treffern wählen, nichts erfinden. Harter Filter über die
-  Kompatibilitäts-/VRAM-Engine auf „läuft auf **dieser** Hardware". Ausgabe: kurze
-  Liste mit Ein-Satz-Begründung + „Import"-Knopf (→ Download-Manager). Der
-  HF-Query ist ein externer Call → per-Aktion-Consent, im `offline_mode` gesperrt.
-- Cloud-Provider-Adapter (opt-in): Claude/OpenAI als optionale Agent-Backends
+Scheibenplan + Research: [PHASE_6_PLAN.md](PHASE_6_PLAN.md). Aus dem manuellen
+Modell-Umgang (Datei selbst laden, Pfad eingeben) wird ein Model-Manager: online
+suchen, verifiziert laden, lokal messen, Upgrade-Check. Alles offline-first
+(ADR-009), kein Anspruch auf einen objektiven Qualitäts-Score (R12).
+
+- 6.0 **Registry-/Benchmark-Spike** (Voraussetzung): HF-Hub-API + Ollama real
+  testen, Benchmark-Datenquelle festlegen (HF Open LLM Leaderboard eingestellt),
+  ADR-022 / ADR-024. Schließt R9 / R10
+- 6.1 **`core::registry`** — HF-Hub-Quellen-Adapter (`ModelSource`-Trait), TTL-
+  Cache für Offline, SHA-256 vorab aus `lfs.oid`
+- 6.2 **Discovery-UI** — Suche + Filter + Fit-Ampel im Models-Tab
+- 6.3 **Kompatibilitäts-Engine v2** — `.safetensors`-Header, `FitVerdict`
+  🟢/🟡/🔴, Overhead gegen echte Messungen kalibriert (verlängert ADR-016)
+- 6.4 **Download-Manager** — `downloads`-Tabelle, Queue, Range/Resume, Verify →
+  `import_model`, Speicherplanung (ADR-023)
+- 6.5 **`core::bench`** — lokale Mikro-Benchmarks (tok/s, Ladezeit, VRAM/RAM-
+  Peak), optionaler externer Score, gewichtete Heuristik
+- 6.6 **Benchmark-gestützte `Auto`-Auswahl** — `pick_for_role` nutzt Fit +
+  Score + Nutzung
+- 6.7 **Upgrade-Check** — „Gibt es was Besseres?" pro Modell / Rolle: HF-Hub
+  fragen → Fit-Filter → lokales LLM rankt die echten Treffer (erfindet nichts)
+  → Liste + „Download & import". Per-Aktion-Consent, im `offline_mode` gesperrt
+  (ADR-025)
+- 6.8 **Aufräum-Reports** — Dedup / Unused / Old versions, Storage-Ansicht
+- 6.9 **Collections + Politur** — Sammlungen, Rate-Limit-Backoff, optionales
+  `HF_TOKEN`, Registry-Diagnostics
+- Cloud-Provider-Adapter (Claude/OpenAI als opt-in **Agent**-Backends) gehört
+  zu Phase 5, eigener ADR, nach Phase 6
 
 ## Später / bewusst offen
 

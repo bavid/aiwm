@@ -119,6 +119,15 @@ Command-Approval (UI) + erzwungene Offline-Config.
   Tauri + Settings-Karte „Backup & restore". Politur (Kompaktierungs-Anzeige,
   Pause-Fluss, Diagnostics-Zeile) = 5.5c, vertagt.
 
+**Phase 6 (Automatisierung & Model-Manager v2) — geplant:** [docs/PHASE_6_PLAN.md](docs/PHASE_6_PLAN.md).
+Aus dem manuellen Modell-Umgang wird ein Model-Manager: online suchen
+(`core::registry`, HF-Hub), verifiziert laden (Download-Manager mit Queue/Resume,
+SHA-256 vorab aus `lfs.oid`), lokal messen (`core::bench`), Upgrade-Check („gibt
+es was Besseres, das in 16 GB passt?" — lokales LLM rankt echte HF-Treffer),
+Dedup-/Unused-Reports. Alles offline-first (ADR-009). Start = **6.0-Spike**
+(HF-API + Benchmark-Quelle real prüfen; das HF Open LLM Leaderboard ist
+eingestellt).
+
 - **4.1** ✅ **`capability::video`**: `job_type=video` → feste `wan_ti2v`-Pipeline
   (`WanImageToVideo` → `KSampler` → `VAEDecode` → `CreateVideo` → `SaveVideo`,
   mp4) → `<outputs>/<job_id>.mp4`. `generate_image` → **`generate_media`**

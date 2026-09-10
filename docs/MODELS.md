@@ -98,9 +98,13 @@ Welche Modellgrößen/Quantisierungen auf der RTX 4080 Super (16 GB) sinnvoll si
 [HARDWARE.md](HARDWARE.md). Kurz: 7–14B komfortabel, ~24–30B an der Kante,
 70B unrealistisch. Video: Kurzclips 480–720p.
 
-## Zu untersuchen vor Phase 6 (Brief 10.24)
+## Phase 6 — Model-Manager v2
 
-Model-Repository-APIs (HF Hub, Ollama-Registry), Download-/Resume-Support,
-Metadaten-Umfang, Versionserkennung, Checksums, Quant-Erkennung aus
-Dateiname + GGUF-Header, VRAM-Schätzformel + Kalibrierung, Trust-Bewertung von
-Quellen. **Kein automatischer Download aus unbekannten Quellen.**
+Scheibenplan + API-Research: [PHASE_6_PLAN.md](PHASE_6_PLAN.md). `core::registry`
+(HF-Hub-Quellen-Adapter, `ModelSource`-Trait), Download-Manager (Queue, Range/
+Resume, Verify — die **SHA-256 steht vorab** fest über `GET /api/models/{id}/tree/
+{rev}?recursive=true` → `lfs.oid`), `core::bench` (lokale Mikro-Benchmarks),
+Discovery-UI, Upgrade-Check, Aufräum-Reports. Start = **6.0-Spike**: HF-Hub-API +
+Ollama (kein Such-API) + Benchmark-Datenquelle real prüfen (das HF Open LLM
+Leaderboard ist eingestellt), Quant-Erkennung aus Dateiname + `general.file_type`.
+**Kein automatischer Download aus unbekannten Quellen.**

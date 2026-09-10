@@ -247,29 +247,19 @@ hierher, damit nichts verloren geht.
   pausieren?"-Fluss (R8), Diagnostics-Zeile pro Agent.
 
 ## Vor Phase 6 (Model-Manager v2)
-- Spike: HF-Hub- + Ollama-Registry-API real testen (Rate-Limits, Token-Pflicht,
-  Revision-Pinning, Quant-Erkennung) → Ergebnisse in RUNTIMES.md / MODELS.md
-- Kompatibilitäts-/VRAM-Estimator: Formel + Kalibrierung gegen echte Messungen
-- Quality-Score-Gewichtung definieren (extern gepflegte Benchmarks + lokale
-  Speed/VRAM/Stabilität)
-- Best-of-N-Modellauswahl: Bewertungskriterium pro Capability
-- **Upgrade-Check** (Modell-Explorer-Knopf „Gibt es was Besseres?"): offene Fragen
-  vor dem Bau —
-  - HF-Endpoint: `GET /api/models?filter=<lib>&sort=downloads&direction=-1` +
-    `pipeline_tag`/`author`-Filter; wie Rolle+Familie des lokalen Modells auf
-    HF-Filter mappen (GGUF-Repos vs. Original-Repos, `-GGUF`-Suffix-Konvention).
-  - Prompt ans lokale LLM: Kandidatenliste (nur echte API-Treffer, als JSON) +
-    aktuelles Modell → strukturierte Antwort (rank + Ein-Satz-Grund); **kein**
-    freier Modellname, Antwort gegen die Kandidaten-IDs validieren.
-  - Kompatibilitäts-Filter: `core::compat` VRAM-Fit gegen `vram_budget_mb` **vor**
-    der LLM-Bewertung anwenden (spart Tokens, hält die Liste ehrlich); Quant/
-    Format muss real beziehbar sein.
-  - Offline/Consent: der HF-Query ist ein externer Call → per-Aktion-Consent
-    (ADR-009), im `offline_mode` ist der Knopf gesperrt (kein stiller Fallback).
-  - Reicht das lokale Coding-/Chat-Modell für die Bewertung, oder braucht es ein
-    kleines dediziertes „Analyse"-Modell? Kein Netz für die LLM-Inferenz selbst.
-  - UI: Knopf pro Zeile im Models-Tab **und** pro Rolle (Auto-Kandidat); Ergebnis
-    als aufklappbare Vorschlagsliste mit „Import" → Download-Manager.
+Scheibenplan + Research + offene Entscheidungen A–I: [PHASE_6_PLAN.md](PHASE_6_PLAN.md).
+Die Spike-Punkte unten sind jetzt **Scheibe 6.0** (Voraussetzung).
+- 6.0-Spike: HF-Hub-API (`/api/models`, `expand[]`, `/tree?recursive=true` →
+  `lfs.oid` = SHA-256), Ollama-Library (kein Such-API), **Benchmark-Datenquelle
+  festlegen** (HF Open LLM Leaderboard eingestellt), Quant-Erkennung → Ergebnisse
+  in RUNTIMES.md / MODELS.md / BENCHMARKS.md, ADR-022 / ADR-024
+- Kompatibilitäts-/VRAM-Estimator: `.safetensors`-Header + Kalibrierung gegen
+  echte Messungen → Scheibe 6.3 (ADR-023)
+- Quality-Score-Gewichtung: lokale Mikro-Benchmarks (6.5) + optionaler externer
+  Score, klar als Heuristik gekennzeichnet
+- Upgrade-Check → Scheibe 6.7 (Design-Fragen im Plan: Rolle→HF-Filter-Mapping,
+  strukturierter LLM-Prompt mit ID-Validierung, Fit-Filter vor der Bewertung,
+  Consent-/Offline-Gate)
 
 ## Offen / später zu entscheiden
 - App-Selbst-Update offline (manueller Installer + Signaturprüfung angenommen)
