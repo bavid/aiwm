@@ -286,10 +286,12 @@ async fn discovery_endpoints_over_http() {
     );
     assert_eq!(gguf["sha256"].as_str().unwrap().len(), 64);
     assert!(gguf["vram_estimate_mb"].as_u64().unwrap() > 4_000);
-    assert!(["green", "yellow", "red"].contains(&gguf["fit"].as_str().unwrap()));
+    // A ~4.4 GB Q4_K_M is never "red" on a real budget (16 GB card here).
+    let level = gguf["fit"]["level"].as_str().unwrap();
+    assert!(level == "green" || level == "yellow", "{level}");
 
     // A non-weight file has no estimate and an unknown fit.
     let readme = files.iter().find(|f| f["path"] == "README.md").unwrap();
     assert!(readme["vram_estimate_mb"].is_null());
-    assert_eq!(readme["fit"], "unknown");
+    assert_eq!(readme["fit"]["level"], "unknown");
 }

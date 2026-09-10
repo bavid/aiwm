@@ -485,9 +485,13 @@ export interface RemoteModel {
   format: "gguf" | "safetensors" | "other";
 }
 
-/** VRAM fit of one file against the current budget (a first-cut check — 6.3
- *  refines it). */
-export type FitLevel = "green" | "yellow" | "red" | "unknown";
+/** Will this file run on this machine? Weights + KV + overhead vs the VRAM
+ *  budget and free system RAM, with a plain-language reason (`core::compat`). */
+export type FitVerdict =
+  | { level: "green" }
+  | { level: "yellow"; reason: string }
+  | { level: "red"; reason: string }
+  | { level: "unknown" };
 
 export interface RegistryFile {
   path: string;
@@ -499,7 +503,7 @@ export interface RegistryFile {
   /** Opens in the browser — the app has no download manager yet (6.4). */
   download_url: string;
   vram_estimate_mb: number | null;
-  fit: FitLevel;
+  fit: FitVerdict;
 }
 
 export interface RegistryDetails extends RemoteModel {

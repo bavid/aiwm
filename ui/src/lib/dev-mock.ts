@@ -211,20 +211,21 @@ export function installDevMock(): void {
             {
               path: "README.md", size_bytes: 4200, sha256: null, quant: null,
               shard: null, download_url: `https://huggingface.co/${mid}/resolve/main/README.md`,
-              vram_estimate_mb: null, fit: "unknown",
+              vram_estimate_mb: null, fit: { level: "unknown" },
             },
             {
               path: `${repo}-q4_k_m.gguf`, size_bytes: 4_683_073_536,
               sha256: "509287f78cb4d4cf6b3843734733b914b2c158e43e22a7f4bf5e963800894d3c",
               quant: "Q4_K_M", shard: null,
               download_url: `https://huggingface.co/${mid}/resolve/main/model-q4_k_m.gguf`,
-              vram_estimate_mb: 5_800, fit: "green",
+              vram_estimate_mb: 5_800, fit: { level: "green" },
             },
             {
               path: `${repo}-q8_0.gguf`, size_bytes: 8_100_000_000,
               sha256: "aa".repeat(32), quant: "Q8_0", shard: null,
               download_url: `https://huggingface.co/${mid}/resolve/main/model-q8_0.gguf`,
-              vram_estimate_mb: 9_200, fit: "yellow",
+              vram_estimate_mb: 9_200,
+              fit: { level: "yellow", reason: "needs ~9.0 GB of your ~14.8 GB VRAM budget — little head-room for a longer context or a second resident model" },
             },
           ],
         };

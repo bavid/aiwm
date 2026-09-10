@@ -333,6 +333,12 @@
   word-break: break-all;
 }
 
+.discover__fitnote {
+  color: var(--load-warn);
+  font-size: var(--text-xs);
+  cursor: help;
+}
+
 .discover__copy {
   margin-left: auto;
   padding: 2px var(--space-2);

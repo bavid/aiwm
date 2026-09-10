@@ -176,23 +176,9 @@ impl RegistrySearchDto {
     }
 }
 
-/// The VRAM fit of a specific file against the current budget. A first-cut
-/// weights + rough-KV check (6.2); slice 6.3 replaces it with the real
-/// `FitVerdict` (`.safetensors` header, activations, system RAM, reasons).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum FitLevel {
-    /// Comfortably within budget.
-    Green,
-    /// Fits, but tight — expect eviction pressure.
-    Yellow,
-    /// Over the VRAM budget.
-    Red,
-    /// Not a model file, or no budget / size to judge against.
-    Unknown,
-}
-
-/// One downloadable file, enriched with the browser link + a fit verdict.
+/// One downloadable file, enriched with the browser link + a fit verdict
+/// ([`crate::compat::verdict`] — weights + KV + overhead vs the VRAM budget and
+/// free system RAM, with a plain-language reason).
 #[derive(Debug, Clone, Serialize)]
 pub struct RegistryFileDto {
     pub path: String,
@@ -205,7 +191,7 @@ pub struct RegistryFileDto {
     pub download_url: String,
     /// `null` for non-model files (README, `config.json`).
     pub vram_estimate_mb: Option<u64>,
-    pub fit: FitLevel,
+    pub fit: crate::compat::FitVerdict,
 }
 
 /// `GET /registry/models/{id}` — the model plus every file with size, hash and

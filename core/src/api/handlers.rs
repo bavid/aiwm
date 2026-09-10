@@ -6,10 +6,11 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use super::dto::{
-    AboutDto, AgentPermissionDto, AgentSessionDetailDto, ConfigUpdate, FitLevel, JobDetailDto,
-    NewAgentDto, OpenAgentSessionDto, RegistryDetailsDto, RegistryFileDto, RegistrySearchDto,
-    RuntimeStatusDto, SubmitJobDto,
+    AboutDto, AgentPermissionDto, AgentSessionDetailDto, ConfigUpdate, JobDetailDto, NewAgentDto,
+    OpenAgentSessionDto, RegistryDetailsDto, RegistryFileDto, RegistrySearchDto, RuntimeStatusDto,
+    SubmitJobDto,
 };
+use crate::compat::FitVerdict;
 use crate::config::Config;
 use crate::db::{Agent, AgentSession, Job, JobFilter, Model, NewAgent, NewJob};
 use crate::model::{ImportOutcome, ImportRequest};
@@ -406,15 +407,17 @@ pub async fn registry_search(
 }
 
 /// `GET /registry/models/{id}` — one repo, with every file enriched with the
-/// browser link and a VRAM fit verdict against the current budget.
+/// browser link and a VRAM fit verdict against the current budget + free RAM.
 pub async fn registry_details(app: &App, id: &str) -> Result<RegistryDetailsDto> {
     let fetched = app.registry.details(id).await?;
     let budget_mb = app.scheduler.budget_mb();
+    let host = app.telemetry.latest().host;
+    let free_ram_mb = host.ram_total_mb.saturating_sub(host.ram_used_mb);
     let d = fetched.data;
     let files = d
         .files
         .iter()
-        .map(|f| enrich_file(id, &d.revision, &d.model, f, budget_mb))
+        .map(|f| enrich_file(id, &d.revision, &d.model, f, budget_mb, free_ram_mb))
         .collect();
     Ok(RegistryDetailsDto {
         model: d.model,
@@ -436,6 +439,7 @@ fn enrich_file(
     model: &RemoteModel,
     f: &RemoteFile,
     budget_mb: u64,
+    free_ram_mb: u64,
 ) -> RegistryFileDto {
     let (vram_estimate_mb, fit) = if is_weight_file(model, &f.path) && f.size > 0 {
         let dims = crate::compat::ModelDims {
@@ -444,10 +448,13 @@ fn enrich_file(
             param_count: model.param_count,
             ..Default::default()
         };
-        let est = crate::compat::estimate(&dims, crate::compat::effective_ctx(model.ctx_max));
-        (Some(est.total_mb), fit_of(est.total_mb, budget_mb))
+        let ctx = crate::compat::effective_ctx(model.ctx_max);
+        (
+            Some(crate::compat::estimate(&dims, ctx).total_mb),
+            crate::compat::verdict(&dims, ctx, budget_mb, free_ram_mb),
+        )
     } else {
-        (None, FitLevel::Unknown)
+        (None, FitVerdict::Unknown)
     };
     RegistryFileDto {
         download_url: format!("https://huggingface.co/{id}/resolve/{revision}/{}", f.path),
@@ -458,21 +465,6 @@ fn enrich_file(
         shard: f.shard.map(|(a, b)| [a, b]),
         vram_estimate_mb,
         fit,
-    }
-}
-
-/// 🟢/🟡/🔴 against the VRAM budget. `yellow` at 85 % — enough head-room for the
-/// runtime to breathe.
-fn fit_of(total_mb: u64, budget_mb: u64) -> FitLevel {
-    if budget_mb == 0 {
-        return FitLevel::Unknown;
-    }
-    if total_mb > budget_mb {
-        FitLevel::Red
-    } else if total_mb.saturating_mul(100) > budget_mb.saturating_mul(85) {
-        FitLevel::Yellow
-    } else {
-        FitLevel::Green
     }
 }
 
@@ -499,16 +491,6 @@ pub fn recent_logs(app: &App, lines: usize) -> Result<Vec<String>> {
 mod tests {
     use super::*;
     use crate::registry::SearchSort;
-
-    #[test]
-    fn fit_of_thresholds() {
-        assert_eq!(fit_of(9_000, 0), FitLevel::Unknown);
-        assert_eq!(fit_of(8_000, 16_000), FitLevel::Green);
-        assert_eq!(fit_of(13_600, 16_000), FitLevel::Green); // 85 % exactly is still green
-        assert_eq!(fit_of(13_601, 16_000), FitLevel::Yellow);
-        assert_eq!(fit_of(16_000, 16_000), FitLevel::Yellow); // fits, tight
-        assert_eq!(fit_of(16_001, 16_000), FitLevel::Red);
-    }
 
     #[test]
     fn is_weight_file_needs_the_format_and_the_extension() {

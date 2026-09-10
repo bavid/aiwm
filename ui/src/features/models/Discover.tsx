@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import {
   registryModel,
-  type FitLevel,
+  type FitVerdict,
   type Freshness,
   type ModelType,
   type RegistryDetails,
@@ -24,12 +24,19 @@ const count = (n: number) =>
   n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}k` : `${n}`;
 const params = (n: number | null) => (n == null ? "—" : n >= 1e9 ? `${(n / 1e9).toFixed(1)}B` : `${(n / 1e6).toFixed(0)}M`);
 
-const FIT_LABEL: Record<FitLevel, string> = {
-  green: "Fits comfortably",
-  yellow: "Fits, tight",
-  red: "Over your VRAM budget",
-  unknown: "—",
+const FIT_COLOR: Record<FitVerdict["level"], string> = {
+  green: "var(--load-ok)",
+  yellow: "var(--load-warn)",
+  red: "var(--load-crit)",
+  unknown: "var(--border)",
 };
+
+function fitTitle(fit: FitVerdict, vramMb: number | null): string {
+  const est = vramMb ? ` · ~${(vramMb / 1024).toFixed(1)} GB VRAM` : "";
+  if (fit.level === "green") return `Fits comfortably${est}`;
+  if (fit.level === "unknown") return "Fit unknown";
+  return `${fit.reason}${est}`;
+}
 
 function freshnessNote(f: Freshness): string | null {
   if (f.kind === "live") return null;
@@ -186,27 +193,25 @@ function FileRow({ file, gated }: { file: RegistryFile; gated: boolean }) {
       /* clipboard blocked — the link is in the title attr */
     }
   };
-  const dotColor =
-    file.fit === "green"
-      ? "var(--load-ok)"
-      : file.fit === "yellow"
-        ? "var(--load-warn)"
-        : file.fit === "red"
-          ? "var(--load-crit)"
-          : "var(--border)";
+  const warn = file.fit.level === "yellow" || file.fit.level === "red";
 
   return (
     <div className="discover__file">
       <span
         className="discover__dot"
-        style={{ background: dotColor }}
-        title={`${FIT_LABEL[file.fit]}${file.vram_estimate_mb ? ` · ~${(file.vram_estimate_mb / 1024).toFixed(1)} GB VRAM` : ""}`}
+        style={{ background: FIT_COLOR[file.fit.level] }}
+        title={fitTitle(file.fit, file.vram_estimate_mb)}
       />
       <span className="discover__quant">
         {file.quant ?? file.path}
         {file.shard && ` · part ${file.shard[0]}/${file.shard[1]}`}
       </span>
       <span className="numeric muted">{gb(file.size_bytes)}</span>
+      {warn && "reason" in file.fit && (
+        <span className="discover__fitnote" title={file.fit.reason}>
+          {file.fit.level === "red" ? "won’t fit" : "tight"}
+        </span>
+      )}
       {gated && <span className="badge badge--warn">accept licence on HF</span>}
       <button type="button" className="discover__copy" title={file.download_url} onClick={copy}>
         {copied ? "Copied ✓" : "Copy link"}

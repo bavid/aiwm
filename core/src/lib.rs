@@ -54,7 +54,7 @@ pub use agent::{
 pub use api::{ApiServer, Services};
 pub use app::App;
 pub use capability::agent::{AgentSessions, CodingRuntime, LlamaCodingRuntime};
-pub use compat::{estimate as estimate_vram, ModelDims, VramEstimate};
+pub use compat::{estimate as estimate_vram, FitVerdict, ModelDims, VramEstimate};
 pub use config::Config;
 pub use db::{Database, Model, ModelRepo, NewModel};
 pub use error::{CoreError, Result};

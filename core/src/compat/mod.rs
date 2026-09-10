@@ -14,12 +14,90 @@
 //!
 //! Deliberately conservative: better to over-reserve and queue than to load and
 //! crash. Not a benchmark — see `docs/HARDWARE.md` for the real numbers.
+//!
+//! [`verdict`] wraps [`estimate`] into a plain-language 🟢/🟡/🔴 answer for
+//! "would this model run on this machine?" — used by Discovery (6.2) and the
+//! Upgrade-Check (6.7); it also weighs free system RAM for the offload case.
+
+use serde::Serialize;
 
 /// Context length the chat capability targets by default. `llama-server` would
 /// otherwise allocate the model's full trained context (often 128K), whose KV
 /// cache alone can exceed the card — so we cap here and size the estimate to
 /// match. The Settings UI will expose an override (slice 2.7).
 pub const DEFAULT_CHAT_CTX: u32 = 8192;
+
+/// Below this fraction of the VRAM budget a fit is "green"; above it (but still
+/// within budget) it is "yellow" — no head-room for a longer context or a
+/// second resident model.
+const FIT_TIGHT_PCT: u64 = 85;
+
+/// RAM to keep free for the OS + page cache while layers are offloaded there.
+const OFFLOAD_RAM_RESERVE_MB: u64 = 4096;
+
+/// A plain-language answer to "will this model run on this machine?" — for
+/// Discovery (6.2) and the Upgrade-Check (6.7). Advisory: it is **not** the
+/// scheduler's live "does it fit right now given what's loaded" check.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "level", rename_all = "snake_case")]
+pub enum FitVerdict {
+    /// Comfortably within the VRAM budget.
+    Green,
+    /// Runs, with a caveat (tight, or partly offloaded to system RAM).
+    Yellow { reason: String },
+    /// Will not run acceptably here.
+    Red { reason: String },
+    /// No budget set, or not enough information to judge.
+    Unknown,
+}
+
+/// Judge `dims` at context length `ctx` against the VRAM budget and the amount
+/// of free system RAM (for the offload fallback).
+pub fn verdict(dims: &ModelDims, ctx: u32, vram_budget_mb: u64, free_ram_mb: u64) -> FitVerdict {
+    if vram_budget_mb == 0 || dims.size_bytes == 0 {
+        return FitVerdict::Unknown;
+    }
+    let total = estimate(dims, ctx).total_mb;
+
+    if total <= vram_budget_mb {
+        if total.saturating_mul(100) > vram_budget_mb.saturating_mul(FIT_TIGHT_PCT) {
+            return FitVerdict::Yellow {
+                reason: format!(
+                    "needs ~{} of your ~{} VRAM budget — little head-room for a longer \
+                     context or a second resident model",
+                    gb(total),
+                    gb(vram_budget_mb),
+                ),
+            };
+        }
+        return FitVerdict::Green;
+    }
+
+    // Over the VRAM budget — the runtime can offload layers to system RAM if
+    // there is room, at a large speed cost.
+    let overflow = total - vram_budget_mb;
+    if free_ram_mb >= overflow.saturating_add(OFFLOAD_RAM_RESERVE_MB) {
+        FitVerdict::Yellow {
+            reason: format!(
+                "needs ~{}, over your ~{} VRAM budget — about {} would run in system RAM \
+                 (much slower)",
+                gb(total),
+                gb(vram_budget_mb),
+                gb(overflow),
+            ),
+        }
+    } else {
+        FitVerdict::Red {
+            reason: format!(
+                "needs ~{}, over your ~{} VRAM budget, and only ~{} RAM is free to offload \
+                 the rest",
+                gb(total),
+                gb(vram_budget_mb),
+                gb(free_ram_mb),
+            ),
+        }
+    }
+}
 
 /// Flat VRAM overhead for the CUDA context, cuBLAS workspace and compute graph.
 const RUNTIME_OVERHEAD_MB: u64 = 650;
@@ -273,5 +351,61 @@ mod tests {
             ..ModelDims::default()
         };
         assert!(estimate(&dims, 8192).describe().contains("KV cache ~"));
+    }
+
+    /// Weights only, no arch dims → the estimate uses the rough KV fallback.
+    fn weights(mb: u64) -> ModelDims {
+        ModelDims {
+            size_bytes: mb * MIB_I,
+            ..ModelDims::default()
+        }
+    }
+
+    #[test]
+    fn verdict_is_green_with_comfortable_head_room() {
+        // 6 GB weights + rough KV + 0.65 overhead ≈ 7.9 GB, well under 16 GB.
+        assert_eq!(
+            verdict(&weights(6_000), 8192, 16_000, 32_000),
+            FitVerdict::Green
+        );
+    }
+
+    #[test]
+    fn verdict_is_yellow_when_it_fits_but_is_tight() {
+        // ~13.7 GB total against a 15 GB budget is > 85 % → tight.
+        let v = verdict(&weights(12_000), 8192, 15_000, 32_000);
+        match v {
+            FitVerdict::Yellow { reason } => assert!(reason.contains("head-room"), "{reason}"),
+            other => panic!("expected tight yellow, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn verdict_is_yellow_when_over_budget_but_offloadable() {
+        // ~22 GB total, 16 GB budget → 6 GB overflow; 32 GB RAM covers it.
+        let v = verdict(&weights(20_000), 8192, 16_000, 32_000);
+        match v {
+            FitVerdict::Yellow { reason } => assert!(reason.contains("system RAM"), "{reason}"),
+            other => panic!("expected offload yellow, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn verdict_is_red_when_over_budget_and_ram_cannot_offload() {
+        // Same 20 GB model, but only 4 GB RAM free — can't offload 6 GB.
+        let v = verdict(&weights(20_000), 8192, 16_000, 4_000);
+        assert!(matches!(v, FitVerdict::Red { .. }), "{v:?}");
+    }
+
+    #[test]
+    fn verdict_is_unknown_without_a_budget_or_a_size() {
+        assert_eq!(
+            verdict(&weights(8_000), 8192, 0, 32_000),
+            FitVerdict::Unknown
+        );
+        assert_eq!(
+            verdict(&ModelDims::default(), 8192, 16_000, 32_000),
+            FitVerdict::Unknown
+        );
     }
 }
