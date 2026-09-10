@@ -702,6 +702,133 @@ auf der echten Maschine verprobt (`node` 24, `uv` 0.12, Git-Bash, `wsl` da).
 
 ---
 
+## ADR-022 — Model-Discovery: `core::registry`, Hugging Face Hub als primäre Quelle
+
+**Status:** Entschieden — Slice 6.0 (Registry-Spike, echte API-Calls 2026-09).
+
+**Kontext:** Phase 6 braucht Online-Modell-Suche. Der Brief (10.6/10.17) will
+„One-Click" für beliebige Quellen; ANALYSIS rahmt das auf kuratierte Quellen +
+assistierten Import (ADR bestätigt das). Frage: welche Quelle(n), welche API,
+reicht anonym, wie sieht der Offline-Fallback aus.
+
+**Befunde (Live-Probes gegen die echte API):**
+1. **HF-Hub-API ist tragfähig und anonym nutzbar.**
+   `GET /api/models?search=&filter=&pipeline_tag=&library=&author=&sort=&direction=-1&limit=&expand[]=…`.
+   **`expand[]` funktioniert auch auf dem Listen-Endpoint** — ein Call liefert
+   pro Treffer `gguf` (`total` = Param-Count, `architecture`, `context_length`,
+   `chat_template`), `safetensors` (`parameters: { <DTYPE>: n }` → Precision +
+   Param-Count **ohne Download**), `gated`, `lastModified`, `createdAt`,
+   `downloadsAllTime`, `trendingScore`, `cardData`. `sort` u. a. `downloads`,
+   `likes`, `likes7d`, `trendingScore`, `createdAt`, `lastModified`.
+2. **Verify-SHA-256 steht vor dem Download fest.**
+   `GET /api/models/{id}/tree/{rev}?recursive=true` → pro Datei
+   `{ path, size, oid (git-sha1), lfs: { oid: "<sha256>", size }, xetHash }`.
+   **`lfs.oid` ist die SHA-256** (auch auf Xet-Repos vorhanden); `xetHash` ist
+   ein anderer Hash (Xet-Content-Addressing) — **nicht** verwenden. Split-GGUFs
+   (`…-00001-of-00003.gguf`) als Set behandeln.
+3. **Gated-Repos sind durchsuch- und inspizierbar** (`gated: "manual"|"auto"`);
+   nur der Datei-Download (`/resolve/`) braucht akzeptierte Lizenz + Token. Die
+   Discovery zeigt sie, der Download-Manager (6.4) muss `gated` erkennen und
+   „Lizenz auf HF akzeptieren + Token setzen" sagen statt mitten im Download zu
+   scheitern.
+4. **Rate-Limits reichen locker.** `RateLimit: "api";r=499;t=98` /
+   `RateLimit-Policy: "fixed window";"api";q=500;w=300` — **500 API-Calls / 5 min
+   pro IP anonym**, 1 000 mit Free-Token. Ein Upgrade-Check ist ~1–3 Calls.
+   `429` mit `RateLimit`-Header → Backoff auf `t`. **Kein `Cache-Control`**, aber
+   schwacher **`ETag`** → `If-None-Match` beim Cache-Refresh (`304`).
+5. **Ollama-Library hat kein Such-API.** `registry.ollama.ai/v2/library/<m>/manifests/<tag>`
+   (OCI) liefert für einen **bekannten** Namen `layers[].{digest: "sha256:…", size}`
+   — aber keine Suche/Liste. `ollama.com/search?format=json` ignoriert `format`
+   und liefert HTML; Drittquellen (`ollamadb.dev`) sind brüchig / z. T. offline.
+6. **Content-Farm-Spam ist real (R9).** `sort=trendingScore`/`likes7d` ist voll
+   halluzinierter Namen („Qwen3.8-27B-…", aufgeblasene Downloads). **`filter=base_model:<id>`
+   funktioniert** und ist der verlässliche Weg, echte Quant-Re-Uploads +
+   Abkömmlinge eines bekannten Basismodells zu finden.
+
+**Entscheidung:**
+- **`core::registry::ModelSource`-Trait** (`search`, `details`) mit
+  **`HuggingFaceSource` als einziger MVP-Implementierung**. Ollama-Library als
+  späterer best-effort-Adapter hinter derselben Schnittstelle (HTML-Scrape,
+  niedrige Priorität).
+- **Anonym per Default**; optionales `HF_TOKEN` (`[models]`-Config / Settings)
+  nur für Gated-Repos / höhere Limits. **Nie Pflicht, nie im Backup-Export.**
+- **SHA-256 = `lfs.oid`**, immer aus `/tree?recursive=true` geholt und an
+  `download_verified` gereicht. `xetHash` wird ignoriert.
+- **Offline-Fallback:** TTL-JSON-Cache unter `<data>/cache/registry/` (search-
+  Queries + `details`), `offline_mode` → harte Ablehnung mit Klartext, sonst
+  Cache + „stale seit …"-Marker. `ETag` beim Refresh.
+- **Remote-Quant-Erkennung aus dem Dateinamen** (`q4_k_m`, `q8_0`, `fp16`,
+  `bf16`, `iq4_xs`, …) — die HF-`gguf`-Metadaten tragen `general.file_type`
+  **nicht**. Lokal bleibt es `gguf::ftype_name` (schon da).
+
+**Konsequenzen:**
+- (+) Eine Quelle, offizielle API, kein Python, Verify-Hash gratis.
+- (+) `base_model:`-Filter + `expand[]` machen den Upgrade-Check (6.7) mit ~1–3
+  Calls möglich.
+- (−) Bild-/Video-Repos taggen `pipeline_tag`/`library_name` oft `null` —
+  Discovery dort schwächer, muss auf `tags` + Familien-Namenssuche setzen.
+- (−) Spam-Filterung nötig: Autor-Allowlist / `base_model`-Lineage gewichten,
+  nicht nackte Popularität.
+- (−) Ollama-Dedup (R4) bleibt Anzeige-only (Manifest nicht junction-bar).
+
+---
+
+## ADR-024 — Quality-Score: keine gebündelte externe Benchmark-Quelle im MVP
+
+**Status:** Entschieden — Slice 6.0. **Verfeinert** die BENCHMARKS.md-Skizze und
+R12.
+
+**Kontext:** Der Brief (15/32/33) will benchmark-gestützte Auto-Auswahl + einen
+„Overall Score". R12 hält fest: **kein billiger, lokaler, objektiver Qualitäts-
+Benchmark**. Der Plan nahm an, extern gepflegte Leaderboards (SWE-bench o. Ä.)
+online zu ziehen. Slice 6.0 hat die Quellenlage geprüft.
+
+**Befunde:**
+1. **Das HF Open LLM Leaderboard ist eingestellt** (v1 → Juni 2024 archiviert,
+   v2 → **März 2025 abgeschaltet**). Kein kanonischer Nachfolger — HF setzt auf
+   dezentrale „Community Evals" (`eval.yaml` pro Repo) + 200+ Community-
+   Leaderboards.
+2. **Verbleibende maschinenlesbare Quellen sind heterogen und cloud-lastig.**
+   Das Aider-Polyglot-Leaderboard (`Aider-AI/aider` Repo, `polyglot_leaderboard.yml`,
+   Apache-2.0) ist sauberes YAML — aber die Modellnamen sind Provider-API-Namen
+   („gpt-4o-mini-2024-07-18"), **nicht** GGUF-Quant-Repo-IDs. SWE-bench-Daten
+   liegen verstreut im `swe-bench/experiments`-Repo (kein einzelnes JSON).
+   Artificial Analysis / LMArena / llm-stats: Lizenz + stabiles JSON unklar.
+3. **Das Matching-Problem ist der eigentliche Blocker:** „Qwen2.5-Coder-7B-
+   Instruct-**GGUF** @ Q4_K_M" auf eine Leaderboard-Zeile abzubilden ist
+   unscharf und oft unmöglich (Quant ≠ Original, lokale kleine Modelle fehlen
+   meist ganz).
+
+**Entscheidung:**
+- **Kein gebündeltes externes Leaderboard im MVP.** `core::bench` (6.5) misst
+  **nur lokal**: tok/s (Prompt+Gen), Ladezeit, VRAM-Peak (NVML), RAM-Peak
+  (sysinfo), Stabilität über N Läufe. Das ist der ehrliche, reproduzierbare
+  Kern.
+- **Der „Overall Score" ist eine offen deklarierte Heuristik** aus lokaler
+  Performance + Fit (`core::compat`) + objektiven HF-Signalen (Downloads/Likes/
+  Recency/`base_model`-Lineage) — **keine „Qualitäts"-Achse**, die wir nicht
+  belegen können.
+- **Externe Scores = opt-in, Post-6.5.** Falls später eine tragbare Quelle
+  auftaucht (stabiles JSON, klare Lizenz, GGUF-Abdeckung, lösbares Matching),
+  kommt sie als abschaltbarer Fetch mit „Heuristik/extern"-Kennzeichnung dazu.
+  HF „Community Evals" (`eval.yaml` im Repo) ist der aussichtsreichste Kandidat,
+  weil die Daten am Modell selbst hängen.
+- **Upgrade-Check (6.7)** rankt entsprechend **ohne** Qualitäts-Score — nur
+  Release-Datum, Downloads/Likes, Familien-Lineage, Fit; das lokale LLM
+  markiert „Qualität nicht lokal verifizierbar".
+
+**Konsequenzen:**
+- (+) Keine Abhängigkeit von einer wackligen externen Quelle; nichts, was
+  offline kaputtgeht.
+- (+) `core::bench` ist klein und testbar (ein Job wie „Modell testen").
+- (−) Die Auto-Auswahl (6.6) hat im MVP keine „Qualitäts"-Daten — sie bleibt
+  Fit + lokale Perf + Nutzung. Regelbasiert bleibt der Default, wenn keine
+  Bench-Daten da sind.
+- (−) „Welches ist das *beste* Coding-Modell?" beantwortet das Tool nicht
+  absolut — nur „das schnellste/größte, das bei dir passt und viel genutzt wird".
+
+---
+
 ## Offene Entscheidungen
 
 | # | Frage | Status |

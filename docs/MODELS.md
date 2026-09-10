@@ -101,10 +101,23 @@ Welche Modellgrößen/Quantisierungen auf der RTX 4080 Super (16 GB) sinnvoll si
 ## Phase 6 — Model-Manager v2
 
 Scheibenplan + API-Research: [PHASE_6_PLAN.md](PHASE_6_PLAN.md). `core::registry`
-(HF-Hub-Quellen-Adapter, `ModelSource`-Trait), Download-Manager (Queue, Range/
-Resume, Verify — die **SHA-256 steht vorab** fest über `GET /api/models/{id}/tree/
-{rev}?recursive=true` → `lfs.oid`), `core::bench` (lokale Mikro-Benchmarks),
-Discovery-UI, Upgrade-Check, Aufräum-Reports. Start = **6.0-Spike**: HF-Hub-API +
-Ollama (kein Such-API) + Benchmark-Datenquelle real prüfen (das HF Open LLM
-Leaderboard ist eingestellt), Quant-Erkennung aus Dateiname + `general.file_type`.
+(HF-Hub-Quellen-Adapter, `ModelSource`-Trait), Download-Manager, `core::bench`
+(lokale Mikro-Benchmarks), Discovery-UI, Upgrade-Check, Aufräum-Reports.
 **Kein automatischer Download aus unbekannten Quellen.**
+
+**6.0-Spike ✅ (ADR-022 / ADR-024)** — HF-Hub-API live geprüft:
+- `GET /api/models?…&expand[]=gguf&expand[]=safetensors&expand[]=gated&…` —
+  `expand[]` geht **auch auf dem Listen-Endpoint**; ein Call bringt Param-Count,
+  `context_length`, Precision (`safetensors.parameters`-DTYPE-Key), Lizenz,
+  `base_model`, `lastModified` — **ohne Download**.
+- **`filter=base_model:<owner/repo>`** findet alle Quant-Re-Uploads + Abkömmlinge
+  eines Basismodells → Kern des Upgrade-Checks.
+- **Verify-SHA-256 vorab:** `GET /api/models/{id}/tree/{rev}?recursive=true` →
+  `lfs.oid` (nicht `xetHash`). Split-GGUFs als Set.
+- Gated-Repos: Metadaten + `/tree` ohne Token (200); nur `/resolve/` braucht
+  Lizenz+Token. Rate-Limit anon 500 API-Calls / 5 min / IP.
+- **Remote-Quant-Erkennung aus dem Dateinamen** (`q4_k_m`, `q8_0`, `fp16`, …) —
+  die HF-`gguf`-Metadaten tragen `general.file_type` nicht. Lokal:
+  `gguf::ftype_name` (schon da).
+- **Ollama:** kein Such-API (OCI-Manifest nur für bekannte Namen) → best-effort-
+  Adapter, später.

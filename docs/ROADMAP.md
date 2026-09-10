@@ -192,9 +192,12 @@ Modell-Umgang (Datei selbst laden, Pfad eingeben) wird ein Model-Manager: online
 suchen, verifiziert laden, lokal messen, Upgrade-Check. Alles offline-first
 (ADR-009), kein Anspruch auf einen objektiven Qualitäts-Score (R12).
 
-- 6.0 **Registry-/Benchmark-Spike** (Voraussetzung): HF-Hub-API + Ollama real
-  testen, Benchmark-Datenquelle festlegen (HF Open LLM Leaderboard eingestellt),
-  ADR-022 / ADR-024. Schließt R9 / R10
+- [x] 6.0 **Registry-/Benchmark-Spike** (`ADR-022` + `ADR-024`) — HF-Hub-API
+  live geprüft: `expand[]` geht auch auf `/api/models`, `lfs.oid` = die
+  Verify-SHA-256, `filter=base_model:<id>` findet Abkömmlinge, anon 500 Calls/
+  5 min reichen, Gated durchsuchbar. Ollama = kein Such-API. **HF Open LLM
+  Leaderboard abgeschaltet** → kein gebündeltes externes Leaderboard, nur lokale
+  Mikro-Benchmarks. Schließt R9 / R10
 - 6.1 **`core::registry`** — HF-Hub-Quellen-Adapter (`ModelSource`-Trait), TTL-
   Cache für Offline, SHA-256 vorab aus `lfs.oid`
 - 6.2 **Discovery-UI** — Suche + Filter + Fit-Ampel im Models-Tab

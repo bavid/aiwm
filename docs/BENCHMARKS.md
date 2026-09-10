@@ -3,11 +3,21 @@
 Konzept für die Modell-Bewertung. **Noch nicht implementiert** — Phase 6,
 Scheibe 6.5 ([PHASE_6_PLAN.md](PHASE_6_PLAN.md)).
 
-> **Achtung (2026-09):** Das **HF Open LLM Leaderboard ist eingestellt** — es
-> gibt keine einzelne kanonische, frei abrufbare Score-Quelle mehr. Der 6.0-Spike
-> legt fest, ob überhaupt eine externe Quelle gebündelt wird (Kandidaten:
-> Artificial Analysis, LMArena, llm-stats, SWE-bench-JSON) oder ob der MVP nur
-> mit lokalen Mikro-Benchmarks + Katalog-Notizen fährt (Empfehlung: Letzteres).
+## 6.0-Befund → ADR-024: keine gebündelte externe Benchmark-Quelle im MVP
+
+- Das **HF Open LLM Leaderboard ist abgeschaltet** (v1 Juni 2024 archiviert, v2
+  **März 2025**). Kein kanonischer Nachfolger — HF setzt auf dezentrale
+  „Community Evals" (`eval.yaml` pro Repo) + 200+ Community-Leaderboards.
+- Maschinenlesbare Alternativen sind heterogen und cloud-lastig: Aider-Polyglot
+  (`Aider-AI/aider` → `polyglot_leaderboard.yml`, Apache-2.0, aber **Provider-
+  API-Namen**, keine GGUF-Quant-IDs), SWE-bench (verstreut im `experiments`-
+  Repo). **Das Matching „GGUF-Quant-Repo → Leaderboard-Zeile" ist der Blocker.**
+- **Entscheidung:** `core::bench` misst **nur lokal**. „Overall Score" = offen
+  deklarierte Heuristik aus lokaler Performance + Fit + objektiven HF-Signalen
+  (Downloads/Likes/Recency/`base_model`-Lineage). **Keine „Qualitäts"-Achse**,
+  die wir nicht belegen können. Externe Scores = opt-in, Post-6.5, wenn eine
+  tragbare Quelle auftaucht (aussichtsreich: HF Community Evals — Daten hängen
+  am Modell selbst).
 
 ## Zweck
 

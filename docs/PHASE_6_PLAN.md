@@ -36,7 +36,7 @@ den letzten Cache + „offline" statt Fehler.
 
 | Scheibe | Inhalt | Status |
 |---|---|---|
-| **6.0** | **Registry-/Benchmark-Spike** (Voraussetzung, wie 5.0 / 4.0, **kein Feature-Code**): HF-Hub-API real testen (`GET /api/models` Such-/Filter-Params, `GET /api/models/{id}?expand[]=…`, `/tree/{rev}?recursive=true` für Dateigrößen + `lfs.oid` = SHA-256, Rate-Limits, Anon vs. Token, Gated-Repos, GGUF- vs. Original-Repo-Konventionen, Quant-Erkennung aus Dateiname + `general.file_type`); Ollama-Library prüfen (kein offizieller Such-Endpoint — OCI-Registry + HTML/Drittquelle); **Benchmark-Datenquelle festlegen** (das HF Open LLM Leaderboard ist eingestellt — Kandidaten: Artificial Analysis, LMArena, llm-stats, SWE-bench-JSON; Lizenz + stabiles JSON prüfen). Ergebnisse in `MODELS.md` / `RUNTIMES.md` / `BENCHMARKS.md`, ADR-022 (Registry) + ADR-024 (Score-Heuristik). Schließt R9 / R10 / „Zu untersuchen vor Phase 6". | offen |
+| **6.0** | **Registry-/Benchmark-Spike** (Voraussetzung, wie 5.0 / 4.0, **kein Feature-Code**): HF-Hub-API real testen, Ollama-Library prüfen, Benchmark-Datenquelle festlegen. Ergebnisse in `MODELS.md` / `RUNTIMES.md` / `BENCHMARKS.md`, **ADR-022** (Registry) + **ADR-024** (Score-Heuristik). Schließt R9 / R10 / „Zu untersuchen vor Phase 6". | ✅ *(siehe „## 6.0 — Ergebnis")* |
 | **6.1** | **`core::registry` — HF-Hub-Quellen-Adapter** (read-only, gegen ein Fixture): `ModelSource`-Trait (`search(query, filters) -> Vec<RemoteModel>`, `details(id) -> RemoteModelDetails`) + `HuggingFaceSource`. `RemoteModelDetails` = Params, `ctx_max`, Architektur, Lizenz, Gated-Flag, Downloads/Likes/`lastModified`/`createdAt` + die Quant-Dateien mit Größe **und SHA-256 aus `lfs.oid`** (kein Download nötig). TTL-Cache als JSON unter `<data>/cache/registry/`, damit `search`/`details` offline den letzten Stand + „stale"-Marker liefern. `offline_mode` → harte Ablehnung. `aiwm-fake-hfhub`-Fixture + Integrationstest. | offen |
 | **6.2** | **Discovery-UI** (`ui/src/features/models/` erweitert): „Discover"-Panel im Models-Tab — Suchfeld, Filter nach Rolle/Capability + „passt in mein VRAM-Budget", Ergebnis-Karten (Name, Params, Downloads, Lizenz, `🟢/🟡/🔴`-Fit via `core::compat`, Quant-Dropdown mit Größen). Aktion vorerst nur „Copy link" + „Set import type" (Auto-Download = 6.4). `useRegistrySearch` (debounced), dev-mock. | offen |
 | **6.3** | **Kompatibilitäts-Engine v2** (`core::compat` erweitert — verlängert ADR-016): `.safetensors`-Header-Inspektion (Arch/Precision — der seit 3.3 vertagte TODO), Diffusions-/Video-Modell-VRAM-Heuristik statt der Datei-Namens-`+2,5 GB`-Faustregel, `FitVerdict { Green, Yellow(grund), Red(grund) }` das Gewichte + KV/Aktivierungen + Overhead gegen `vram_budget_mb` **und** freien System-RAM prüft. Flat-Overhead gegen echte `HARDWARE.md`-Messungen kalibrieren (R3). Genutzt von Discovery + Upgrade-Check + dem bestehenden Job-Preflight. | offen |
@@ -179,3 +179,84 @@ unter `<data>/cache/registry/`** — wegwerfbar, nicht in der DB, nicht im Backu
 (suchen + verifiziert laden). 6.5–6.9 sind einzeln abschaltbar, falls der
 Aufwand kippt. **Kein** generisches Scoring-Framework, **kein** Auto-Download
 aus unbekannten Quellen, **kein** Plugin-System.
+
+---
+
+## 6.0 — Ergebnis (abgeschlossen) · **ADR-022 + ADR-024**
+
+Live-Probes gegen die echte HF-Hub-API + `registry.ollama.ai` (2026-09,
+anonym, read-only — kein Repo-Code). Bestätigt A/C/D aus den offenen
+Entscheidungen, verfeinert B (→ ADR-024). Details in DECISIONS.md.
+
+### HF-Hub-API — was wirklich geht
+
+- **Ein Listen-Call reicht meist.** `expand[]` funktioniert **auch auf
+  `GET /api/models`** (nicht nur auf dem Detail-Endpoint):
+  `?search=&filter=&pipeline_tag=&library=&author=&sort=&direction=-1&limit=&expand[]=gguf&expand[]=safetensors&expand[]=gated&expand[]=lastModified&expand[]=downloadsAllTime&expand[]=trendingScore&expand[]=cardData`.
+  Pro Treffer: `gguf` (`total` = Param-Count, `architecture`, `context_length`,
+  `chat_template`, `bos/eos_token`, `totalFileSize`), `safetensors`
+  (`parameters: { <DTYPE>: n }` → **Precision** `BF16`/`F16`/`F8_E4M3` + Param-
+  Count **ohne Download**), `gated`, `lastModified`, `createdAt`,
+  `downloadsAllTime`, `trendingScore`, `cardData` (u. a. `license`,
+  `base_model`, `tags`).
+- **Ohne `expand[]`** liefert die Liste nur `id`, `likes`, `downloads`, `tags`,
+  `pipeline_tag`, `library_name`, `createdAt`, `private`, `modelId`. `tags`
+  enthält aber schon `base_model:<id>`, `base_model:quantized:<id>` und
+  `license:<slug>` als parsebare Strings.
+- **`sort`:** `downloads`, `likes`, `likes7d`, `trendingScore`, `createdAt`,
+  `lastModified` (+ `direction=-1`). **`filter=base_model:<owner/repo>`
+  funktioniert** — der zuverlässige Weg zu allen Quant-Re-Uploads + Abkömmlingen
+  eines bekannten Basismodells (Kern des Upgrade-Checks).
+- **Verify-SHA-256 vor dem Download:** `GET /api/models/{id}/tree/{rev}?recursive=true`
+  → pro Datei `{ path, size, oid (git-sha1), lfs: { oid, size, pointerSize }, xetHash }`.
+  **`lfs.oid` = die SHA-256** (64 hex, auch auf Xet-Repos present). `xetHash`
+  ist ein **anderer** Hash (Xet-Content-Addressing) — nicht verwenden. Split-
+  GGUFs (`…-00001-of-00003.gguf`) + eine ggf. zusätzlich vorhandene Merge-Datei
+  → als Set behandeln.
+- **Gated-Repos:** Metadaten + `/tree` liefern **200 ohne Token**
+  (`gated: "manual"|"auto"`); nur `/resolve/` (der Download) braucht akzeptierte
+  Lizenz + Token → 6.4 muss `gated` erkennen und den Nutzer hinschicken, nicht
+  mitten im Download scheitern.
+- **Rate-Limits:** `RateLimit-Policy: "fixed window";"api";q=500;w=300` →
+  **500 API-Calls / 5 min / IP anonym** (1 000 mit Free-Token), `RateLimit`-
+  Header trägt Rest + Reset-Sekunden, `429` → Backoff auf `t`. **Kein
+  `Cache-Control`**, aber schwacher `ETag` → `If-None-Match` beim Cache-Refresh.
+- **Paginierung:** cursor-basiert über den `Link: <…cursor=…>; rel="next"`-Header.
+
+### Ollama-Library
+
+- **Kein Such-/Listen-API.** `GET https://registry.ollama.ai/v2/library/<model>/manifests/<tag>`
+  (OCI, anonym) → `layers[]` mit `{ digest: "sha256:…", size }`; die
+  `application/vnd.ollama.image.model`-Layer ist das GGUF — aber nur für einen
+  **bekannten** Namen+Tag. `ollama.com/search?format=json` → HTML. Drittquellen
+  (`ollamadb.dev`) DNS-tot / brüchig. → **best-effort, zweiter Adapter, später.**
+
+### Benchmark-Landschaft → **ADR-024**
+
+- **Das HF Open LLM Leaderboard ist abgeschaltet** (v2 seit März 2025). Kein
+  kanonischer Nachfolger — HF setzt auf dezentrale „Community Evals"
+  (`eval.yaml` pro Repo).
+- Maschinenlesbare Alternativen sind heterogen + cloud-lastig: Aider-Polyglot
+  (`polyglot_leaderboard.yml`, Apache-2.0, aber **Provider-API-Namen**, keine
+  GGUF-Quant-IDs), SWE-bench (verstreut im `experiments`-Repo). Das Matching
+  „GGUF-Quant-Repo → Leaderboard-Zeile" ist der eigentliche Blocker.
+- **Entscheidung (ADR-024): kein gebündeltes externes Leaderboard im MVP.**
+  `core::bench` misst nur lokal (tok/s, Ladezeit, VRAM/RAM-Peak, Stabilität).
+  „Overall Score" = offen deklarierte Heuristik aus lokaler Perf + Fit +
+  objektiven HF-Signalen. Externe Scores = opt-in, Post-6.5, wenn eine tragbare
+  Quelle auftaucht (Kandidat: HF Community Evals).
+
+### Konsequenzen für die weiteren Scheiben
+
+- **6.1:** `HuggingFaceSource` — `search` = ein Listen-Call mit `expand[]`;
+  `details` = derselbe + `/tree?recursive=true` für Größen/SHA-256. Cache mit
+  `ETag`. `xetHash` ignorieren.
+- **6.3:** `.safetensors`-Precision kommt aus der API (`safetensors.parameters`-
+  DTYPE-Key) — die Header-Inspektion ist nur für **lokale, nicht via Registry
+  importierte** Dateien nötig.
+- **6.4:** `gated`-Erkennung + Split-GGUF-Sets + `If-Range`/Range-Resume;
+  SHA-256 = `lfs.oid`.
+- **6.7:** ~1–3 Calls (Basis-Modell aus `base_model:`-Tag → `filter=base_model:` +
+  `sort=lastModified`/`likes7d` + `expand[]`), dann Fit-Filter, dann LLM-Ranking.
+  **Spam-Filter nötig** (R9): Autor-Allowlist / `base_model`-Lineage gewichten,
+  nicht nackte `trendingScore`.

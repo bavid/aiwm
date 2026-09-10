@@ -183,6 +183,20 @@ geht der Job auf `blocked` mit Klartext-`error_text`
 **ohne** `llama-server` zu starten. Kalibrierung der Konstanten gegen echte
 `nvidia-smi`-Messungen → Phase 6.
 
+## Modell-Quellen (Phase 6, `core::registry`, ADR-022)
+
+6.0-Spike (Live-Probes 2026-09):
+
+- **Hugging Face Hub** = primäre Quelle. Read-API anonym nutzbar (500 API-Calls
+  / 5 min / IP), `expand[]` auch auf `GET /api/models`, `filter=base_model:<id>`
+  findet Abkömmlinge, `GET /api/models/{id}/tree/{rev}?recursive=true` →
+  `lfs.oid` = die **SHA-256** für `download_verified` (nicht `xetHash`).
+  Gated-Repos sind durchsuch-/inspizierbar; nur `/resolve/` braucht Lizenz +
+  `HF_TOKEN`. Offline-Fallback = TTL-JSON-Cache + `ETag`/`If-None-Match`.
+- **Ollama-Library** = **kein Such-API**. `registry.ollama.ai/v2/library/<m>/manifests/<tag>`
+  (OCI) liefert `layers[].{digest: "sha256:…", size}` nur für einen bekannten
+  Namen. → best-effort-Adapter hinter `ModelSource`, niedrige Priorität.
+
 ## Zu untersuchen vor Phase 2/3
 
 - ~~llama.cpp: gepinnte Version + Bezugsquelle des Windows-CUDA-Builds~~ →
