@@ -4,11 +4,13 @@ pub mod catalog;
 mod gguf;
 mod import;
 mod kind;
+mod safetensors;
 
 pub use catalog::{KnownModel, KNOWN_MODELS};
 pub use gguf::{read_gguf_info, GgufInfo};
 pub use import::{import_model, ImportOutcome, ImportRequest};
 pub use kind::ModelKind;
+pub use safetensors::{read_safetensors_info, SafetensorsInfo};
 
 /// Bytes per MiB, used for the VRAM/size estimates.
 pub(crate) const MIB: u64 = 1024 * 1024;

@@ -31,7 +31,7 @@ noch keine echte AI-Capability (die kommt ab Phase 2).
 | WP-9 | CI-Workflow, Git-Hooks (pre-commit fmt, pre-push voller Gate) |
 | WP-10 | ADRs finalisiert, Stub-Docs (MODELS/RUNTIMES/SECURITY/BENCHMARKS) |
 
-**320 Rust-Unit + 49 Integrationstests + 5 pytest** grün · `scripts/check.ps1` grün ·
+**329 Rust-Unit + 49 Integrationstests + 5 pytest** grün · `scripts/check.ps1` grün ·
 **null `unsafe`** im Produktivcode.
 
 **Phase 2 (MVP) ✅ abgeschlossen** — Scheiben 2.1–2.7 + durchgehender
@@ -119,7 +119,7 @@ Command-Approval (UI) + erzwungene Offline-Config.
   Tauri + Settings-Karte „Backup & restore". Politur (Kompaktierungs-Anzeige,
   Pause-Fluss, Diagnostics-Zeile) = 5.5c, vertagt.
 
-**Phase 6 (Automatisierung & Model-Manager v2) — Plan + 6.0 + 6.1 + 6.2 ✅:** [docs/PHASE_6_PLAN.md](docs/PHASE_6_PLAN.md).
+**Phase 6 (Automatisierung & Model-Manager v2) — Plan + 6.0 + 6.1 + 6.2 + 6.3 ✅:** [docs/PHASE_6_PLAN.md](docs/PHASE_6_PLAN.md).
 Aus dem manuellen Modell-Umgang wird ein Model-Manager: online suchen, verifiziert
 laden, lokal messen, Upgrade-Check, Dedup-/Unused-Reports. Alles offline-first
 (ADR-009).
@@ -142,6 +142,15 @@ laden, lokal messen, Upgrade-Check, Dedup-/Unused-Reports. Alles offline-first
   die Dateiliste on-demand mit Quant + Größe + `🟢/🟡/🔴`-Fit-Punkt (via
   `core::compat` gegen das VRAM-Budget) + „Copy link" (Browser-Download; kein
   Download-Manager bis 6.4). `Stale`/`Offline` → gelber Cache-Banner.
+- **6.3** ✅ **Kompatibilitäts-Engine v2** (verlängert ADR-016) — 6.3a
+  `compat::verdict → FitVerdict {Green | Yellow{reason} | Red{reason} | Unknown}`:
+  Gewichte + KV + Overhead gegen das VRAM-Budget **und** freien System-RAM
+  (Offload → Yellow statt Red, langsam), mit Klartext-Grund, in der
+  „Discover"-Dateiliste. 6.3b bounded `.safetensors`-Header-Reader
+  (`read_safetensors_info` — Param-Count + dominante Precision + `__metadata__`,
+  der seit 3.3 vertagte TODO), im Import verdrahtet; familien-bewusstes
+  VRAM-Polster (`media_headroom_mb`) statt der `+2,5 GB`-Faustregel. Konstanten +
+  Kalibrierungs-Plan in `docs/HARDWARE.md` (echte Messungen = 4.0).
 
 - **4.1** ✅ **`capability::video`**: `job_type=video` → feste `wan_ti2v`-Pipeline
   (`WanImageToVideo` → `KSampler` → `VAEDecode` → `CreateVideo` → `SaveVideo`,

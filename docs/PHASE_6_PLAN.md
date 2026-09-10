@@ -39,7 +39,7 @@ den letzten Cache + „offline" statt Fehler.
 | **6.0** | **Registry-/Benchmark-Spike** (Voraussetzung, wie 5.0 / 4.0, **kein Feature-Code**): HF-Hub-API real testen, Ollama-Library prüfen, Benchmark-Datenquelle festlegen. Ergebnisse in `MODELS.md` / `RUNTIMES.md` / `BENCHMARKS.md`, **ADR-022** (Registry) + **ADR-024** (Score-Heuristik). Schließt R9 / R10 / „Zu untersuchen vor Phase 6". | ✅ *(siehe „## 6.0 — Ergebnis")* |
 | **6.1** | **`core::registry` — HF-Hub-Quellen-Adapter** (read-only, gegen ein Fixture): `ModelSource`-Trait + `HuggingFaceSource`, `Registry`-Wrapper mit TTL-JSON-Cache (`<data>/cache/registry/`) + `Freshness` (Live/Stale/Offline). SHA-256 aus `lfs.oid`. `aiwm-fake-hfhub`-Fixture + Integrationstest + `#[ignore]`-Live-Test. | ✅ *(siehe „## 6.1 — Ergebnis")* |
 | **6.2** | **Discovery-UI** — `App.registry` + `GET /registry/search` + `GET /registry/models/{*id}` + 2 Tauri-Commands + DTOs (`FitLevel`, `RegistryFileDto` mit Fit + Download-Link, `RegistryDetailsDto`). „Discover"-Panel im Models-Tab (`Discover.tsx`): Suchfeld, „GGUF only", Sort; Ergebnis-Karten (id, Params, Downloads/Likes, Lizenz, Gated-Badge, `base_model`); „Files" → Dateiliste mit Quant + Größe + `🟢/🟡/🔴`-Fit-Punkt (via `core::compat`) + „Copy link" + „Set import type". `Freshness`-Banner bei Stale/Offline. `useRegistrySearch` (400 ms debounced). | ✅ *(siehe „## 6.2 — Ergebnis")* |
-| **6.3** | **Kompatibilitäts-Engine v2** (`core::compat` erweitert — verlängert ADR-016): `.safetensors`-Header-Inspektion (Arch/Precision — der seit 3.3 vertagte TODO), Diffusions-/Video-Modell-VRAM-Heuristik statt der Datei-Namens-`+2,5 GB`-Faustregel, `FitVerdict { Green, Yellow(grund), Red(grund) }` das Gewichte + KV/Aktivierungen + Overhead gegen `vram_budget_mb` **und** freien System-RAM prüft. Flat-Overhead gegen echte `HARDWARE.md`-Messungen kalibrieren (R3). Genutzt von Discovery + Upgrade-Check + dem bestehenden Job-Preflight. | offen |
+| **6.3** | **Kompatibilitäts-Engine v2** (`core::compat` + `core::model` erweitert — verlängert ADR-016). **6.3a**: `compat::verdict(dims, ctx, vram_budget, free_ram) -> FitVerdict { Green \| Yellow{reason} \| Red{reason} \| Unknown }` (Gewichte + KV + Overhead vs. VRAM-Budget **und** freier System-RAM für den Offload-Fall), in der „Discover"-Dateiliste. **6.3b**: bounded `.safetensors`-Header-Reader (`read_safetensors_info` — Param-Count + dominante Precision + `__metadata__`, der seit 3.3 vertagte TODO), im Import verdrahtet (nicht-lesbarer Header failt nicht); familien-bewusste `media_headroom_mb` statt der `+2,5 GB`-Faustregel. Konstanten in `HARDWARE.md` dokumentiert, echte Messkalibrierung wartet auf 4.0. | ✅ *(siehe „## 6.3 — Ergebnis")* |
 | **6.4** | **Download-Manager** (`core::download` erweitert — ADR-023): `downloads`-Tabelle (Migration `0006`: id, url, dest, sha256, size, bytes_done, state {queued\|running\|paused\|verifying\|done\|failed}), Queue mit einem aktiven Slot, **Resume über HTTP-Range**, Verify gegen die erwartete SHA-256 (aus 6.1), dann Übergabe an `import_model`. `GET/POST /downloads`, `POST /downloads/{id}/{pause,resume,cancel}`, Fortschritts-Events (`job_events`-Muster). `offline_mode` → Ablehnung. UI: „Download & import"-Knopf auf den Discovery-Karten + eine Downloads-Liste. Speicherplanung: freier Platz auf dem Store-Volume vs. Download-Größe, Klartext-Warnung. | offen |
 | **6.5** | **`core::bench` — lokale Mikro-Benchmarks**: `benchmarks`-Tabelle (Migration `0006`: model_id, ts, tokens_per_sec, load_ms, vram_peak_mb, ram_peak_mb, stability_score, notes), ein „Test model"-Job pro Modell (kurzer Prompt → tok/s Prompt+Gen, Ladezeit vom Adapter, VRAM-Peak via NVML, RAM-Peak via sysinfo). Für Bild/Video analog: Generierungszeit + VRAM. Optionaler Fetch der externen Benchmark-Scores (Quelle aus 6.0), lokal gecacht. `Overall Score` = klar gekennzeichnete gewichtete Heuristik (lokale Perf + externer Score + Stabilität). UI: „Test"-Knopf + eine Score-Spalte in der Model Library. | offen |
 | **6.6** | **Benchmark-gestützte `Auto`-Auswahl**: `ModelRepo::pick_for_role` bezieht Benchmark-Daten ein (statt nur `last_used_at` / `use_count`) — Fit zuerst, dann Score, dann Nutzung. Gewichtung + „bevorzuge schnell / bevorzuge Qualität" in `[models]`-Config. Betrifft Chat, Coding, `base_diffusion`, `base_video`. Regelbasierter Fallback bleibt, wenn keine Benchmark-Daten da sind. | offen |
@@ -362,3 +362,54 @@ Die Discovery-Vertikale: `core::registry` an `App` + API + Tauri + ein
   SHA-256 + `fit`, Nicht-Gewichtsdatei → `fit: unknown`). **320 Lib + 49 integ.**
   `check.ps1` grün, Browser-Smoke (dev-mock): Suche → Karten → „Files" zeigt
   Q4_K_M grün / Q8_0 gelb, keine Konsolenfehler.
+
+---
+
+## 6.3 — Ergebnis (abgeschlossen, a + b)
+
+Die Kompatibilitäts-Engine v2 — der Fit-Verdikt mit Begründung (überall wo
+Discovery ihn schon zeigt) und das `.safetensors`-Header-Wissen (der seit 3.3
+vertagte TODO).
+
+**6.3a** (`e3198f2`) — `FitVerdict`:
+- **`compat::verdict(dims, ctx, vram_budget_mb, free_ram_mb) -> FitVerdict`**
+  (`Green | Yellow{reason} | Red{reason} | Unknown`, `#[serde(tag="level")]`).
+  Wickelt `estimate()`: **Green** unter 85 % des VRAM-Budgets; **Yellow** wenn's
+  passt, aber eng ist (kein Puffer für längeren Kontext / ein zweites Modell);
+  über Budget → **Yellow** wenn der freie System-RAM den Überhang + 4 GB
+  OS-Reserve trägt (langsamer Offload), sonst **Red**. `Unknown` ohne Budget
+  oder Größe. Jede Nicht-Green-Antwort trägt einen Klartext-Grund.
+- **Discovery** (`registry_details` / `enrich_file`): der Ad-hoc-`dto::FitLevel`
+  + `handlers::fit_of` fliegen raus; `compat::verdict` mit freiem RAM aus der
+  Telemetrie (`ram_total - ram_used`). `RegistryFileDto.fit` ist jetzt der
+  serialisierte `FitVerdict` (`{level, reason?}`).
+- **UI**: `ipc.ts` `FitLevel` → `FitVerdict`-Union. `Discover.tsx`: Punktfarbe
+  aus `fit.level`, ein „tight"/„won't fit"-Pill mit `fit.reason` als Tooltip.
+- **+5 Compat-Unit-Tests** (green / tight-yellow / offload-yellow / red /
+  unknown). `handlers::fit_of_thresholds` entfernt.
+
+**6.3b** (dieser Commit) — `.safetensors`-Header:
+- **`core::model::safetensors::read_safetensors_info(path) -> SafetensorsInfo`**
+  — bounded Reader: 8-Byte-LE-Länge + range-checked (≤ 64 MiB, `+8 ≤ file_len`)
+  JSON-Header → **Param-Count** (Σ `product(shape)` über echte Tensoren),
+  **Precision** (dominanter DTYPE nach Param-Count, `F8_*`/`FP8*` → `FP8`),
+  `__metadata__`-Strings (`modelspec.architecture`). Nie die Tensor-Bytes.
+- **Import** (`media_new_model`): der `.safetensors`-Header füllt `param_count`,
+  `quant` (= Precision) und `arch` (aus `__metadata__`); ein **nicht lesbarer
+  Header failt den Import nicht** (`.ok()` → Fallback auf die Namens-Heuristik,
+  GGUF-Parse bleibt fatal). `media_family` gibt nur noch die Familie zurück,
+  `media_headroom_mb(family)` das VRAM-Polster: Wan 6 GB · LTX/Flux/SD3 4 GB ·
+  SDXL 2 GB · sonst 2,5 GB — die `+2,5 GB`-Faustregel + die zwei alten
+  `*_HEADROOM_MB`-Konstanten sind weg.
+- **`docs/HARDWARE.md`** — neue „Estimator-Konstanten"-Tabelle
+  (`RUNTIME_OVERHEAD_MB`, `KV_ROUGH_MB_PER_1K_CTX`, `FIT_TIGHT_PCT`,
+  `OFFLOAD_RAM_RESERVE_MB`, `media_headroom_mb`) + Kalibrierungs-Plan
+  (`nvidia-smi`-Peak bei 4.0 gegen `estimate()` halten).
+- **+4 Reader-Unit-Tests** (Param-Count + dominante Precision + Metadaten,
+  fp8→FP8, bogus-Länge abgelehnt, nicht-JSON abgelehnt) + **+1 Import-Test**
+  (echter `.safetensors`-Header → `param_count` + `quant` gesetzt). **329 Lib +
+  49 integ.** `check.ps1` grün.
+- **Nicht** in 6.3: `FitVerdict` in die Job-Preflight-Meldung einbauen — der
+  `HybridScheduler` trifft die Block/Allow-Entscheidung schon, mit
+  `VramEstimate::describe()` als Grund; `verdict`s RAM-Offload-Logik ist rein
+  advisory für die „soll ich das laden"-Frage vor dem Download (ADR-016-Zusatz).

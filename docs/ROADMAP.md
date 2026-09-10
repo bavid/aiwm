@@ -206,8 +206,12 @@ suchen, verifiziert laden, lokal messen, Upgrade-Check. Alles offline-first
   + Tauri + ein „Discover"-Panel im Models-Tab (Suche, „GGUF only", Sort,
   Ergebnis-Karten, „Files" mit 🟢/🟡/🔴-Fit-Punkt via `core::compat` + „Copy
   link"). `Freshness`-Banner bei Stale/Offline. Kein Download-Manager (6.4)
-- 6.3 **Kompatibilitäts-Engine v2** — `.safetensors`-Header, `FitVerdict`
-  🟢/🟡/🔴, Overhead gegen echte Messungen kalibriert (verlängert ADR-016)
+- [x] 6.3 **Kompatibilitäts-Engine v2** (verlängert ADR-016) — 6.3a
+  `compat::verdict → FitVerdict {Green|Yellow{reason}|Red{reason}|Unknown}`
+  (VRAM-Budget + freier RAM für Offload) in der „Discover"-Dateiliste;
+  6.3b bounded `.safetensors`-Header-Reader (Param-Count/Precision/`__metadata__`)
+  im Import, familien-bewusste `media_headroom_mb`. Konstanten in `HARDWARE.md`
+  dokumentiert; echte Messkalibrierung wartet auf 4.0
 - 6.4 **Download-Manager** — `downloads`-Tabelle, Queue, Range/Resume, Verify →
   `import_model`, Speicherplanung (ADR-023)
 - 6.5 **`core::bench`** — lokale Mikro-Benchmarks (tok/s, Ladezeit, VRAM/RAM-

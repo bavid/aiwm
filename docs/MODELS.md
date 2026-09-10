@@ -45,18 +45,21 @@ TODO. Typ-Hint `video` beim Import routet in den Video-Store.
 
 `import_model` nimmt `.gguf` **und** `.safetensors`; `.ckpt`/`.bin`/`.pt`/`.pth`
 werden mit Klartext abgelehnt (Pickle kann beim Laden Code ausführen — erst nach
-`.safetensors` konvertieren). GGUF-Header wird nur für `chat` geparst;
-`.safetensors`-Header-Inspektion (Arch/Precision) ist auf später vertagt. Bild-
-Modelle landen flach im Typ-Ordner (ComfyUI-Konvention), Namens-Kollision →
-`-<hash8>`-Suffix.
+`.safetensors` konvertieren). GGUF-Header wird für `chat` geparst; der
+**`.safetensors`-Header** (bounded reader, 6.3b) füllt **Param-Count +
+Precision** (dominanter DTYPE, fp8-Varianten → `FP8`) + `arch` aus
+`__metadata__` — ein nicht lesbarer Header failt den Import **nicht** (Fallback
+auf die Namens-Heuristik). Bild-Modelle landen flach im Typ-Ordner (ComfyUI-
+Konvention), Namens-Kollision → `-<hash8>`-Suffix.
 
 Bild- und Video-Modelle bekommen die Rolle aus dem Typ
 (`ModelKind::default_role`), so dass `Auto` das `base_diffusion`- bzw.
 `base_video`-Modell findet und `capability::image` / `capability::video` die
-Begleiter (`text_encoder` / `vae`) auflösen können (3.4/3.6/4.1). `family` +
-VRAM-Headroom aus einer Datei-Namens-Heuristik: `flux`/`sd3`/`wan`/`ltx` →
-+2,5 GB (der T5/umt5 wird beim Sampling ausgelagert), sonst +2 GB. Ein echter
-Wert wartet auf die `.safetensors`-Header-Inspektion + Kalibrierung (Phase 6).
+Begleiter (`text_encoder` / `vae`) auflösen können (3.4/3.6/4.1). `family` aus
+der Datei-Namens-Heuristik; **VRAM-Headroom pro Familie** (6.3b,
+`media_headroom_mb`): Wan 6 GB · LTX/Flux/SD3 4 GB · SDXL 2 GB · sonst 2,5 GB —
+dokumentierte Heuristik (`HARDWARE.md`-Bereiche), echte Kalibrierung wartet auf
+den Hands-on-ComfyUI-Lauf (4.0).
 
 ## Katalog — „Known models" (3.6 · Video 4.4)
 
@@ -84,11 +87,11 @@ Kandidaten + Import + Smoke: [AGENT_MODELS.md](AGENT_MODELS.md). Noch nicht im
 | Manueller Modell-Import (GGUF **oder** `.safetensors` wählen → getypter Store) | ✅ 2.1 · `.safetensors` + `ModelKind`-Routing + Pickle-Ablehnung 3.3 |
 | `Auto`-Modellwahl (Rolle → zuletzt/meist genutzt → Name) | ✅ 2.4a `chat` (ADR-015) · 3.4 `base_diffusion` für `job_type=image`; benchmark-gestützt erst Phase 6 |
 | Kanonischer Store + Link-Manager | ✅ Store 2.1 · `core::link` 2.3 (Passthrough/Junction/Hardlink/Copy, `model_links`, ADR-007) · `ExtraPath` 3.3 (ADR-019). GGUF → llama.cpp = `passthrough`; Bild → ComfyUI = `extra_path` |
-| VRAM-Fit-Schätzung vor dem Load (`core::compat`) | ✅ 2.6 (ADR-016): Gewichte + KV-Cache aus GGUF-Arch-Dims + flacher Overhead, geschätzt für `min(ctx_max, 8192)`; Scheduler plant dagegen; passt es nicht → `blocked` mit Klartext. Kalibrierung → Phase 6 |
+| VRAM-Fit-Schätzung vor dem Load (`core::compat`) | ✅ 2.6 (ADR-016): Gewichte + KV-Cache aus GGUF-Arch-Dims + flacher Overhead, geschätzt für `min(ctx_max, 8192)`; Scheduler plant dagegen; passt es nicht → `blocked` mit Klartext. + 6.3 **`compat::verdict`** → 🟢/🟡/🔴 mit Begründung (VRAM-Budget + freier RAM für Offload) für Discovery/Upgrade-Check. Konstanten-Kalibrierung → 4.0 |
+| Kompatibilitäts-Engine (🟢/🟡/🔴 vor Download) | ✅ 6.3 `compat::verdict` in der „Discover"-Dateiliste + `.safetensors`-Header-Reader (Param-Count/Precision) im Import |
 | Kuratierter „Known models"-Katalog (SHA-256, HF-Quelle, Lizenz) | ✅ 3.6 (`core::model::catalog`, `GET /models/known`); Auto-Download → Phase 6 |
 | Online-Discovery (HF Hub, Ollama-Library) | ✅ 6.1 `core::registry` + 6.2 „Discover"-Panel im Models-Tab (`GET /registry/{search,models/{id}}`, Fit-Ampel via `core::compat`, „Copy link"); Ollama später |
 | Download-Manager (Queue, Resume, Verify, Speicherplan) | Phase 6 (6.4) |
-| Kompatibilitäts-Engine (🟢/🟡/🔴 vor Download) | Phase 6 (baut auf `core::compat` auf) |
 | Dedup-/Unused-/Versions-Reports | Phase 6 |
 | Benchmark-gestützte Auto-Auswahl | Phase 6 (braucht [BENCHMARKS.md](BENCHMARKS.md)) |
 

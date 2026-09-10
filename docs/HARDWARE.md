@@ -139,6 +139,25 @@ prüft trotzdem freien Platz vor jedem Download und liefert Dedup/Unused-Reports
 
 ---
 
+## Estimator-Konstanten (Stand 6.3 — noch nicht gemessen kalibriert)
+
+`core::compat` schätzt den VRAM-Bedarf **vor** dem Load; `core::model::import`
+schätzt Bild-/Video-Modelle. Die Konstanten sind aus den Größenordnungen oben
+abgeleitet, **nicht** aus `nvidia-smi`-Messungen — echte Kalibrierung wartet auf
+den Hands-on-ComfyUI-Lauf (4.0) + den manuellen Agent-Smoke.
+
+| Konstante | Wert | Bedeutung |
+|---|---|---|
+| `RUNTIME_OVERHEAD_MB` | 650 | CUDA-Kontext + cuBLAS-Workspace + Compute-Graph pro Modell (`llama-server`) |
+| `KV_ROUGH_MB_PER_1K_CTX` | 160 | KV-Cache-Reserve pro 1K Token, wenn die GGUF-Arch-Dims fehlen (dense-13B-nah, GQA deutlich darunter) |
+| `FIT_TIGHT_PCT` | 85 % | ab hier ist ein Fit „gelb" statt „grün" — kein Puffer für längeren Kontext / ein zweites Modell |
+| `OFFLOAD_RAM_RESERVE_MB` | 4096 | RAM für OS + Page-Cache, das beim Layer-Offload frei bleiben muss |
+| `media_headroom_mb` | Wan 6144 · LTX/Flux/SD3 4096 · SDXL 2048 · sonst 2560 | Sampler-Aktivierungen + VAE-Decode + Compute-Buffer über die Gewichts-Größe |
+
+Kalibrierungs-Plan: bei 4.0 pro getestetem Modell `nvidia-smi`-Peak während
+Load + Sampling loggen, gegen `estimate().total_mb` halten, die Flat-Konstanten
+nachziehen; Ergebnis-Tabelle hier ergänzen.
+
 ## Hardware-Empfehlungen (optional)
 
 | Upgrade | Nutzen | Priorität |

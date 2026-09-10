@@ -366,7 +366,8 @@ verlangt, dass das Tool die Runtime selbst beschafft.
 
 ## ADR-016 — VRAM-Fit-Schätzung vor dem Modell-Load (`core::compat`)
 
-**Status:** Entschieden — umgesetzt (2.6).
+**Status:** Entschieden — umgesetzt (2.6); verlängert in 6.3 (`FitVerdict` +
+`.safetensors`-Header, siehe „Zusatz" unten).
 
 **Kontext:** Bis 2.5 plante der Scheduler gegen `vram_estimate_mb = Dateigröße +
 1 GB`. Das ignoriert den KV-Cache (wächst linear mit Kontext × Modell-Tiefe/
@@ -414,6 +415,23 @@ Modell-Load lief los und OOM-te erst dort, ohne Klartext.
 - (−) Blockierte Jobs werden noch nicht automatisch neu eingereiht, wenn eine
   Runtime stoppt / eine Session endet — nur beim Evict durch einen anderen Job
   oder manuell ([TODO.md](TODO.md)).
+
+**Zusatz — Slice 6.3 (Kompatibilitäts-Engine v2):**
+- **`compat::verdict(dims, ctx, vram_budget_mb, free_ram_mb) -> FitVerdict`**
+  wickelt `estimate()` in eine Klartext-Ampel `Green | Yellow{reason} |
+  Red{reason} | Unknown` — für **Discovery** (6.2) und den **Upgrade-Check**
+  (6.7): „würde dieses Modell hier laufen?" **vor** dem Download. Green < 85 %
+  Budget; Yellow wenn eng; über Budget → Yellow wenn der freie System-RAM den
+  Überhang + 4 GB OS-Reserve trägt (Offload, langsam), sonst Red.
+- **`.safetensors`-Header-Reader** (`core::model::safetensors`, der seit 3.3
+  vertagte TODO): bounded Reader → Param-Count + dominante Precision +
+  `__metadata__`; im Import verdrahtet, ein nicht lesbarer Header failt nicht.
+- **`media_headroom_mb(family)`** ersetzt die `+2,5 GB`-Namens-Faustregel:
+  Wan 6 GB · LTX/Flux/SD3 4 GB · SDXL 2 GB · sonst 2,5 GB.
+- **Der `HybridScheduler` bleibt die Laufzeit-Instanz** für „passt es *jetzt*"
+  (Block/Allow + `describe()`-Grund). `verdict` ist advisory, es fasst die
+  Scheduler-Entscheidung nicht an. Alle Konstanten +
+  Kalibrierungs-Plan: [HARDWARE.md](HARDWARE.md).
 
 ---
 
