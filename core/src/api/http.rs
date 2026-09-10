@@ -36,6 +36,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/models/known", get(known_models))
         .route("/models/{id}/benchmark", post(benchmark_model))
         .route("/models/{id}/benchmarks", get(model_benchmarks))
+        .route("/models/{id}/upgrade-check", post(upgrade_check))
         .route("/benchmarks", get(latest_benchmarks))
         .route("/runtimes", get(runtimes))
         .route("/runtimes/llamacpp/install", post(install_llamacpp))
@@ -243,6 +244,16 @@ async fn benchmark_model(
     Ok((
         StatusCode::CREATED,
         Json(handlers::benchmark_model(&app, &id).await?),
+    ))
+}
+
+async fn upgrade_check(
+    State(app): AppState,
+    Path(id): Path<String>,
+) -> Result<(StatusCode, Json<crate::db::Job>), ApiError> {
+    Ok((
+        StatusCode::CREATED,
+        Json(handlers::upgrade_check(&app, &id).await?),
     ))
 }
 

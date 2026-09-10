@@ -3,6 +3,7 @@ import { useBenchmarks, useJobs, useKnownModels, useModels } from "../../lib/hoo
 import {
   benchmarkModel,
   importModel,
+  upgradeCheck,
   type Benchmark,
   type Job,
   type KnownModel,
@@ -11,6 +12,7 @@ import {
 } from "../../lib/ipc";
 import { Discover } from "./Discover";
 import { Downloads } from "./Downloads";
+import { UpgradeChecks } from "./UpgradeChecks";
 import "./models.css";
 
 const ROLES = ["chat", "coding", "reasoning", "embedding"];
@@ -60,6 +62,8 @@ export function Models() {
 
       <Downloads />
 
+      <UpgradeChecks />
+
       <Discover onUseType={setModelType} />
 
       <KnownModels onUseType={setModelType} />
@@ -72,11 +76,18 @@ function ModelLibrary({ models, error }: { models: Model[] | null; error: string
   const { data: jobs } = useJobs();
 
   const byModel = new Map((benchmarks ?? []).map((b) => [b.model_id, b]));
-  const testing = new Set(
-    (jobs ?? [])
-      .filter((j: Job) => j.job_type === "bench" && j.model_id && ACTIVE_JOB.has(j.state))
-      .map((j) => j.model_id as string),
-  );
+  const targetOf = (j: Job): string => {
+    const p = j.params as { target_model_id?: string } | null;
+    return p?.target_model_id ?? j.model_id ?? "";
+  };
+  const activeOf = (type: string) =>
+    new Set(
+      (jobs ?? [])
+        .filter((j: Job) => j.job_type === type && ACTIVE_JOB.has(j.state))
+        .map(targetOf),
+    );
+  const testing = activeOf("bench");
+  const checking = activeOf("upgrade_check");
 
   return (
     <section className="card card--wide">
@@ -101,6 +112,7 @@ function ModelLibrary({ models, error }: { models: Model[] | null; error: string
                 <th>Score</th>
                 <th>Roles</th>
                 <th>Runtimes</th>
+                <th />
               </tr>
             </thead>
             <tbody>
@@ -127,6 +139,9 @@ function ModelLibrary({ models, error }: { models: Model[] | null; error: string
                   </td>
                   <td className="muted">{m.roles.join(", ") || "—"}</td>
                   <td className="muted">{m.runtimes.join(", ") || "—"}</td>
+                  <td>
+                    <UpgradeCell model={m} checking={checking.has(m.id)} />
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -174,6 +189,33 @@ function ScoreCell({
         </button>
       )}
     </span>
+  );
+}
+
+/** "Is there something better?" — one online request, so ask first. */
+function UpgradeCell({ model, checking }: { model: Model; checking: boolean }) {
+  const [state, setState] = useState<"idle" | "error">("idle");
+
+  const run = async () => {
+    if (
+      !window.confirm(
+        `Ask Hugging Face for a newer/bigger model like “${model.name}”, then have your local model rank the results?\n\nThis makes one online request.`,
+      )
+    )
+      return;
+    setState("idle");
+    try {
+      await upgradeCheck(model.id);
+    } catch {
+      setState("error");
+    }
+  };
+
+  if (checking) return <span className="score__testing">checking…</span>;
+  return (
+    <button type="button" className="score__test" onClick={run}>
+      {state === "error" ? "retry" : "Better?"}
+    </button>
   );
 }
 

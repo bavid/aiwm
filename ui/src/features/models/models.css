@@ -184,6 +184,86 @@
   color: var(--load-warn);
 }
 
+/* --- upgrade check (6.7) --- */
+
+.up__list {
+  list-style: none;
+  margin: var(--space-2) 0 0;
+  padding: 0;
+  display: grid;
+  gap: var(--space-3);
+}
+
+.up__row {
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+
+.up__row--failed {
+  border-color: color-mix(in oklab, var(--load-crit) 45%, var(--border));
+  color: var(--load-crit);
+}
+
+.up__head {
+  font-size: var(--text-sm);
+}
+
+.up__note {
+  margin: var(--space-1) 0 0;
+  font-size: var(--text-xs);
+  color: var(--muted);
+}
+
+.up__cands {
+  list-style: none;
+  margin: var(--space-2) 0 0;
+  padding: 0;
+  display: grid;
+  gap: var(--space-1);
+}
+
+.up__cand {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  font-size: var(--text-xs);
+  padding-top: var(--space-1);
+  border-top: 1px solid var(--border);
+}
+
+.up__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.up__id {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  color: var(--text);
+  text-decoration: none;
+  word-break: break-all;
+}
+
+.up__id:hover {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+.up__meta {
+  color: var(--muted);
+}
+
+.up__why {
+  flex: 1;
+  min-width: 12rem;
+  color: var(--muted);
+}
+
 /* --- known models --- */
 
 .known {

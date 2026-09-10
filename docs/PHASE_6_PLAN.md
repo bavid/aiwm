@@ -43,7 +43,7 @@ den letzten Cache + „offline" statt Fehler.
 | **6.4** | **Download-Manager** (`core::download` erweitert — ADR-023): `downloads`-Tabelle (Migration `0006`: id, url, dest, sha256, size, bytes_done, state {queued\|running\|paused\|verifying\|done\|failed}), Queue mit einem aktiven Slot, **Resume über HTTP-Range**, Verify gegen die erwartete SHA-256 (aus 6.1), dann Übergabe an `import_model`. `GET/POST /downloads`, `POST /downloads/{id}/{pause,resume,cancel}`, Fortschritts-Events (`job_events`-Muster). `offline_mode` → Ablehnung. UI: „Download & import"-Knopf auf den Discovery-Karten + eine Downloads-Liste. Speicherplanung: freier Platz auf dem Store-Volume vs. Download-Größe, Klartext-Warnung. | ✅ *(siehe „## 6.4 — Ergebnis")* |
 | **6.5** | **`core::bench` — lokale Mikro-Benchmarks**: `benchmarks`-Tabelle (Migration `0006`: model_id, ts, tokens_per_sec, load_ms, vram_peak_mb, ram_peak_mb, stability_score, notes), ein „Test model"-Job pro Modell (kurzer Prompt → tok/s Prompt+Gen, Ladezeit vom Adapter, VRAM-Peak via NVML, RAM-Peak via sysinfo). Für Bild/Video analog: Generierungszeit + VRAM. Optionaler Fetch der externen Benchmark-Scores (Quelle aus 6.0), lokal gecacht. `Overall Score` = klar gekennzeichnete gewichtete Heuristik (lokale Perf + externer Score + Stabilität). UI: „Test"-Knopf + eine Score-Spalte in der Model Library. | ✅ *(siehe „## 6.5 — Ergebnis")* |
 | **6.6** | **Benchmark-gestützte `Auto`-Auswahl**: `ModelRepo::pick_for_role` bezieht Benchmark-Daten ein (statt nur `last_used_at` / `use_count`) — Fit zuerst, dann Score, dann Nutzung. Gewichtung + „bevorzuge schnell / bevorzuge Qualität" in `[models]`-Config. Betrifft Chat, Coding, `base_diffusion`, `base_video`. Regelbasierter Fallback bleibt, wenn keine Benchmark-Daten da sind. | ✅ *(siehe „## 6.6 — Ergebnis")* |
-| **6.7** | **Upgrade-Check** (die Backlog-Idee — `core::registry` + `core::compat` + lokales LLM): Knopf „Gibt es was Besseres?" pro installiertem Modell **und** pro Rolle. Ablauf: HF-Hub nach neueren/populäreren Modellen derselben Rolle+Familie fragen → `core::compat`-Fit-Filter auf „läuft in `vram_budget_mb`" **vor** der LLM-Bewertung (spart Tokens, hält die Liste ehrlich) → das lokale LLM (Rolle `chat`/`coding`) rankt die **echten API-Treffer** als JSON, schreibt eine Ein-Satz-Begründung, **darf keinen Modellnamen erfinden** (Antwort gegen die Kandidaten-IDs validieren) → Ausgabe: kurze Liste + „Download & import" (→ 6.4). „Besser" misst sich in der MVP-Fassung an **objektiven, abrufbaren** Signalen (Release-Datum, Downloads/Likes, größere/neuere Basis in der Familie, Fit) + ggf. externem Score (6.5); das LLM markiert „Qualität nicht lokal verifizierbar". HF-Query = externer Call → **per-Aktion-Consent**, im `offline_mode` gesperrt. ADR-025. | offen |
+| **6.7** | **Upgrade-Check** (die Backlog-Idee — `core::registry` + `core::compat` + lokales LLM): Knopf „Gibt es was Besseres?" pro installiertem Modell **und** pro Rolle. Ablauf: HF-Hub nach neueren/populäreren Modellen derselben Rolle+Familie fragen → `core::compat`-Fit-Filter auf „läuft in `vram_budget_mb`" **vor** der LLM-Bewertung (spart Tokens, hält die Liste ehrlich) → das lokale LLM (Rolle `chat`/`coding`) rankt die **echten API-Treffer** als JSON, schreibt eine Ein-Satz-Begründung, **darf keinen Modellnamen erfinden** (Antwort gegen die Kandidaten-IDs validieren) → Ausgabe: kurze Liste + „Download & import" (→ 6.4). „Besser" misst sich in der MVP-Fassung an **objektiven, abrufbaren** Signalen (Release-Datum, Downloads/Likes, größere/neuere Basis in der Familie, Fit) + ggf. externem Score (6.5); das LLM markiert „Qualität nicht lokal verifizierbar". HF-Query = externer Call → **per-Aktion-Consent**, im `offline_mode` gesperrt. ADR-025. | ✅ *(siehe „## 6.7 — Ergebnis")* |
 | **6.8** | **Aufräum-Reports**: **Dedup** (gleiche SHA-256 / dieselbe Datei an mehreren Pfaden, inkl. per-Junction gebundener Ollama-Blobs — nur anzeigen, R4), **Unused** (nie genutzt / seit N Tagen nicht), **Old versions** (installiertes Modell hat eine neuere Katalog-/Registry-Revision — nutzt 6.1). Eine „Storage"-Ansicht: was belegt wie viel, was ist gefahrlos löschbar. Löschen bleibt eine bestätigte Nutzer-Aktion. | offen |
 | **6.9** | **Collections + Politur**: benannte Modell-Sammlungen / Tags (`model_collections`), Discovery-Verlauf, Rate-Limit-Handling mit Backoff + `RateLimit`-Header, optionales `HF_TOKEN`-Feld in Settings (nie Pflicht — nur für Gated-Repos / hohe Limits), Diagnostics-Zeile für die Registry (letzter Fetch, Cache-Alter, Rate-Limit-Rest). | offen |
 
@@ -603,3 +603,78 @@ Modellwahl ein. Verlängert **ADR-015** (siehe „Zusatz" dort).
   Neustart (die drei Subsysteme halten den Wert bei Konstruktion).
 - Eine sichtbare „warum dieses Modell?"-Begründung in der UI — das
   Auto-Selektions-Event schreibt schon „auto-selected …", mehr nicht.
+
+---
+
+## 6.7 — Ergebnis (abgeschlossen, a + b)
+
+Der **Upgrade-Check** — „Gibt es was Besseres?" pro installiertem Modell. Das
+lokale LLM ist nur ein Re-Ranker über echte HF-Treffer, die schon in den
+VRAM-Etat passen. **ADR-025.** „Besser" = nur objektive, abrufbare Signale;
+jede Ausgabe trägt „Qualität ist nicht lokal verifizierbar" (ADR-024).
+
+**6.7a** (`056f965`) — `core::upgrade`:
+- **`run(registry, reasoner, target, vram_budget_mb, free_ram_mb) -> UpgradeReport`**:
+  zwei HF-Suchen auf die **Familie** des Ziels (`SearchSort::Trending` +
+  `RecentlyUpdated`, `gguf_only` für LLM-Rollen), gemergt → **Spam-Guard**
+  (`looks_like_spam`: unter 80 Downloads **und** 3 Likes raus; brandneues Repo
+  mit „unmöglicher" Popularität raus — R9) → **Fit-Filter** (`compat::verdict`
+  über eine grobe VRAM-Schätzung `param_count` × Bytes/Gewicht[Precision];
+  **`Red` fliegt raus**) → **objektives Vor-Ranking** (`objective_score`:
+  Recency + log-Popularität + Fit-Bonus; installierte Repos sinken) → Top 8.
+- **Das LLM ist nur ein Re-Ranker, best-effort.** `build_prompt` listet die
+  **echten** Kandidaten; `parse_ranking` nimmt **ausschließlich** ids, die exakt
+  in der Kandidatenliste stehen (`BTreeSet`-Match) — ein erfundener Name wird
+  verworfen. Leere / kaputte / fehlgeschlagene Antwort → objektive Reihenfolge
+  bleibt, `note` sagt das.
+- **`Reasoner`-Trait** (`async think(prompt, max_tokens) -> String`) —
+  Prod-Impl auf `LlamaCppAdapter::complete`, Tests mit Canned-Antwort.
+- `UpgradeTarget { label, family, params, is_llm, installed_ids }`,
+  `UpgradeCandidate { id, why, downloads, likes, last_modified, param_count,
+  format, gated, fit, installed, llm_ranked }`, `UpgradeReport { target, query,
+  candidates, note, freshness }`.
+- **+7 Unit** (`bytes_per_param`, Spam-Guard, `parse_ranking` [bekannte ids /
+  Junk], `run` filtert+rankt+wendet die LLM-Ordnung an, `run` fällt auf die
+  objektive Ordnung zurück, `run`s Hinweis wenn nichts passt).
+
+**6.7b** (`<dieser Commit>`) — Job + API + UI:
+- **`App.registry`** ist jetzt `Arc<Registry>` (der Job-Engine teilt ihn).
+  **`JobEngine`**: `job_type == "upgrade_check"`-Zweig; `resolve_target` pic't
+  das **Reasoning-Modell** (`chat`, Fallback `coding`, via 6.6-`select`), der
+  Scheduler lädt es. `with_registry(Arc<Registry>)` + `set_registry` (letzterer
+  für `App::with_registry` in Tests). Body: `upgrade_target(&job)` aus
+  `params.target_model_id` (Familie aus `family`/`arch`/Namens-Tokens;
+  `installed_ids` aus den HF-URLs der Download-History) → `upgrade::run` →
+  `UpgradeReport`-JSON in `jobs.result`. Gemeinsame Helfer `pick_llm` /
+  `llm_target` (chat + upgrade teilen sie).
+- **Handler** `upgrade_check(app, model_id)` — `offline` → 400; Modell muss
+  existieren → 400; submitted `NewJob::new("upgrade_check")` mit
+  `params.target_model_id`. **HTTP** `POST /models/{id}/upgrade-check` (201 +
+  `Job`). **Tauri** `upgrade_check(id)`.
+- **UI**: `ipc.ts` `UpgradeCandidate` / `UpgradeReport` + `upgradeCheck(id)`.
+  `Models.tsx` neue letzte Spalte **„Better?"** pro Zeile (`UpgradeCell` —
+  `window.confirm` als per-Aktion-Consent, „checking…" solange ein Job läuft).
+  `UpgradeChecks.tsx` (neu) — ein Panel über `<Discover>` das laufende +
+  fertige Checks zeigt: Ziel, `note`, Kandidatenzeilen (Fit-Punkt, id-Link,
+  Params/Downloads/Datum, `why`, „Download & import" → `registryModel` →
+  bestes GGUF-File → `enqueueDownload`; „installed" / „gated"-Badges).
+  `dev-mock`: `upgrade_check` + `progressUpgradeJobs()` (canned Report nach ~3 s).
+- **+1 Integration** (`core/tests/upgrade.rs`: echter `JobEngine` +
+  `aiwm-fake-llama` [Prosa → objektive Ordnung] + Stub-`ModelSource` → 70B auf
+  Fit gefiltert, Spam gefiltert, Report in `jobs.result`) **+1 api-Test**
+  (offline → 400, online → 201 mit `params.target_model_id`, Ghost → 400).
+  **→ 359 Lib + 57 integ.** `check.ps1` grün; Browser-Smoke: „Better?" →
+  „checking…" → Panel mit 2 Kandidaten + Note → „Download & import" reiht einen
+  Download ein. Konsole fehlerfrei.
+
+**Nicht in 6.7 (bewusst verschoben):**
+- **Pro-Rolle-Check** — der Handler nimmt bewusst nur eine `model_id`; „bester
+  chat-Modell allgemein" käme über dieselbe Maschinerie mit dem Rollen-Referenz-
+  Modell, aber ohne UI-Einstieg. Später.
+- **`base_model:`-Lineage-Suche** — die Familie kommt aus Freitext (`family`);
+  der `filter=base_model:<id>`-Pfad braucht das Ziel *auf* HF gematcht, was
+  unzuverlässig ist (R9). Freitext + Vor-Ranking + LLM reichen für den MVP.
+- **Externer Score** (6.5-Fetch) im Ranking — ADR-024, kommt wenn eine Quelle
+  auftaucht.
+- Gated-Repos / Split-GGUFs one-click — der Knopf zeigt dann „retry" / den
+  HF-Link (wie 6.4).

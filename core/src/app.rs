@@ -49,8 +49,9 @@ pub struct App {
     pub opencode: Arc<OpenCodeAdapter>,
     pub hermes: Arc<HermesAgentAdapter>,
     /// Online model discovery (Phase 6.1). Wraps the Hugging Face source with a
-    /// disposable cache and the same `offline` switch.
-    pub registry: Registry,
+    /// disposable cache and the same `offline` switch. `Arc` so the job engine
+    /// (upgrade check, 6.7) shares it.
+    pub registry: Arc<Registry>,
     /// The model download queue (Phase 6.4). Its worker is spawned by
     /// [`crate::api::spawn`].
     pub downloads: Arc<DownloadManager>,
@@ -97,6 +98,12 @@ impl App {
         let budget = resolve_vram_budget(&config, &telemetry);
         let scheduler = Arc::new(HybridScheduler::new(runtimes.clone(), budget));
         let auto_pref = config.models.auto_preference;
+        let offline = Arc::new(AtomicBool::new(config.offline_mode));
+        let registry = Arc::new(Registry::new(
+            Box::new(HuggingFaceSource::new()?),
+            paths.cache_dir().join("registry"),
+            offline.clone(),
+        ));
         let jobs = Arc::new(
             JobEngine::new(
                 db.clone(),
@@ -107,7 +114,8 @@ impl App {
                 paths.outputs_dir(),
             )
             .with_telemetry(telemetry.subscribe())
-            .with_auto_preference(auto_pref),
+            .with_auto_preference(auto_pref)
+            .with_registry(registry.clone()),
         );
         let coding = Arc::new(LlamaCodingRuntime::new(
             runtimes.clone(),
@@ -121,12 +129,6 @@ impl App {
                 .with_adapter(opencode.clone())
                 .with_adapter(hermes.clone())
                 .with_auto_preference(auto_pref),
-        );
-        let offline = Arc::new(AtomicBool::new(config.offline_mode));
-        let registry = Registry::new(
-            Box::new(HuggingFaceSource::new()?),
-            paths.cache_dir().join("registry"),
-            offline.clone(),
         );
         let downloads = Arc::new(DownloadManager::new(
             db.clone(),
@@ -154,9 +156,14 @@ impl App {
         })
     }
 
-    /// Swap the discovery registry — tests point it at a fixture.
+    /// Swap the discovery registry — tests point it at a fixture. Also re-points
+    /// the job engine's copy (the upgrade check, 6.7).
     pub fn with_registry(mut self, registry: Registry) -> Self {
-        self.registry = registry;
+        let registry = Arc::new(registry);
+        self.registry = registry.clone();
+        if let Some(jobs) = Arc::get_mut(&mut self.jobs) {
+            jobs.set_registry(registry);
+        }
         self
     }
 

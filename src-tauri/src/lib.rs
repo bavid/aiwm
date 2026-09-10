@@ -207,6 +207,11 @@ async fn benchmark_model(app: tauri::State<'_, Arc<App>>, id: String) -> Result<
 }
 
 #[tauri::command]
+async fn upgrade_check(app: tauri::State<'_, Arc<App>>, id: String) -> Result<Job, String> {
+    to_ipc(handlers::upgrade_check(&app, &id).await)
+}
+
+#[tauri::command]
 async fn import_model(
     app: tauri::State<'_, Arc<App>>,
     request: ImportRequest,
@@ -329,6 +334,7 @@ fn try_run() -> anyhow::Result<()> {
             list_benchmarks,
             model_benchmarks,
             benchmark_model,
+            upgrade_check,
             install_llamacpp,
             install_comfyui,
             install_hermes,

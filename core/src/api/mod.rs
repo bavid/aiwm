@@ -797,6 +797,65 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn upgrade_check_queues_a_job_and_refuses_offline() {
+        use crate::db::NewModel;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = crate::AppPaths::rooted(tmp.path());
+        std::fs::create_dir_all(paths.root()).unwrap();
+        std::fs::write(paths.config_file(), "offline_mode = true\n").unwrap();
+        let app = Arc::new(App::load(paths).await.unwrap());
+        let model = app
+            .db
+            .models()
+            .insert(NewModel {
+                name: "Qwen2.5 7B".into(),
+                format: "gguf".into(),
+                family: Some("qwen2".into()),
+                file_path: "E:\\AI\\models\\llm\\qwen\\qwen.gguf".into(),
+                size_bytes: 4_500 * 1024 * 1024,
+                source: "manual".into(),
+                ..NewModel::default()
+            })
+            .await
+            .unwrap();
+        let server = ApiServer::bind(app.clone(), SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
+            .await
+            .unwrap();
+        let base = format!("http://{}", server.addr);
+        let http = reqwest::Client::new();
+
+        // Offline → 400.
+        let offline = http
+            .post(format!("{base}/models/{}/upgrade-check", model.id))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(offline.status(), 400);
+
+        // Back online → 201 + a queued upgrade_check job carrying the target id.
+        app.set_offline(false);
+        let created = http
+            .post(format!("{base}/models/{}/upgrade-check", model.id))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(created.status(), 201);
+        let job: serde_json::Value = created.json().await.unwrap();
+        assert_eq!(job["job_type"], "upgrade_check");
+        assert_eq!(job["state"], "queued");
+        assert_eq!(job["params"]["target_model_id"], model.id);
+
+        // Unknown model → 400.
+        let ghost = http
+            .post(format!("{base}/models/ghost/upgrade-check"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(ghost.status(), 400);
+    }
+
+    #[tokio::test]
     async fn install_hermes_refuses_in_offline_mode() {
         let tmp = tempfile::tempdir().unwrap();
         let paths = crate::AppPaths::rooted(tmp.path());

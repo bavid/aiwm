@@ -622,3 +622,37 @@ export const modelBenchmarks = (id: string) =>
   invoke<Benchmark[]>("model_benchmarks", { id });
 /** Queue a "Test model" job (GGUF models only). Returns the job. */
 export const benchmarkModel = (id: string) => invoke<Job>("benchmark_model", { id });
+
+// --- upgrade check (Phase 6.7) ------------------------------------------
+
+/** One model the upgrade check proposes (`UpgradeReport.candidates[]`). */
+export interface UpgradeCandidate {
+  /** `owner/repo` on Hugging Face. */
+  id: string;
+  /** One sentence — the local model's reason, or an objective note. */
+  why: string;
+  downloads: number;
+  likes: number;
+  last_modified: string | null;
+  param_count: number | null;
+  format: "gguf" | "safetensors" | "other";
+  gated: boolean;
+  fit: FitVerdict;
+  /** Already in your library. */
+  installed: boolean;
+  /** The local model ranked this (vs. objective-only). */
+  llm_ranked: boolean;
+}
+
+/** The result of an `upgrade_check` job — JSON in `job.result`. */
+export interface UpgradeReport {
+  target: string;
+  query: string;
+  candidates: UpgradeCandidate[];
+  note: string;
+  freshness: Freshness;
+}
+
+/** Queue an "is there something better?" job for one installed model. Reasons
+ *  with an Auto-picked chat/coding model + queries Hugging Face. Offline-gated. */
+export const upgradeCheck = (id: string) => invoke<Job>("upgrade_check", { id });

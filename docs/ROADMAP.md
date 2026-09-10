@@ -233,10 +233,15 @@ suchen, verifiziert laden, lokal messen, Upgrade-Check. Alles offline-first
   Regel. `[models].auto_preference` = `balanced` / `fast` / `quality` (Settings).
   Verdrahtet für `chat` / `coding` / `base_diffusion` / `base_video` (verlängert
   ADR-015)
-- 6.7 **Upgrade-Check** — „Gibt es was Besseres?" pro Modell / Rolle: HF-Hub
-  fragen → Fit-Filter → lokales LLM rankt die echten Treffer (erfindet nichts)
-  → Liste + „Download & import". Per-Aktion-Consent, im `offline_mode` gesperrt
-  (ADR-025)
+- [x] 6.7 **Upgrade-Check** (**ADR-025**) — `core::upgrade` + `job_type=upgrade_check`:
+  Knopf „Better?" pro installiertem Modell → 2 HF-Suchen auf die Familie →
+  Spam-Guard + `compat`-Fit-Filter (Red raus) → objektives Vor-Ranking → das
+  `Auto`-Reasoning-LLM (chat/coding) rankt die **echten** Treffer als JSON und
+  **darf keine id erfinden** (gegen die Kandidatenliste validiert), best-effort
+  (kaputt → objektive Ordnung). Ergebnis in `jobs.result`; `UpgradeChecks.tsx`-
+  Panel mit „Download & import" (→ 6.4). Per-Aktion-Consent (confirm), offline
+  → 400. „Besser" = nur objektive Signale, „Qualität nicht lokal verifizierbar".
+  Pro-Rolle-Check + `base_model:`-Lineage später
 - 6.8 **Aufräum-Reports** — Dedup / Unused / Old versions, Storage-Ansicht
 - 6.9 **Collections + Politur** — Sammlungen, Rate-Limit-Backoff, optionales
   `HF_TOKEN`, Registry-Diagnostics

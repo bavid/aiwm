@@ -544,6 +544,27 @@ pub async fn benchmark_model(app: &App, model_id: &str) -> Result<Job> {
         .await
 }
 
+// --- upgrade check (Phase 6.7) -------------------------------------------
+
+/// Queue an "is there something better?" job for one installed model. It reasons
+/// with an `Auto`-picked chat/coding model and queries Hugging Face — refused in
+/// offline mode. The result (an [`crate::UpgradeReport`]) lands in `jobs.result`.
+pub async fn upgrade_check(app: &App, model_id: &str) -> Result<Job> {
+    if app.offline() {
+        return Err(CoreError::Config(
+            "offline mode is on — the upgrade check needs Hugging Face".into(),
+        ));
+    }
+    if app.db.models().get(model_id).await?.is_none() {
+        return Err(CoreError::Config(format!(
+            "model {model_id} is not in the library"
+        )));
+    }
+    let mut new = NewJob::new("upgrade_check");
+    new.params = serde_json::json!({ "target_model_id": model_id });
+    app.jobs.submit(new).await
+}
+
 /// Tail of the current day's log file.
 pub fn recent_logs(app: &App, lines: usize) -> Result<Vec<String>> {
     let dir = app.paths.logs_dir();

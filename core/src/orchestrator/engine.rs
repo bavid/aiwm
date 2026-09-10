@@ -24,10 +24,11 @@ use crate::capability::image::{self, ImageOutcome};
 use crate::capability::video::{self, VideoOutcome};
 use crate::compat::{self, VramEstimate};
 use crate::db::{EventLevel, Job, JobPatch, Model, NewJob};
+use crate::registry::Registry;
 use crate::runtime::{ComfyUiAdapter, LlamaCppAdapter, RuntimeRegistry};
 use crate::scheduler::{Decision, PlanRequest, Scheduler};
 use crate::telemetry::SystemTelemetry;
-use crate::{CoreError, Database, Result};
+use crate::{upgrade, CoreError, Database, Result};
 
 const CANCEL_REASON: &str = "cancelled by user";
 /// Runtime ids the engine wires capability bodies to.
@@ -75,6 +76,8 @@ pub struct JobEngine {
     telemetry: watch::Receiver<SystemTelemetry>,
     /// How `Auto` weighs speed vs heft (`[models]` config, 6.6).
     auto_preference: crate::select::AutoPreference,
+    /// The online model index — an `upgrade_check` job queries it (6.7).
+    model_index: Option<Arc<Registry>>,
     /// Cancel signals for jobs the engine is actively driving right now.
     cancels: Mutex<HashMap<String, watch::Sender<bool>>>,
 }
@@ -97,6 +100,7 @@ impl JobEngine {
             outputs_dir,
             telemetry: frozen_telemetry(),
             auto_preference: crate::select::AutoPreference::default(),
+            model_index: None,
             cancels: Mutex::new(HashMap::new()),
         }
     }
@@ -114,6 +118,18 @@ impl JobEngine {
     pub fn with_auto_preference(mut self, pref: crate::select::AutoPreference) -> Self {
         self.auto_preference = pref;
         self
+    }
+
+    /// Give the engine the model index for `upgrade_check` jobs.
+    #[must_use]
+    pub fn with_registry(mut self, registry: Arc<Registry>) -> Self {
+        self.model_index = Some(registry);
+        self
+    }
+
+    /// Re-point the model index (test helper — [`crate::App::with_registry`]).
+    pub fn set_registry(&mut self, registry: Arc<Registry>) {
+        self.model_index = Some(registry);
     }
 
     fn cancels(&self) -> std::sync::MutexGuard<'_, HashMap<String, watch::Sender<bool>>> {
@@ -239,44 +255,114 @@ impl JobEngine {
             });
         }
         if job.job_type == "chat" {
-            let model = crate::select::pick_for_role(
-                &self.db,
-                "chat",
-                self.scheduler.budget_mb(),
-                self.auto_preference,
-            )
-            .await?
-            .ok_or_else(|| CoreError::Runtime {
-                runtime: "llamacpp".into(),
-                message: "no chat model in the library — import a .gguf first".into(),
-            })?;
-            self.db
-                .jobs()
-                .assign(&job.id, "llamacpp", &model.id)
-                .await?;
-            self.db
-                .jobs()
-                .append_event(
-                    &job.id,
-                    EventLevel::Info,
-                    &format!("auto-selected model \u{201c}{}\u{201d}", model.name),
-                )
-                .await?;
-            let estimate = compat::estimate(
-                &model.vram_dims(),
-                compat::effective_ctx(model.ctx_max.and_then(|v| u32::try_from(v).ok())),
-            );
-            return Ok(Target {
-                runtime_id: "llamacpp".into(),
-                model_id: model.id,
-                model_name: model.name,
-                vram_mb: job.vram_needed_mb().max(estimate.total_mb),
-                estimate: Some(estimate),
-            });
+            let model = self
+                .pick_llm("chat", None)
+                .await?
+                .ok_or_else(|| CoreError::Runtime {
+                    runtime: "llamacpp".into(),
+                    message: "no chat model in the library — import a .gguf first".into(),
+                })?;
+            return self.llm_target(job, model, "auto-selected model").await;
+        }
+        if job.job_type == "upgrade_check" {
+            // Reason with a chat model, or a coding one if that is all there is.
+            let model = self
+                .pick_llm("chat", Some("coding"))
+                .await?
+                .ok_or_else(|| CoreError::Runtime {
+                    runtime: "llamacpp".into(),
+                    message: "no chat or coding model — import a .gguf to run the upgrade check"
+                        .into(),
+                })?;
+            return self.llm_target(job, model, "reasoning with").await;
         }
         Err(CoreError::Runtime {
             runtime: "?".into(),
             message: format!("job {} has no runtime or model to run on", job.id),
+        })
+    }
+
+    /// Best benchmark-aware pick for `role`, falling back to `fallback_role`.
+    async fn pick_llm(&self, role: &str, fallback_role: Option<&str>) -> Result<Option<Model>> {
+        let budget = self.scheduler.budget_mb();
+        if let Some(m) =
+            crate::select::pick_for_role(&self.db, role, budget, self.auto_preference).await?
+        {
+            return Ok(Some(m));
+        }
+        match fallback_role {
+            Some(r) => {
+                crate::select::pick_for_role(&self.db, r, budget, self.auto_preference).await
+            }
+            None => Ok(None),
+        }
+    }
+
+    /// Bind `model` to a llama.cpp job, log it, and build the `Target`.
+    async fn llm_target(&self, job: &Job, model: Model, verb: &str) -> Result<Target> {
+        self.db
+            .jobs()
+            .assign(&job.id, "llamacpp", &model.id)
+            .await?;
+        self.db
+            .jobs()
+            .append_event(
+                &job.id,
+                EventLevel::Info,
+                &format!("{verb} \u{201c}{}\u{201d}", model.name),
+            )
+            .await?;
+        let estimate = compat::estimate(
+            &model.vram_dims(),
+            compat::effective_ctx(model.ctx_max.and_then(|v| u32::try_from(v).ok())),
+        );
+        Ok(Target {
+            runtime_id: "llamacpp".into(),
+            model_id: model.id,
+            model_name: model.name,
+            vram_mb: job.vram_needed_mb().max(estimate.total_mb),
+            estimate: Some(estimate),
+        })
+    }
+
+    /// Build the `UpgradeTarget` for an `upgrade_check` job from its params.
+    async fn upgrade_target(&self, job: &Job) -> Result<upgrade::UpgradeTarget> {
+        let model_id = job
+            .params
+            .get("target_model_id")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| CoreError::Config("upgrade_check job has no target_model_id".into()))?;
+        let model =
+            self.db.models().get(model_id).await?.ok_or_else(|| {
+                CoreError::Config(format!("model {model_id} is not in the library"))
+            })?;
+
+        let family = model
+            .family
+            .clone()
+            .or_else(|| model.arch.clone())
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| first_tokens(&model.name, 2));
+        let is_llm =
+            model.format == "gguf" || model.roles.iter().any(|r| r == "chat" || r == "coding");
+
+        // Repo ids we already have — from the download history's HF URLs.
+        let installed_ids = self
+            .db
+            .downloads()
+            .list()
+            .await
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|d| hf_repo_from_url(&d.url))
+            .collect();
+
+        Ok(upgrade::UpgradeTarget {
+            label: model.name.clone(),
+            family,
+            params: model.param_count.and_then(|n| u64::try_from(n).ok()),
+            is_llm,
+            installed_ids,
         })
     }
 
@@ -704,6 +790,54 @@ impl JobEngine {
                     return Ok(JobOutcome::Cancelled { job_id: job.id });
                 }
             }
+        } else if job.job_type == "upgrade_check" {
+            if runtime_id != LLAMACPP {
+                return Err(CoreError::Runtime {
+                    runtime: runtime_id.clone(),
+                    message: "the upgrade check reasons with llama.cpp".into(),
+                });
+            }
+            let registry = self.model_index.clone().ok_or_else(|| {
+                CoreError::Config("the upgrade check needs the model registry".into())
+            })?;
+            let target = self.upgrade_target(&job).await?;
+            let free_ram_mb = {
+                let t = self.telemetry.borrow();
+                t.host
+                    .ram_total_mb
+                    .saturating_sub(t.host.ram_used_mb.min(t.host.ram_total_mb))
+            };
+            self.db
+                .jobs()
+                .append_event(
+                    &job.id,
+                    EventLevel::Info,
+                    &format!(
+                        "asking Hugging Face for a better \u{201c}{}\u{201d}",
+                        target.label
+                    ),
+                )
+                .await?;
+            let report = upgrade::run(
+                &registry,
+                &*self.llama,
+                &target,
+                self.scheduler.budget_mb(),
+                free_ram_mb,
+            )
+            .await?;
+            let json = serde_json::to_string(&report)
+                .map_err(|e| CoreError::Db(format!("serialize upgrade report: {e}")))?;
+            self.db.jobs().set_result(&job.id, &json).await?;
+            let _ = self.db.models().mark_used(&model_id).await;
+            self.db
+                .jobs()
+                .append_event(
+                    &job.id,
+                    EventLevel::Info,
+                    &format!("{} candidate(s) that fit", report.candidates.len()),
+                )
+                .await?;
         }
 
         self.to(&mut job, JobState::Post, JobPatch::default())
@@ -804,6 +938,23 @@ fn frozen_telemetry() -> watch::Receiver<SystemTelemetry> {
         },
     })
     .1
+}
+
+/// First `n` whitespace tokens of `s`, joined — the family fallback for the
+/// upgrade check when a model carries no `family` / `arch`.
+fn first_tokens(s: &str, n: usize) -> String {
+    s.split_whitespace().take(n).collect::<Vec<_>>().join(" ")
+}
+
+/// `owner/repo` from a Hugging Face `…/resolve/…` URL, else `None`.
+fn hf_repo_from_url(url: &str) -> Option<String> {
+    let rest = url
+        .strip_prefix("https://huggingface.co/")
+        .or_else(|| url.strip_prefix("http://huggingface.co/"))?;
+    let mut parts = rest.split('/');
+    let owner = parts.next().filter(|s| !s.is_empty())?;
+    let repo = parts.next().filter(|s| !s.is_empty())?;
+    (parts.next() == Some("resolve")).then(|| format!("{owner}/{repo}"))
 }
 
 /// VRAM (MB) to reserve for a ComfyUI model. Uses the estimate `import`

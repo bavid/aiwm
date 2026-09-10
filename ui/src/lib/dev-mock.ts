@@ -106,6 +106,52 @@ function progressBenchJobs(): void {
   }
 }
 
+/** Flip a running `upgrade_check` job to `completed` with a canned report. */
+function progressUpgradeJobs(): void {
+  for (const j of JOBS) {
+    if (j.job_type !== "upgrade_check" || j.state !== "running") continue;
+    const started = Date.parse(String(j.started_at ?? j.created_at));
+    if (Date.now() - started < 3000) continue;
+    const m = MODELS.find((x) => x.id === (j.params as AnyRecord)?.target_model_id);
+    j.state = "completed";
+    j.finished_at = now();
+    j.result = JSON.stringify({
+      target: String(m?.name ?? "model"),
+      query: String(m?.family ?? "qwen2"),
+      note: "Ranked by your local model over the objective signals (release date, downloads, size, fit). Quality is not locally verifiable.",
+      freshness: { kind: "live" },
+      candidates: [
+        {
+          id: "Qwen/Qwen2.5-Coder-14B-Instruct-GGUF",
+          why: "same family, ~2× the parameters, still fits your 16 GB budget, 400k downloads",
+          downloads: 402113,
+          likes: 88,
+          last_modified: "2026-04-18",
+          param_count: 14_770_000_000,
+          format: "gguf",
+          gated: false,
+          fit: { level: "yellow", reason: "needs ~9 GB — little head-room" },
+          installed: false,
+          llm_ranked: true,
+        },
+        {
+          id: "bartowski/Qwen2.5-7B-Instruct-GGUF",
+          why: "same size, newer quant set, more actively maintained",
+          downloads: 1_780_676,
+          likes: 436,
+          last_modified: "2026-05-02",
+          param_count: 7_615_616_512,
+          format: "gguf",
+          gated: false,
+          fit: { level: "green" },
+          installed: false,
+          llm_ranked: true,
+        },
+      ],
+    });
+  }
+}
+
 const DISCOVER_MODELS: AnyRecord[] = [
   {
     id: "Qwen/Qwen2.5-Coder-7B-Instruct-GGUF", author: "Qwen", downloads: 1_780_676, likes: 436,
@@ -188,6 +234,7 @@ export function installDevMock(): void {
         return [];
       case "list_jobs":
         progressBenchJobs();
+        progressUpgradeJobs();
         // Fresh array — `usePolled` needs a changed reference to re-render.
         return JOBS.map((j) => ({ ...j }));
       case "get_config":
@@ -226,6 +273,14 @@ export function installDevMock(): void {
       case "benchmark_model": {
         const job = mkJob(`j-bench-${seq++}`, "bench", "running", {
           model_id: String(a.id),
+          started_at: now(),
+        });
+        JOBS.unshift(job);
+        return job;
+      }
+      case "upgrade_check": {
+        const job = mkJob(`j-up-${seq++}`, "upgrade_check", "running", {
+          params: { target_model_id: String(a.id) },
           started_at: now(),
         });
         JOBS.unshift(job);
