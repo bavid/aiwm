@@ -224,3 +224,16 @@ pub struct EnqueueDownloadDto {
     #[serde(default)]
     pub size_bytes: Option<u64>,
 }
+
+/// Body for `PUT /models/{id}/tags` — replace a model's tag set (Phase 6.9).
+#[derive(Debug, Clone, Deserialize)]
+pub struct SetTagsDto {
+    pub tags: Vec<String>,
+}
+
+/// Body for `PUT /registry/token` — set (or clear, when blank) the Hugging Face
+/// token. Applied on the next restart.
+#[derive(Debug, Clone, Deserialize)]
+pub struct SetTokenDto {
+    pub token: String,
+}

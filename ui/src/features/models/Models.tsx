@@ -1,8 +1,15 @@
-import { useState } from "react";
-import { useBenchmarks, useJobs, useKnownModels, useModels } from "../../lib/hooks";
+import { useMemo, useState } from "react";
+import {
+  useBenchmarks,
+  useJobs,
+  useKnownModels,
+  useModels,
+  useModelTags,
+} from "../../lib/hooks";
 import {
   benchmarkModel,
   importModel,
+  setModelTags,
   upgradeCheck,
   type Benchmark,
   type Job,
@@ -77,6 +84,14 @@ export function Models() {
 function ModelLibrary({ models, error }: { models: Model[] | null; error: string | null }) {
   const { data: benchmarks } = useBenchmarks();
   const { data: jobs } = useJobs();
+  const { data: tagMap } = useModelTags();
+  const [tagFilter, setTagFilter] = useState<string | null>(null);
+
+  const tags = tagMap ?? {};
+  const allTags = useMemo(
+    () => [...new Set(Object.values(tags).flat())].sort(),
+    [tags],
+  );
 
   const byModel = new Map((benchmarks ?? []).map((b) => [b.model_id, b]));
   const targetOf = (j: Job): string => {
@@ -92,14 +107,41 @@ function ModelLibrary({ models, error }: { models: Model[] | null; error: string
   const testing = activeOf("bench");
   const checking = activeOf("upgrade_check");
 
+  const shown = (models ?? []).filter(
+    (m) => !tagFilter || (tags[m.id] ?? []).includes(tagFilter),
+  );
+
   return (
     <section className="card card--wide">
       <header className="card__head">
         <h2>Model Library</h2>
-        <span className="card__sub numeric">{models?.length ?? 0} installed</span>
+        <span className="card__sub numeric">
+          {tagFilter ? `${shown.length} of ${models?.length ?? 0}` : `${models?.length ?? 0} installed`}
+        </span>
       </header>
       {error && <p className="muted">Could not load models: {error}</p>}
       {models && models.length === 0 && <p className="muted">No models yet — import a .gguf above.</p>}
+      {allTags.length > 0 && (
+        <div className="tagfilter">
+          <button
+            type="button"
+            className={`chip ${tagFilter === null ? "chip--on" : ""}`}
+            onClick={() => setTagFilter(null)}
+          >
+            All
+          </button>
+          {allTags.map((t) => (
+            <button
+              key={t}
+              type="button"
+              className={`chip ${tagFilter === t ? "chip--on" : ""}`}
+              onClick={() => setTagFilter(tagFilter === t ? null : t)}
+            >
+              {t}
+            </button>
+          ))}
+        </div>
+      )}
       {models && models.length > 0 && (
         <div className="model-table__scroll">
           <table className="model-table">
@@ -113,13 +155,14 @@ function ModelLibrary({ models, error }: { models: Model[] | null; error: string
                 <th>Ctx</th>
                 <th>VRAM est.</th>
                 <th>Score</th>
+                <th>Tags</th>
                 <th>Roles</th>
                 <th>Runtimes</th>
                 <th />
               </tr>
             </thead>
             <tbody>
-              {models.map((m: Model) => (
+              {shown.map((m: Model) => (
                 <tr key={m.id}>
                   <td title={m.file_path}>{m.name}</td>
                   <td className="muted">{m.family ?? m.arch ?? "—"}</td>
@@ -139,6 +182,9 @@ function ModelLibrary({ models, error }: { models: Model[] | null; error: string
                       bench={byModel.get(m.id)}
                       testing={testing.has(m.id)}
                     />
+                  </td>
+                  <td>
+                    <TagCell modelId={m.id} tags={tags[m.id] ?? []} />
                   </td>
                   <td className="muted">{m.roles.join(", ") || "—"}</td>
                   <td className="muted">{m.runtimes.join(", ") || "—"}</td>
@@ -190,6 +236,66 @@ function ScoreCell({
       {canTest && (
         <button type="button" className="score__test" onClick={run}>
           {err ? "retry" : bench ? "re-test" : "Test"}
+        </button>
+      )}
+    </span>
+  );
+}
+
+/** Chips with an ×, plus a "+" that reveals a one-tag input. Optimistic. */
+function TagCell({ modelId, tags }: { modelId: string; tags: string[] }) {
+  const [adding, setAdding] = useState(false);
+  const [draft, setDraft] = useState("");
+  const [local, setLocal] = useState<string[] | null>(null);
+  const shown = local ?? tags;
+
+  const save = async (next: string[]) => {
+    setLocal(next);
+    try {
+      const clean = await setModelTags(modelId, next);
+      setLocal(clean);
+    } catch {
+      setLocal(null); // let the poll restore the truth
+    }
+  };
+
+  const add = () => {
+    const t = draft.trim().toLowerCase();
+    setDraft("");
+    setAdding(false);
+    if (t && !shown.includes(t)) void save([...shown, t]);
+  };
+
+  return (
+    <span className="tagcell">
+      {shown.map((t) => (
+        <span key={t} className="tagcell__chip">
+          {t}
+          <button type="button" onClick={() => void save(shown.filter((x) => x !== t))}>
+            ×
+          </button>
+        </span>
+      ))}
+      {adding ? (
+        <input
+          autoFocus
+          className="tagcell__input"
+          value={draft}
+          placeholder="tag…"
+          spellCheck={false}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") add();
+            if (e.key === "Escape") {
+              setAdding(false);
+              setDraft("");
+            }
+          }}
+          onBlur={add}
+        />
+      ) : (
+        <button type="button" className="tagcell__plus" onClick={() => setAdding(true)}>
+          + tag
         </button>
       )}
     </span>

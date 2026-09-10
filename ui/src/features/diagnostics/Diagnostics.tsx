@@ -1,5 +1,11 @@
 import { useEffect, useRef, useState } from "react";
-import { useAbout, useLogs, useRuntimes, useTelemetry } from "../../lib/hooks";
+import {
+  useAbout,
+  useLogs,
+  useRegistryStatus,
+  useRuntimes,
+  useTelemetry,
+} from "../../lib/hooks";
 import { installComfyui, installLlamacpp } from "../../lib/ipc";
 import { getTheme } from "../../lib/theme";
 import "./diagnostics.css";
@@ -8,6 +14,7 @@ export function Diagnostics() {
   const { data: runtimes } = useRuntimes();
   const { data: logs } = useLogs();
   const { telemetry } = useTelemetry();
+  const { data: registry } = useRegistryStatus();
   const about = useAbout();
   const logRef = useRef<HTMLPreElement>(null);
   const detailOf = (id: string) => runtimes?.find((r) => r.id === id)?.detail ?? null;
@@ -123,6 +130,27 @@ export function Diagnostics() {
             </tbody>
           </table>
         )}
+      </section>
+
+      <section className="card">
+        <header className="card__head">
+          <h2>Model registry</h2>
+          <span className="card__sub">{registry?.source_id ?? "…"}</span>
+        </header>
+        <dl className="kv numeric">
+          <dt>last fetch</dt>
+          <dd>{registry?.last_fetch ? registry.last_fetch.replace("T", " ").slice(0, 19) : "—"}</dd>
+          <dt>cache entries</dt>
+          <dd>{registry?.cache_entries ?? "…"}</dd>
+          <dt>rate limit left</dt>
+          <dd>
+            {registry?.rate_limited_secs
+              ? `backing off ${registry.rate_limited_secs}s`
+              : (registry?.rate_limit_remaining ?? "—")}
+          </dd>
+          <dt>HF token</dt>
+          <dd>{registry ? (registry.token_set ? "set" : "not set") : "…"}</dd>
+        </dl>
       </section>
 
       <section className="card card--wide">

@@ -250,8 +250,21 @@ suchen, verifiziert laden, lokal messen, Upgrade-Check. Alles offline-first
   Model Library. **+ die aus 6.4 verschobene Download-Speicherplanung**
   (`enqueue` lehnt ab, wenn das Store-Volume die Datei nicht hält). „Old
   versions" → deckt der 6.7-„Better?"-Knopf ab (verschoben)
-- 6.9 **Collections + Politur** — Sammlungen, Rate-Limit-Backoff, optionales
-  `HF_TOKEN`, Registry-Diagnostics
+- [x] 6.9 **Collections + Politur** — freie **Tags** (`model_tags`, Migration
+  `0008`) statt schwergewichtiger Collections: `ModelRepo::{tags,set_tags,
+  all_tags}`, „Tags"-Spalte + Filter-Chip-Zeile in der Model Library.
+  **Discovery-Verlauf** (`localStorage`, letzte 6 Suchen als Klick-Chips).
+  HF-**Rate-Limit-Backoff** (`Mutex<HubState>` — `RateLimit: r=;t=` + `Retry-
+  After`, fail-fast im Backoff-Fenster, `429` → Fenster aus Reset-Hint sonst
+  90 s). Optionales **`HF_TOKEN`** in `<local_root>/hf_token.txt` (nie Pflicht,
+  nie im Backup — ADR-022) + „Hugging Face"-Karte in Settings. **Registry-Zeile
+  in Diagnostics** (`RegistryStatus`: letzter Fetch, Cache-Einträge, Rate-Limit-
+  Rest, Token). `GET /models/tags`, `PUT /models/{id}/tags`,
+  `GET /registry/status`, `PUT /registry/token`. Benannte Collections + `ETag`-
+  Refresh verworfen/verschoben. **Schließt Phase 6.**
+- **Phase 6 abgeschlossen** — 6.0 – 6.9 ✅, **371 Lib / 57 integ / 5 pytest**,
+  ADRs 022 – 025. Offen bleibt nur 4.0 (echtes ComfyUI + Estimator-Kalibrierung)
+  und der manuelle Agent-Smoke.
 - Cloud-Provider-Adapter (Claude/OpenAI als opt-in **Agent**-Backends) gehört
   zu Phase 5, eigener ADR, nach Phase 6
 

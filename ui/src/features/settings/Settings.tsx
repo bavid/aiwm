@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
-import { useAbout } from "../../lib/hooks";
+import { useAbout, useRegistryStatus } from "../../lib/hooks";
 import {
   getConfig,
   saveConfig,
+  setHfToken,
   type AppConfig,
   type AutoPreference,
   type ComfyConfig,
@@ -226,6 +227,8 @@ export function Settings() {
         </label>
       </section>
 
+      <HuggingFaceCard />
+
       <section className="card set-group">
         <header className="card__head">
           <h2>Network</h2>
@@ -421,6 +424,75 @@ export function Settings() {
         </button>
       </div>
     </div>
+  );
+}
+
+/** Optional Hugging Face token — for gated repos and higher rate limits. Never
+ *  required, stored machine-local (not in a backup), applied on restart. */
+function HuggingFaceCard() {
+  const { data: status } = useRegistryStatus();
+  const [value, setValue] = useState("");
+  const [msg, setMsg] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const save = async (token: string) => {
+    setBusy(true);
+    setMsg(null);
+    try {
+      await setHfToken(token);
+      setValue("");
+      setMsg(
+        token.trim()
+          ? "Token saved — restart the app to use it."
+          : "Token cleared — restart to apply.",
+      );
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <section className="card set-group">
+      <header className="card__head">
+        <h2>Hugging Face</h2>
+        <span className="card__sub">restart to apply</span>
+      </header>
+      <label className="set-field">
+        <span>
+          Access token — optional, only for <strong>gated</strong> repos or if you
+          hit the anonymous rate limit. Stored on this machine only (never in a
+          backup). Currently: <strong>{status?.token_set ? "set" : "not set"}</strong>.
+        </span>
+        <input
+          type="password"
+          value={value}
+          placeholder={status?.token_set ? "•••••••• (leave blank to keep)" : "hf_…"}
+          spellCheck={false}
+          autoComplete="off"
+          onChange={(e) => {
+            setValue(e.target.value);
+            setMsg(null);
+          }}
+        />
+      </label>
+      <div className="rt-setup">
+        <button type="button" disabled={busy || !value.trim()} onClick={() => save(value)}>
+          {busy ? "Saving…" : "Save token"}
+        </button>
+        {status?.token_set && (
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => save("")}
+          >
+            Clear
+          </button>
+        )}
+        {msg && <span className="muted">{msg}</span>}
+      </div>
+    </section>
   );
 }
 

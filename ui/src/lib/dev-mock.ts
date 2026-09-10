@@ -75,6 +75,8 @@ let HERMES_INSTALLED = false;
 
 const DOWNLOADS: AnyRecord[] = [];
 const BENCHMARKS: AnyRecord[] = [];
+const TAGS: Record<string, string[]> = { "m-qwen": ["coding", "favourite"] };
+let HF_TOKEN = "";
 
 /** Flip a running `bench` job to `completed` a few seconds in and drop a
  *  benchmark row — the dev-mock stand-in for `core::bench`. */
@@ -312,8 +314,36 @@ export function installDevMock(): void {
         const i = MODELS.findIndex((m) => m.id === a.id);
         if (i < 0) throw new Error(`model ${a.id} is not in the library`);
         const [m] = MODELS.splice(i, 1);
+        delete TAGS[String(m.id)];
         return { id: m.id, name: m.name, file_removed: true, freed_bytes: Number(m.size_bytes) };
       }
+      case "model_tags":
+        return { ...TAGS };
+      case "set_model_tags": {
+        if (!MODELS.some((m) => m.id === a.id)) throw new Error(`model ${a.id} is not in the library`);
+        const clean = [
+          ...new Set(
+            ((a.tags as string[]) ?? [])
+              .map((t) => t.trim().toLowerCase())
+              .filter((t) => t && t.length <= 32),
+          ),
+        ].sort();
+        if (clean.length) TAGS[String(a.id)] = clean;
+        else delete TAGS[String(a.id)];
+        return clean;
+      }
+      case "registry_status":
+        return {
+          source_id: "huggingface",
+          last_fetch: now(),
+          rate_limit_remaining: 471,
+          rate_limited_secs: null,
+          token_set: HF_TOKEN.length > 0,
+          cache_entries: 3,
+        };
+      case "set_hf_token":
+        HF_TOKEN = String(a.token ?? "").trim();
+        return null;
       case "list_benchmarks":
         progressBenchJobs();
         return [...new Map(BENCHMARKS.map((b) => [b.model_id, b])).values()];

@@ -879,6 +879,90 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn tags_registry_status_and_hf_token_over_http() {
+        use crate::db::NewModel;
+
+        let (app, tmp) = test_app().await;
+        let model = app
+            .db
+            .models()
+            .insert(NewModel {
+                name: "Qwen".into(),
+                format: "gguf".into(),
+                file_path: "E:\\AI\\models\\llm\\qwen\\q.gguf".into(),
+                size_bytes: 1,
+                source: "manual".into(),
+                ..NewModel::default()
+            })
+            .await
+            .unwrap();
+        let server = ApiServer::bind(app.clone(), SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
+            .await
+            .unwrap();
+        let base = format!("http://{}", server.addr);
+        let http = reqwest::Client::new();
+
+        // Set + read tags.
+        let set: serde_json::Value = http
+            .put(format!("{base}/models/{}/tags", model.id))
+            .json(&serde_json::json!({ "tags": [" Favourite ", "coding", "coding"] }))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(set, serde_json::json!(["coding", "favourite"]));
+
+        let all: serde_json::Value = reqwest::get(format!("{base}/models/tags"))
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(all[&model.id], serde_json::json!(["coding", "favourite"]));
+
+        let ghost = http
+            .put(format!("{base}/models/ghost/tags"))
+            .json(&serde_json::json!({ "tags": ["x"] }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(ghost.status(), 400);
+
+        // Registry status — no token, no fetch yet.
+        let status: serde_json::Value = reqwest::get(format!("{base}/registry/status"))
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(status["source_id"], "huggingface");
+        assert_eq!(status["token_set"], false);
+
+        // Set a token → it lands in the machine-local file (not the backup).
+        let resp = http
+            .put(format!("{base}/registry/token"))
+            .json(&serde_json::json!({ "token": "hf_secret123" }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 204);
+        assert_eq!(
+            std::fs::read_to_string(tmp.path().join("hf_token.txt")).unwrap(),
+            "hf_secret123"
+        );
+
+        // Clearing removes it.
+        http.put(format!("{base}/registry/token"))
+            .json(&serde_json::json!({ "token": "  " }))
+            .send()
+            .await
+            .unwrap();
+        assert!(!tmp.path().join("hf_token.txt").exists());
+    }
+
+    #[tokio::test]
     async fn upgrade_check_queues_a_job_and_refuses_offline() {
         use crate::db::NewModel;
 

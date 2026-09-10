@@ -12,7 +12,9 @@ import {
   listKnownModels,
   listDownloads,
   listModels,
+  modelTags,
   registrySearch,
+  registryStatus,
   storageReport,
   type AboutInfo,
   type Agent,
@@ -20,6 +22,7 @@ import {
   type Benchmark,
   type Download,
   type Job,
+  type RegistryStatus,
   type StorageReport,
   type KnownModel,
   type Model,
@@ -105,6 +108,10 @@ export const useBenchmarks = () =>
   usePolled<Benchmark[]>("benchmarks", listBenchmarks, 3000);
 export const useStorage = () =>
   usePolled<StorageReport>("storage", storageReport, 5000);
+export const useModelTags = () =>
+  usePolled<Record<string, string[]>>("model-tags", modelTags, 4000);
+export const useRegistryStatus = () =>
+  usePolled<RegistryStatus>("registry-status", registryStatus, 5000);
 
 /** Debounced Hugging Face search for the Discover panel. Runs when `params`
  *  change (400 ms after the last one) and `enabled`; not polled. */

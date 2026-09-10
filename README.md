@@ -31,7 +31,7 @@ noch keine echte AI-Capability (die kommt ab Phase 2).
 | WP-9 | CI-Workflow, Git-Hooks (pre-commit fmt, pre-push voller Gate) |
 | WP-10 | ADRs finalisiert, Stub-Docs (MODELS/RUNTIMES/SECURITY/BENCHMARKS) |
 
-**366 Rust-Unit + 57 Integrationstests + 5 pytest** grün · `scripts/check.ps1` grün ·
+**371 Rust-Unit + 57 Integrationstests + 5 pytest** grün · `scripts/check.ps1` grün ·
 **null `unsafe`** im Produktivcode.
 
 **Phase 2 (MVP) ✅ abgeschlossen** — Scheiben 2.1–2.7 + durchgehender
@@ -119,10 +119,11 @@ Command-Approval (UI) + erzwungene Offline-Config.
   Tauri + Settings-Karte „Backup & restore". Politur (Kompaktierungs-Anzeige,
   Pause-Fluss, Diagnostics-Zeile) = 5.5c, vertagt.
 
-**Phase 6 (Automatisierung & Model-Manager v2) — Plan + 6.0 + 6.1 + 6.2 + 6.3 + 6.4 + 6.5 + 6.6 + 6.7 + 6.8 ✅:** [docs/PHASE_6_PLAN.md](docs/PHASE_6_PLAN.md).
+**Phase 6 (Automatisierung & Model-Manager v2) ✅ abgeschlossen — Scheiben 6.0–6.9:** [docs/PHASE_6_PLAN.md](docs/PHASE_6_PLAN.md).
 Aus dem manuellen Modell-Umgang wird ein Model-Manager: online suchen, verifiziert
-laden, lokal messen, Upgrade-Check, Dedup-/Unused-Reports. Alles offline-first
-(ADR-009).
+laden, lokal messen, benchmark-gestützt auto-wählen, Upgrade-Check, Dedup-/Unused-
+Reports, Tags + Discovery-Verlauf. Alles offline-first (ADR-009), loopback-only
+(ADR-008). ADRs 022–025.
 
 - **6.0** ✅ Registry-/Benchmark-Spike (**ADR-022 + ADR-024**) — HF-Hub-API live
   geprüft: `expand[]` geht auch auf `/api/models`, `lfs.oid` = die Verify-SHA-256,
@@ -194,6 +195,16 @@ laden, lokal messen, Upgrade-Check, Dedup-/Unused-Reports. Alles offline-first
   „Delete") + „Delete" in der Model Library. **+ die aus 6.4 verschobene
   Download-Speicherplanung** (`enqueue` lehnt ab, wenn das Store-Volume die
   Datei + 2 GB Marge nicht hält). „Old versions" deckt der 6.7-„Better?"-Knopf ab.
+- **6.9** ✅ **Collections + Politur** (schließt Phase 6) — freie **Tags**
+  (`model_tags`, Migration `0008`; `ModelRepo::{tags,set_tags,all_tags}`,
+  „Tags"-Spalte + Filter-Chips in der Model Library) statt schwergewichtiger
+  Collections. **Discovery-Verlauf** (letzte 6 Suchen als `localStorage`-Chips).
+  HF-**Rate-Limit-Backoff** (`RateLimit: r=;t=` + `Retry-After` → `Mutex<HubState>`,
+  fail-fast im Backoff-Fenster). Optionales **`HF_TOKEN`** in
+  `<local_root>/hf_token.txt` (nie Pflicht, nie im Backup — ADR-022) + „Hugging
+  Face"-Karte in Settings. **Registry-Zeile in Diagnostics** (`RegistryStatus`:
+  letzter Fetch, Cache-Einträge, Rate-Limit-Rest, Token). `GET /models/tags`,
+  `PUT /models/{id}/tags`, `GET /registry/status`, `PUT /registry/token`.
 
 - **4.1** ✅ **`capability::video`**: `job_type=video` → feste `wan_ti2v`-Pipeline
   (`WanImageToVideo` → `KSampler` → `VAEDecode` → `CreateVideo` → `SaveVideo`,

@@ -45,7 +45,7 @@ den letzten Cache + „offline" statt Fehler.
 | **6.6** | **Benchmark-gestützte `Auto`-Auswahl**: `ModelRepo::pick_for_role` bezieht Benchmark-Daten ein (statt nur `last_used_at` / `use_count`) — Fit zuerst, dann Score, dann Nutzung. Gewichtung + „bevorzuge schnell / bevorzuge Qualität" in `[models]`-Config. Betrifft Chat, Coding, `base_diffusion`, `base_video`. Regelbasierter Fallback bleibt, wenn keine Benchmark-Daten da sind. | ✅ *(siehe „## 6.6 — Ergebnis")* |
 | **6.7** | **Upgrade-Check** (die Backlog-Idee — `core::registry` + `core::compat` + lokales LLM): Knopf „Gibt es was Besseres?" pro installiertem Modell **und** pro Rolle. Ablauf: HF-Hub nach neueren/populäreren Modellen derselben Rolle+Familie fragen → `core::compat`-Fit-Filter auf „läuft in `vram_budget_mb`" **vor** der LLM-Bewertung (spart Tokens, hält die Liste ehrlich) → das lokale LLM (Rolle `chat`/`coding`) rankt die **echten API-Treffer** als JSON, schreibt eine Ein-Satz-Begründung, **darf keinen Modellnamen erfinden** (Antwort gegen die Kandidaten-IDs validieren) → Ausgabe: kurze Liste + „Download & import" (→ 6.4). „Besser" misst sich in der MVP-Fassung an **objektiven, abrufbaren** Signalen (Release-Datum, Downloads/Likes, größere/neuere Basis in der Familie, Fit) + ggf. externem Score (6.5); das LLM markiert „Qualität nicht lokal verifizierbar". HF-Query = externer Call → **per-Aktion-Consent**, im `offline_mode` gesperrt. ADR-025. | ✅ *(siehe „## 6.7 — Ergebnis")* |
 | **6.8** | **Aufräum-Reports**: **Dedup** (gleiche SHA-256 / dieselbe Datei an mehreren Pfaden, inkl. per-Junction gebundener Ollama-Blobs — nur anzeigen, R4), **Unused** (nie genutzt / seit N Tagen nicht), **Old versions** (installiertes Modell hat eine neuere Katalog-/Registry-Revision — nutzt 6.1). Eine „Storage"-Ansicht: was belegt wie viel, was ist gefahrlos löschbar. Löschen bleibt eine bestätigte Nutzer-Aktion. | ✅ *(siehe „## 6.8 — Ergebnis")* |
-| **6.9** | **Collections + Politur**: benannte Modell-Sammlungen / Tags (`model_collections`), Discovery-Verlauf, Rate-Limit-Handling mit Backoff + `RateLimit`-Header, optionales `HF_TOKEN`-Feld in Settings (nie Pflicht — nur für Gated-Repos / hohe Limits), Diagnostics-Zeile für die Registry (letzter Fetch, Cache-Alter, Rate-Limit-Rest). | offen |
+| **6.9** | **Collections + Politur**: benannte Modell-Sammlungen / Tags (`model_collections`), Discovery-Verlauf, Rate-Limit-Handling mit Backoff + `RateLimit`-Header, optionales `HF_TOKEN`-Feld in Settings (nie Pflicht — nur für Gated-Repos / hohe Limits), Diagnostics-Zeile für die Registry (letzter Fetch, Cache-Alter, Rate-Limit-Rest). | ✅ *(siehe „## 6.9 — Ergebnis")* |
 
 Cloud-Provider-Adapter (Claude/OpenAI als optionale **Agent**-Backends, opt-in)
 ist in der ROADMAP unter Phase 6 gelistet, gehört aber thematisch zu Phase 5
@@ -745,3 +745,122 @@ Löschen + die aus 6.4 verschobene Download-Speicherplanung.
   SHA-256. Die Ollama-Anzeige braucht erst den Ollama-Adapter.
 - **Retention/Auto-Cleanup** von `outputs/` — bleibt manuell (Settings zeigt
   Größe + „reveal").
+
+---
+
+## 6.9 — Ergebnis (abgeschlossen, a + b) · **schließt Phase 6**
+
+Die Politur-Scheibe: freie **Tags** statt schwergewichtiger „Collections",
+**Discovery-Verlauf**, HF-**Rate-Limit-Backoff** mit `RateLimit`-Header,
+optionales **`HF_TOKEN`** (nie Pflicht, nie im Backup — ADR-022), eine
+**Registry-Zeile in Diagnostics**.
+
+**Scope-Anpassung:** Der Plan nannte „benannte Modell-Sammlungen
+(`model_collections`)". Umgesetzt sind **freie Tags** (`model_tags`) — dieselbe
+Nutzergeschichte („meine Coding-Modelle gruppieren"), aber ohne eine zweite
+Entität mit eigener CRUD-Oberfläche. Ein Tag-Filter über der Model Library
+liefert die „Sammlung"-Ansicht. Benannte Collections mit Reihenfolge/Notiz sind
+Post-Phase-6, falls je gebraucht.
+
+**6.9a** (`685b3b3`) — Core, TDD, ohne API/UI:
+- **Migration `0008`** — `model_tags (model_id FK ON DELETE CASCADE, tag)`
+  STRICT, PK `(model_id, tag)` + Index auf `tag`.
+- **`db::ModelRepo`** — `tags(id)` (sortiert), `set_tags(id, &[String])`
+  (trimmt, klein­schreibt, entfernt Leere + `> 32` Zeichen, dedupt, ersetzt das
+  ganze Set in **einer** Transaktion, gibt das bereinigte Set zurück),
+  `all_tags() -> BTreeMap<model_id, Vec<tag>>`. **`Model` bleibt unverändert** —
+  die UI joint Tags separat (wie die Benchmarks), kein Anfassen jedes
+  `Model {}`-Literals in den Tests.
+- **`registry::RegistryStatus { source_id, last_fetch, rate_limit_remaining,
+  rate_limited_secs, token_set, cache_entries }`** — `ModelSource::status()`
+  (Default), `Registry::status()` füllt `cache_entries` aus `Cache::count()`
+  (zählt `.json` im Cache-Ordner).
+- **`HuggingFaceSource`** — ein `Mutex<HubState>` hält `last_fetch`, den
+  `RateLimit-Remaining`-Rest und einen `limited_until`-Unix-Stempel. `get_json`
+  parst den IETF-Draft-Header `RateLimit: r=…;t=…` **plus** `Retry-After`,
+  **fail-fast solange ein bekanntes Backoff-Fenster läuft** (kein verschwendeter
+  Call), und setzt bei `429` das Fenster aus dem Reset-Hinweis (sonst `90 s`).
+  Bei Erfolg: Fenster geräumt, `last_fetch` = jetzt.
+- **`AppPaths::hf_token_file()`** = `<local_root>/hf_token.txt` — nur
+  maschinen-lokal, nie geroamt, **nie im Backup-Export** (ADR-022). `App::load`
+  liest die Datei in `HuggingFaceSource::with_token`.
+- **+1 Tags-Unit + 3 HF-Unit** (`parse_rate_headers` [Draft- + `Retry-After`-
+  Form], `status` meldet Token + laufendes Backoff, ein bekanntes Backoff
+  scheitert ohne Call). **→ 370 Lib.**
+
+**6.9b** (dieser Commit) — API / Tauri / UI:
+- **DTOs** (`api::dto`): `SetTagsDto { tags }`, `SetTokenDto { token }`.
+- **Handler** (`api::handlers`, transport-agnostisch): `model_tags` (→ die
+  `BTreeMap`), `set_model_tags` (Modell muss existieren → sonst 400, gibt das
+  bereinigte Set zurück), `registry_status` (sync), `set_hf_token` (trimmt;
+  **leer → Datei löschen**; legt den `local_root` an, schreibt die Datei).
+- **HTTP** (`api::http`): `GET /models/tags`, `PUT /models/{id}/tags`
+  (`Json<SetTagsDto>` → `Json<Vec<String>>`), `GET /registry/status`,
+  `PUT /registry/token` (`Json<SetTokenDto>` → `204`). **Tauri**: `model_tags`,
+  `set_model_tags(id, tags)`, `registry_status` (sync), `set_hf_token(token)` in
+  `generate_handler!`.
+- **UI** (`ipc.ts` / `hooks.ts`): `modelTags` / `setModelTags` / `RegistryStatus`
+  / `registryStatus` / `setHfToken`; `useModelTags` (4 s), `useRegistryStatus`
+  (5 s).
+  - **`Models.tsx`** — neue **„Tags"-Spalte** (`TagCell`: optimistische Chips
+    mit `×`, „+ tag"-Eingabe, Enter fügt hinzu, `setModelTags` schreibt zurück
+    und übernimmt das bereinigte Set) + eine **Tag-Filter-Chip-Zeile** über der
+    Tabelle (`All` + jeder Tag; aktiver Tag filtert die Zeilen, Untertitel „N of
+    M"). Das ist die „Collection"-Ansicht.
+  - **`Settings.tsx`** — neue Karte **„Hugging Face"** vor „Network":
+    Passwort-Feld, „Currently: set / not set" aus `useRegistryStatus`, „Save
+    token" → `setHfToken` → „restart the app to use it", „Clear" (nur wenn
+    gesetzt).
+  - **`Diagnostics.tsx`** — neue Karte **„Model registry"**: `source_id`,
+    letzter Fetch, Cache-Einträge, „rate limit left" (bzw. „backing off Ns"),
+    HF-Token set/not set.
+  - **`Discover.tsx`** — **Discovery-Verlauf**: `RECENT_KEY` in `localStorage`
+    (max 6, dedupt), ein `useEffect` schiebt den Suchbegriff nach einem Treffer
+    dazu; eine `.discover__recent`-Chip-Zeile (nur wenn das Feld leer ist)
+    stellt die letzten Suchen als Klick-Chips wieder her.
+  - **`dev-mock`**: `model_tags` / `set_model_tags` (bereinigt + speichert) /
+    `registry_status` (canned) / `set_hf_token`; `delete_model` räumt auch
+    `TAGS[id]`.
+- **+1 api-Test** (`tags_registry_status_and_hf_token_over_http`: `PUT` Tags
+  `[" Favourite ", "coding", "coding"]` → `["coding", "favourite"]`,
+  `GET /models/tags` map, Ghost → 400, `GET /registry/status` →
+  `source_id == "huggingface"` + `token_set == false`, `PUT /registry/token`
+  → `204` + Datei geschrieben, leer → Datei weg). **→ 371 Lib + 57 integ +
+  5 pytest.** `check.ps1` grün.
+- **Smoke** (dev-mock): Tags-Spalte + Filter-Chips („keep" auf SDXL setzen →
+  nach dem Poll erscheint der Filter-Chip → filtert auf 1 Zeile → `×` entfernt);
+  Settings-Karte „Hugging Face" (Token speichern → „Currently: set" nach dem
+  Poll); Diagnostics „Model registry" (letzter Fetch / Cache 3 / Limit 471 /
+  Token set); Discover-Verlauf („coder" suchen → 2 Treffer → Feld leeren →
+  `recent`-Chip „coder"). Konsole fehlerfrei.
+
+**Nicht in 6.9 (bewusst verschoben / fallen gelassen):**
+- **Benannte Collections** mit eigener Reihenfolge/Notiz — freie Tags decken die
+  Nutzergeschichte; eine zweite Entität nur bei echtem Bedarf (Post-Phase-6).
+- **`ETag` / `If-None-Match`** beim Cache-Refresh — 6.1 hatte es als 6.9-Thema
+  vermerkt; der 5-Minuten-TTL-Cache + der Rate-Limit-Backoff reichen für die
+  Anon-Limits. Ein bedingter Refresh spart nur Bandbreite, kein Rate-Budget
+  (der Call zählt so oder so).
+- **Token live anwenden** — wie `[llama]` / `[models]` erst nach Neustart
+  (`HuggingFaceSource` bekommt den Token bei Konstruktion).
+
+---
+
+## Phase 6 — abgeschlossen
+
+Alle Scheiben 6.0 – 6.9 ✅. Aus dem manuellen „Datei-Pfad eintippen" ist ein
+Model-Manager geworden: **suchen** (HF-Hub, offline-cached), **verifiziert
+laden** (Download-Manager, SHA-256 aus `lfs.oid`, Range-Resume, Free-Space-Gate),
+**lokal messen** (`core::bench` — tok/s / Ladezeit / VRAM-Peak / Stabilität),
+**benchmark-gestützt auto-wählen** (`core::select`), **Upgrade-Check** („gibt es
+was Besseres?", LLM-Re-Ranking über fit-gefilterte HF-Treffer), **aufräumen**
+(Storage-Report, Dedup, Unused, `delete_model`), **taggen + Verlauf**. Alles
+offline-first (ADR-009), loopback-only (ADR-008), Downloads SHA-256-verifiziert.
+ADRs 022 – 025.
+
+**Test-Bilanz Phase 6:** von ~300 Lib / 44 integ (Ende Phase 5) auf **371 Lib /
+57 integ / 5 pytest**.
+
+**Offen nach Phase 6** (unverändert): **4.0** (echtes ComfyUI auf der 4080 —
+kalibriert auch die 6.3/6.5-Estimator-Konstanten), der manuelle Agent-Smoke
+(echtes opencode + hermes mit einem Coding-GGUF), Phase 5.5c-Politur.

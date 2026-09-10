@@ -219,6 +219,32 @@ async fn storage_report(
 }
 
 #[tauri::command]
+async fn model_tags(
+    app: tauri::State<'_, Arc<App>>,
+) -> Result<std::collections::BTreeMap<String, Vec<String>>, String> {
+    to_ipc(handlers::model_tags(&app).await)
+}
+
+#[tauri::command]
+async fn set_model_tags(
+    app: tauri::State<'_, Arc<App>>,
+    id: String,
+    tags: Vec<String>,
+) -> Result<Vec<String>, String> {
+    to_ipc(handlers::set_model_tags(&app, &id, &tags).await)
+}
+
+#[tauri::command]
+fn registry_status(app: tauri::State<'_, Arc<App>>) -> aiwm_core::RegistryStatus {
+    handlers::registry_status(&app)
+}
+
+#[tauri::command]
+fn set_hf_token(app: tauri::State<'_, Arc<App>>, token: String) -> Result<(), String> {
+    to_ipc(handlers::set_hf_token(&app, &token))
+}
+
+#[tauri::command]
 async fn delete_model(
     app: tauri::State<'_, Arc<App>>,
     id: String,
@@ -352,6 +378,10 @@ fn try_run() -> anyhow::Result<()> {
             upgrade_check,
             storage_report,
             delete_model,
+            model_tags,
+            set_model_tags,
+            registry_status,
+            set_hf_token,
             install_llamacpp,
             install_comfyui,
             install_hermes,

@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   enqueueDownload,
   registryModel,
@@ -11,6 +11,27 @@ import {
   type RemoteModel,
 } from "../../lib/ipc";
 import { useRegistrySearch } from "../../lib/hooks";
+
+const RECENT_KEY = "aiwm.discover.recent";
+
+function loadRecent(): string[] {
+  try {
+    const v = JSON.parse(localStorage.getItem(RECENT_KEY) ?? "[]");
+    return Array.isArray(v) ? v.slice(0, 6).map(String) : [];
+  } catch {
+    return [];
+  }
+}
+
+function pushRecent(term: string): string[] {
+  const next = [term, ...loadRecent().filter((t) => t !== term)].slice(0, 6);
+  try {
+    localStorage.setItem(RECENT_KEY, JSON.stringify(next));
+  } catch {
+    /* private window — the list is a convenience */
+  }
+  return next;
+}
 
 /** `RemoteModel.format` → the `import_model` type (a first guess; the user can
  *  change the role on the Models table afterwards). */
@@ -69,6 +90,13 @@ export function Discover({ onUseType }: { onUseType: (t: ModelType) => void }) {
   const { result, error, loading } = useRegistrySearch(query, enabled);
   const note = result ? freshnessNote(result.freshness) : null;
 
+  const [recent, setRecent] = useState<string[]>(loadRecent);
+  useEffect(() => {
+    if (enabled && result && result.data.length > 0) {
+      setRecent(pushRecent(trimmed));
+    }
+  }, [enabled, result, trimmed]);
+
   return (
     <section className="card card--wide">
       <header className="card__head">
@@ -97,6 +125,17 @@ export function Discover({ onUseType }: { onUseType: (t: ModelType) => void }) {
           ))}
         </select>
       </div>
+
+      {!enabled && recent.length > 0 && (
+        <div className="discover__recent">
+          <span className="muted">recent:</span>
+          {recent.map((t) => (
+            <button key={t} type="button" className="chip" onClick={() => setText(t)}>
+              {t}
+            </button>
+          ))}
+        </div>
+      )}
 
       {!enabled && <p className="muted">Type at least two characters to search.</p>}
       {enabled && loading && !result && <p className="muted">Searching…</p>}

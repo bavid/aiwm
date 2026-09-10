@@ -246,21 +246,26 @@ hierher, damit nichts verloren geht.
 - 5.5c (vertagt, Post-MVP-Politur): Kontext-Kompaktierung anzeigen, „Agent
   pausieren?"-Fluss (R8), Diagnostics-Zeile pro Agent.
 
-## Vor Phase 6 (Model-Manager v2)
-Scheibenplan + Research + offene Entscheidungen A–I: [PHASE_6_PLAN.md](PHASE_6_PLAN.md).
-Die Spike-Punkte unten sind jetzt **Scheibe 6.0** (Voraussetzung).
-- 6.0-Spike: HF-Hub-API (`/api/models`, `expand[]`, `/tree?recursive=true` →
-  `lfs.oid` = SHA-256), Ollama-Library (kein Such-API), **Benchmark-Datenquelle
-  festlegen** (HF Open LLM Leaderboard eingestellt), Quant-Erkennung → Ergebnisse
-  in RUNTIMES.md / MODELS.md / BENCHMARKS.md, ADR-022 / ADR-024
-- Kompatibilitäts-/VRAM-Estimator: `.safetensors`-Header + Kalibrierung gegen
-  echte Messungen → Scheibe 6.3 ✅ (ADR-016-Zusatz); Download-Manager → 6.4 ✅
-  (ADR-023)
-- Quality-Score-Gewichtung: lokale Mikro-Benchmarks (6.5) + optionaler externer
-  Score, klar als Heuristik gekennzeichnet
-- Upgrade-Check → Scheibe 6.7 (Design-Fragen im Plan: Rolle→HF-Filter-Mapping,
-  strukturierter LLM-Prompt mit ID-Validierung, Fit-Filter vor der Bewertung,
-  Consent-/Offline-Gate)
+## Phase 6 (Model-Manager v2) — ✅ abgeschlossen (Scheiben 6.0–6.9)
+Scheibenplan + Research + Ergebnisse: [PHASE_6_PLAN.md](PHASE_6_PLAN.md).
+ADRs 022–025. 371 Lib / 57 integ / 5 pytest.
+- ~~6.0-Spike~~ ✅ (ADR-022 / ADR-024) · ~~6.1 `core::registry`~~ ✅ ·
+  ~~6.2 Discovery-UI~~ ✅ · ~~6.3 Kompat-Engine v2~~ ✅ (ADR-016-Zusatz) ·
+  ~~6.4 Download-Manager~~ ✅ (ADR-023) · ~~6.5 `core::bench`~~ ✅ ·
+  ~~6.6 benchmark-gestützte Auto-Auswahl~~ ✅ · ~~6.7 Upgrade-Check~~ ✅ (ADR-025) ·
+  ~~6.8 Aufräum-Reports~~ ✅ · ~~6.9 Tags + Discovery-Verlauf + Rate-Limit-Backoff
+  + `HF_TOKEN` + Registry-Diagnostics~~ ✅
+- **Offen aus 6.9 (bewusst verschoben / fallen gelassen):**
+  - Benannte Modell-Collections mit Reihenfolge/Notiz — freie Tags decken die
+    Nutzergeschichte; nur bei echtem Bedarf (`model_collections`-Entität +
+    eigene CRUD-Oberfläche)
+  - `ETag`/`If-None-Match` beim Registry-Cache-Refresh — verworfen: `304` spart
+    nur Bandbreite, nicht das Rate-Budget (der Call zählt so oder so)
+  - `HF_TOKEN` live anwenden statt neustart-pflichtig (wie `[llama]`/`[models]`)
+- **Bleibt für Phase 6 / 4.0:** die 6.3/6.5-Estimator-Konstanten
+  (`RUNTIME_OVERHEAD_MB`, `KV_ROUGH_MB_PER_1K_CTX`, `SPEED_REF_TPS`,
+  `media_headroom_mb`) gegen echte `nvidia-smi`-Peaks kalibrieren →
+  [HARDWARE.md](HARDWARE.md), zusammen mit dem 4.0-ComfyUI-Smoke
 
 ## Offen / später zu entscheiden
 - App-Selbst-Update offline (manueller Installer + Signaturprüfung angenommen)

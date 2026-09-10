@@ -271,6 +271,29 @@ export const storageReport = () => invoke<StorageReport>("storage_report");
  *  the model is loaded. */
 export const deleteModel = (id: string) => invoke<DeleteOutcome>("delete_model", { id });
 
+// --- tags & registry status (Phase 6.9) -------------------------------
+
+/** `model_id -> [tags]` for every tagged model. */
+export const modelTags = () => invoke<Record<string, string[]>>("model_tags");
+/** Replace one model's tags; returns the cleaned set. */
+export const setModelTags = (id: string, tags: string[]) =>
+  invoke<string[]>("set_model_tags", { id, tags });
+
+/** The registry health line for Diagnostics (`GET /registry/status`). */
+export interface RegistryStatus {
+  source_id: string;
+  last_fetch: string | null;
+  rate_limit_remaining: number | null;
+  /** Seconds until the rate-limit window clears — set only while limited. */
+  rate_limited_secs: number | null;
+  token_set: boolean;
+  cache_entries: number;
+}
+export const registryStatus = () => invoke<RegistryStatus>("registry_status");
+/** Set (blank clears) the Hugging Face token — a machine-local file, never in
+ *  a backup. Takes effect on the next restart. */
+export const setHfToken = (token: string) => invoke<void>("set_hf_token", { token });
+
 /** One entry of the curated image-model catalogue (`GET /models/known`). */
 export interface KnownModel {
   id: string;

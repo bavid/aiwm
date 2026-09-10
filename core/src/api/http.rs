@@ -12,7 +12,8 @@ use axum::{Json, Router};
 use serde::Deserialize;
 
 use super::dto::{
-    AgentMessageDto, AgentPermissionDto, NewAgentDto, OpenAgentSessionDto, SubmitJobDto,
+    AgentMessageDto, AgentPermissionDto, NewAgentDto, OpenAgentSessionDto, SetTagsDto, SetTokenDto,
+    SubmitJobDto,
 };
 use super::handlers;
 use crate::db::JobFilter;
@@ -35,6 +36,10 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/models", get(list_models).post(import_model))
         .route("/models/known", get(known_models))
         .route("/models/{id}", axum::routing::delete(delete_model))
+        .route("/models/tags", get(model_tags))
+        .route("/models/{id}/tags", put(set_model_tags))
+        .route("/registry/status", get(registry_status))
+        .route("/registry/token", put(set_hf_token))
         .route("/storage", get(storage_report))
         .route("/models/{id}/benchmark", post(benchmark_model))
         .route("/models/{id}/benchmarks", get(model_benchmarks))
@@ -230,6 +235,32 @@ async fn storage_report(
     State(app): AppState,
 ) -> Result<Json<crate::cleanup::StorageReport>, ApiError> {
     Ok(Json(handlers::storage_report(&app).await?))
+}
+
+async fn model_tags(
+    State(app): AppState,
+) -> Result<Json<std::collections::BTreeMap<String, Vec<String>>>, ApiError> {
+    Ok(Json(handlers::model_tags(&app).await?))
+}
+
+async fn set_model_tags(
+    State(app): AppState,
+    Path(id): Path<String>,
+    Json(body): Json<SetTagsDto>,
+) -> Result<Json<Vec<String>>, ApiError> {
+    Ok(Json(handlers::set_model_tags(&app, &id, &body.tags).await?))
+}
+
+async fn registry_status(State(app): AppState) -> Json<crate::registry::RegistryStatus> {
+    Json(handlers::registry_status(&app))
+}
+
+async fn set_hf_token(
+    State(app): AppState,
+    Json(body): Json<SetTokenDto>,
+) -> Result<StatusCode, ApiError> {
+    handlers::set_hf_token(&app, &body.token)?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn delete_model(

@@ -167,6 +167,44 @@ pub async fn list_models(app: &App) -> Result<Vec<Model>> {
     app.db.models().list().await
 }
 
+// --- tags & registry status (Phase 6.9) --------------------------------------
+
+/// `model_id -> [tags]` for every tagged model.
+pub async fn model_tags(app: &App) -> Result<BTreeMap<String, Vec<String>>> {
+    app.db.models().all_tags().await
+}
+
+/// Replace one model's tags; returns the cleaned set.
+pub async fn set_model_tags(app: &App, id: &str, tags: &[String]) -> Result<Vec<String>> {
+    if app.db.models().get(id).await?.is_none() {
+        return Err(CoreError::Config(format!(
+            "model {id} is not in the library"
+        )));
+    }
+    app.db.models().set_tags(id, tags).await
+}
+
+/// The registry health line (last fetch, cache size, rate-limit, token).
+pub fn registry_status(app: &App) -> crate::registry::RegistryStatus {
+    app.registry.status()
+}
+
+/// Write (or clear, when blank) the Hugging Face token. Takes effect on the
+/// next restart. The token lives in a machine-local file, never a backup.
+pub fn set_hf_token(app: &App, token: &str) -> Result<()> {
+    let path = app.paths.hf_token_file();
+    let token = token.trim();
+    if token.is_empty() {
+        let _ = std::fs::remove_file(&path);
+        return Ok(());
+    }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| CoreError::Config(format!("create {}: {e}", parent.display())))?;
+    }
+    std::fs::write(&path, token).map_err(|e| CoreError::Config(format!("write hf token: {e}")))
+}
+
 /// Storage overview + the "safe to delete" reports (Phase 6.8).
 pub async fn storage_report(app: &App) -> Result<crate::cleanup::StorageReport> {
     let models = app.db.models().list().await?;

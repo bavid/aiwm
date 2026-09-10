@@ -813,6 +813,24 @@ reicht anonym, wie sieht der Offline-Fallback aus.
   nicht nackte Popularität.
 - (−) Ollama-Dedup (R4) bleibt Anzeige-only (Manifest nicht junction-bar).
 
+**Nachtrag (Slice 6.9 — Rate-Limit-Backoff + Token-Ablage):**
+- **`HF_TOKEN` liegt in `<local_root>/hf_token.txt`, *nicht* in `[models]`-Config.**
+  Der Plan (oben) hatte die `[models]`-Tabelle angedacht — verworfen, weil
+  `core::backup::export` `config.toml` mit-snapshottet und der Token nach ADR-022
+  **nie in einem Backup** landen darf. `local_root` wird vom Backup nicht
+  angefasst. `App::load` liest die Datei in `HuggingFaceSource::with_token`;
+  `PUT /registry/token` schreibt sie (leer = löschen), aktiv erst nach Neustart.
+- **Rate-Limit-Backoff umgesetzt:** `HuggingFaceSource` hält einen
+  `Mutex<HubState>` (`last_fetch`, `RateLimit-Remaining`, `limited_until`-Unix).
+  `get_json` parst den IETF-Draft-Header `RateLimit: r=…;t=…` **plus**
+  `Retry-After`, **fail-fast solange ein bekanntes Fenster läuft** (kein
+  verschwendeter Call), `429` → Fenster aus dem Reset-Hinweis (sonst `90 s`).
+- **`ETag`/`If-None-Match` verworfen.** Ein `304` spart nur Bandbreite — der
+  Call zählt trotzdem gegen das Rate-Budget. Der 5-Minuten-TTL-Cache +
+  Backoff reichen für die Anon-Limits.
+- **`RegistryStatus`** (`GET /registry/status`) legt letzten Fetch, Cache-Größe,
+  Rate-Limit-Rest und `token_set` in der Diagnostics-„Model registry"-Karte offen.
+
 ---
 
 ## ADR-023 — Download-Manager: eine Queue, Range-Resume, Verify → `import_model`
