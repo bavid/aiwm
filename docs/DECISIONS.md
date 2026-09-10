@@ -704,7 +704,9 @@ auf der echten Maschine verprobt (`node` 24, `uv` 0.12, Git-Bash, `wsl` da).
 
 ## ADR-022 — Model-Discovery: `core::registry`, Hugging Face Hub als primäre Quelle
 
-**Status:** Entschieden — Slice 6.0 (Registry-Spike, echte API-Calls 2026-09).
+**Status:** Entschieden — Slice 6.0 (Registry-Spike, echte API-Calls 2026-09);
+in Slice 6.1 als `core::registry` umgesetzt (Trait + `HuggingFaceSource` +
+`Registry`-Cache-Wrapper, gegen `aiwm-fake-hfhub` + einen `#[ignore]`-Live-Test).
 
 **Kontext:** Phase 6 braucht Online-Modell-Suche. Der Brief (10.6/10.17) will
 „One-Click" für beliebige Quellen; ANALYSIS rahmt das auf kuratierte Quellen +
@@ -750,6 +752,11 @@ reicht anonym, wie sieht der Offline-Fallback aus.
   **`HuggingFaceSource` als einziger MVP-Implementierung**. Ollama-Library als
   späterer best-effort-Adapter hinter derselben Schnittstelle (HTML-Scrape,
   niedrige Priorität).
+- **Nativer Rust-`reqwest`-Client, kein Python-Sidecar.** Der Plan-Entwurf
+  (ARCHITECTURE §3.3) nannte `huggingface_hub` im Sidecar — verworfen: die API
+  ist anonym, sind einfache GETs, und `lfs.oid` liefert den Verify-Hash direkt.
+  Ein Sidecar-Roundtrip für drei GETs lohnt nicht. `runtime::download`
+  (`download_verified`, `hex`) wird ohnehin nativ wiederverwendet.
 - **Anonym per Default**; optionales `HF_TOKEN` (`[models]`-Config / Settings)
   nur für Gated-Repos / höhere Limits. **Nie Pflicht, nie im Backup-Export.**
 - **SHA-256 = `lfs.oid`**, immer aus `/tree?recursive=true` geholt und an

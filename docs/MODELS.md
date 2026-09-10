@@ -86,8 +86,8 @@ Kandidaten + Import + Smoke: [AGENT_MODELS.md](AGENT_MODELS.md). Noch nicht im
 | Kanonischer Store + Link-Manager | ✅ Store 2.1 · `core::link` 2.3 (Passthrough/Junction/Hardlink/Copy, `model_links`, ADR-007) · `ExtraPath` 3.3 (ADR-019). GGUF → llama.cpp = `passthrough`; Bild → ComfyUI = `extra_path` |
 | VRAM-Fit-Schätzung vor dem Load (`core::compat`) | ✅ 2.6 (ADR-016): Gewichte + KV-Cache aus GGUF-Arch-Dims + flacher Overhead, geschätzt für `min(ctx_max, 8192)`; Scheduler plant dagegen; passt es nicht → `blocked` mit Klartext. Kalibrierung → Phase 6 |
 | Kuratierter „Known models"-Katalog (SHA-256, HF-Quelle, Lizenz) | ✅ 3.6 (`core::model::catalog`, `GET /models/known`); Auto-Download → Phase 6 |
-| Online-Discovery (HF Hub, Ollama-Library) | Phase 6 |
-| Download-Manager (Queue, Resume, Verify, Speicherplan) | Phase 6 |
+| Online-Discovery (HF Hub, Ollama-Library) | 🔨 6.1: `core::registry` (`ModelSource` + `HuggingFaceSource`, nativer `reqwest`-Client, TTL-Cache + `Freshness`) fertig; API/UI = 6.2, Ollama später |
+| Download-Manager (Queue, Resume, Verify, Speicherplan) | Phase 6 (6.4) |
 | Kompatibilitäts-Engine (🟢/🟡/🔴 vor Download) | Phase 6 (baut auf `core::compat` auf) |
 | Dedup-/Unused-/Versions-Reports | Phase 6 |
 | Benchmark-gestützte Auto-Auswahl | Phase 6 (braucht [BENCHMARKS.md](BENCHMARKS.md)) |

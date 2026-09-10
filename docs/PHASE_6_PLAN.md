@@ -37,7 +37,7 @@ den letzten Cache + „offline" statt Fehler.
 | Scheibe | Inhalt | Status |
 |---|---|---|
 | **6.0** | **Registry-/Benchmark-Spike** (Voraussetzung, wie 5.0 / 4.0, **kein Feature-Code**): HF-Hub-API real testen, Ollama-Library prüfen, Benchmark-Datenquelle festlegen. Ergebnisse in `MODELS.md` / `RUNTIMES.md` / `BENCHMARKS.md`, **ADR-022** (Registry) + **ADR-024** (Score-Heuristik). Schließt R9 / R10 / „Zu untersuchen vor Phase 6". | ✅ *(siehe „## 6.0 — Ergebnis")* |
-| **6.1** | **`core::registry` — HF-Hub-Quellen-Adapter** (read-only, gegen ein Fixture): `ModelSource`-Trait (`search(query, filters) -> Vec<RemoteModel>`, `details(id) -> RemoteModelDetails`) + `HuggingFaceSource`. `RemoteModelDetails` = Params, `ctx_max`, Architektur, Lizenz, Gated-Flag, Downloads/Likes/`lastModified`/`createdAt` + die Quant-Dateien mit Größe **und SHA-256 aus `lfs.oid`** (kein Download nötig). TTL-Cache als JSON unter `<data>/cache/registry/`, damit `search`/`details` offline den letzten Stand + „stale"-Marker liefern. `offline_mode` → harte Ablehnung. `aiwm-fake-hfhub`-Fixture + Integrationstest. | offen |
+| **6.1** | **`core::registry` — HF-Hub-Quellen-Adapter** (read-only, gegen ein Fixture): `ModelSource`-Trait + `HuggingFaceSource`, `Registry`-Wrapper mit TTL-JSON-Cache (`<data>/cache/registry/`) + `Freshness` (Live/Stale/Offline). SHA-256 aus `lfs.oid`. `aiwm-fake-hfhub`-Fixture + Integrationstest + `#[ignore]`-Live-Test. | ✅ *(siehe „## 6.1 — Ergebnis")* |
 | **6.2** | **Discovery-UI** (`ui/src/features/models/` erweitert): „Discover"-Panel im Models-Tab — Suchfeld, Filter nach Rolle/Capability + „passt in mein VRAM-Budget", Ergebnis-Karten (Name, Params, Downloads, Lizenz, `🟢/🟡/🔴`-Fit via `core::compat`, Quant-Dropdown mit Größen). Aktion vorerst nur „Copy link" + „Set import type" (Auto-Download = 6.4). `useRegistrySearch` (debounced), dev-mock. | offen |
 | **6.3** | **Kompatibilitäts-Engine v2** (`core::compat` erweitert — verlängert ADR-016): `.safetensors`-Header-Inspektion (Arch/Precision — der seit 3.3 vertagte TODO), Diffusions-/Video-Modell-VRAM-Heuristik statt der Datei-Namens-`+2,5 GB`-Faustregel, `FitVerdict { Green, Yellow(grund), Red(grund) }` das Gewichte + KV/Aktivierungen + Overhead gegen `vram_budget_mb` **und** freien System-RAM prüft. Flat-Overhead gegen echte `HARDWARE.md`-Messungen kalibrieren (R3). Genutzt von Discovery + Upgrade-Check + dem bestehenden Job-Preflight. | offen |
 | **6.4** | **Download-Manager** (`core::download` erweitert — ADR-023): `downloads`-Tabelle (Migration `0006`: id, url, dest, sha256, size, bytes_done, state {queued\|running\|paused\|verifying\|done\|failed}), Queue mit einem aktiven Slot, **Resume über HTTP-Range**, Verify gegen die erwartete SHA-256 (aus 6.1), dann Übergabe an `import_model`. `GET/POST /downloads`, `POST /downloads/{id}/{pause,resume,cancel}`, Fortschritts-Events (`job_events`-Muster). `offline_mode` → Ablehnung. UI: „Download & import"-Knopf auf den Discovery-Karten + eine Downloads-Liste. Speicherplanung: freier Platz auf dem Store-Volume vs. Download-Größe, Klartext-Warnung. | offen |
@@ -260,3 +260,57 @@ Entscheidungen, verfeinert B (→ ADR-024). Details in DECISIONS.md.
   `sort=lastModified`/`likes7d` + `expand[]`), dann Fit-Filter, dann LLM-Ranking.
   **Spam-Filter nötig** (R9): Autor-Allowlist / `base_model`-Lineage gewichten,
   nicht nackte `trendingScore`.
+
+---
+
+## 6.1 — Ergebnis (abgeschlossen) · **ADR-022**
+
+`core::registry` — der HF-Hub-Quellen-Adapter, nur der Adapter + der Cache-
+Wrapper (API/UI = 6.2). **Nativer `reqwest`-Client, kein Sidecar** — der
+Plan-Entwurf hatte `huggingface_hub` im Python-Sidecar angedacht (ARCHITECTURE
+§3.3); die 6.0-Befunde (anonym, einfache GETs, `lfs.oid` gratis) machen einen
+Rust-Client klar einfacher. ADR-022 hält das fest.
+
+- **`registry/mod.rs`** — `ModelSource`-Trait (`search(&SearchQuery)` /
+  `details(&str)`), die Typen (`RemoteModel` mit Params/`ctx_max`/Arch/Lizenz/
+  `base_model`/Gated/Precision/Format, `RemoteFile` mit `size` + `sha256` +
+  `quant` + `shard`, `RemoteModelDetails`), `SearchQuery`
+  (`text` / `base_model` / `gguf_only` / `sort` / `limit`), `SearchSort`
+  (Downloads/Likes/Trending=`likes7d`/RecentlyUpdated/RecentlyCreated).
+  **`Registry`** = `Box<dyn ModelSource>` + Cache + `Arc<AtomicBool>` offline:
+  `offline` → Cache oder Klartext-Ablehnung; online → Quelle, bei Transport-
+  Fehler Fallback auf den Cache als `Freshness::Stale`, bei Erfolg
+  Write-Through. `Fetched<T> { data, freshness }`, `Freshness`
+  `Live | Stale{age_secs} | Offline{age_secs}`.
+- **`registry/huggingface.rs`** — `HuggingFaceSource::{new, with_base_url,
+  with_token}`. `search` baut **einen** `GET /api/models`-Call mit
+  `expand[]=gguf,safetensors,gated,downloadsAllTime,lastModified,createdAt,
+  trendingScore,cardData` + optional `search=` / `filter=gguf` /
+  `filter=base_model:<id>`. `details` = `GET /api/models/{id}?expand[]=…` +
+  `GET /api/models/{id}/tree/main?recursive=true`. `429` → Klartext-Fehler.
+  Pure, einzeln getestete Parser: `parse_model` (Tags → `license:` /
+  `base_model:` [bevorzugt die blanke Form, ignoriert `quantized:` etc.],
+  `downloadsAllTime` vor `downloads`), `parse_tree` (**`sha256` nur aus
+  `lfs.oid`, 64-hex-validiert — nie `oid` oder `xetHash`**),
+  `quant_from_filename` (`Q4_K_M` / `IQ4_XS` / `F16` / `FP8`, Shard-Suffix
+  vorher abgeschnitten), `shard_from_filename` (`-00001-of-00003` → `(1,3)`),
+  `safetensors_precision` (dominanter DTYPE-Key), `gated_of`.
+- **`registry/cache.rs`** — ein JSON-Envelope (`{stored_at, value}`) pro
+  SHA-256-Schlüssel unter dem Cache-Ordner, atomarer temp+rename-Write. Jede
+  Operation best-effort: Miss / korrupte Datei / nicht anlegbarer Ordner →
+  „kein Cache", nie ein Fehler.
+- **`AppPaths::cache_dir()`** = `<local_root>/cache` (wegwerfbar, nie geroamt,
+  nie im Backup).
+- **`bin/aiwm-fake-hfhub`** — axum-Fixture, zwei kanonische Repos (ein GGUF-
+  Quant-Repo + sein Basismodell), honoriert `search` / `filter` / `limit`.
+- **Tests:** 15 Unit (Parser, Cache, `Registry`-Fetch/Offline/Stale gegen eine
+  `FakeSource`) + **5 Integration** (`core/tests/registry.rs`, echter
+  Kindprozess + Loopback-HTTP: `search` parst die `expand[]`-Felder,
+  `filter=base_model:` findet die Quant-Re-Uploads, `details` listet Dateien
+  mit SHA-256 aus `lfs.oid` + Quant + Shard, `Registry` serviert den Cache
+  offline, tote Quelle → `Stale`) + **1 `#[ignore]`-Live-Test** gegen das echte
+  `huggingface.co` (lief einmal grün — der Parser passt zur echten API).
+  **316 Lib + `registry.rs`** (5 + 1 ignored). `check.ps1` grün.
+- Noch **nicht** an `App` / API / Tauri / UI verdrahtet — das ist 6.2.
+  `HF_TOKEN` aus der Config, `ETag`/`If-None-Match` beim Refresh und der
+  `RateLimit`-Header-Backoff kommen mit 6.9.

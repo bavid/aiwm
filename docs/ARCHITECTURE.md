@@ -167,14 +167,20 @@ Der **Link-Manager** entscheidet pro (Modell, Runtime):
 | ComfyUI | Junction in `models/checkpoints` etc. |
 | Ollama | `ollama create` aus GGUF → **Kopie** in Ollama-Blob-Store (unvermeidbar); im Dedup-Report sichtbar |
 
-### 3.3 Discovery / Download (NICHT im MVP)
+### 3.3 Discovery / Download (Phase 6 — Model-Manager v2)
 
-Ab Phase „Model Manager v2":
+Plan: [PHASE_6_PLAN.md](PHASE_6_PLAN.md). Umgesetzt:
 
-- **Quellen-Adapter:** `HuggingFaceSource` (via `huggingface_hub` im Sidecar),
-  `OllamaLibrarySource`. GitHub/andere später.
-- **Download-Manager** im Rust-Core: Queue, Pause/Resume (HTTP Range), Retry,
-  SHA256-Verify, Speicherplatz-Check *vor* Start.
+- **6.1 ✅ Quellen-Adapter:** `core::registry::ModelSource`-Trait +
+  `HuggingFaceSource` — **nativer Rust-`reqwest`-Client**, kein Sidecar
+  (`huggingface_hub` verworfen, ADR-022). `search` / `details` gegen die
+  HF-Hub-Read-API (`expand[]` auch auf `/api/models`, `filter=base_model:`,
+  `/tree?recursive=true` → SHA-256 aus `lfs.oid`). `Registry` legt einen
+  wegwerfbaren TTL-JSON-Cache unter `<data>/cache/registry/` an → `Freshness`
+  `Live` / `Stale` (Quelle tot) / `Offline` (`offline_mode`). `OllamaLibrarySource`
+  später (best-effort, kein HF-Such-API-Äquivalent).
+- **6.4 Download-Manager** im Rust-Core: Queue, Pause/Resume (HTTP Range), Retry,
+  SHA256-Verify (Hash aus 6.1 bekannt), Speicherplatz-Check *vor* Start.
 - **Kompatibilitäts-Engine:** VRAM-Schätzung aus Parametern + Quant + Kontext +
   KV-Cache-Modell; Ergebnis 🟢/🟡/🔴 mit Begründung. Rein heuristisch, klar so
   benannt.

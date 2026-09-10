@@ -198,8 +198,10 @@ suchen, verifiziert laden, lokal messen, Upgrade-Check. Alles offline-first
   5 min reichen, Gated durchsuchbar. Ollama = kein Such-API. **HF Open LLM
   Leaderboard abgeschaltet** → kein gebündeltes externes Leaderboard, nur lokale
   Mikro-Benchmarks. Schließt R9 / R10
-- 6.1 **`core::registry`** — HF-Hub-Quellen-Adapter (`ModelSource`-Trait), TTL-
-  Cache für Offline, SHA-256 vorab aus `lfs.oid`
+- [x] 6.1 **`core::registry`** — `ModelSource`-Trait + `HuggingFaceSource`
+  (nativer `reqwest`-Client, kein Sidecar — ADR-022), `Registry`-Wrapper mit
+  wegwerfbarem TTL-JSON-Cache + `Freshness` (Live/Stale/Offline), SHA-256 aus
+  `lfs.oid`. `aiwm-fake-hfhub` + `#[ignore]`-Live-Test
 - 6.2 **Discovery-UI** — Suche + Filter + Fit-Ampel im Models-Tab
 - 6.3 **Kompatibilitäts-Engine v2** — `.safetensors`-Header, `FitVerdict`
   🟢/🟡/🔴, Overhead gegen echte Messungen kalibriert (verlängert ADR-016)

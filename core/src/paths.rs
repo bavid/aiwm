@@ -99,6 +99,12 @@ impl AppPaths {
         self.local_root.join("outputs")
     }
 
+    /// Disposable machine-local caches (the registry index cache, 6.1). Safe to
+    /// delete at any time; never roamed, never backed up.
+    pub fn cache_dir(&self) -> PathBuf {
+        self.local_root.join("cache")
+    }
+
     /// Where `POST /export` writes backup archives (roamed — small).
     pub fn exports_dir(&self) -> PathBuf {
         self.root.join("exports")

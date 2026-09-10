@@ -19,6 +19,7 @@
 //! - [`capability`]   — capability-specific job bodies (chat 2.4, image 3.4, video 4.1)
 //! - [`agent`]        — `AgentAdapter` trait + types for the OpenCode/Hermes runtimes (5.1)
 //! - [`pipeline`]     — fixed image workflow-JSON templates (3.4)
+//! - [`registry`]     — online model discovery: `ModelSource` + Hugging Face (6.1)
 //! - [`compat`]        — VRAM / KV-cache fit estimate before a model load (2.6)
 //! - [`link`]         — canonical model file ↔ runtime layout (junction/copy, 2.3)
 //! - [`scheduler`]    — `Scheduler` trait + hybrid scheduler skeleton (WP-5)
@@ -40,6 +41,7 @@ pub mod model;
 pub mod orchestrator;
 pub mod paths;
 pub mod pipeline;
+pub mod registry;
 pub mod runtime;
 pub mod scheduler;
 pub mod sidecar;
@@ -60,6 +62,10 @@ pub use link::LinkStrategy;
 pub use model::{import_model, GgufInfo, ImportOutcome, ImportRequest};
 pub use orchestrator::{JobEngine, JobOutcome, JobState};
 pub use paths::AppPaths;
+pub use registry::{
+    Fetched, Freshness, Gated, HuggingFaceSource, ModelSource, Registry, RemoteFile, RemoteFormat,
+    RemoteModel, RemoteModelDetails, SearchQuery, SearchSort,
+};
 pub use runtime::{
     ComfyUiAdapter, Health, LlamaCppAdapter, LlamaServerOptions, RuntimeAdapter, RuntimeKind,
     RuntimeRegistry, RuntimeSupervisor, SpawnSpec,
