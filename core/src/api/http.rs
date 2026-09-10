@@ -34,6 +34,9 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/jobs/{id}/output", get(job_output))
         .route("/models", get(list_models).post(import_model))
         .route("/models/known", get(known_models))
+        .route("/models/{id}/benchmark", post(benchmark_model))
+        .route("/models/{id}/benchmarks", get(model_benchmarks))
+        .route("/benchmarks", get(latest_benchmarks))
         .route("/runtimes", get(runtimes))
         .route("/runtimes/llamacpp/install", post(install_llamacpp))
         .route("/runtimes/comfyui/install", post(install_comfyui))
@@ -218,6 +221,29 @@ async fn list_models(State(app): AppState) -> Result<Json<Vec<crate::db::Model>>
 
 async fn known_models(State(app): AppState) -> Json<&'static [crate::model::KnownModel]> {
     Json(handlers::known_models(&app))
+}
+
+async fn latest_benchmarks(
+    State(app): AppState,
+) -> Result<Json<Vec<crate::db::Benchmark>>, ApiError> {
+    Ok(Json(handlers::latest_benchmarks(&app).await?))
+}
+
+async fn model_benchmarks(
+    State(app): AppState,
+    Path(id): Path<String>,
+) -> Result<Json<Vec<crate::db::Benchmark>>, ApiError> {
+    Ok(Json(handlers::model_benchmarks(&app, &id).await?))
+}
+
+async fn benchmark_model(
+    State(app): AppState,
+    Path(id): Path<String>,
+) -> Result<(StatusCode, Json<crate::db::Job>), ApiError> {
+    Ok((
+        StatusCode::CREATED,
+        Json(handlers::benchmark_model(&app, &id).await?),
+    ))
 }
 
 async fn import_model(

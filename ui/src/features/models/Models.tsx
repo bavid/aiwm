@@ -1,6 +1,14 @@
 import { useState } from "react";
-import { useKnownModels, useModels } from "../../lib/hooks";
-import { importModel, type KnownModel, type Model, type ModelType } from "../../lib/ipc";
+import { useBenchmarks, useJobs, useKnownModels, useModels } from "../../lib/hooks";
+import {
+  benchmarkModel,
+  importModel,
+  type Benchmark,
+  type Job,
+  type KnownModel,
+  type Model,
+  type ModelType,
+} from "../../lib/ipc";
 import { Discover } from "./Discover";
 import { Downloads } from "./Downloads";
 import "./models.css";
@@ -23,6 +31,23 @@ const params = (n: number | null) =>
   n == null ? "—" : n >= 1e9 ? `${(n / 1e9).toFixed(1)} B` : `${(n / 1e6).toFixed(0)} M`;
 const ctx = (n: number | null) => (n == null ? "—" : n >= 1024 ? `${Math.round(n / 1024)}K` : `${n}`);
 
+/** Not-yet-finished job states — a `bench` job in one of these means "testing". */
+const ACTIVE_JOB = new Set(["queued", "scheduled", "blocked", "preparing", "running", "post"]);
+
+const scoreBand = (score: number) =>
+  score >= 70 ? "ok" : score >= 40 ? "warn" : "crit";
+
+function scoreTitle(b: Benchmark): string {
+  const bits = [
+    b.gen_tps != null && `${b.gen_tps.toFixed(1)} tok/s generation`,
+    b.prompt_tps != null && `${b.prompt_tps.toFixed(0)} tok/s prompt`,
+    b.load_ms != null && `${(b.load_ms / 1000).toFixed(1)} s load`,
+    b.vram_peak_mb != null && `${(b.vram_peak_mb / 1024).toFixed(1)} GB VRAM peak`,
+    `stability ${(b.stability_score * 100).toFixed(0)}%`,
+  ].filter(Boolean);
+  return `Heuristic score (speed + fit + stability — not a quality score)\n${bits.join(" · ")}`;
+}
+
 export function Models() {
   const { data: models, error, refetch } = useModels();
   const [modelType, setModelType] = useState<ModelType>("chat");
@@ -31,53 +56,7 @@ export function Models() {
     <div className="models">
       <ImportForm modelType={modelType} setModelType={setModelType} onImported={refetch} />
 
-      <section className="card card--wide">
-        <header className="card__head">
-          <h2>Model Library</h2>
-          <span className="card__sub numeric">{models?.length ?? 0} installed</span>
-        </header>
-        {error && <p className="muted">Could not load models: {error}</p>}
-        {models && models.length === 0 && <p className="muted">No models yet — import a .gguf above.</p>}
-        {models && models.length > 0 && (
-          <div className="model-table__scroll">
-            <table className="model-table">
-              <thead>
-                <tr>
-                  <th>Name</th>
-                  <th>Family</th>
-                  <th>Quant</th>
-                  <th>Params</th>
-                  <th>Size</th>
-                  <th>Ctx</th>
-                  <th>VRAM est.</th>
-                  <th>Roles</th>
-                  <th>Runtimes</th>
-                </tr>
-              </thead>
-              <tbody>
-                {models.map((m: Model) => (
-                  <tr key={m.id}>
-                    <td title={m.file_path}>{m.name}</td>
-                    <td className="muted">{m.family ?? m.arch ?? "—"}</td>
-                    <td>{m.quant ?? "—"}</td>
-                    <td className="numeric">{params(m.param_count)}</td>
-                    <td className="numeric">{gb(m.size_bytes / (1024 * 1024))}</td>
-                    <td className="numeric">{ctx(m.ctx_max)}</td>
-                    <td
-                      className="numeric"
-                      title="Estimate at load — weights + KV cache / activations + runtime overhead"
-                    >
-                      {gb(m.vram_estimate_mb)}
-                    </td>
-                    <td className="muted">{m.roles.join(", ") || "—"}</td>
-                    <td className="muted">{m.runtimes.join(", ") || "—"}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </section>
+      <ModelLibrary models={models} error={error} />
 
       <Downloads />
 
@@ -85,6 +64,116 @@ export function Models() {
 
       <KnownModels onUseType={setModelType} />
     </div>
+  );
+}
+
+function ModelLibrary({ models, error }: { models: Model[] | null; error: string | null }) {
+  const { data: benchmarks } = useBenchmarks();
+  const { data: jobs } = useJobs();
+
+  const byModel = new Map((benchmarks ?? []).map((b) => [b.model_id, b]));
+  const testing = new Set(
+    (jobs ?? [])
+      .filter((j: Job) => j.job_type === "bench" && j.model_id && ACTIVE_JOB.has(j.state))
+      .map((j) => j.model_id as string),
+  );
+
+  return (
+    <section className="card card--wide">
+      <header className="card__head">
+        <h2>Model Library</h2>
+        <span className="card__sub numeric">{models?.length ?? 0} installed</span>
+      </header>
+      {error && <p className="muted">Could not load models: {error}</p>}
+      {models && models.length === 0 && <p className="muted">No models yet — import a .gguf above.</p>}
+      {models && models.length > 0 && (
+        <div className="model-table__scroll">
+          <table className="model-table">
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Family</th>
+                <th>Quant</th>
+                <th>Params</th>
+                <th>Size</th>
+                <th>Ctx</th>
+                <th>VRAM est.</th>
+                <th>Score</th>
+                <th>Roles</th>
+                <th>Runtimes</th>
+              </tr>
+            </thead>
+            <tbody>
+              {models.map((m: Model) => (
+                <tr key={m.id}>
+                  <td title={m.file_path}>{m.name}</td>
+                  <td className="muted">{m.family ?? m.arch ?? "—"}</td>
+                  <td>{m.quant ?? "—"}</td>
+                  <td className="numeric">{params(m.param_count)}</td>
+                  <td className="numeric">{gb(m.size_bytes / (1024 * 1024))}</td>
+                  <td className="numeric">{ctx(m.ctx_max)}</td>
+                  <td
+                    className="numeric"
+                    title="Estimate at load — weights + KV cache / activations + runtime overhead"
+                  >
+                    {gb(m.vram_estimate_mb)}
+                  </td>
+                  <td>
+                    <ScoreCell
+                      model={m}
+                      bench={byModel.get(m.id)}
+                      testing={testing.has(m.id)}
+                    />
+                  </td>
+                  <td className="muted">{m.roles.join(", ") || "—"}</td>
+                  <td className="muted">{m.runtimes.join(", ") || "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function ScoreCell({
+  model,
+  bench,
+  testing,
+}: {
+  model: Model;
+  bench: Benchmark | undefined;
+  testing: boolean;
+}) {
+  const [err, setErr] = useState(false);
+  const canTest = model.format === "gguf";
+
+  const run = async () => {
+    setErr(false);
+    try {
+      await benchmarkModel(model.id);
+    } catch {
+      setErr(true);
+    }
+  };
+
+  if (testing) return <span className="score__testing">testing…</span>;
+
+  return (
+    <span className="score">
+      {bench && (
+        <span className={`score__pill score__pill--${scoreBand(bench.overall_score)}`} title={scoreTitle(bench)}>
+          {bench.overall_score}
+          {bench.gen_tps != null && <em> · {bench.gen_tps.toFixed(0)} t/s</em>}
+        </span>
+      )}
+      {canTest && (
+        <button type="button" className="score__test" onClick={run}>
+          {err ? "retry" : bench ? "re-test" : "Test"}
+        </button>
+      )}
+    </span>
   );
 }
 

@@ -154,9 +154,18 @@ den Hands-on-ComfyUI-Lauf (4.0) + den manuellen Agent-Smoke.
 | `OFFLOAD_RAM_RESERVE_MB` | 4096 | RAM für OS + Page-Cache, das beim Layer-Offload frei bleiben muss |
 | `media_headroom_mb` | Wan 6144 · LTX/Flux/SD3 4096 · SDXL 2048 · sonst 2560 | Sampler-Aktivierungen + VAE-Decode + Compute-Buffer über die Gewichts-Größe |
 
+### Benchmark-Score (`core::bench`, 6.5)
+
+| Konstante | Wert | Bedeutung |
+|---|---|---|
+| `SPEED_REF_TPS` | 80 | gen-tok/s, die volle Speed-Punktzahl geben (gut quantisiertes 7–8B auf der 4080); `speed = gen_tps / 80`, geklammert |
+| Score-Gewichte | `0,65·speed + 0,35·stability`, dann `·fit_faktor` | „wie gut lief der Lauf", skaliert mit dem Fit |
+| `fit_faktor` | Green 1,0 · Yellow 0,85 · Unknown 0,8 · Red 0,35 | ein Modell, das nicht in den VRAM-Etat passt, wird hart gedeckelt — egal wie schnell |
+
 Kalibrierungs-Plan: bei 4.0 pro getestetem Modell `nvidia-smi`-Peak während
 Load + Sampling loggen, gegen `estimate().total_mb` halten, die Flat-Konstanten
-nachziehen; Ergebnis-Tabelle hier ergänzen.
+nachziehen; dabei auch `SPEED_REF_TPS` an echten tok/s-Messungen (7B / 14B /
+32B, Q4/Q5/Q8) ausrichten. Ergebnis-Tabelle hier ergänzen.
 
 ## Hardware-Empfehlungen (optional)
 

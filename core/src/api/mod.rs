@@ -707,6 +707,92 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn benchmark_endpoints_over_http() {
+        use crate::db::NewModel;
+
+        let (app, _tmp) = test_app().await;
+        let gguf = app
+            .db
+            .models()
+            .insert(NewModel {
+                name: "Qwen2.5 7B".into(),
+                format: "gguf".into(),
+                file_path: "E:\\AI\\models\\llm\\qwen\\qwen.gguf".into(),
+                size_bytes: 4_500 * 1024 * 1024,
+                ctx_max: Some(32_768),
+                source: "manual".into(),
+                ..NewModel::default()
+            })
+            .await
+            .unwrap();
+        let sdxl = app
+            .db
+            .models()
+            .insert(NewModel {
+                name: "SDXL".into(),
+                format: "safetensors".into(),
+                file_path: "E:\\AI\\models\\image\\sdxl.safetensors".into(),
+                size_bytes: 6_500 * 1024 * 1024,
+                source: "manual".into(),
+                ..NewModel::default()
+            })
+            .await
+            .unwrap();
+
+        let server = ApiServer::bind(app.clone(), SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
+            .await
+            .unwrap();
+        let base = format!("http://{}", server.addr);
+        let http = reqwest::Client::new();
+
+        // Nothing measured yet.
+        let empty: serde_json::Value = reqwest::get(format!("{base}/benchmarks"))
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert!(empty.as_array().unwrap().is_empty());
+
+        // Queue a "Test model" job for the GGUF.
+        let created = http
+            .post(format!("{base}/models/{}/benchmark", gguf.id))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(created.status(), 201);
+        let job: serde_json::Value = created.json().await.unwrap();
+        assert_eq!(job["job_type"], "bench");
+        assert_eq!(job["state"], "queued");
+        assert_eq!(job["model_id"], gguf.id);
+
+        // A non-GGUF model is refused with 400.
+        let bad = http
+            .post(format!("{base}/models/{}/benchmark", sdxl.id))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(bad.status(), 400);
+
+        // An unknown model is refused too.
+        let ghost = http
+            .post(format!("{base}/models/ghost/benchmark"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(ghost.status(), 400);
+
+        // Per-model history endpoint is empty until a run finishes.
+        let hist: serde_json::Value = reqwest::get(format!("{base}/models/{}/benchmarks", gguf.id))
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert!(hist.as_array().unwrap().is_empty());
+    }
+
+    #[tokio::test]
     async fn install_hermes_refuses_in_offline_mode() {
         let tmp = tempfile::tempdir().unwrap();
         let paths = crate::AppPaths::rooted(tmp.path());

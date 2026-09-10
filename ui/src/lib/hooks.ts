@@ -7,6 +7,7 @@ import {
   getTelemetry,
   listAgentRuntimes,
   listAgents,
+  listBenchmarks,
   listJobs,
   listKnownModels,
   listDownloads,
@@ -15,6 +16,7 @@ import {
   type AboutInfo,
   type Agent,
   type AgentRuntime,
+  type Benchmark,
   type Download,
   type Job,
   type KnownModel,
@@ -97,6 +99,8 @@ export const useAgentRuntimes = () =>
   usePolled<AgentRuntime[]>("agent-runtimes", listAgentRuntimes, 3000);
 export const useDownloads = () =>
   usePolled<Download[]>("downloads", listDownloads, 1500);
+export const useBenchmarks = () =>
+  usePolled<Benchmark[]>("benchmarks", listBenchmarks, 3000);
 
 /** Debounced Hugging Face search for the Discover panel. Runs when `params`
  *  change (400 ms after the last one) and `enabled`; not polled. */

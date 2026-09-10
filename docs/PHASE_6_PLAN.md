@@ -41,7 +41,7 @@ den letzten Cache + „offline" statt Fehler.
 | **6.2** | **Discovery-UI** — `App.registry` + `GET /registry/search` + `GET /registry/models/{*id}` + 2 Tauri-Commands + DTOs (`FitLevel`, `RegistryFileDto` mit Fit + Download-Link, `RegistryDetailsDto`). „Discover"-Panel im Models-Tab (`Discover.tsx`): Suchfeld, „GGUF only", Sort; Ergebnis-Karten (id, Params, Downloads/Likes, Lizenz, Gated-Badge, `base_model`); „Files" → Dateiliste mit Quant + Größe + `🟢/🟡/🔴`-Fit-Punkt (via `core::compat`) + „Copy link" + „Set import type". `Freshness`-Banner bei Stale/Offline. `useRegistrySearch` (400 ms debounced). | ✅ *(siehe „## 6.2 — Ergebnis")* |
 | **6.3** | **Kompatibilitäts-Engine v2** (`core::compat` + `core::model` erweitert — verlängert ADR-016). **6.3a**: `compat::verdict(dims, ctx, vram_budget, free_ram) -> FitVerdict { Green \| Yellow{reason} \| Red{reason} \| Unknown }` (Gewichte + KV + Overhead vs. VRAM-Budget **und** freier System-RAM für den Offload-Fall), in der „Discover"-Dateiliste. **6.3b**: bounded `.safetensors`-Header-Reader (`read_safetensors_info` — Param-Count + dominante Precision + `__metadata__`, der seit 3.3 vertagte TODO), im Import verdrahtet (nicht-lesbarer Header failt nicht); familien-bewusste `media_headroom_mb` statt der `+2,5 GB`-Faustregel. Konstanten in `HARDWARE.md` dokumentiert, echte Messkalibrierung wartet auf 4.0. | ✅ *(siehe „## 6.3 — Ergebnis")* |
 | **6.4** | **Download-Manager** (`core::download` erweitert — ADR-023): `downloads`-Tabelle (Migration `0006`: id, url, dest, sha256, size, bytes_done, state {queued\|running\|paused\|verifying\|done\|failed}), Queue mit einem aktiven Slot, **Resume über HTTP-Range**, Verify gegen die erwartete SHA-256 (aus 6.1), dann Übergabe an `import_model`. `GET/POST /downloads`, `POST /downloads/{id}/{pause,resume,cancel}`, Fortschritts-Events (`job_events`-Muster). `offline_mode` → Ablehnung. UI: „Download & import"-Knopf auf den Discovery-Karten + eine Downloads-Liste. Speicherplanung: freier Platz auf dem Store-Volume vs. Download-Größe, Klartext-Warnung. | ✅ *(siehe „## 6.4 — Ergebnis")* |
-| **6.5** | **`core::bench` — lokale Mikro-Benchmarks**: `benchmarks`-Tabelle (Migration `0006`: model_id, ts, tokens_per_sec, load_ms, vram_peak_mb, ram_peak_mb, stability_score, notes), ein „Test model"-Job pro Modell (kurzer Prompt → tok/s Prompt+Gen, Ladezeit vom Adapter, VRAM-Peak via NVML, RAM-Peak via sysinfo). Für Bild/Video analog: Generierungszeit + VRAM. Optionaler Fetch der externen Benchmark-Scores (Quelle aus 6.0), lokal gecacht. `Overall Score` = klar gekennzeichnete gewichtete Heuristik (lokale Perf + externer Score + Stabilität). UI: „Test"-Knopf + eine Score-Spalte in der Model Library. | offen |
+| **6.5** | **`core::bench` — lokale Mikro-Benchmarks**: `benchmarks`-Tabelle (Migration `0006`: model_id, ts, tokens_per_sec, load_ms, vram_peak_mb, ram_peak_mb, stability_score, notes), ein „Test model"-Job pro Modell (kurzer Prompt → tok/s Prompt+Gen, Ladezeit vom Adapter, VRAM-Peak via NVML, RAM-Peak via sysinfo). Für Bild/Video analog: Generierungszeit + VRAM. Optionaler Fetch der externen Benchmark-Scores (Quelle aus 6.0), lokal gecacht. `Overall Score` = klar gekennzeichnete gewichtete Heuristik (lokale Perf + externer Score + Stabilität). UI: „Test"-Knopf + eine Score-Spalte in der Model Library. | ✅ *(siehe „## 6.5 — Ergebnis")* |
 | **6.6** | **Benchmark-gestützte `Auto`-Auswahl**: `ModelRepo::pick_for_role` bezieht Benchmark-Daten ein (statt nur `last_used_at` / `use_count`) — Fit zuerst, dann Score, dann Nutzung. Gewichtung + „bevorzuge schnell / bevorzuge Qualität" in `[models]`-Config. Betrifft Chat, Coding, `base_diffusion`, `base_video`. Regelbasierter Fallback bleibt, wenn keine Benchmark-Daten da sind. | offen |
 | **6.7** | **Upgrade-Check** (die Backlog-Idee — `core::registry` + `core::compat` + lokales LLM): Knopf „Gibt es was Besseres?" pro installiertem Modell **und** pro Rolle. Ablauf: HF-Hub nach neueren/populäreren Modellen derselben Rolle+Familie fragen → `core::compat`-Fit-Filter auf „läuft in `vram_budget_mb`" **vor** der LLM-Bewertung (spart Tokens, hält die Liste ehrlich) → das lokale LLM (Rolle `chat`/`coding`) rankt die **echten API-Treffer** als JSON, schreibt eine Ein-Satz-Begründung, **darf keinen Modellnamen erfinden** (Antwort gegen die Kandidaten-IDs validieren) → Ausgabe: kurze Liste + „Download & import" (→ 6.4). „Besser" misst sich in der MVP-Fassung an **objektiven, abrufbaren** Signalen (Release-Datum, Downloads/Likes, größere/neuere Basis in der Familie, Fit) + ggf. externem Score (6.5); das LLM markiert „Qualität nicht lokal verifizierbar". HF-Query = externer Call → **per-Aktion-Consent**, im `offline_mode` gesperrt. ADR-025. | offen |
 | **6.8** | **Aufräum-Reports**: **Dedup** (gleiche SHA-256 / dieselbe Datei an mehreren Pfaden, inkl. per-Junction gebundener Ollama-Blobs — nur anzeigen, R4), **Unused** (nie genutzt / seit N Tagen nicht), **Old versions** (installiertes Modell hat eine neuere Katalog-/Registry-Revision — nutzt 6.1). Eine „Storage"-Ansicht: was belegt wie viel, was ist gefahrlos löschbar. Löschen bleibt eine bestätigte Nutzer-Aktion. | offen |
@@ -486,3 +486,74 @@ den Store — Range-Resume, Verify gegen die SHA-256 aus 6.1, dann `import_model
   Knopf ist für beide deaktiviert (6.9).
 - **Streaming-Hash** während des Transfers — Verify bleibt ein separater
   Re-Hash, weil Resume den Zwischenstand nicht mitführt.
+
+---
+
+## 6.5 — Ergebnis (abgeschlossen, a + b)
+
+`core::bench` — der „Test model"-Job. Misst **nur lokal** (ADR-024): tok/s
+Prompt + Generation, Kalt-Ladezeit, VRAM-/RAM-Peak, Konsistenz über N Läufe.
+Der „Overall Score" ist eine **offen deklarierte Heuristik**, keine
+Qualitäts-Achse.
+
+**6.5a** (`62217ff`) — `core::bench` + Persistenz + Engine:
+- **Migration `0007`** — `benchmarks` (STRICT): `model_id` (FK, `ON DELETE
+  CASCADE`), `job_id`, `kind` (`llm`), `runs`, `prompt_tps`, `gen_tps`,
+  `load_ms`, `vram_peak_mb`, `ram_peak_mb`, `stability_score`, `overall_score`,
+  `notes`, `created_at` + Index `(model_id, created_at)`.
+- **`db::BenchRepo`** (`db.benchmarks()`) — `insert` / `get` / `list_for` /
+  `latest_for` / `latest_all` (eine Zeile pro Modell — die Score-Spalte).
+- **`core::bench`**: `BenchRequest::from_params` (Default-Prompt, 3 Läufe, 128
+  Tokens; geklammert 1–10 / 16–512). **`stability_score(&[f64])`** = `1 −
+  Variationskoeffizient`, geklammert; < 2 Samples → 1,0. **`overall_score(gen_tps,
+  stability, &FitVerdict)`** = `(0,65·speed + 0,35·stability) · fit_faktor`,
+  `speed = gen_tps / 80` geklammert; `fit_faktor` Green 1,0 · Yellow 0,85 ·
+  Unknown 0,8 · **Red 0,35** (ein Modell, das nicht passt, wird hart gedeckelt,
+  egal wie schnell). **`bench::run`**: N gestreamte Läufe, Telemetrie-Peak an
+  den Lauf-Grenzen gesampelt (der Sampler tickt 1×/s → grober Peak), eine
+  `benchmarks`-Zeile + Job-Events.
+- **`GenerationEvent::Done`** hat jetzt `prompt_tokens_per_second` (aus
+  `timings.prompt_per_second`); `chat.rs` ignoriert es, `aiwm-fake-llama` emit­tiert es.
+- **`JobEngine`**: `job_type == "bench"`-Zweig → `bench::run`; die Plan-`match`
+  misst jetzt die Modell-Ladezeit (`Instant` um `self.load`) und reicht sie als
+  Kalt-Ladezeit weiter. **`JobEngine::with_telemetry(rx)`** — der Bench-Body
+  sampelt daraus; `App` verdrahtet `telemetry.subscribe()`, jeder andere
+  Aufrufer behält eine eingefrorene „kein GPU"-Reading. **`Scheduler`-Trait**
+  hat jetzt `budget_mb()` (Default `0`; `HybridScheduler` gibt sein Budget) →
+  der Engine kann Fit gegen ein `dyn Scheduler` beurteilen.
+- **+4 DB-Unit + 7 Bench-Unit** (stability / score / from_params / run
+  misst+speichert / run abgebrochen) **+1 Integration** (`core/tests/bench.rs`:
+  echter `JobEngine` + `aiwm-fake-llama` → ein Bench-Job timed die Kalt-Ladung,
+  schreibt eine Zeile, markiert das Modell genutzt).
+
+**6.5b** (dieser Commit) — API / Tauri / UI:
+- **Handler** (`api::handlers`): `latest_benchmarks` (`latest_all`),
+  `model_benchmarks` (Verlauf), `benchmark_model` (nur `format == "gguf"` → sonst
+  400; berechnet die VRAM-Schätzung, submitted `NewJob::new("bench").on("llamacpp",
+  …)`).
+- **HTTP**: `GET /benchmarks`, `GET /models/{id}/benchmarks`,
+  `POST /models/{id}/benchmark` (201 + `Job`). **Tauri**: `list_benchmarks`,
+  `model_benchmarks`, `benchmark_model`.
+- **UI**: `ipc.ts` `Benchmark` + `listBenchmarks`/`modelBenchmarks`/`benchmarkModel`;
+  `hooks.ts` `useBenchmarks` (3 s). `Models.tsx` → `ModelLibrary` extrahiert,
+  neue **„Score"-Spalte**: `ScoreCell` zeigt das gefärbte Score-Pill (ok ≥ 70 ·
+  warn ≥ 40 · crit) mit tok/s-Kürzel + Tooltip (gen/prompt tok/s, Ladezeit,
+  VRAM-Peak, Stabilität), „Test" / „re-test"-Knopf (nur GGUF), „testing…" solange
+  ein `bench`-Job für das Modell aktiv ist (aus `useJobs`).
+- **dev-mock**: `list_benchmarks` / `model_benchmarks` / `benchmark_model`;
+  `progressBenchJobs()` flippt einen laufenden `bench`-Job nach ~3,5 s auf
+  `completed` + legt eine Bench-Zeile an. `list_jobs` gibt jetzt frische Kopien
+  zurück (gleicher `Object.is`-Bailout wie bei 6.4s `list_downloads`).
+- **Smoke** (dev-mock): „Test" → Zelle „testing…" → nach ~3,5 s grünes Pill
+  „81 · 70 t/s" + „re-test"; Konsole fehlerfrei.
+
+**→ 345 Lib + 56 integ + 5 pytest.** `check.ps1` grün.
+
+**Nicht in 6.5 (bewusst verschoben):**
+- **Bild-/Video-Benchmarks** (Generierungszeit + VRAM) — der Plan nennt sie
+  „analog"; braucht einen ComfyUI-Bench-Pfad. `kind`-Spalte + `overall_score`
+  sind schon dafür ausgelegt.
+- **Externer Benchmark-Score-Fetch** — ADR-024: erst wenn eine tragbare Quelle
+  auftaucht (Post-6.5).
+- **Kalibrierung** von `SPEED_REF_TPS` (80) und den Gewichten — Faustwerte;
+  echte Zahlen zusammen mit der Estimator-Kalibrierung bei 4.0 (`HARDWARE.md`).

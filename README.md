@@ -31,7 +31,7 @@ noch keine echte AI-Capability (die kommt ab Phase 2).
 | WP-9 | CI-Workflow, Git-Hooks (pre-commit fmt, pre-push voller Gate) |
 | WP-10 | ADRs finalisiert, Stub-Docs (MODELS/RUNTIMES/SECURITY/BENCHMARKS) |
 
-**333 Rust-Unit + 55 Integrationstests + 5 pytest** grün · `scripts/check.ps1` grün ·
+**345 Rust-Unit + 56 Integrationstests + 5 pytest** grün · `scripts/check.ps1` grün ·
 **null `unsafe`** im Produktivcode.
 
 **Phase 2 (MVP) ✅ abgeschlossen** — Scheiben 2.1–2.7 + durchgehender
@@ -119,7 +119,7 @@ Command-Approval (UI) + erzwungene Offline-Config.
   Tauri + Settings-Karte „Backup & restore". Politur (Kompaktierungs-Anzeige,
   Pause-Fluss, Diagnostics-Zeile) = 5.5c, vertagt.
 
-**Phase 6 (Automatisierung & Model-Manager v2) — Plan + 6.0 + 6.1 + 6.2 + 6.3 + 6.4 ✅:** [docs/PHASE_6_PLAN.md](docs/PHASE_6_PLAN.md).
+**Phase 6 (Automatisierung & Model-Manager v2) — Plan + 6.0 + 6.1 + 6.2 + 6.3 + 6.4 + 6.5 ✅:** [docs/PHASE_6_PLAN.md](docs/PHASE_6_PLAN.md).
 Aus dem manuellen Modell-Umgang wird ein Model-Manager: online suchen, verifiziert
 laden, lokal messen, Upgrade-Check, Dedup-/Unused-Reports. Alles offline-first
 (ADR-009).
@@ -160,6 +160,15 @@ laden, lokal messen, Upgrade-Check, Dedup-/Unused-Reports. Alles offline-first
   (kein Event-Stream). „Download & import" pro Datei-Zeile in `Discover.tsx`
   (Split-GGUF / Gated deaktiviert) + `Downloads.tsx`-Liste im Models-Tab.
   `offline_mode` sperrt `enqueue`/`resume`. Speicherplanung → 6.8.
+- **6.5** ✅ **`core::bench`** — der „Test model"-Job (`job_type=bench`, Migration
+  `0007` `benchmarks`). Misst **nur lokal** (ADR-024): tok/s Prompt + Generation,
+  Kalt-Ladezeit, VRAM-/RAM-Peak, Konsistenz über N Läufe. `overall_score` =
+  offen deklarierte Heuristik `(0,65·speed + 0,35·stability)·fit_faktor` — ein
+  Modell, das nicht in den VRAM-Etat passt, wird hart gedeckelt; **keine
+  Qualitäts-Achse**. `bench::run` sampelt den Telemetrie-Peak; die Engine timed
+  die Modell-Ladung. `GET /benchmarks` + `POST /models/{id}/benchmark` + Tauri;
+  **„Score"-Spalte + „Test"-Knopf** in der Model Library (nur GGUF). Bild-/
+  Video-Bench + externer Score = später.
 
 - **4.1** ✅ **`capability::video`**: `job_type=video` → feste `wan_ti2v`-Pipeline
   (`WanImageToVideo` → `KSampler` → `VAEDecode` → `CreateVideo` → `SaveVideo`,

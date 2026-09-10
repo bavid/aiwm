@@ -220,8 +220,12 @@ suchen, verifiziert laden, lokal messen, Upgrade-Check. Alles offline-first
   pro Datei-Zeile in `Discover.tsx` (Split-GGUF / Gated deaktiviert) + eine
   `Downloads.tsx`-Liste. `offline_mode` sperrt `enqueue`/`resume`. Recovery →
   `queued`. Speicherplanung noch offen (→ 6.8)
-- 6.5 **`core::bench`** — lokale Mikro-Benchmarks (tok/s, Ladezeit, VRAM/RAM-
-  Peak), optionaler externer Score, gewichtete Heuristik
+- [x] 6.5 **`core::bench`** — der „Test model"-Job (`job_type=bench`, Migration
+  `0007`): misst **nur lokal** (ADR-024) tok/s Prompt+Gen, Kalt-Ladezeit,
+  VRAM-/RAM-Peak, Stabilität über N Läufe; `overall_score` = offen deklarierte
+  Heuristik `(0,65·speed + 0,35·stability)·fit_faktor`, **keine Qualitäts-Achse**.
+  `GET /benchmarks` + `POST /models/{id}/benchmark` + Tauri; „Score"-Spalte +
+  „Test"-Knopf in der Model Library. Bild/Video-Bench + externer Score = später
 - 6.6 **Benchmark-gestützte `Auto`-Auswahl** — `pick_for_role` nutzt Fit +
   Score + Nutzung
 - 6.7 **Upgrade-Check** — „Gibt es was Besseres?" pro Modell / Rolle: HF-Hub

@@ -12,7 +12,9 @@ use super::dto::{
 };
 use crate::compat::FitVerdict;
 use crate::config::Config;
-use crate::db::{Agent, AgentSession, Download, Job, JobFilter, Model, NewAgent, NewJob};
+use crate::db::{
+    Agent, AgentSession, Benchmark, Download, Job, JobFilter, Model, NewAgent, NewJob,
+};
 use crate::download::EnqueueRequest;
 use crate::model::{ImportOutcome, ImportRequest};
 use crate::orchestrator::JobOutcome;
@@ -504,6 +506,41 @@ pub async fn resume_download(app: &App, id: &str) -> Result<()> {
 
 pub async fn cancel_download(app: &App, id: &str) -> Result<()> {
     app.downloads.cancel(id).await
+}
+
+// --- benchmarks (Phase 6.5) -----------------------------------------------
+
+/// The most recent benchmark for every model that has one — the Model Library
+/// score column polls this and joins by `model_id`.
+pub async fn latest_benchmarks(app: &App) -> Result<Vec<Benchmark>> {
+    app.db.benchmarks().latest_all().await
+}
+
+/// Every benchmark run for one model, newest first.
+pub async fn model_benchmarks(app: &App, model_id: &str) -> Result<Vec<Benchmark>> {
+    app.db.benchmarks().list_for(model_id).await
+}
+
+/// Queue a "Test model" job for a local GGUF model. It goes through the
+/// scheduler like a chat job (load / evict / run), then [`crate::bench`]
+/// records a `benchmarks` row.
+pub async fn benchmark_model(app: &App, model_id: &str) -> Result<Job> {
+    let model = app
+        .db
+        .models()
+        .get(model_id)
+        .await?
+        .ok_or_else(|| CoreError::Config(format!("model {model_id} is not in the library")))?;
+    if model.format != "gguf" {
+        return Err(CoreError::Config(
+            "benchmarking is llama.cpp / GGUF models only for now".into(),
+        ));
+    }
+    let ctx = crate::compat::effective_ctx(model.ctx_max.and_then(|v| u32::try_from(v).ok()));
+    let vram = crate::compat::estimate(&model.vram_dims(), ctx).total_mb;
+    app.jobs
+        .submit(NewJob::new("bench").on("llamacpp", &model.id, vram))
+        .await
 }
 
 /// Tail of the current day's log file.

@@ -577,3 +577,38 @@ export const enqueueDownload = (body: EnqueueDownloadBody) =>
 export const pauseDownload = (id: string) => invoke<void>("pause_download", { id });
 export const resumeDownload = (id: string) => invoke<void>("resume_download", { id });
 export const cancelDownload = (id: string) => invoke<void>("cancel_download", { id });
+
+// --- benchmarks (Phase 6.5) ----------------------------------------------
+
+/** One "Test model" run, measured on this machine (`GET /benchmarks`). */
+export interface Benchmark {
+  id: string;
+  model_id: string;
+  job_id: string | null;
+  /** `"llm"` for now. */
+  kind: string;
+  runs: number;
+  /** Prompt (prefill) tokens/sec, mean. */
+  prompt_tps: number | null;
+  /** Generation tokens/sec, mean. */
+  gen_tps: number | null;
+  /** Cold load time; null when the model was already resident. */
+  load_ms: number | null;
+  vram_peak_mb: number | null;
+  ram_peak_mb: number | null;
+  /** 0..1, 1 = perfectly consistent tokens/sec across the runs. */
+  stability_score: number;
+  /** 0..100 openly-declared heuristic (speed + fit + stability), **not** a
+   *  quality score. */
+  overall_score: number;
+  notes: string | null;
+  created_at: string;
+}
+
+/** The latest benchmark for every model that has one — join by `model_id`. */
+export const listBenchmarks = () => invoke<Benchmark[]>("list_benchmarks");
+/** Every benchmark run for one model, newest first. */
+export const modelBenchmarks = (id: string) =>
+  invoke<Benchmark[]>("model_benchmarks", { id });
+/** Queue a "Test model" job (GGUF models only). Returns the job. */
+export const benchmarkModel = (id: string) => invoke<Job>("benchmark_model", { id });

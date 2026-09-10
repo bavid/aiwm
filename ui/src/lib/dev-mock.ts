@@ -15,7 +15,7 @@ const MODELS: AnyRecord[] = [
   mkModel("m-umt5", "umt5_xxl_fp8_e4m3fn_scaled", { roles: ["text_encoder"], runtimes: ["comfyui"] }),
   mkModel("m-wanvae", "wan2.2_vae", { family: "wan", roles: ["vae"], runtimes: ["comfyui"] }),
   mkModel("m-sdxl", "SDXL Base 1.0", { family: "sdxl", roles: ["base_diffusion"], runtimes: ["comfyui"], vram_estimate_mb: 8200 }),
-  mkModel("m-qwen", "Qwen2.5 7B Instruct", { family: "qwen2", roles: ["chat"], runtimes: ["llamacpp"], vram_estimate_mb: 6400 }),
+  mkModel("m-qwen", "Qwen2.5 7B Instruct", { family: "qwen2", format: "gguf", quant: "Q5_K_M", param_count: 7_615_616_512, ctx_max: 32_768, roles: ["chat"], runtimes: ["llamacpp"], vram_estimate_mb: 6400 }),
 ];
 
 const JOBS: AnyRecord[] = [
@@ -74,6 +74,37 @@ let DEV_SESSION: DevSession | null = null;
 let HERMES_INSTALLED = false;
 
 const DOWNLOADS: AnyRecord[] = [];
+const BENCHMARKS: AnyRecord[] = [];
+
+/** Flip a running `bench` job to `completed` a few seconds in and drop a
+ *  benchmark row — the dev-mock stand-in for `core::bench`. */
+function progressBenchJobs(): void {
+  for (const j of JOBS) {
+    if (j.job_type !== "bench" || j.state !== "running") continue;
+    const started = Date.parse(String(j.started_at ?? j.created_at));
+    if (Date.now() - started < 3500) continue;
+    j.state = "completed";
+    j.finished_at = now();
+    const m = MODELS.find((x) => x.id === j.model_id);
+    const gen = 38 + Math.round(Math.random() * 42);
+    BENCHMARKS.unshift({
+      id: `bench-${seq++}`,
+      model_id: j.model_id,
+      job_id: j.id,
+      kind: "llm",
+      runs: 3,
+      prompt_tps: 260 + Math.round(Math.random() * 220),
+      gen_tps: gen,
+      load_ms: 1500 + Math.round(Math.random() * 2200),
+      vram_peak_mb: Number(m?.vram_estimate_mb ?? 6000),
+      ram_peak_mb: 14000 + Math.round(Math.random() * 2000),
+      stability_score: 0.9 + Math.random() * 0.09,
+      overall_score: Math.min(100, Math.round(gen * 1.15)),
+      notes: "dev-mock",
+      created_at: now(),
+    });
+  }
+}
 
 const DISCOVER_MODELS: AnyRecord[] = [
   {
@@ -155,7 +186,9 @@ export function installDevMock(): void {
       case "list_known_models":
         return [];
       case "list_jobs":
-        return JOBS;
+        progressBenchJobs();
+        // Fresh array — `usePolled` needs a changed reference to re-render.
+        return JOBS.map((j) => ({ ...j }));
       case "get_config":
         return CONFIG;
       case "save_config": {
@@ -183,6 +216,20 @@ export function installDevMock(): void {
       }
       case "cancel_job":
         return true;
+      case "list_benchmarks":
+        progressBenchJobs();
+        return [...new Map(BENCHMARKS.map((b) => [b.model_id, b])).values()];
+      case "model_benchmarks":
+        progressBenchJobs();
+        return BENCHMARKS.filter((b) => b.model_id === a.id);
+      case "benchmark_model": {
+        const job = mkJob(`j-bench-${seq++}`, "bench", "running", {
+          model_id: String(a.id),
+          started_at: now(),
+        });
+        JOBS.unshift(job);
+        return job;
+      }
       case "list_agents":
         return AGENTS;
       case "list_agent_runtimes":

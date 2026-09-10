@@ -1,7 +1,8 @@
 # Benchmarks
 
-Konzept für die Modell-Bewertung. **Noch nicht implementiert** — Phase 6,
-Scheibe 6.5 ([PHASE_6_PLAN.md](PHASE_6_PLAN.md)).
+Modell-Bewertung. **Umgesetzt in Scheibe 6.5** (`core::bench`,
+[PHASE_6_PLAN.md](PHASE_6_PLAN.md) → „## 6.5 — Ergebnis") — der „Test model"-Job
+misst nur lokal; der „Overall Score" ist eine offen deklarierte Heuristik.
 
 ## 6.0-Befund → ADR-024: keine gebündelte externe Benchmark-Quelle im MVP
 
@@ -39,19 +40,37 @@ Für Bild/Video: Generierungszeit, VRAM, Auflösung.
 ## Was **nicht** lokal messbar ist
 
 Modell-**Qualität**. Es gibt keinen billigen, lokalen, objektiven
-Qualitäts-Benchmark. Lösung:
+Qualitäts-Benchmark (ADR-024). Deshalb:
 
-- extern gepflegte Benchmarks (SWE-bench Verified für Coding usw.) **online**
-  ziehen und cachen
-- der „Overall Score" ist eine **gewichtete Heuristik**, klar als solche
-  gekennzeichnet — kein Anspruch auf Objektivität der Qualitäts-Achse
+- **kein** gebündeltes externes Leaderboard im MVP (HF Open LLM Leaderboard
+  abgeschaltet; GGUF-Quant → Leaderboard-Zeile ist unlösbar). Externer
+  Score-Fetch = opt-in, Post-6.5, wenn eine tragbare Quelle auftaucht.
+- der „Overall Score" ist eine **offen deklarierte gewichtete Heuristik** —
+  kein Anspruch auf eine Qualitäts-Achse.
 
-## Datenmodell
+## Datenmodell (6.5)
 
-`benchmarks`-Tabelle (Schema-Erweiterung Phase 6): model_id, ts,
-tokens_per_sec, load_ms, vram_peak_mb, ram_peak_mb, stability_score, notes.
+`benchmarks`-Tabelle (Migration `0007`, STRICT): `id`, `model_id` (FK,
+`ON DELETE CASCADE`), `job_id`, `kind` (`llm`; `image`/`video` später), `runs`,
+`prompt_tps`, `gen_tps`, `load_ms` (NULL wenn schon resident), `vram_peak_mb`
+(NULL ohne GPU), `ram_peak_mb`, `stability_score` (0–1), `overall_score`
+(0–100), `notes`, `created_at`.
+
+## Ablauf (6.5)
+
+`job_type = bench` — ein Job wie „Modell testen": Scheduler lädt das Modell
+(Ladezeit getimed), `core::bench::run` schickt einen festen Prompt N-mal durch
+(`stream_completion`), liest die tok/s aus dem `Done`-Event, sampelt VRAM/RAM
+aus der Telemetrie an den Lauf-Grenzen, schreibt eine `benchmarks`-Zeile.
+
+- **`stability_score`** = `1 − Variationskoeffizient` der gen-tok/s, geklammert.
+- **`overall_score`** = `(0,65·speed + 0,35·stability) · fit_faktor`, wobei
+  `speed = gen_tps / SPEED_REF_TPS` (80, Faustwert) geklammert und `fit_faktor`
+  Green 1,0 · Yellow 0,85 · Unknown 0,8 · **Red 0,35** (`core::compat::verdict`).
+  Ein Modell, das nicht in den VRAM-Etat passt, wird hart gedeckelt.
 
 ## Nutzung
 
-Ab Phase 6 fließen Benchmark-Daten in `Model: AUTO` ein. Bis dahin ist die
-Auto-Auswahl regelbasiert (Aufgabe + VRAM-Budget + installierte Modelle).
+Ab **6.6** fließen die Benchmark-Daten in `Model: Auto` ein (Fit → Score →
+Nutzung). Bis dahin bleibt die Auto-Auswahl regelbasiert (Aufgabe + VRAM-Budget
++ installierte Modelle).

@@ -13,7 +13,7 @@ use aiwm_core::api::dto::{
 };
 use aiwm_core::api::handlers;
 use aiwm_core::config::Config;
-use aiwm_core::db::{Agent, AgentSession, Download, Job, JobFilter, Model};
+use aiwm_core::db::{Agent, AgentSession, Benchmark, Download, Job, JobFilter, Model};
 use aiwm_core::model::{ImportOutcome, ImportRequest};
 use aiwm_core::orchestrator::JobState;
 use aiwm_core::registry::{Fetched, RemoteModel};
@@ -189,6 +189,24 @@ fn list_known_models(app: tauri::State<'_, Arc<App>>) -> &'static [aiwm_core::mo
 }
 
 #[tauri::command]
+async fn list_benchmarks(app: tauri::State<'_, Arc<App>>) -> Result<Vec<Benchmark>, String> {
+    to_ipc(handlers::latest_benchmarks(&app).await)
+}
+
+#[tauri::command]
+async fn model_benchmarks(
+    app: tauri::State<'_, Arc<App>>,
+    id: String,
+) -> Result<Vec<Benchmark>, String> {
+    to_ipc(handlers::model_benchmarks(&app, &id).await)
+}
+
+#[tauri::command]
+async fn benchmark_model(app: tauri::State<'_, Arc<App>>, id: String) -> Result<Job, String> {
+    to_ipc(handlers::benchmark_model(&app, &id).await)
+}
+
+#[tauri::command]
 async fn import_model(
     app: tauri::State<'_, Arc<App>>,
     request: ImportRequest,
@@ -308,6 +326,9 @@ fn try_run() -> anyhow::Result<()> {
             list_models,
             list_known_models,
             import_model,
+            list_benchmarks,
+            model_benchmarks,
+            benchmark_model,
             install_llamacpp,
             install_comfyui,
             install_hermes,

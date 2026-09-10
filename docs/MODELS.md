@@ -93,8 +93,9 @@ Kandidaten + Import + Smoke: [AGENT_MODELS.md](AGENT_MODELS.md). Noch nicht im
 | Kuratierter „Known models"-Katalog (SHA-256, HF-Quelle, Lizenz) | ✅ 3.6 (`core::model::catalog`, `GET /models/known`); Auto-Download → Phase 6 |
 | Online-Discovery (HF Hub, Ollama-Library) | ✅ 6.1 `core::registry` + 6.2 „Discover"-Panel im Models-Tab (`GET /registry/{search,models/{id}}`, Fit-Ampel via `core::compat`, „Copy link"); Ollama später |
 | Download-Manager (Queue, Resume, Verify, Speicherplan) | ✅ 6.4 (ADR-023) `core::download::DownloadManager` — eine Queue / ein Slot, HTTP-Range-Resume (Retry 5×), Verify gegen die SHA-256 aus 6.1 → `import_model`. `downloads`-Tabelle (Migr. `0006`), Recovery → `queued`. `GET/POST /downloads` + `{pause,resume,cancel}` + Tauri; „Download & import" in `Discover.tsx` (Split-GGUF/Gated aus) + `Downloads.tsx`. `offline_mode` sperrt `enqueue`/`resume`. **Speicherplan noch offen → 6.8** |
-| Dedup-/Unused-/Versions-Reports | Phase 6 |
-| Benchmark-gestützte Auto-Auswahl | Phase 6 (braucht [BENCHMARKS.md](BENCHMARKS.md)) |
+| Dedup-/Unused-/Versions-Reports | Phase 6 (6.8) |
+| Lokale Mikro-Benchmarks („Test model") | ✅ 6.5 `core::bench` (`job_type=bench`, Migr. `0007`) — tok/s Prompt+Gen, Kalt-Ladezeit, VRAM-/RAM-Peak, Stabilität; `overall_score` = offen deklarierte Heuristik `(0,65·speed+0,35·stability)·fit_faktor`, **keine Qualitäts-Achse** (ADR-024). `GET /benchmarks` + `POST /models/{id}/benchmark` + „Score"-Spalte + „Test"-Knopf (nur GGUF). Bild/Video-Bench + externer Score = später |
+| Benchmark-gestützte Auto-Auswahl | Phase 6 (6.6 — nutzt 6.5) |
 
 ## Hardware-Realität
 
