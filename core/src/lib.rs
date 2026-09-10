@@ -14,6 +14,7 @@
 //! - [`app`]          — bootstrap paths + config + logging into an [`app::App`] (WP-1)
 //! - [`telemetry`]    — NVML + sysinfo sampler, 1 Hz (WP-3)
 //! - [`db`]           — sqlx pool, migrations, repositories (WP-2)
+//! - [`download`]     — the model download manager: queue, resume, verify, import (6.4)
 //! - [`runtime`]      — `RuntimeAdapter` trait, supervisor, llama.cpp (2.2) + ComfyUI (3.1) adapters
 //! - [`orchestrator`] — job state machine + engine (WP-5)
 //! - [`capability`]   — capability-specific job bodies (chat 2.4, image 3.4, video 4.1)
@@ -34,6 +35,7 @@ pub mod capability;
 pub mod compat;
 pub mod config;
 pub mod db;
+pub mod download;
 pub mod error;
 pub mod link;
 pub mod logging;
@@ -57,6 +59,7 @@ pub use capability::agent::{AgentSessions, CodingRuntime, LlamaCodingRuntime};
 pub use compat::{estimate as estimate_vram, FitVerdict, ModelDims, VramEstimate};
 pub use config::Config;
 pub use db::{Database, Model, ModelRepo, NewModel};
+pub use download::{DownloadManager, EnqueueRequest};
 pub use error::{CoreError, Result};
 pub use link::LinkStrategy;
 pub use model::{import_model, GgufInfo, ImportOutcome, ImportRequest};

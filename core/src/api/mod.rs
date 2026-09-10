@@ -59,11 +59,13 @@ impl Drop for ApiServer {
     }
 }
 
-/// The core's long-running background work: the loopback API and the job loop.
+/// The core's long-running background work: the loopback API, the job loop and
+/// the download worker.
 #[derive(Debug)]
 pub struct Services {
     api: ApiServer,
     job_loop: JoinHandle<()>,
+    download_worker: JoinHandle<()>,
 }
 
 impl Services {
@@ -76,10 +78,12 @@ impl Services {
 impl Drop for Services {
     fn drop(&mut self) {
         self.job_loop.abort();
+        self.download_worker.abort();
     }
 }
 
-/// Start the loopback API (on `127.0.0.1:core_api_port`) and the job loop.
+/// Start the loopback API (on `127.0.0.1:core_api_port`), the job loop and the
+/// download worker.
 pub async fn spawn(app: Arc<App>) -> Result<Services> {
     let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, app.config.core_api_port));
     spawn_on(app, addr).await
@@ -90,8 +94,13 @@ pub async fn spawn_on(app: Arc<App>, api_addr: SocketAddr) -> Result<Services> {
     let api = ApiServer::bind(app.clone(), api_addr).await?;
     tracing::info!(addr = %api.addr, "core API listening (loopback only)");
 
+    let download_worker = tokio::spawn(app.downloads.clone().run());
     let job_loop = tokio::spawn(run_job_loop(app));
-    Ok(Services { api, job_loop })
+    Ok(Services {
+        api,
+        job_loop,
+        download_worker,
+    })
 }
 
 async fn run_job_loop(app: Arc<App>) {

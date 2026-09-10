@@ -105,6 +105,12 @@ impl AppPaths {
         self.local_root.join("cache")
     }
 
+    /// Where the download manager (6.4) stages in-flight files, one dir per
+    /// download id; a finished download is moved into the model store.
+    pub fn downloads_dir(&self) -> PathBuf {
+        self.local_root.join(".downloads")
+    }
+
     /// Where `POST /export` writes backup archives (roamed — small).
     pub fn exports_dir(&self) -> PathBuf {
         self.root.join("exports")

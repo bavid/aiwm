@@ -10,6 +10,7 @@ use crate::agent::{HermesAgentAdapter, OpenCodeAdapter};
 use crate::capability::agent::{AgentSessions, LlamaCodingRuntime};
 use crate::config::{Config, FALLBACK_VRAM_BUDGET_MB};
 use crate::db::{now_rfc3339, Database};
+use crate::download::DownloadManager;
 use crate::orchestrator::JobEngine;
 use crate::paths::AppPaths;
 use crate::registry::{HuggingFaceSource, Registry};
@@ -50,6 +51,9 @@ pub struct App {
     /// Online model discovery (Phase 6.1). Wraps the Hugging Face source with a
     /// disposable cache and the same `offline` switch.
     pub registry: Registry,
+    /// The model download queue (Phase 6.4). Its worker is spawned by
+    /// [`crate::api::spawn`].
+    pub downloads: Arc<DownloadManager>,
     /// Live offline switch (ADR-009). Seeded from `config.offline_mode`; the
     /// Settings UI flips it without a restart, and every outbound-call site
     /// checks [`offline`](Self::offline) rather than `config.offline_mode`.
@@ -118,6 +122,12 @@ impl App {
             paths.cache_dir().join("registry"),
             offline.clone(),
         );
+        let downloads = Arc::new(DownloadManager::new(
+            db.clone(),
+            config.store_path.clone(),
+            paths.downloads_dir(),
+            offline.clone(),
+        ));
 
         Ok(Self {
             paths,
@@ -133,6 +143,7 @@ impl App {
             opencode,
             hermes,
             registry,
+            downloads,
             offline,
         })
     }
@@ -173,6 +184,10 @@ impl App {
                 count = orphaned,
                 "closed orphaned agent sessions from a previous run"
             );
+        }
+        let requeued = db.downloads().recover_interrupted().await?;
+        if requeued > 0 {
+            tracing::warn!(count = requeued, "re-queued interrupted downloads");
         }
         Ok(())
     }
