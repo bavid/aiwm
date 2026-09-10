@@ -937,6 +937,60 @@ online zu ziehen. Slice 6.0 hat die Quellenlage geprüft.
 
 ---
 
+## ADR-025 — Upgrade-Check: objektive HF-Signale + Fit-Filter, LLM nur als Ranker
+
+**Status:** Entschieden — Slice 6.7 (`core::upgrade`; 6.7a Kern, 6.7b Job + API +
+UI). Konkretisiert die offenen Entscheidungen **E** und **F**.
+
+**Kontext:** Der Brief will „gibt es inzwischen was Besseres, das auf dieser
+Hardware läuft?" pro installiertem Modell und pro Rolle. Risiko: das lokale LLM
+halluziniert Modellnamen (R9 — auf HF selbst sind `trendingScore`/`likes7d`
+voll erfundener „Qwen3.8-27B"-Repos), und „besser" ist ohne Qualitäts-Benchmark
+(ADR-024) nicht belegbar.
+
+**Entscheidung:**
+- **`core::upgrade::run(registry, reasoner, target, vram_budget_mb, free_ram_mb)`.**
+  Ablauf: zwei HF-Suchen auf die **Familie** des Ziels (`SearchSort::Trending`
+  + `RecentlyUpdated`, `gguf_only` für `chat`/`coding`) → **Spam-Guard**
+  (`looks_like_spam`: unter 80 Downloads *und* 3 Likes raus; brandneues Repo
+  mit „unmöglicher" Popularität raus) → **Fit-Filter** (`compat::verdict` über
+  eine grobe VRAM-Schätzung aus `param_count` × Bytes-pro-Gewicht[Precision];
+  **`Red` fliegt raus**) → **objektives Vor-Ranking** (`objective_score`:
+  Recency + log-Popularität + Fit-Bonus; installierte Repos sinken) → Top 8.
+- **Das LLM ist nur ein Re-Ranker, best-effort.** Prompt listet die **echten**
+  Kandidaten (id, Params, Downloads, Likes, Datum); Antwort **nur** JSON
+  `[{id, why}]`. `parse_ranking` nimmt **ausschließlich** ids, die exakt in der
+  Kandidatenliste stehen (`BTreeSet`-Match) — ein erfundener Name wird verworfen.
+  Leere / kaputte / fehlgeschlagene Antwort → die objektive Reihenfolge bleibt,
+  `note` sagt das.
+- **Reasoner-Trait** (`async fn think(prompt, max_tokens) -> String`) —
+  Prod-Impl auf `LlamaCppAdapter` (`complete`), Tests mit Canned-Antwort. Das
+  Modell ist das über die Rolle `chat`/`coding` geladene (6.6-`select`); der
+  Job lädt es über den Scheduler.
+- **„Besser" = nur objektive, abrufbare Signale** (Release-Datum, Downloads/
+  Likes, mehr Params als das installierte, Fit). Jede Ausgabe trägt „Qualität
+  ist nicht lokal verifizierbar".
+- **Externer Call → Job wird per Handler offline-gated**; die UI holt vorher
+  per-Aktion-Consent (ein Bestätigungsdialog), bevor sie den Job submitted.
+- **Kein Auto-Download** — die Vorschläge haben einen „Download & import"-Knopf
+  (→ 6.4), der Nutzer entscheidet.
+
+**Konsequenzen:**
+- (+) Das LLM kann keinen nicht-existenten Download vorschlagen — die id muss
+  aus einem echten `/api/models`-Treffer stammen.
+- (+) Ohne / mit kaputtem LLM ist die Funktion trotzdem nützlich (objektive
+  Liste).
+- (−) Familie über Freitext ist unscharf — die Suche zieht auch andere Größen /
+  Quant-Re-Uploads; Vor-Ranking + LLM sortieren das, aber die Liste ist nie
+  „kuratiert".
+- (−) Die VRAM-Schätzung aus `param_count` × Precision ist grob (keine echte
+  Dateigröße vor dem Download); ein knapper Fall kann falsch als `Yellow`/`Red`
+  landen. Kalibriert mit den 6.5-Messungen.
+- (−) `SearchSort::Trending` bleibt als eine der zwei Quellen — der Spam-Guard
+  fängt das Gröbste, aber nicht alles.
+
+---
+
 ## Offene Entscheidungen
 
 | # | Frage | Status |

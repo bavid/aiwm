@@ -50,6 +50,7 @@ pub mod scheduler;
 pub mod select;
 pub mod sidecar;
 pub mod telemetry;
+pub mod upgrade;
 
 pub use agent::{
     AgentAdapter, AgentEvent, AgentKind, EndpointConfig, FakeAgentAdapter, HermesAgentAdapter,
@@ -79,6 +80,7 @@ pub use runtime::{
 pub use scheduler::{Decision, HybridScheduler, PlanRequest, Scheduler};
 pub use select::AutoPreference;
 pub use sidecar::{Handshake, SidecarClient, SidecarSpec};
+pub use upgrade::{Reasoner, UpgradeCandidate, UpgradeReport, UpgradeTarget};
 
 /// Semantic version of the core crate, surfaced in the sidecar handshake and the
 /// API `about` endpoint.
