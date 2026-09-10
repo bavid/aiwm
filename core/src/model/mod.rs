@@ -1,12 +1,14 @@
 //! Model files: GGUF header inspection and importing into the canonical store.
 
 pub mod catalog;
+mod delete;
 mod gguf;
 mod import;
 mod kind;
 mod safetensors;
 
 pub use catalog::{KnownModel, KNOWN_MODELS};
+pub use delete::{delete_model, DeleteOutcome};
 pub use gguf::{read_gguf_info, GgufInfo};
 pub use import::{import_model, ImportOutcome, ImportRequest};
 pub use kind::ModelKind;

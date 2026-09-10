@@ -1,0 +1,325 @@
+//! `core::cleanup` — a storage overview and the "safe to delete" reports
+//! (Phase 6.8): what the model store holds, how much room is left on its
+//! volume, exact-duplicate weights, and models that have gone unused.
+//!
+//! Everything here only *reports*. Deleting a model is [`crate::model::delete_model`],
+//! always a confirmed user action.
+
+use std::cmp::Reverse;
+use std::collections::BTreeMap;
+use std::path::Path;
+
+use serde::Serialize;
+use time::{format_description::well_known::Rfc3339, Duration, OffsetDateTime};
+
+use crate::db::Model;
+
+/// Default "not used in a while" threshold for the unused report.
+pub const DEFAULT_STALE_DAYS: i64 = 45;
+/// Free space kept as a safety margin when gating a download (bytes).
+pub const DOWNLOAD_FREE_MARGIN_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+
+/// The whole picture for the Storage panel.
+#[derive(Debug, Clone, Serialize)]
+pub struct StorageReport {
+    /// Sum of the model file sizes the library knows about.
+    pub store_bytes: u64,
+    /// Free / total bytes on the volume the store lives on. `None` when the
+    /// volume can't be resolved (no matching mount point).
+    pub volume_free_bytes: Option<u64>,
+    pub volume_total_bytes: Option<u64>,
+    pub by_kind: Vec<KindUsage>,
+    pub models: Vec<ModelDisk>,
+    /// SHA-256 groups with more than one member — the same weights twice.
+    pub duplicates: Vec<DuplicateGroup>,
+    /// Model ids never used, or not used within `stale_days`.
+    pub unused: Vec<String>,
+    pub stale_days: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct KindUsage {
+    /// `llm` / `image` / `video` / `other` — the top store folder.
+    pub kind: String,
+    pub bytes: u64,
+    pub count: u32,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ModelDisk {
+    pub id: String,
+    pub name: String,
+    pub kind: String,
+    pub size_bytes: u64,
+    pub last_used_at: Option<String>,
+    pub use_count: i64,
+    pub roles: Vec<String>,
+    /// The canonical file is actually on disk.
+    pub file_present: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DuplicateGroup {
+    pub sha256: String,
+    pub member_ids: Vec<String>,
+    /// What deleting all but one would free.
+    pub wasted_bytes: u64,
+}
+
+/// The top store folder a model's file sits in (`llm` / `image` / `video`),
+/// else `"other"` — the file is outside the store.
+pub fn kind_of(model: &Model, store_root: &Path) -> String {
+    let file = Path::new(&model.file_path);
+    let Ok(rel) = file.strip_prefix(store_root) else {
+        return "other".to_string();
+    };
+    rel.components()
+        .next()
+        .and_then(|c| c.as_os_str().to_str())
+        .map(str::to_string)
+        .unwrap_or_else(|| "other".to_string())
+}
+
+/// SHA-256 groups with more than one member, newest-first per group.
+pub fn duplicates(models: &[Model]) -> Vec<DuplicateGroup> {
+    let mut by_hash: BTreeMap<&str, Vec<&Model>> = BTreeMap::new();
+    for m in models {
+        if let Some(h) = m.sha256.as_deref().filter(|h| !h.is_empty()) {
+            by_hash.entry(h).or_default().push(m);
+        }
+    }
+    let mut out: Vec<DuplicateGroup> = by_hash
+        .into_iter()
+        .filter(|(_, ms)| ms.len() > 1)
+        .map(|(hash, mut ms)| {
+            ms.sort_by_key(|m| Reverse(m.imported_at.clone()));
+            let unit = ms
+                .iter()
+                .map(|m| m.size_bytes.max(0) as u64)
+                .max()
+                .unwrap_or(0);
+            DuplicateGroup {
+                sha256: hash.to_string(),
+                member_ids: ms.iter().map(|m| m.id.clone()).collect(),
+                wasted_bytes: unit.saturating_mul((ms.len() - 1) as u64),
+            }
+        })
+        .collect();
+    out.sort_by_key(|g| Reverse(g.wasted_bytes));
+    out
+}
+
+/// Ids of models never used, or whose `last_used_at` is before `cutoff_iso`
+/// (an RFC 3339 string — timestamps sort lexicographically).
+pub fn unused_ids(models: &[Model], cutoff_iso: &str) -> Vec<String> {
+    models
+        .iter()
+        .filter(|m| match &m.last_used_at {
+            None => true,
+            Some(last) => last.as_str() < cutoff_iso,
+        })
+        .map(|m| m.id.clone())
+        .collect()
+}
+
+/// `(free, total)` bytes on the volume that `path` lives on — the disk whose
+/// mount point is the longest prefix of `path`'s canonical form.
+pub fn volume_free(path: &Path) -> Option<(u64, u64)> {
+    let target = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let disks = sysinfo::Disks::new_with_refreshed_list();
+    disks
+        .list()
+        .iter()
+        .filter(|d| target.starts_with(d.mount_point()))
+        .max_by_key(|d| d.mount_point().as_os_str().len())
+        .map(|d| (d.available_space(), d.total_space()))
+}
+
+/// Assemble the full report. `stale_days` sets the unused cutoff.
+pub fn report(models: &[Model], store_root: &Path, stale_days: i64) -> StorageReport {
+    let cutoff = (OffsetDateTime::now_utc() - Duration::days(stale_days.max(0)))
+        .format(&Rfc3339)
+        .unwrap_or_default();
+
+    let mut by_kind: BTreeMap<String, (u64, u32)> = BTreeMap::new();
+    let mut store_bytes: u64 = 0;
+    let mut disks: Vec<ModelDisk> = Vec::with_capacity(models.len());
+    for m in models {
+        let size = m.size_bytes.max(0) as u64;
+        let kind = kind_of(m, store_root);
+        store_bytes = store_bytes.saturating_add(size);
+        let e = by_kind.entry(kind.clone()).or_default();
+        e.0 = e.0.saturating_add(size);
+        e.1 += 1;
+        disks.push(ModelDisk {
+            id: m.id.clone(),
+            name: m.name.clone(),
+            kind,
+            size_bytes: size,
+            last_used_at: m.last_used_at.clone(),
+            use_count: m.use_count,
+            roles: m.roles.clone(),
+            file_present: Path::new(&m.file_path).is_file(),
+        });
+    }
+    disks.sort_by_key(|d| Reverse(d.size_bytes));
+
+    let (free, total) = match volume_free(store_root) {
+        Some((f, t)) => (Some(f), Some(t)),
+        None => (None, None),
+    };
+
+    StorageReport {
+        store_bytes,
+        volume_free_bytes: free,
+        volume_total_bytes: total,
+        by_kind: by_kind
+            .into_iter()
+            .map(|(kind, (bytes, count))| KindUsage { kind, bytes, count })
+            .collect(),
+        models: disks,
+        duplicates: duplicates(models),
+        unused: unused_ids(models, &cutoff),
+        stale_days,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::NewModel;
+
+    fn model(over: NewModel) -> Model {
+        Model {
+            id: over.name.clone(),
+            publisher: None,
+            name: over.name,
+            family: None,
+            format: over.format,
+            quant: None,
+            arch: None,
+            param_count: None,
+            file_path: over.file_path,
+            sha256: over.sha256,
+            size_bytes: over.size_bytes,
+            ctx_max: None,
+            vram_estimate_mb: None,
+            ram_estimate_mb: None,
+            source: "manual".into(),
+            source_revision: None,
+            imported_at: "2026-01-01T00:00:00Z".into(),
+            last_used_at: None,
+            use_count: 0,
+            n_layers: None,
+            n_embd: None,
+            n_heads: None,
+            n_kv_heads: None,
+            roles: over.roles,
+            runtimes: vec![],
+        }
+    }
+
+    #[test]
+    fn kind_is_the_top_store_folder() {
+        let store = Path::new("E:\\AI\\models");
+        let m = model(NewModel {
+            name: "q".into(),
+            format: "gguf".into(),
+            file_path: "E:\\AI\\models\\llm\\qwen\\q.gguf".into(),
+            ..NewModel::default()
+        });
+        assert_eq!(kind_of(&m, store), "llm");
+
+        let outside = model(NewModel {
+            name: "x".into(),
+            format: "gguf".into(),
+            file_path: "D:\\elsewhere\\x.gguf".into(),
+            ..NewModel::default()
+        });
+        assert_eq!(kind_of(&outside, store), "other");
+    }
+
+    #[test]
+    fn duplicates_groups_by_sha256_and_totals_the_waste() {
+        let mk = |name: &str, hash: Option<&str>, size: i64, imported: &str| {
+            let mut m = model(NewModel {
+                name: name.into(),
+                format: "gguf".into(),
+                file_path: format!("E:\\m\\{name}.gguf"),
+                sha256: hash.map(str::to_string),
+                size_bytes: size,
+                ..NewModel::default()
+            });
+            m.imported_at = imported.into();
+            m
+        };
+        let models = vec![
+            mk("a", Some("aaaa"), 1_000, "2026-01-01T00:00:00Z"),
+            mk("a-copy", Some("aaaa"), 1_000, "2026-02-01T00:00:00Z"),
+            mk("a-again", Some("aaaa"), 1_000, "2026-03-01T00:00:00Z"),
+            mk("b", Some("bbbb"), 500, "2026-01-01T00:00:00Z"),
+            mk("no-hash", None, 9_999, "2026-01-01T00:00:00Z"),
+        ];
+        let dups = duplicates(&models);
+        assert_eq!(dups.len(), 1);
+        assert_eq!(dups[0].sha256, "aaaa");
+        assert_eq!(dups[0].member_ids, ["a-again", "a-copy", "a"]); // newest first
+        assert_eq!(dups[0].wasted_bytes, 2_000); // two redundant copies
+    }
+
+    #[test]
+    fn unused_ids_flags_never_used_and_stale() {
+        let mut fresh = model(NewModel {
+            name: "fresh".into(),
+            format: "gguf".into(),
+            file_path: "E:\\m\\fresh.gguf".into(),
+            ..NewModel::default()
+        });
+        fresh.last_used_at = Some("2026-09-01T00:00:00Z".into());
+        let mut stale = model(NewModel {
+            name: "stale".into(),
+            format: "gguf".into(),
+            file_path: "E:\\m\\stale.gguf".into(),
+            ..NewModel::default()
+        });
+        stale.last_used_at = Some("2026-01-01T00:00:00Z".into());
+        let never = model(NewModel {
+            name: "never".into(),
+            format: "gguf".into(),
+            file_path: "E:\\m\\never.gguf".into(),
+            ..NewModel::default()
+        });
+
+        let got = unused_ids(&[fresh, stale, never], "2026-06-01T00:00:00Z");
+        assert_eq!(got, ["stale", "never"]);
+    }
+
+    #[test]
+    fn report_sums_by_kind_and_orders_models_by_size() {
+        let store = Path::new("E:\\AI\\models");
+        let mk = |name: &str, kind: &str, size: i64| {
+            model(NewModel {
+                name: name.into(),
+                format: "gguf".into(),
+                file_path: format!("E:\\AI\\models\\{kind}\\{name}\\f"),
+                size_bytes: size,
+                ..NewModel::default()
+            })
+        };
+        let r = report(
+            &[
+                mk("big", "llm", 8_000),
+                mk("small", "llm", 1_000),
+                mk("pic", "image", 6_000),
+            ],
+            store,
+            30,
+        );
+        assert_eq!(r.store_bytes, 15_000);
+        assert_eq!(r.models[0].name, "big");
+        let llm = r.by_kind.iter().find(|k| k.kind == "llm").unwrap();
+        assert_eq!(llm.bytes, 9_000);
+        assert_eq!(llm.count, 2);
+        assert_eq!(r.unused.len(), 3); // none ever used
+    }
+}

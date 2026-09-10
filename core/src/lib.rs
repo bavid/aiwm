@@ -33,6 +33,7 @@ pub mod app;
 pub mod backup;
 pub mod bench;
 pub mod capability;
+pub mod cleanup;
 pub mod compat;
 pub mod config;
 pub mod db;
@@ -60,13 +61,16 @@ pub use api::{ApiServer, Services};
 pub use app::App;
 pub use bench::{BenchOutcome, BenchReport, BenchRequest};
 pub use capability::agent::{AgentSessions, CodingRuntime, LlamaCodingRuntime};
+pub use cleanup::StorageReport;
 pub use compat::{estimate as estimate_vram, FitVerdict, ModelDims, VramEstimate};
 pub use config::Config;
 pub use db::{Database, Model, ModelRepo, NewModel};
 pub use download::{DownloadManager, EnqueueRequest};
 pub use error::{CoreError, Result};
 pub use link::LinkStrategy;
-pub use model::{import_model, GgufInfo, ImportOutcome, ImportRequest};
+pub use model::{
+    delete_model, import_model, DeleteOutcome, GgufInfo, ImportOutcome, ImportRequest,
+};
 pub use orchestrator::{JobEngine, JobOutcome, JobState};
 pub use paths::AppPaths;
 pub use registry::{

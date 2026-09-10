@@ -37,6 +37,11 @@ fn err(msg: impl std::fmt::Display) -> CoreError {
     CoreError::Config(format!("download: {msg}"))
 }
 
+/// Bytes → a rough `"12.3 GB"` for user-facing messages.
+fn gib(bytes: u64) -> String {
+    format!("{:.1} GB", bytes as f64 / (1024.0 * 1024.0 * 1024.0))
+}
+
 /// What a caller supplies to queue a download.
 #[derive(Debug, Clone)]
 pub struct EnqueueRequest {
@@ -89,10 +94,26 @@ impl DownloadManager {
         self.offline.load(Ordering::Relaxed)
     }
 
-    /// Queue a download. Refused in offline mode.
+    /// Queue a download. Refused in offline mode, or when the store volume
+    /// clearly cannot hold the file (Phase 6.8 — the size only counts once, on
+    /// the store volume, since `import_model` moves it there).
     pub async fn enqueue(&self, req: EnqueueRequest) -> Result<Download> {
         if self.is_offline() {
             return Err(err("offline mode is on — cannot download"));
+        }
+        if let Some(size) = req.size_bytes {
+            if let Some((free, _total)) = crate::cleanup::volume_free(&self.store_root) {
+                let need = size.saturating_add(crate::cleanup::DOWNLOAD_FREE_MARGIN_BYTES);
+                if free < need {
+                    return Err(err(format!(
+                        "not enough free space on the model store volume: needs ~{} \
+                         (+{} margin), {} free",
+                        gib(size),
+                        gib(crate::cleanup::DOWNLOAD_FREE_MARGIN_BYTES),
+                        gib(free),
+                    )));
+                }
+            }
         }
         let d = self
             .db
