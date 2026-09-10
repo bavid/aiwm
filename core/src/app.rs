@@ -96,6 +96,7 @@ impl App {
         runtimes.register(comfyui.clone());
         let budget = resolve_vram_budget(&config, &telemetry);
         let scheduler = Arc::new(HybridScheduler::new(runtimes.clone(), budget));
+        let auto_pref = config.models.auto_preference;
         let jobs = Arc::new(
             JobEngine::new(
                 db.clone(),
@@ -105,7 +106,8 @@ impl App {
                 comfyui.clone(),
                 paths.outputs_dir(),
             )
-            .with_telemetry(telemetry.subscribe()),
+            .with_telemetry(telemetry.subscribe())
+            .with_auto_preference(auto_pref),
         );
         let coding = Arc::new(LlamaCodingRuntime::new(
             runtimes.clone(),
@@ -117,7 +119,8 @@ impl App {
         let agents = Arc::new(
             AgentSessions::new(db.clone(), coding)
                 .with_adapter(opencode.clone())
-                .with_adapter(hermes.clone()),
+                .with_adapter(hermes.clone())
+                .with_auto_preference(auto_pref),
         );
         let offline = Arc::new(AtomicBool::new(config.offline_mode));
         let registry = Registry::new(

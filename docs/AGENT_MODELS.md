@@ -32,8 +32,9 @@ lässt ~9–11 GB VRAM für alles andere; ein 14B-Q4 füllt die Karte fast allei
 `open_agent_session` löst das Modell so auf:
 
 1. `agent.model_id` gesetzt → genau dieses (muss in der Library sein).
-2. sonst **`Auto`** → `models.pick_for_role("coding")` (zuletzt genutzt, dann
-   meist genutzt, dann Name).
+2. sonst **`Auto`** → `core::select::pick_for_role("coding", …)` (6.6): passt es
+   ins VRAM-Budget → benchmark-Score (`[models].auto_preference`) → Nutzung.
+   Ohne Benchmark-Daten = zuletzt / meist genutzt / Name.
 
 Die `EndpointConfig.model` an OpenCode ist der Library-**Name** des Modells;
 `llama-server` serviert ohnehin nur das geladene Modell, der Name ist für
@@ -76,8 +77,7 @@ bleibt an.
 2. Models → **Import** → Typ **Chat**, Rollen `chat, coding` (Komma).
 3. Import stempelt Familie/Kontext aus dem GGUF-Header.
 
-Danach zeigt `models.pick_for_role("coding")` das Modell, und `Auto` in einem
-Agent-Profil greift.
+Danach greift `Auto` in einem Agent-Profil (Rolle `coding`).
 
 ---
 

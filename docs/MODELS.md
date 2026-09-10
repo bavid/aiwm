@@ -86,7 +86,7 @@ Kandidaten + Import + Smoke: [AGENT_MODELS.md](AGENT_MODELS.md). Noch nicht im
 | Schema + Tabellen | ✅ WP-2 (+ `jobs.result`, Migration 0002, 2.4a) |
 | `ModelRepo` (CRUD, Rollen, `find_by_*`, `pick_for_role`) | ✅ 2.1 / 2.4a |
 | Manueller Modell-Import (GGUF **oder** `.safetensors` wählen → getypter Store) | ✅ 2.1 · `.safetensors` + `ModelKind`-Routing + Pickle-Ablehnung 3.3 |
-| `Auto`-Modellwahl (Rolle → zuletzt/meist genutzt → Name) | ✅ 2.4a `chat` (ADR-015) · 3.4 `base_diffusion` für `job_type=image`; benchmark-gestützt erst Phase 6 |
+| `Auto`-Modellwahl | ✅ 2.4a `chat` (ADR-015) · 3.4 `base_diffusion` · 4.1 `base_video`. **6.6** `core::select::pick_for_role` — Fit zuerst, dann benchmark-Score (6.5, preference-gewichtet), dann Nutzung; ohne Benchmark = die alte „zuletzt/meist genutzt/Name"-Regel. `[models].auto_preference` balanced/fast/quality. `vae`/`text_encoder` bleiben schlicht |
 | Kanonischer Store + Link-Manager | ✅ Store 2.1 · `core::link` 2.3 (Passthrough/Junction/Hardlink/Copy, `model_links`, ADR-007) · `ExtraPath` 3.3 (ADR-019). GGUF → llama.cpp = `passthrough`; Bild → ComfyUI = `extra_path` |
 | VRAM-Fit-Schätzung vor dem Load (`core::compat`) | ✅ 2.6 (ADR-016): Gewichte + KV-Cache aus GGUF-Arch-Dims + flacher Overhead, geschätzt für `min(ctx_max, 8192)`; Scheduler plant dagegen; passt es nicht → `blocked` mit Klartext. + 6.3 **`compat::verdict`** → 🟢/🟡/🔴 mit Begründung (VRAM-Budget + freier RAM für Offload) für Discovery/Upgrade-Check. Konstanten-Kalibrierung → 4.0 |
 | Kompatibilitäts-Engine (🟢/🟡/🔴 vor Download) | ✅ 6.3 `compat::verdict` in der „Discover"-Dateiliste + `.safetensors`-Header-Reader (Param-Count/Precision) im Import |
@@ -95,7 +95,7 @@ Kandidaten + Import + Smoke: [AGENT_MODELS.md](AGENT_MODELS.md). Noch nicht im
 | Download-Manager (Queue, Resume, Verify, Speicherplan) | ✅ 6.4 (ADR-023) `core::download::DownloadManager` — eine Queue / ein Slot, HTTP-Range-Resume (Retry 5×), Verify gegen die SHA-256 aus 6.1 → `import_model`. `downloads`-Tabelle (Migr. `0006`), Recovery → `queued`. `GET/POST /downloads` + `{pause,resume,cancel}` + Tauri; „Download & import" in `Discover.tsx` (Split-GGUF/Gated aus) + `Downloads.tsx`. `offline_mode` sperrt `enqueue`/`resume`. **Speicherplan noch offen → 6.8** |
 | Dedup-/Unused-/Versions-Reports | Phase 6 (6.8) |
 | Lokale Mikro-Benchmarks („Test model") | ✅ 6.5 `core::bench` (`job_type=bench`, Migr. `0007`) — tok/s Prompt+Gen, Kalt-Ladezeit, VRAM-/RAM-Peak, Stabilität; `overall_score` = offen deklarierte Heuristik `(0,65·speed+0,35·stability)·fit_faktor`, **keine Qualitäts-Achse** (ADR-024). `GET /benchmarks` + `POST /models/{id}/benchmark` + „Score"-Spalte + „Test"-Knopf (nur GGUF). Bild/Video-Bench + externer Score = später |
-| Benchmark-gestützte Auto-Auswahl | Phase 6 (6.6 — nutzt 6.5) |
+| Benchmark-gestützte Auto-Auswahl | ✅ 6.6 `core::select` (verlängert ADR-015) — siehe „`Auto`-Modellwahl" oben |
 
 ## Hardware-Realität
 

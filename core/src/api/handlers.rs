@@ -71,6 +71,7 @@ pub fn save_config(app: &App, update: ConfigUpdate) -> Result<Config> {
     cfg.vram_budget_mb = update.vram_budget_mb;
     cfg.llama = update.llama;
     cfg.comfyui = update.comfyui;
+    cfg.models = update.models;
     cfg.save(&app.paths)?;
     app.set_offline(cfg.offline_mode);
     Ok(cfg)

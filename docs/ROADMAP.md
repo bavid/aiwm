@@ -226,8 +226,13 @@ suchen, verifiziert laden, lokal messen, Upgrade-Check. Alles offline-first
   Heuristik `(0,65·speed + 0,35·stability)·fit_faktor`, **keine Qualitäts-Achse**.
   `GET /benchmarks` + `POST /models/{id}/benchmark` + Tauri; „Score"-Spalte +
   „Test"-Knopf in der Model Library. Bild/Video-Bench + externer Score = später
-- 6.6 **Benchmark-gestützte `Auto`-Auswahl** — `pick_for_role` nutzt Fit +
-  Score + Nutzung
+- [x] 6.6 **Benchmark-gestützte `Auto`-Auswahl** — `core::select::pick_for_role`
+  (nutzt die 6.5-`benchmarks`): **Fit zuerst** (`vram_estimate_mb` ≤ Budget),
+  **dann Score** (preference-gewichtet aus `gen_tps` / `stability` / Params —
+  keine Qualitäts-Achse), **dann Nutzung**. Ohne Benchmark-Daten = die alte
+  Regel. `[models].auto_preference` = `balanced` / `fast` / `quality` (Settings).
+  Verdrahtet für `chat` / `coding` / `base_diffusion` / `base_video` (verlängert
+  ADR-015)
 - 6.7 **Upgrade-Check** — „Gibt es was Besseres?" pro Modell / Rolle: HF-Hub
   fragen → Fit-Filter → lokales LLM rankt die echten Treffer (erfindet nichts)
   → Liste + „Download & import". Per-Aktion-Consent, im `offline_mode` gesperrt

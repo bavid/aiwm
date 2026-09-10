@@ -161,6 +161,7 @@ const CONFIG: AnyRecord = {
     jinja: true, chat_template: "", load_timeout_secs: 180,
   },
   comfyui: { vram_mode: "auto", reserve_vram_mb: 0, extra_args: "" },
+  models: { auto_preference: "balanced" },
 };
 
 const TELEMETRY: AnyRecord = {

@@ -59,6 +59,11 @@ pub trait CodingRuntime: Send + Sync + fmt::Debug {
 
     /// Unpin and unload `model_id` (best effort — a stop must not fail on this).
     async fn release(&self, model_id: &str);
+
+    /// VRAM budget (MB) to judge `Auto` fit against; `0` = unknown.
+    fn budget_mb(&self) -> u64 {
+        0
+    }
 }
 
 /// The production [`CodingRuntime`]: plan on the scheduler, load on `llama-server`,
@@ -119,6 +124,10 @@ impl CodingRuntime for LlamaCodingRuntime {
             let _ = rt.unload_model(model_id).await;
         }
     }
+
+    fn budget_mb(&self) -> u64 {
+        self.scheduler.budget_mb()
+    }
 }
 
 /// A session that is currently running: its runtime, the model it pinned, and
@@ -145,6 +154,8 @@ pub struct AgentSessions {
     db: Database,
     coding: Arc<dyn CodingRuntime>,
     adapters: HashMap<AgentKind, Arc<dyn AgentAdapter>>,
+    /// How `Auto` weighs the `coding` candidates (`[models]` config, 6.6).
+    auto_preference: crate::select::AutoPreference,
     /// Behind an `Arc` so a session's drain task can finalise itself (unpin the
     /// model, mark the row `Failed`) if the runtime dies without a `stop`.
     live: LiveMap,
@@ -156,6 +167,7 @@ impl AgentSessions {
             db,
             coding,
             adapters: HashMap::new(),
+            auto_preference: crate::select::AutoPreference::default(),
             live: Arc::new(Mutex::new(HashMap::new())),
         }
     }
@@ -164,6 +176,13 @@ impl AgentSessions {
     #[must_use]
     pub fn with_adapter(mut self, adapter: Arc<dyn AgentAdapter>) -> Self {
         self.adapters.insert(adapter.kind(), adapter);
+        self
+    }
+
+    /// Set the `Auto` coding-model preference (`[models].auto_preference`).
+    #[must_use]
+    pub fn with_auto_preference(mut self, pref: crate::select::AutoPreference) -> Self {
+        self.auto_preference = pref;
         self
     }
 
@@ -304,17 +323,19 @@ impl AgentSessions {
             Some(id) => self.db.models().get(id).await?.ok_or_else(|| {
                 CoreError::Config(format!("the profile's model {id} is not in the library"))
             }),
-            None => self
-                .db
-                .models()
-                .pick_for_role("coding")
-                .await?
-                .ok_or_else(|| {
-                    CoreError::Config(
+            None => crate::select::pick_for_role(
+                &self.db,
+                "coding",
+                self.coding.budget_mb(),
+                self.auto_preference,
+            )
+            .await?
+            .ok_or_else(|| {
+                CoreError::Config(
                     "no model carries the 'coding' role — import a coding GGUF and mark it 'coding'"
                         .into(),
                 )
-                }),
+            }),
         }
     }
 

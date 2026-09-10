@@ -5,9 +5,11 @@ import {
   getConfig,
   saveConfig,
   type AppConfig,
+  type AutoPreference,
   type ComfyConfig,
   type ConfigUpdate,
   type LlamaConfig,
+  type ModelsConfig,
 } from "../../lib/ipc";
 import { getTheme, setTheme, type Theme } from "../../lib/theme";
 import { BackupCard } from "./BackupCard";
@@ -29,6 +31,12 @@ const VRAM_MODES: { value: string; label: string }[] = [
   { value: "novram", label: "No VRAM — minimal GPU use (slow)" },
 ];
 
+const AUTO_PREFS: { value: AutoPreference; label: string }[] = [
+  { value: "balanced", label: "Balanced — speed, stability and size together" },
+  { value: "fast", label: "Prefer fast — highest tokens/sec that still fits" },
+  { value: "quality", label: "Prefer quality — biggest model that still fits" },
+];
+
 type Form = ConfigUpdate;
 
 const toForm = (c: AppConfig): Form => ({
@@ -37,6 +45,7 @@ const toForm = (c: AppConfig): Form => ({
   vram_budget_mb: c.vram_budget_mb,
   llama: { ...c.llama },
   comfyui: { ...c.comfyui },
+  models: { ...c.models },
 });
 
 const sameForm = (a: Form, b: Form): boolean =>
@@ -51,7 +60,8 @@ const sameForm = (a: Form, b: Form): boolean =>
   a.llama.chat_template === b.llama.chat_template &&
   a.comfyui.vram_mode === b.comfyui.vram_mode &&
   a.comfyui.reserve_vram_mb === b.comfyui.reserve_vram_mb &&
-  a.comfyui.extra_args === b.comfyui.extra_args;
+  a.comfyui.extra_args === b.comfyui.extra_args &&
+  a.models.auto_preference === b.models.auto_preference;
 
 export function Settings() {
   const about = useAbout();
@@ -96,6 +106,8 @@ export function Settings() {
     patch({ llama: { ...form.llama, ...next } });
   const patchComfy = (next: Partial<ComfyConfig>) =>
     patch({ comfyui: { ...form.comfyui, ...next } });
+  const patchModels = (next: Partial<ModelsConfig>) =>
+    patch({ models: { ...form.models, ...next } });
 
   const chooseTheme = (t: Theme) => {
     setTheme(t);
@@ -112,7 +124,7 @@ export function Settings() {
       setForm(f);
       setStatus({
         kind: "ok",
-        text: "Saved. Offline mode applies now; store path, VRAM budget, llama.cpp and ComfyUI options take effect after a restart.",
+        text: "Saved. Offline mode applies now; store path, VRAM budget, model selection, llama.cpp and ComfyUI options take effect after a restart.",
       });
     } catch (e) {
       setStatus({ kind: "err", text: e instanceof Error ? e.message : String(e) });
@@ -185,6 +197,32 @@ export function Settings() {
             value={form.vram_budget_mb}
             onChange={(e) => patch({ vram_budget_mb: numeric(e.target.value) })}
           />
+        </label>
+      </section>
+
+      <section className="card set-group">
+        <header className="card__head">
+          <h2>Model selection (Auto)</h2>
+          <span className="card__sub">restart to apply</span>
+        </header>
+        <label className="set-field">
+          <span>
+            When a job asks for <code>Auto</code>, rank the role's models by their
+            benchmark (run “Test” on the Models tab) — a model that fits your VRAM
+            budget always wins first. No benchmark data → most-recently-used.
+          </span>
+          <select
+            value={form.models.auto_preference}
+            onChange={(e) =>
+              patchModels({ auto_preference: e.target.value as AutoPreference })
+            }
+          >
+            {AUTO_PREFS.map((p) => (
+              <option key={p.value} value={p.value}>
+                {p.label}
+              </option>
+            ))}
+          </select>
         </label>
       </section>
 

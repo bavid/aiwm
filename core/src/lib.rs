@@ -47,6 +47,7 @@ pub mod pipeline;
 pub mod registry;
 pub mod runtime;
 pub mod scheduler;
+pub mod select;
 pub mod sidecar;
 pub mod telemetry;
 
@@ -76,6 +77,7 @@ pub use runtime::{
     RuntimeRegistry, RuntimeSupervisor, SpawnSpec,
 };
 pub use scheduler::{Decision, HybridScheduler, PlanRequest, Scheduler};
+pub use select::AutoPreference;
 pub use sidecar::{Handshake, SidecarClient, SidecarSpec};
 
 /// Semantic version of the core crate, surfaced in the sidecar handshake and the

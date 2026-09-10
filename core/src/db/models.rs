@@ -331,6 +331,22 @@ impl<'a> ModelRepo<'a> {
         Ok(out)
     }
 
+    /// Every model carrying `role`, each paired with its most recent benchmark
+    /// (`None` if never tested). Feeds [`crate::select::pick_for_role`].
+    pub async fn for_role_with_benchmark(
+        &self,
+        role: &str,
+    ) -> Result<Vec<(Model, Option<super::Benchmark>)>> {
+        let models = self.for_role(role).await?;
+        let bench = super::BenchRepo::new(self.pool);
+        let mut out = Vec::with_capacity(models.len());
+        for m in models {
+            let b = bench.latest_for(&m.id).await?;
+            out.push((m, b));
+        }
+        Ok(out)
+    }
+
     pub async fn mark_used(&self, id: &str) -> Result<()> {
         sqlx::query("UPDATE models SET use_count = use_count + 1, last_used_at = $1 WHERE id = $2")
             .bind(now_rfc3339())

@@ -304,6 +304,7 @@ mod tests {
         assert_eq!(current["offline_mode"], false);
         assert_eq!(current["llama"]["gpu_layers"], 999);
         assert_eq!(current["comfyui"]["vram_mode"], "auto");
+        assert_eq!(current["models"]["auto_preference"], "balanced");
 
         let saved: serde_json::Value = reqwest::Client::new()
             .put(format!("{base}/config"))
@@ -312,7 +313,8 @@ mod tests {
                 "offline_mode": true,
                 "vram_budget_mb": 12000,
                 "llama": { "gpu_layers": 32, "ctx_size": 4096, "flash_attention": false, "load_timeout_secs": 120 },
-                "comfyui": { "vram_mode": "lowvram" }
+                "comfyui": { "vram_mode": "lowvram" },
+                "models": { "auto_preference": "quality" }
             }))
             .send()
             .await
@@ -323,6 +325,7 @@ mod tests {
         assert_eq!(saved["vram_budget_mb"], 12000);
         assert_eq!(saved["llama"]["ctx_size"], 4096);
         assert_eq!(saved["comfyui"]["vram_mode"], "lowvram");
+        assert_eq!(saved["models"]["auto_preference"], "quality");
 
         // Offline flipped without a restart; the file kept the change.
         assert!(app.offline());
@@ -335,6 +338,7 @@ mod tests {
         assert_eq!(reread["store_path"], "E:\\models\\here");
         assert_eq!(reread["offline_mode"], true);
         assert_eq!(reread["comfyui"]["vram_mode"], "lowvram");
+        assert_eq!(reread["models"]["auto_preference"], "quality");
 
         // A bad VRAM mode is rejected.
         let bad = reqwest::Client::new()

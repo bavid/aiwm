@@ -41,6 +41,14 @@ export interface ComfyConfig {
   extra_args: string;
 }
 
+/** How `Auto` weighs speed vs heft (`balanced` | `fast` | `quality`). */
+export type AutoPreference = "balanced" | "fast" | "quality";
+
+/** The `[models]` table — how `Auto` picks a model for a role (6.6). */
+export interface ModelsConfig {
+  auto_preference: AutoPreference;
+}
+
 /** The full config.toml as the core sees it. */
 export interface AppConfig {
   store_path: string;
@@ -51,6 +59,7 @@ export interface AppConfig {
   vram_budget_mb: number;
   llama: LlamaConfig;
   comfyui: ComfyConfig;
+  models: ModelsConfig;
 }
 
 /** The user-editable subset the Settings tab sends back. */
@@ -60,6 +69,7 @@ export interface ConfigUpdate {
   vram_budget_mb: number;
   llama: LlamaConfig;
   comfyui: ComfyConfig;
+  models: ModelsConfig;
 }
 
 export interface GpuProcess {

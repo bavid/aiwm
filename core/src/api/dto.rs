@@ -4,7 +4,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::agent::{HermesInstallStatus, PermissionDecision};
-use crate::config::{ComfyConfig, LlamaConfig};
+use crate::config::{ComfyConfig, LlamaConfig, ModelsConfig};
 use crate::db::{AgentSession, AgentSessionEvent, Job, JobEvent};
 use crate::registry::{Freshness, RemoteModel, SearchQuery, SearchSort};
 use crate::runtime::{Health, RuntimeKind};
@@ -37,6 +37,9 @@ pub struct ConfigUpdate {
     /// New in 3.7; older clients that omit it keep ComfyUI on `auto`.
     #[serde(default)]
     pub comfyui: ComfyConfig,
+    /// New in 6.6; older clients that omit it keep `Auto` on `balanced`.
+    #[serde(default)]
+    pub models: ModelsConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

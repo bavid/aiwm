@@ -44,6 +44,8 @@ pub struct Config {
     pub llama: LlamaConfig,
     /// ComfyUI server launch options (see [`crate::runtime::ComfyOptions`]).
     pub comfyui: ComfyConfig,
+    /// How `Auto` picks a model (Phase 6.6).
+    pub models: ModelsConfig,
 }
 
 /// Upper bound for `[comfyui].reserve_vram_mb` — reserving more than this on a
@@ -160,6 +162,16 @@ impl LlamaConfig {
     }
 }
 
+/// The `[models]` table — how `Auto` picks a model for a role (Phase 6.6).
+/// Applied at startup; a change needs a restart.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ModelsConfig {
+    /// `balanced` (default), `fast`, or `quality`. Steers the benchmark-aware
+    /// selection ([`crate::select`]).
+    pub auto_preference: crate::select::AutoPreference,
+}
+
 /// Used when `vram_budget_mb` is `0` and no NVIDIA GPU is detected.
 pub const FALLBACK_VRAM_BUDGET_MB: u64 = 8192;
 
@@ -173,6 +185,7 @@ impl Default for Config {
             vram_budget_mb: 0,
             llama: LlamaConfig::default(),
             comfyui: ComfyConfig::default(),
+            models: ModelsConfig::default(),
         }
     }
 }
@@ -574,6 +587,29 @@ mod tests {
 
         let cfg = Config::load(&paths).unwrap();
         assert_eq!(cfg.comfyui, ComfyConfig::default());
+        assert_eq!(
+            cfg.models.auto_preference,
+            crate::select::AutoPreference::Balanced
+        );
+    }
+
+    #[test]
+    fn models_table_reads_the_auto_preference_and_rejects_junk() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = AppPaths::rooted(tmp.path());
+        std::fs::write(
+            paths.config_file(),
+            "[models]\nauto_preference = 'quality'\n",
+        )
+        .unwrap();
+        let cfg = Config::load(&paths).unwrap();
+        assert_eq!(
+            cfg.models.auto_preference,
+            crate::select::AutoPreference::Quality
+        );
+
+        std::fs::write(paths.config_file(), "[models]\nauto_preference = 'turbo'\n").unwrap();
+        assert!(Config::load(&paths).is_err());
     }
 
     #[test]

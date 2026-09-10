@@ -42,7 +42,7 @@ den letzten Cache + „offline" statt Fehler.
 | **6.3** | **Kompatibilitäts-Engine v2** (`core::compat` + `core::model` erweitert — verlängert ADR-016). **6.3a**: `compat::verdict(dims, ctx, vram_budget, free_ram) -> FitVerdict { Green \| Yellow{reason} \| Red{reason} \| Unknown }` (Gewichte + KV + Overhead vs. VRAM-Budget **und** freier System-RAM für den Offload-Fall), in der „Discover"-Dateiliste. **6.3b**: bounded `.safetensors`-Header-Reader (`read_safetensors_info` — Param-Count + dominante Precision + `__metadata__`, der seit 3.3 vertagte TODO), im Import verdrahtet (nicht-lesbarer Header failt nicht); familien-bewusste `media_headroom_mb` statt der `+2,5 GB`-Faustregel. Konstanten in `HARDWARE.md` dokumentiert, echte Messkalibrierung wartet auf 4.0. | ✅ *(siehe „## 6.3 — Ergebnis")* |
 | **6.4** | **Download-Manager** (`core::download` erweitert — ADR-023): `downloads`-Tabelle (Migration `0006`: id, url, dest, sha256, size, bytes_done, state {queued\|running\|paused\|verifying\|done\|failed}), Queue mit einem aktiven Slot, **Resume über HTTP-Range**, Verify gegen die erwartete SHA-256 (aus 6.1), dann Übergabe an `import_model`. `GET/POST /downloads`, `POST /downloads/{id}/{pause,resume,cancel}`, Fortschritts-Events (`job_events`-Muster). `offline_mode` → Ablehnung. UI: „Download & import"-Knopf auf den Discovery-Karten + eine Downloads-Liste. Speicherplanung: freier Platz auf dem Store-Volume vs. Download-Größe, Klartext-Warnung. | ✅ *(siehe „## 6.4 — Ergebnis")* |
 | **6.5** | **`core::bench` — lokale Mikro-Benchmarks**: `benchmarks`-Tabelle (Migration `0006`: model_id, ts, tokens_per_sec, load_ms, vram_peak_mb, ram_peak_mb, stability_score, notes), ein „Test model"-Job pro Modell (kurzer Prompt → tok/s Prompt+Gen, Ladezeit vom Adapter, VRAM-Peak via NVML, RAM-Peak via sysinfo). Für Bild/Video analog: Generierungszeit + VRAM. Optionaler Fetch der externen Benchmark-Scores (Quelle aus 6.0), lokal gecacht. `Overall Score` = klar gekennzeichnete gewichtete Heuristik (lokale Perf + externer Score + Stabilität). UI: „Test"-Knopf + eine Score-Spalte in der Model Library. | ✅ *(siehe „## 6.5 — Ergebnis")* |
-| **6.6** | **Benchmark-gestützte `Auto`-Auswahl**: `ModelRepo::pick_for_role` bezieht Benchmark-Daten ein (statt nur `last_used_at` / `use_count`) — Fit zuerst, dann Score, dann Nutzung. Gewichtung + „bevorzuge schnell / bevorzuge Qualität" in `[models]`-Config. Betrifft Chat, Coding, `base_diffusion`, `base_video`. Regelbasierter Fallback bleibt, wenn keine Benchmark-Daten da sind. | offen |
+| **6.6** | **Benchmark-gestützte `Auto`-Auswahl**: `ModelRepo::pick_for_role` bezieht Benchmark-Daten ein (statt nur `last_used_at` / `use_count`) — Fit zuerst, dann Score, dann Nutzung. Gewichtung + „bevorzuge schnell / bevorzuge Qualität" in `[models]`-Config. Betrifft Chat, Coding, `base_diffusion`, `base_video`. Regelbasierter Fallback bleibt, wenn keine Benchmark-Daten da sind. | ✅ *(siehe „## 6.6 — Ergebnis")* |
 | **6.7** | **Upgrade-Check** (die Backlog-Idee — `core::registry` + `core::compat` + lokales LLM): Knopf „Gibt es was Besseres?" pro installiertem Modell **und** pro Rolle. Ablauf: HF-Hub nach neueren/populäreren Modellen derselben Rolle+Familie fragen → `core::compat`-Fit-Filter auf „läuft in `vram_budget_mb`" **vor** der LLM-Bewertung (spart Tokens, hält die Liste ehrlich) → das lokale LLM (Rolle `chat`/`coding`) rankt die **echten API-Treffer** als JSON, schreibt eine Ein-Satz-Begründung, **darf keinen Modellnamen erfinden** (Antwort gegen die Kandidaten-IDs validieren) → Ausgabe: kurze Liste + „Download & import" (→ 6.4). „Besser" misst sich in der MVP-Fassung an **objektiven, abrufbaren** Signalen (Release-Datum, Downloads/Likes, größere/neuere Basis in der Familie, Fit) + ggf. externem Score (6.5); das LLM markiert „Qualität nicht lokal verifizierbar". HF-Query = externer Call → **per-Aktion-Consent**, im `offline_mode` gesperrt. ADR-025. | offen |
 | **6.8** | **Aufräum-Reports**: **Dedup** (gleiche SHA-256 / dieselbe Datei an mehreren Pfaden, inkl. per-Junction gebundener Ollama-Blobs — nur anzeigen, R4), **Unused** (nie genutzt / seit N Tagen nicht), **Old versions** (installiertes Modell hat eine neuere Katalog-/Registry-Revision — nutzt 6.1). Eine „Storage"-Ansicht: was belegt wie viel, was ist gefahrlos löschbar. Löschen bleibt eine bestätigte Nutzer-Aktion. | offen |
 | **6.9** | **Collections + Politur**: benannte Modell-Sammlungen / Tags (`model_collections`), Discovery-Verlauf, Rate-Limit-Handling mit Backoff + `RateLimit`-Header, optionales `HF_TOKEN`-Feld in Settings (nie Pflicht — nur für Gated-Repos / hohe Limits), Diagnostics-Zeile für die Registry (letzter Fetch, Cache-Alter, Rate-Limit-Rest). | offen |
@@ -557,3 +557,49 @@ Qualitäts-Achse.
   auftaucht (Post-6.5).
 - **Kalibrierung** von `SPEED_REF_TPS` (80) und den Gewichten — Faustwerte;
   echte Zahlen zusammen mit der Estimator-Kalibrierung bei 4.0 (`HARDWARE.md`).
+
+---
+
+## 6.6 — Ergebnis (abgeschlossen)
+
+Benchmark-gestützte `Auto`-Auswahl — die 6.5-Messungen fließen in die
+Modellwahl ein. Verlängert **ADR-015** (siehe „Zusatz" dort).
+
+- **`core::select`** (neu) — `AutoPreference { Balanced (Default) | Fast |
+  Quality }` (`#[serde(rename_all="snake_case")]`, `parse`/`as_str`).
+  **`pick_for_role(db, role, vram_budget_mb, pref) -> Option<Model>`**: holt
+  `for_role_with_benchmark`, ordnet best-first, nimmt den ersten. `rank()` ist
+  pur + getestet: **Fit-Partition** (`vram_estimate_mb ≤ Budget` schlägt „passt
+  nicht"; Budget `0` oder unbekannte Schätzung → nicht ausgeschlossen) → **Score**
+  (`selection_score`: benchmarkt → `speed`/`stability` aus dem `benchmarks`-Eintrag
+  + `heft` aus `param_count` gegen 14 B, per `pref` gewichtet [Fast 0,8·speed ·
+  Quality 0,55·heft]; nicht benchmarkt → neutral 50, Quality nudged mit `heft`) →
+  **Nutzung** (`last_used_at` desc, `use_count` desc, Name). Ohne jeden Benchmark
+  ist es exakt die alte Regel.
+- **`db::ModelRepo::for_role_with_benchmark(role) -> Vec<(Model, Option<Benchmark>)>`**
+  — `for_role` + `benchmarks().latest_for` pro Modell.
+- **`config`**: neue `[models]`-Tabelle, `ModelsConfig { auto_preference:
+  AutoPreference }` (`#[serde(default, deny_unknown_fields)]`, Enum-Variante wird
+  von toml validiert). Restart nötig.
+- **Verdrahtung**: `JobEngine::with_auto_preference` + `AgentSessions::with_auto_preference`
+  (Default `Balanced`), von `App::load` aus `config.models.auto_preference`
+  gesetzt. `engine::resolve_target` (`chat`) + `resolve_comfyui_target`
+  (`base_diffusion`/`base_video`) + `capability::agent::resolve_model` (`coding`)
+  rufen jetzt `select::pick_for_role`. `Scheduler`-Trait + `CodingRuntime`-Trait
+  bekamen `budget_mb()` (Default `0`; die echten Impls geben das Scheduler-Budget).
+  `vae` / `text_encoder` bleiben auf `ModelRepo::pick_for_role`.
+- **API/UI**: `ConfigUpdate.models` (`#[serde(default)]`), `save_config` schreibt
+  es. `ipc.ts` `AutoPreference` + `ModelsConfig` in `AppConfig`/`ConfigUpdate`;
+  `dev-mock` `CONFIG.models`. `Settings.tsx` neue Karte **„Model selection
+  (Auto)"** — ein `<select>` balanced / fast / quality mit Erklärung.
+- **+7 select-Unit** (fit schlägt Speed · Fast vs Quality · Usage-Regel ohne
+  Bench · Budget 0 · DB-Join) **+1 config-Unit** (`[models]` liest die Preference,
+  lehnt Junk ab) **+ api-Roundtrip erweitert** (`models.auto_preference` durch
+  `PUT /config`). **→ 351 Lib + 56 integ.** `check.ps1` grün; Browser-Smoke:
+  Settings → „Prefer quality" → Save → `get_config` zeigt `quality`.
+
+**Nicht in 6.6:**
+- **Live-Anwenden** der Preference — wie `[llama]` / `[comfyui]` erst nach
+  Neustart (die drei Subsysteme halten den Wert bei Konstruktion).
+- Eine sichtbare „warum dieses Modell?"-Begründung in der UI — das
+  Auto-Selektions-Event schreibt schon „auto-selected …", mehr nicht.

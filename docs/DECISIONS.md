@@ -323,7 +323,9 @@ verlangt, dass das Tool die Runtime selbst beschafft.
 
 ## ADR-015 — Chat-Capability: `/v1/chat/completions`-Streaming, `Auto` per Rolle, Ergebnis in der DB
 
-**Status:** Entschieden — umgesetzt (Streaming/Auto 2.4a, Cancel 2.4b).
+**Status:** Entschieden — umgesetzt (Streaming/Auto 2.4a, Cancel 2.4b); die
+`Auto`-Heuristik in Punkt 2 wurde in **Slice 6.6** benchmark-gestützt (siehe
+„Zusatz" unten).
 
 **Entscheidung:**
 1. **Endpoint:** streamendes `POST /v1/chat/completions` (OpenAI-kompatibel), **nicht**
@@ -361,6 +363,21 @@ verlangt, dass das Tool die Runtime selbst beschafft.
 - (−) Ein langer Chat-Job blockiert die Job-Schleife (Single-Slot-Prämisse,
   ADR-003 — akzeptiert). Token-Zähler kommt aus `timings.predicted_n`
   (llama.cpp-Erweiterung), Fallback `usage.completion_tokens`.
+
+**Zusatz — Slice 6.6 (benchmark-gestützte `Auto`-Auswahl):** Punkt 2 wird um
+`core::select::pick_for_role(db, role, vram_budget_mb, pref)` erweitert (nutzt
+`ModelRepo::for_role_with_benchmark` → jeder Kandidat mit seinem neuesten
+`benchmarks`-Eintrag aus 6.5). Reihenfolge: **Fit zuerst** (ein Modell, dessen
+`vram_estimate_mb` ≤ Budget, schlägt eins, das nicht passt), **dann Score**
+(preference-gewichtet aus den gemessenen `gen_tps` / `stability` + Params als
+Heft-Proxy — **keine Qualitäts-Achse**, ADR-024), **dann Nutzung**
+(`last_used_at` / `use_count` / Name). **Ohne Benchmark-Daten** ist es exakt die
+alte Regel. `[models].auto_preference` = `balanced` (Default) / `fast` (mehr
+Speed-Gewicht) / `quality` (mehr Heft-Gewicht). Betrifft `chat`, `coding`,
+`base_diffusion`, `base_video`; `vae` / `text_encoder` bleiben auf der schlichten
+`ModelRepo::pick_for_role`. Startup-Config (Restart nötig), verdrahtet über
+`JobEngine::with_auto_preference` + `AgentSessions::with_auto_preference`;
+`Scheduler` + `CodingRuntime` bekamen `budget_mb()`.
 
 ---
 

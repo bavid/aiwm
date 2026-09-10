@@ -73,6 +73,8 @@ pub struct JobEngine {
     outputs_dir: PathBuf,
     /// Latest system reading — a `bench` job samples the VRAM / RAM peak from it.
     telemetry: watch::Receiver<SystemTelemetry>,
+    /// How `Auto` weighs speed vs heft (`[models]` config, 6.6).
+    auto_preference: crate::select::AutoPreference,
     /// Cancel signals for jobs the engine is actively driving right now.
     cancels: Mutex<HashMap<String, watch::Sender<bool>>>,
 }
@@ -94,6 +96,7 @@ impl JobEngine {
             comfyui,
             outputs_dir,
             telemetry: frozen_telemetry(),
+            auto_preference: crate::select::AutoPreference::default(),
             cancels: Mutex::new(HashMap::new()),
         }
     }
@@ -103,6 +106,13 @@ impl JobEngine {
     #[must_use]
     pub fn with_telemetry(mut self, telemetry: watch::Receiver<SystemTelemetry>) -> Self {
         self.telemetry = telemetry;
+        self
+    }
+
+    /// Set the `Auto` selection preference (`[models].auto_preference`).
+    #[must_use]
+    pub fn with_auto_preference(mut self, pref: crate::select::AutoPreference) -> Self {
+        self.auto_preference = pref;
         self
     }
 
@@ -229,15 +239,17 @@ impl JobEngine {
             });
         }
         if job.job_type == "chat" {
-            let model = self
-                .db
-                .models()
-                .pick_for_role("chat")
-                .await?
-                .ok_or_else(|| CoreError::Runtime {
-                    runtime: "llamacpp".into(),
-                    message: "no chat model in the library — import a .gguf first".into(),
-                })?;
+            let model = crate::select::pick_for_role(
+                &self.db,
+                "chat",
+                self.scheduler.budget_mb(),
+                self.auto_preference,
+            )
+            .await?
+            .ok_or_else(|| CoreError::Runtime {
+                runtime: "llamacpp".into(),
+                message: "no chat model in the library — import a .gguf first".into(),
+            })?;
             self.db
                 .jobs()
                 .assign(&job.id, "llamacpp", &model.id)
@@ -296,11 +308,16 @@ impl JobEngine {
                     message: format!("model {id} is not in the library"),
                 })?,
             None => {
-                let picked = self.db.models().pick_for_role(role).await?.ok_or_else(|| {
-                    CoreError::Runtime {
-                        runtime: COMFYUI.into(),
-                        message: missing.into(),
-                    }
+                let picked = crate::select::pick_for_role(
+                    &self.db,
+                    role,
+                    self.scheduler.budget_mb(),
+                    self.auto_preference,
+                )
+                .await?
+                .ok_or_else(|| CoreError::Runtime {
+                    runtime: COMFYUI.into(),
+                    message: missing.into(),
                 })?;
                 self.db
                     .jobs()

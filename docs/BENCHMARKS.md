@@ -69,8 +69,11 @@ aus der Telemetrie an den Lauf-Grenzen, schreibt eine `benchmarks`-Zeile.
   Green 1,0 · Yellow 0,85 · Unknown 0,8 · **Red 0,35** (`core::compat::verdict`).
   Ein Modell, das nicht in den VRAM-Etat passt, wird hart gedeckelt.
 
-## Nutzung
+## Nutzung (6.6)
 
-Ab **6.6** fließen die Benchmark-Daten in `Model: Auto` ein (Fit → Score →
-Nutzung). Bis dahin bleibt die Auto-Auswahl regelbasiert (Aufgabe + VRAM-Budget
-+ installierte Modelle).
+`core::select::pick_for_role` bezieht die Daten in `Model: Auto` ein: **Fit
+zuerst** (VRAM-Schätzung ≤ Budget) → **Score** (`selection_score`,
+preference-gewichtet aus `gen_tps` / `stability` / Params) → **Nutzung**.
+`[models].auto_preference` = `balanced` / `fast` / `quality`. Ohne jeden
+Benchmark ist es exakt die alte „zuletzt/meist genutzt/Name"-Regel. Gilt für
+`chat`, `coding`, `base_diffusion`, `base_video`.
