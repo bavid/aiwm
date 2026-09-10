@@ -242,7 +242,14 @@ suchen, verifiziert laden, lokal messen, Upgrade-Check. Alles offline-first
   Panel mit „Download & import" (→ 6.4). Per-Aktion-Consent (confirm), offline
   → 400. „Besser" = nur objektive Signale, „Qualität nicht lokal verifizierbar".
   Pro-Rolle-Check + `base_model:`-Lineage später
-- 6.8 **Aufräum-Reports** — Dedup / Unused / Old versions, Storage-Ansicht
+- [x] 6.8 **Aufräum-Reports** — `core::cleanup::report`: `StorageReport` (Store-
+  Größe, freier Platz auf dem Volume via `sysinfo::Disks`, Nutzung pro Kind,
+  **Dedup** über SHA-256, **Unused** = nie / seit 45 Tagen nicht genutzt).
+  `core::model::delete_model` (Datei + Links + Zeile; abgelehnt solange geladen).
+  `GET /storage`, `DELETE /models/{id}` + `StoragePanel.tsx` + „Delete" in der
+  Model Library. **+ die aus 6.4 verschobene Download-Speicherplanung**
+  (`enqueue` lehnt ab, wenn das Store-Volume die Datei nicht hält). „Old
+  versions" → deckt der 6.7-„Better?"-Knopf ab (verschoben)
 - 6.9 **Collections + Politur** — Sammlungen, Rate-Limit-Backoff, optionales
   `HF_TOKEN`, Registry-Diagnostics
 - Cloud-Provider-Adapter (Claude/OpenAI als opt-in **Agent**-Backends) gehört

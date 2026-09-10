@@ -797,6 +797,88 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn storage_report_and_delete_model_over_http() {
+        use crate::db::NewModel;
+
+        let (app, tmp) = test_app().await;
+        let store = tmp.path().join("models");
+        let mk = |name: &str, hash: Option<&str>, size: i64, sub: &str| {
+            let dir = store.join(sub).join(name);
+            std::fs::create_dir_all(&dir).unwrap();
+            let file = dir.join(format!("{name}.gguf"));
+            std::fs::write(&file, vec![0u8; size.max(0) as usize]).unwrap();
+            NewModel {
+                name: name.into(),
+                format: "gguf".into(),
+                file_path: file.to_string_lossy().into_owned(),
+                sha256: hash.map(str::to_string),
+                size_bytes: size,
+                source: "manual".into(),
+                roles: vec!["chat".into()],
+                ..NewModel::default()
+            }
+        };
+        // Point the config's store at our temp store so kind_of resolves.
+        {
+            let mut cfg = crate::config::Config::read_from(&app.paths).unwrap();
+            cfg.store_path = store.clone();
+            cfg.save(&app.paths).unwrap();
+        }
+        let a = app
+            .db
+            .models()
+            .insert(mk("dup-a", Some("dead"), 2_000, "llm"))
+            .await
+            .unwrap();
+        let b = app
+            .db
+            .models()
+            .insert(mk("dup-b", Some("dead"), 2_000, "llm"))
+            .await
+            .unwrap();
+
+        // Re-open so the handler sees the updated store path.
+        let app = Arc::new(App::load(app.paths.clone()).await.unwrap());
+        let server = ApiServer::bind(app.clone(), SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
+            .await
+            .unwrap();
+        let base = format!("http://{}", server.addr);
+        let http = reqwest::Client::new();
+
+        let report: serde_json::Value = reqwest::get(format!("{base}/storage"))
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(report["store_bytes"], 4_000);
+        assert_eq!(report["duplicates"].as_array().unwrap().len(), 1);
+        assert_eq!(report["duplicates"][0]["wasted_bytes"], 2_000);
+        assert_eq!(report["unused"].as_array().unwrap().len(), 2);
+
+        // Delete the redundant copy.
+        let del = http
+            .delete(format!("{base}/models/{}", b.id))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(del.status(), 200);
+        let out: serde_json::Value = del.json().await.unwrap();
+        assert_eq!(out["file_removed"], true);
+        assert_eq!(out["freed_bytes"], 2_000);
+        assert!(app.db.models().get(&b.id).await.unwrap().is_none());
+        assert!(app.db.models().get(&a.id).await.unwrap().is_some());
+
+        // Deleting an unknown model → 400.
+        let ghost = http
+            .delete(format!("{base}/models/ghost"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(ghost.status(), 400);
+    }
+
+    #[tokio::test]
     async fn upgrade_check_queues_a_job_and_refuses_offline() {
         use crate::db::NewModel;
 

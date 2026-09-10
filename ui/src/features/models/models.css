@@ -264,6 +264,96 @@
   color: var(--muted);
 }
 
+/* --- storage panel (6.8) --- */
+
+.model-table__actions {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  white-space: nowrap;
+}
+
+.st__bar {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--border);
+  overflow: hidden;
+  margin: var(--space-2) 0 var(--space-3);
+}
+
+.st__bar-fill {
+  height: 100%;
+  background: var(--accent);
+}
+
+.st__kinds {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.st__group {
+  margin-top: var(--space-3);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border);
+}
+
+.st__group h3 {
+  margin: 0 0 var(--space-2);
+  font-size: var(--text-sm);
+}
+
+.st__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--space-2);
+}
+
+.st__dup,
+.st__unused {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
+}
+
+.st__member {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 0 var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+
+.st__name {
+  font-weight: 600;
+}
+
+.st__del {
+  padding: 2px var(--space-2);
+  border: 1px solid color-mix(in oklab, var(--load-crit) 40%, var(--border));
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--load-crit);
+  font-size: var(--text-xs);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.st__del:hover {
+  background: color-mix(in oklab, var(--load-crit) 12%, transparent);
+}
+
+.st__del:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
 /* --- known models --- */
 
 .known {

@@ -34,6 +34,8 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/jobs/{id}/output", get(job_output))
         .route("/models", get(list_models).post(import_model))
         .route("/models/known", get(known_models))
+        .route("/models/{id}", axum::routing::delete(delete_model))
+        .route("/storage", get(storage_report))
         .route("/models/{id}/benchmark", post(benchmark_model))
         .route("/models/{id}/benchmarks", get(model_benchmarks))
         .route("/models/{id}/upgrade-check", post(upgrade_check))
@@ -222,6 +224,19 @@ async fn list_models(State(app): AppState) -> Result<Json<Vec<crate::db::Model>>
 
 async fn known_models(State(app): AppState) -> Json<&'static [crate::model::KnownModel]> {
     Json(handlers::known_models(&app))
+}
+
+async fn storage_report(
+    State(app): AppState,
+) -> Result<Json<crate::cleanup::StorageReport>, ApiError> {
+    Ok(Json(handlers::storage_report(&app).await?))
+}
+
+async fn delete_model(
+    State(app): AppState,
+    Path(id): Path<String>,
+) -> Result<Json<crate::model::DeleteOutcome>, ApiError> {
+    Ok(Json(handlers::delete_model(&app, &id).await?))
 }
 
 async fn latest_benchmarks(

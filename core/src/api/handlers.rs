@@ -167,6 +167,34 @@ pub async fn list_models(app: &App) -> Result<Vec<Model>> {
     app.db.models().list().await
 }
 
+/// Storage overview + the "safe to delete" reports (Phase 6.8).
+pub async fn storage_report(app: &App) -> Result<crate::cleanup::StorageReport> {
+    let models = app.db.models().list().await?;
+    Ok(crate::cleanup::report(
+        &models,
+        &app.config.store_path,
+        crate::cleanup::DEFAULT_STALE_DAYS,
+    ))
+}
+
+/// Delete one model — its file, its runtime links, and its DB rows. Refused
+/// while the model is loaded. **Permanent** (the caller confirms).
+pub async fn delete_model(app: &App, id: &str) -> Result<crate::model::DeleteOutcome> {
+    let model = app
+        .db
+        .models()
+        .get(id)
+        .await?
+        .ok_or_else(|| CoreError::Config(format!("model {id} is not in the library")))?;
+    if app.runtimes.runtime_with_model(id).is_some() {
+        return Err(CoreError::Config(format!(
+            "\u{201c}{}\u{201d} is loaded right now — unload it first (close the Chat tab or stop the agent using it)",
+            model.name
+        )));
+    }
+    crate::model::delete_model(&app.db, &model).await
+}
+
 /// The curated "known models" list the Models tab shows for assisted import
 /// (`GET /models/known`). Static — no `App` needed, but kept here for symmetry.
 pub fn known_models(_app: &App) -> &'static [crate::model::KnownModel] {

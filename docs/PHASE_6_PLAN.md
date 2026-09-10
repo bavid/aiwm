@@ -44,7 +44,7 @@ den letzten Cache + „offline" statt Fehler.
 | **6.5** | **`core::bench` — lokale Mikro-Benchmarks**: `benchmarks`-Tabelle (Migration `0006`: model_id, ts, tokens_per_sec, load_ms, vram_peak_mb, ram_peak_mb, stability_score, notes), ein „Test model"-Job pro Modell (kurzer Prompt → tok/s Prompt+Gen, Ladezeit vom Adapter, VRAM-Peak via NVML, RAM-Peak via sysinfo). Für Bild/Video analog: Generierungszeit + VRAM. Optionaler Fetch der externen Benchmark-Scores (Quelle aus 6.0), lokal gecacht. `Overall Score` = klar gekennzeichnete gewichtete Heuristik (lokale Perf + externer Score + Stabilität). UI: „Test"-Knopf + eine Score-Spalte in der Model Library. | ✅ *(siehe „## 6.5 — Ergebnis")* |
 | **6.6** | **Benchmark-gestützte `Auto`-Auswahl**: `ModelRepo::pick_for_role` bezieht Benchmark-Daten ein (statt nur `last_used_at` / `use_count`) — Fit zuerst, dann Score, dann Nutzung. Gewichtung + „bevorzuge schnell / bevorzuge Qualität" in `[models]`-Config. Betrifft Chat, Coding, `base_diffusion`, `base_video`. Regelbasierter Fallback bleibt, wenn keine Benchmark-Daten da sind. | ✅ *(siehe „## 6.6 — Ergebnis")* |
 | **6.7** | **Upgrade-Check** (die Backlog-Idee — `core::registry` + `core::compat` + lokales LLM): Knopf „Gibt es was Besseres?" pro installiertem Modell **und** pro Rolle. Ablauf: HF-Hub nach neueren/populäreren Modellen derselben Rolle+Familie fragen → `core::compat`-Fit-Filter auf „läuft in `vram_budget_mb`" **vor** der LLM-Bewertung (spart Tokens, hält die Liste ehrlich) → das lokale LLM (Rolle `chat`/`coding`) rankt die **echten API-Treffer** als JSON, schreibt eine Ein-Satz-Begründung, **darf keinen Modellnamen erfinden** (Antwort gegen die Kandidaten-IDs validieren) → Ausgabe: kurze Liste + „Download & import" (→ 6.4). „Besser" misst sich in der MVP-Fassung an **objektiven, abrufbaren** Signalen (Release-Datum, Downloads/Likes, größere/neuere Basis in der Familie, Fit) + ggf. externem Score (6.5); das LLM markiert „Qualität nicht lokal verifizierbar". HF-Query = externer Call → **per-Aktion-Consent**, im `offline_mode` gesperrt. ADR-025. | ✅ *(siehe „## 6.7 — Ergebnis")* |
-| **6.8** | **Aufräum-Reports**: **Dedup** (gleiche SHA-256 / dieselbe Datei an mehreren Pfaden, inkl. per-Junction gebundener Ollama-Blobs — nur anzeigen, R4), **Unused** (nie genutzt / seit N Tagen nicht), **Old versions** (installiertes Modell hat eine neuere Katalog-/Registry-Revision — nutzt 6.1). Eine „Storage"-Ansicht: was belegt wie viel, was ist gefahrlos löschbar. Löschen bleibt eine bestätigte Nutzer-Aktion. | offen |
+| **6.8** | **Aufräum-Reports**: **Dedup** (gleiche SHA-256 / dieselbe Datei an mehreren Pfaden, inkl. per-Junction gebundener Ollama-Blobs — nur anzeigen, R4), **Unused** (nie genutzt / seit N Tagen nicht), **Old versions** (installiertes Modell hat eine neuere Katalog-/Registry-Revision — nutzt 6.1). Eine „Storage"-Ansicht: was belegt wie viel, was ist gefahrlos löschbar. Löschen bleibt eine bestätigte Nutzer-Aktion. | ✅ *(siehe „## 6.8 — Ergebnis")* |
 | **6.9** | **Collections + Politur**: benannte Modell-Sammlungen / Tags (`model_collections`), Discovery-Verlauf, Rate-Limit-Handling mit Backoff + `RateLimit`-Header, optionales `HF_TOKEN`-Feld in Settings (nie Pflicht — nur für Gated-Repos / hohe Limits), Diagnostics-Zeile für die Registry (letzter Fetch, Cache-Alter, Rate-Limit-Rest). | offen |
 
 Cloud-Provider-Adapter (Claude/OpenAI als optionale **Agent**-Backends, opt-in)
@@ -678,3 +678,70 @@ jede Ausgabe trägt „Qualität ist nicht lokal verifizierbar" (ADR-024).
   auftaucht.
 - Gated-Repos / Split-GGUFs one-click — der Knopf zeigt dann „retry" / den
   HF-Link (wie 6.4).
+
+---
+
+## 6.8 — Ergebnis (abgeschlossen, a + b)
+
+Die „Storage"-Ansicht + die „gefahrlos löschbar"-Reports + das eigentliche
+Löschen + die aus 6.4 verschobene Download-Speicherplanung.
+
+**6.8a** (`25e99e4`) — `core::cleanup` + `delete_model` + Free-Space-Gate:
+- **`core::cleanup`** — `StorageReport { store_bytes, volume_free_bytes,
+  volume_total_bytes, by_kind, models, duplicates, unused, stale_days }`.
+  - `kind_of(model, store_root)` — der oberste Store-Ordner (`llm` / `image` /
+    `video`), sonst `"other"` (Datei außerhalb des Stores).
+  - `duplicates(models)` — SHA-256-Gruppen mit > 1 Mitglied, neueste zuerst,
+    `wasted_bytes` = (n − 1) × Größe.
+  - `unused_ids(models, cutoff_iso)` — nie genutzt, oder `last_used_at` vor dem
+    Cutoff (RFC 3339 sortiert lexikographisch).
+  - `volume_free(path)` — `(free, total)` auf dem Volume des Pfades (längster
+    Mount-Point-Prefix, via `sysinfo::Disks` — neues `disk`-Feature).
+  - `report(models, store_root, stale_days)` — baut alles zusammen;
+    `DEFAULT_STALE_DAYS = 45`.
+- **`core::model::delete_model(db, model) -> DeleteOutcome`** — Runtime-Links
+  `dematerialize`n (`passthrough`/`extra_path` sind No-Ops), die kanonische
+  Datei + einen jetzt-leeren Per-Modell-Ordner löschen, die Zeile droppen
+  (`model_roles` / `model_links` / `benchmarks` cascaden). Link-Teardown + eine
+  fehlende Datei sind best-effort; ein echter I/O-Fehler auf einer vorhandenen
+  Datei wird durchgereicht.
+- **`DownloadManager::enqueue`** lehnt jetzt ab, wenn das Store-Volume die Datei
+  klar nicht halten kann (Größe + 2 GB Marge vs. `volume_free`) — die aus **6.4**
+  verschobene Speicherplanung. Die Größe zählt einmal, auf dem Store-Volume
+  (`import_model` verschiebt sie ohnehin dorthin).
+- **+4 cleanup-Unit + 2 delete-Unit.**
+
+**6.8b** (dieser Commit) — API / Tauri / UI:
+- **Handler** `storage_report(app)` (`cleanup::report` über `models().list()`);
+  `delete_model(app, id)` — Modell muss existieren → 400; **abgelehnt solange
+  das Modell geladen ist** (`runtimes.runtime_with_model`) → 400; sonst
+  `crate::model::delete_model`.
+- **HTTP** `GET /storage`, `DELETE /models/{id}` (200 + `DeleteOutcome`).
+  **Tauri** `storage_report()`, `delete_model(id)`.
+- **UI**: `ipc.ts` `StorageReport` / `KindUsage` / `ModelDisk` / `DuplicateGroup`
+  / `DeleteOutcome` + `storageReport` / `deleteModel`. `hooks.ts` `useStorage`
+  (5 s). **`StoragePanel.tsx`** (neu, im Models-Tab nach den Upgrade-Checks):
+  Nutzungs-Balken (Store-Größe vs. Volume), Kind-Chips, **Duplicates**-Liste
+  (Gruppe: `keep` + „Delete" auf den redundanten), **Unused**-Liste (Name,
+  Größe, letzte Nutzung + „Delete"), sonst „Nothing to clean up". `DeleteButton`
+  (`window.confirm` — permanent) auch in der neuen **Actions-Spalte** der Model
+  Library (neben „Better?"). `dev-mock`: `storage_report` (aus `MODELS` + eine
+  fabrizierte Dup-Gruppe) + `delete_model` (spliced `MODELS`); `list_models`
+  gibt jetzt frische Kopien zurück.
+- **+1 api-Test** (`storage_report_and_delete_model_over_http`: `store_bytes`,
+  eine Dup-Gruppe mit `wasted_bytes`, 2 unused; `DELETE` → 200 + `file_removed`
+  + `freed_bytes`, Zeile weg; Ghost → 400).
+- **→ 366 Lib + 57 integ.** `check.ps1` grün; Browser-Smoke: Panel zeigt
+  Balken / Chips / Duplicates / Unused; „Delete" auf einem Unused-Modell →
+  verschwindet aus Panel + Model Library, Store-Größe sinkt. Konsole fehlerfrei.
+
+**Nicht in 6.8 (bewusst verschoben):**
+- **„Old versions"-Report** — überschneidet sich stark mit dem 6.7-Upgrade-Check
+  (dort pro Modell der „Better?"-Knopf). Ein passiver „X ist veraltet"-Report
+  bräuchte einen zuverlässigen lokalen→HF-Repo-Match (R9) — verschoben, evtl.
+  fallen lassen.
+- **Junction-/Hardlink-Dedup** (gleiche Datei an mehreren *Pfaden* ohne
+  SHA-256-Match, Ollama-Blobs R4) — 6.8 dedupt nur über die gespeicherte
+  SHA-256. Die Ollama-Anzeige braucht erst den Ollama-Adapter.
+- **Retention/Auto-Cleanup** von `outputs/` — bleibt manuell (Settings zeigt
+  Größe + „reveal").

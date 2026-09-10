@@ -229,7 +229,9 @@ export function installDevMock(): void {
       case "get_runtimes":
         return RUNTIMES;
       case "list_models":
-        return MODELS;
+        // Fresh array — `usePolled` needs a changed reference to re-render
+        // (e.g. after delete_model splices MODELS).
+        return MODELS.map((m) => ({ ...m }));
       case "list_known_models":
         return [];
       case "list_jobs":
@@ -264,6 +266,54 @@ export function installDevMock(): void {
       }
       case "cancel_job":
         return true;
+      case "storage_report": {
+        const kindOf = (m: AnyRecord): string => {
+          const roles = (m.roles as string[]) ?? [];
+          if (roles.includes("chat") || roles.includes("coding")) return "llm";
+          if (roles.includes("base_video")) return "video";
+          return "image";
+        };
+        const byKind: AnyRecord = {};
+        let store = 0;
+        for (const m of MODELS) {
+          const size = Number(m.size_bytes);
+          store += size;
+          const k = kindOf(m);
+          const e = (byKind[k] as AnyRecord) ?? { kind: k, bytes: 0, count: 0 };
+          e.bytes = Number(e.bytes) + size;
+          e.count = Number(e.count) + 1;
+          byKind[k] = e;
+        }
+        return {
+          store_bytes: store,
+          volume_free_bytes: 1_496_000_000_000,
+          volume_total_bytes: 2_000_000_000_000,
+          by_kind: Object.values(byKind),
+          models: MODELS.map((m) => ({
+            id: m.id, name: m.name, kind: kindOf(m), size_bytes: Number(m.size_bytes),
+            last_used_at: m.last_used_at ?? null, use_count: Number(m.use_count ?? 0),
+            roles: m.roles ?? [], file_present: true,
+          })),
+          duplicates:
+            MODELS.length >= 2
+              ? [
+                  {
+                    sha256: "dead00beef00cafe00".repeat(2).slice(0, 64),
+                    member_ids: [MODELS[0].id, MODELS[1].id],
+                    wasted_bytes: Number(MODELS[1].size_bytes),
+                  },
+                ]
+              : [],
+          unused: MODELS.filter((m) => !m.last_used_at).map((m) => m.id),
+          stale_days: 45,
+        };
+      }
+      case "delete_model": {
+        const i = MODELS.findIndex((m) => m.id === a.id);
+        if (i < 0) throw new Error(`model ${a.id} is not in the library`);
+        const [m] = MODELS.splice(i, 1);
+        return { id: m.id, name: m.name, file_removed: true, freed_bytes: Number(m.size_bytes) };
+      }
       case "list_benchmarks":
         progressBenchJobs();
         return [...new Map(BENCHMARKS.map((b) => [b.model_id, b])).values()];

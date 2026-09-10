@@ -220,6 +220,57 @@ export const jobDetail = (id: string) => invoke<JobDetail | null>("job_detail", 
 
 export const listModels = () => invoke<Model[]>("list_models");
 
+// --- storage & cleanup (Phase 6.8) -------------------------------------
+
+export interface KindUsage {
+  /** `llm` / `image` / `video` / `other`. */
+  kind: string;
+  bytes: number;
+  count: number;
+}
+
+export interface ModelDisk {
+  id: string;
+  name: string;
+  kind: string;
+  size_bytes: number;
+  last_used_at: string | null;
+  use_count: number;
+  roles: string[];
+  file_present: boolean;
+}
+
+export interface DuplicateGroup {
+  sha256: string;
+  /** Newest first — keep [0], the rest are redundant. */
+  member_ids: string[];
+  wasted_bytes: number;
+}
+
+export interface StorageReport {
+  store_bytes: number;
+  volume_free_bytes: number | null;
+  volume_total_bytes: number | null;
+  by_kind: KindUsage[];
+  models: ModelDisk[];
+  duplicates: DuplicateGroup[];
+  /** Model ids never used / not used within `stale_days`. */
+  unused: string[];
+  stale_days: number;
+}
+
+export interface DeleteOutcome {
+  id: string;
+  name: string;
+  file_removed: boolean;
+  freed_bytes: number;
+}
+
+export const storageReport = () => invoke<StorageReport>("storage_report");
+/** Delete a model — its file, links and DB rows. Permanent; refused while
+ *  the model is loaded. */
+export const deleteModel = (id: string) => invoke<DeleteOutcome>("delete_model", { id });
+
 /** One entry of the curated image-model catalogue (`GET /models/known`). */
 export interface KnownModel {
   id: string;

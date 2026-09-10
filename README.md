@@ -31,7 +31,7 @@ noch keine echte AI-Capability (die kommt ab Phase 2).
 | WP-9 | CI-Workflow, Git-Hooks (pre-commit fmt, pre-push voller Gate) |
 | WP-10 | ADRs finalisiert, Stub-Docs (MODELS/RUNTIMES/SECURITY/BENCHMARKS) |
 
-**359 Rust-Unit + 57 Integrationstests + 5 pytest** grün · `scripts/check.ps1` grün ·
+**366 Rust-Unit + 57 Integrationstests + 5 pytest** grün · `scripts/check.ps1` grün ·
 **null `unsafe`** im Produktivcode.
 
 **Phase 2 (MVP) ✅ abgeschlossen** — Scheiben 2.1–2.7 + durchgehender
@@ -119,7 +119,7 @@ Command-Approval (UI) + erzwungene Offline-Config.
   Tauri + Settings-Karte „Backup & restore". Politur (Kompaktierungs-Anzeige,
   Pause-Fluss, Diagnostics-Zeile) = 5.5c, vertagt.
 
-**Phase 6 (Automatisierung & Model-Manager v2) — Plan + 6.0 + 6.1 + 6.2 + 6.3 + 6.4 + 6.5 + 6.6 + 6.7 ✅:** [docs/PHASE_6_PLAN.md](docs/PHASE_6_PLAN.md).
+**Phase 6 (Automatisierung & Model-Manager v2) — Plan + 6.0 + 6.1 + 6.2 + 6.3 + 6.4 + 6.5 + 6.6 + 6.7 + 6.8 ✅:** [docs/PHASE_6_PLAN.md](docs/PHASE_6_PLAN.md).
 Aus dem manuellen Modell-Umgang wird ein Model-Manager: online suchen, verifiziert
 laden, lokal messen, Upgrade-Check, Dedup-/Unused-Reports. Alles offline-first
 (ADR-009).
@@ -185,6 +185,15 @@ laden, lokal messen, Upgrade-Check, Dedup-/Unused-Reports. Alles offline-first
   Report in `jobs.result`; `UpgradeChecks.tsx`-Panel mit „Download & import"
   (→ 6.4). Per-Aktion-Consent (`confirm`), im `offline_mode` → 400. „Besser" =
   nur objektive, abrufbare Signale — „Qualität nicht lokal verifizierbar".
+- **6.8** ✅ **Aufräum-Reports** — `core::cleanup::report` → `StorageReport`
+  (Store-Größe, freier Platz auf dem Volume via `sysinfo::Disks`, Nutzung pro
+  Kind, **Dedup** über SHA-256, **Unused** = nie / 45 Tage nicht genutzt).
+  `core::model::delete_model` (Datei + Runtime-Links + Zeile; abgelehnt solange
+  das Modell geladen ist). `GET /storage` + `DELETE /models/{id}` + Tauri;
+  **`StoragePanel.tsx`** (Balken, Kind-Chips, Duplicates-/Unused-Listen mit
+  „Delete") + „Delete" in der Model Library. **+ die aus 6.4 verschobene
+  Download-Speicherplanung** (`enqueue` lehnt ab, wenn das Store-Volume die
+  Datei + 2 GB Marge nicht hält). „Old versions" deckt der 6.7-„Better?"-Knopf ab.
 
 - **4.1** ✅ **`capability::video`**: `job_type=video` → feste `wan_ti2v`-Pipeline
   (`WanImageToVideo` → `KSampler` → `VAEDecode` → `CreateVideo` → `SaveVideo`,

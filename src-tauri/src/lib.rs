@@ -212,6 +212,21 @@ async fn upgrade_check(app: tauri::State<'_, Arc<App>>, id: String) -> Result<Jo
 }
 
 #[tauri::command]
+async fn storage_report(
+    app: tauri::State<'_, Arc<App>>,
+) -> Result<aiwm_core::StorageReport, String> {
+    to_ipc(handlers::storage_report(&app).await)
+}
+
+#[tauri::command]
+async fn delete_model(
+    app: tauri::State<'_, Arc<App>>,
+    id: String,
+) -> Result<aiwm_core::DeleteOutcome, String> {
+    to_ipc(handlers::delete_model(&app, &id).await)
+}
+
+#[tauri::command]
 async fn import_model(
     app: tauri::State<'_, Arc<App>>,
     request: ImportRequest,
@@ -335,6 +350,8 @@ fn try_run() -> anyhow::Result<()> {
             model_benchmarks,
             benchmark_model,
             upgrade_check,
+            storage_report,
+            delete_model,
             install_llamacpp,
             install_comfyui,
             install_hermes,

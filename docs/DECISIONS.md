@@ -871,10 +871,10 @@ wie Fortschritt melden, wie mit Abbruch / Netzabriss / falschem Hash umgehen.
 - (+) Kein Scheduler-Eingriff, kein VRAM-Konflikt; der Worker ist ein schlanker
   `tokio`-Loop mit `Notify`-Wakeup + 5-s-Idle-Poll.
 - (−) Seriell: zwei Modelle laden dauert nacheinander. Bewusst.
-- (−) **Speicherplanung fehlt noch** (freier Platz auf dem Store-Volume vs.
-  Download-Größe, Klartext-Warnung *vor* dem Enqueue) — verschoben in die
-  „Storage"-Ansicht (6.8). Aktuell scheitert ein zu großer Download erst beim
-  Schreiben / Import.
+- **Speicherplanung** (freier Platz auf dem Store-Volume vs. Download-Größe) —
+  in **6.8** nachgezogen: `DownloadManager::enqueue` lehnt ab, wenn
+  `cleanup::volume_free(store_root)` < Größe + 2 GB Marge (die Größe zählt einmal,
+  auf dem Store-Volume, da `import_model` sie ohnehin dorthin verschiebt).
 - (−) Verify ist ein voller Re-Hash nach dem Download (I/O-Kosten ~einmal die
   Dateigröße lesen) — kein Streaming-Hash während des Transfers, weil Resume den
   Zwischenstand nicht mitführt.

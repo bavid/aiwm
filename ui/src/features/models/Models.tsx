@@ -12,6 +12,7 @@ import {
 } from "../../lib/ipc";
 import { Discover } from "./Discover";
 import { Downloads } from "./Downloads";
+import { DeleteButton, StoragePanel } from "./StoragePanel";
 import { UpgradeChecks } from "./UpgradeChecks";
 import "./models.css";
 
@@ -63,6 +64,8 @@ export function Models() {
       <Downloads />
 
       <UpgradeChecks />
+
+      <StoragePanel />
 
       <Discover onUseType={setModelType} />
 
@@ -139,8 +142,9 @@ function ModelLibrary({ models, error }: { models: Model[] | null; error: string
                   </td>
                   <td className="muted">{m.roles.join(", ") || "—"}</td>
                   <td className="muted">{m.runtimes.join(", ") || "—"}</td>
-                  <td>
+                  <td className="model-table__actions">
                     <UpgradeCell model={m} checking={checking.has(m.id)} />
+                    <DeleteButton model={m} />
                   </td>
                 </tr>
               ))}
