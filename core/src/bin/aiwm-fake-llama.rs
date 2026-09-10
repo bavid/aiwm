@@ -142,7 +142,7 @@ async fn chat_completions(
             json!({
                 "choices": [{ "index": 0, "delta": {}, "finish_reason": "stop" }],
                 "usage": { "completion_tokens": total },
-                "timings": { "predicted_n": total, "predicted_per_second": 42.0 }
+                "timings": { "predicted_n": total, "predicted_per_second": 42.0, "prompt_per_second": 300.0 }
             })
             .to_string(),
         ))

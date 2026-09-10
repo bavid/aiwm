@@ -51,6 +51,12 @@ pub trait Scheduler: Send + Sync + std::fmt::Debug {
     fn is_pinned(&self, _model_id: &str) -> bool {
         false
     }
+
+    /// Total VRAM (MB) the scheduler plans against; `0` = unknown. Used by the
+    /// benchmark to judge whether a model fits this machine.
+    fn budget_mb(&self) -> u64 {
+        0
+    }
 }
 
 /// One resident model per modality stays loaded; everything else queues, and a
@@ -125,6 +131,10 @@ impl Scheduler for HybridScheduler {
 
     fn is_pinned(&self, model_id: &str) -> bool {
         self.pinned().contains(model_id)
+    }
+
+    fn budget_mb(&self) -> u64 {
+        self.budget_mb
     }
 
     async fn plan(&self, req: &PlanRequest) -> Decision {

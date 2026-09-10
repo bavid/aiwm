@@ -5,17 +5,20 @@
 //!
 //! `job_type == "chat"` streams from llama.cpp ([`crate::capability::chat`]);
 //! `job_type == "image"` / `"video"` run a fixed workflow on ComfyUI
-//! ([`crate::capability::image`] / [`crate::capability::video`]); every other
-//! type is still a no-op placeholder.
+//! ([`crate::capability::image`] / [`crate::capability::video`]);
+//! `job_type == "bench"` runs a local micro-benchmark ([`crate::bench`]); every
+//! other type is still a no-op placeholder.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, PoisonError};
+use std::time::{Duration, Instant};
 
 use serde::Serialize;
 use tokio::sync::watch;
 
 use super::JobState;
+use crate::bench::{self, BenchOutcome};
 use crate::capability::chat::{self, ChatOutcome};
 use crate::capability::image::{self, ImageOutcome};
 use crate::capability::video::{self, VideoOutcome};
@@ -23,6 +26,7 @@ use crate::compat::{self, VramEstimate};
 use crate::db::{EventLevel, Job, JobPatch, Model, NewJob};
 use crate::runtime::{ComfyUiAdapter, LlamaCppAdapter, RuntimeRegistry};
 use crate::scheduler::{Decision, PlanRequest, Scheduler};
+use crate::telemetry::SystemTelemetry;
 use crate::{CoreError, Database, Result};
 
 const CANCEL_REASON: &str = "cancelled by user";
@@ -67,6 +71,8 @@ pub struct JobEngine {
     comfyui: Arc<ComfyUiAdapter>,
     /// Where image jobs write their output (`<job_id>.png`).
     outputs_dir: PathBuf,
+    /// Latest system reading — a `bench` job samples the VRAM / RAM peak from it.
+    telemetry: watch::Receiver<SystemTelemetry>,
     /// Cancel signals for jobs the engine is actively driving right now.
     cancels: Mutex<HashMap<String, watch::Sender<bool>>>,
 }
@@ -87,8 +93,17 @@ impl JobEngine {
             llama,
             comfyui,
             outputs_dir,
+            telemetry: frozen_telemetry(),
             cancels: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// Feed the engine live system readings so a `bench` job can sample the
+    /// VRAM / RAM peak. Without this it uses a static "no GPU" reading.
+    #[must_use]
+    pub fn with_telemetry(mut self, telemetry: watch::Receiver<SystemTelemetry>) -> Self {
+        self.telemetry = telemetry;
+        self
     }
 
     fn cancels(&self) -> std::sync::MutexGuard<'_, HashMap<String, watch::Sender<bool>>> {
@@ -376,6 +391,9 @@ impl JobEngine {
             return Ok(o);
         }
 
+        // How long the engine spent loading the model this run, if it loaded one
+        // — the `bench` body reports it as the cold load time.
+        let mut load_dur: Option<Duration> = None;
         match self.scheduler.plan(&request).await {
             Decision::Blocked { reason } => {
                 let reason = blocked_message(&model_name, estimate.as_ref(), &reason);
@@ -407,8 +425,10 @@ impl JobEngine {
                 if let Some(o) = self.bail_if_cancelled(&mut job, &mut cancel).await? {
                     return Ok(o);
                 }
+                let t0 = Instant::now();
                 self.load(&runtime_id, &model_id, request.vram_needed_mb)
                     .await?;
+                load_dur = Some(t0.elapsed());
             }
             Decision::EvictThenLoad { victim_model } => {
                 self.to(&mut job, JobState::Preparing, JobPatch::default())
@@ -426,8 +446,10 @@ impl JobEngine {
                     )
                     .await?;
                 self.evict(&victim_model).await?;
+                let t0 = Instant::now();
                 self.load(&runtime_id, &model_id, request.vram_needed_mb)
                     .await?;
+                load_dur = Some(t0.elapsed());
             }
         }
 
@@ -610,6 +632,61 @@ impl JobEngine {
                     return Ok(JobOutcome::Cancelled { job_id: job.id });
                 }
             }
+        } else if job.job_type == "bench" {
+            if runtime_id != LLAMACPP {
+                return Err(CoreError::Runtime {
+                    runtime: runtime_id.clone(),
+                    message: "benchmarks run on llama.cpp".into(),
+                });
+            }
+            let model = self.require_model(&model_id).await?;
+            let req = bench::BenchRequest::from_params(&job.params);
+            match bench::run(
+                &self.db,
+                &self.llama,
+                self.telemetry.clone(),
+                &job.id,
+                &model,
+                req,
+                load_dur,
+                self.scheduler.budget_mb(),
+                cancel,
+            )
+            .await?
+            {
+                BenchOutcome::Done(report) => {
+                    let _ = self.db.models().mark_used(&model_id).await;
+                    self.db
+                        .jobs()
+                        .append_event(
+                            &job.id,
+                            EventLevel::Info,
+                            &format!(
+                                "benchmark done — score {}, {:.1} tok/s",
+                                report.overall_score,
+                                report.gen_tps.unwrap_or(0.0),
+                            ),
+                        )
+                        .await?;
+                }
+                BenchOutcome::Cancelled => {
+                    self.db
+                        .jobs()
+                        .append_event(&job.id, EventLevel::Warn, "cancelled mid-benchmark")
+                        .await?;
+                    self.to(
+                        &mut job,
+                        JobState::Cancelled,
+                        JobPatch {
+                            error_text: Some(CANCEL_REASON.into()),
+                            set_finished_at: true,
+                            ..Default::default()
+                        },
+                    )
+                    .await?;
+                    return Ok(JobOutcome::Cancelled { job_id: job.id });
+                }
+            }
         }
 
         self.to(&mut job, JobState::Post, JobPatch::default())
@@ -690,6 +767,26 @@ impl JobEngine {
         job.state = next;
         Ok(())
     }
+}
+
+/// A telemetry receiver frozen at a "no GPU" reading — the engine's default
+/// until [`JobEngine::with_telemetry`] wires in the live sampler. `borrow`
+/// keeps working after the sender drops.
+fn frozen_telemetry() -> watch::Receiver<SystemTelemetry> {
+    use crate::telemetry::{GpuStatus, HostStatus};
+    watch::channel(SystemTelemetry {
+        captured_at_ms: 0,
+        gpu: GpuStatus::Unavailable {
+            reason: "telemetry not wired to the engine".into(),
+        },
+        host: HostStatus {
+            ram_total_mb: 0,
+            ram_used_mb: 0,
+            cpu_total_pct: 0,
+            cpu_per_core_pct: Vec::new(),
+        },
+    })
+    .1
 }
 
 /// VRAM (MB) to reserve for a ComfyUI model. Uses the estimate `import`

@@ -121,7 +121,7 @@ pub async fn run(
                         last_flush = Instant::now();
                     }
                 }
-                Some(GenerationEvent::Done { tokens: t, tokens_per_second: tps }) => {
+                Some(GenerationEvent::Done { tokens: t, tokens_per_second: tps, .. }) => {
                     tokens = t;
                     tokens_per_second = tps;
                 }

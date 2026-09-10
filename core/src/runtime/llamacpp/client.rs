@@ -20,7 +20,13 @@ use crate::{CoreError, Result};
 #[derive(Debug, Clone, PartialEq)]
 pub enum GenerationEvent {
     Token(String),
-    Done { tokens: u32, tokens_per_second: f64 },
+    Done {
+        tokens: u32,
+        /// Generation (decode) rate the server reported.
+        tokens_per_second: f64,
+        /// Prompt (prefill) rate the server reported; `0.0` when absent.
+        prompt_tokens_per_second: f64,
+    },
 }
 
 /// A `/health` (or `/props`) probe must return within this or the server counts
@@ -209,6 +215,10 @@ fn parse_sse_event(line: &[u8]) -> Option<GenerationEvent> {
                 .pointer("/timings/predicted_per_second")
                 .and_then(Value::as_f64)
                 .unwrap_or(0.0),
+            prompt_tokens_per_second: v
+                .pointer("/timings/prompt_per_second")
+                .and_then(Value::as_f64)
+                .unwrap_or(0.0),
         });
     }
     None
@@ -311,7 +321,7 @@ mod tests {
     /// The final content-less chunk carrying `finish_reason` + stats, as one line.
     const FINISH_LINE: &str =
         "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}],\
-        \"timings\":{\"predicted_n\":2,\"predicted_per_second\":50.0}}\n";
+        \"timings\":{\"predicted_n\":2,\"predicted_per_second\":50.0,\"prompt_per_second\":300.0}}\n";
     /// A full response body: two tokens, the finish chunk, the `[DONE]` sentinel.
     fn sse_body(chunks: &[&str]) -> String {
         let mut body = String::new();
@@ -334,7 +344,8 @@ mod tests {
             parse_sse_event(FINISH_LINE.as_bytes()),
             Some(GenerationEvent::Done {
                 tokens: 2,
-                tokens_per_second: 50.0
+                tokens_per_second: 50.0,
+                prompt_tokens_per_second: 300.0
             })
         );
         // `usage.completion_tokens` is the fallback when `timings.predicted_n` is absent.
@@ -344,7 +355,8 @@ mod tests {
             ),
             Some(GenerationEvent::Done {
                 tokens: 9,
-                tokens_per_second: 0.0
+                tokens_per_second: 0.0,
+                prompt_tokens_per_second: 0.0
             })
         );
         assert_eq!(parse_sse_event(b"\n"), None);
@@ -390,7 +402,8 @@ mod tests {
                 GenerationEvent::Token(" world".into()),
                 GenerationEvent::Done {
                     tokens: 2,
-                    tokens_per_second: 50.0
+                    tokens_per_second: 50.0,
+                    prompt_tokens_per_second: 300.0
                 },
             ]
         );

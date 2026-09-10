@@ -31,6 +31,7 @@ pub mod agent;
 pub mod api;
 pub mod app;
 pub mod backup;
+pub mod bench;
 pub mod capability;
 pub mod compat;
 pub mod config;
@@ -55,6 +56,7 @@ pub use agent::{
 };
 pub use api::{ApiServer, Services};
 pub use app::App;
+pub use bench::{BenchOutcome, BenchReport, BenchRequest};
 pub use capability::agent::{AgentSessions, CodingRuntime, LlamaCodingRuntime};
 pub use compat::{estimate as estimate_vram, FitVerdict, ModelDims, VramEstimate};
 pub use config::Config;

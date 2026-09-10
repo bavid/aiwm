@@ -5,6 +5,7 @@
 //! importer) rather than all up front.
 
 mod agents;
+mod bench;
 mod downloads;
 mod jobs;
 mod models;
@@ -12,6 +13,7 @@ mod runtimes;
 mod settings;
 
 pub use agents::{Agent, AgentRepo, AgentSession, AgentSessionEvent, AgentSessionState, NewAgent};
+pub use bench::{BenchRepo, Benchmark, NewBenchmark};
 pub use downloads::{Download, DownloadRepo, DownloadState, NewDownload};
 pub use jobs::{EventLevel, Job, JobEvent, JobFilter, JobPatch, JobRepo, NewJob};
 pub use models::{Model, ModelLink, ModelRepo, NewModel};
@@ -94,6 +96,10 @@ impl Database {
 
     pub fn downloads(&self) -> DownloadRepo<'_> {
         DownloadRepo::new(&self.pool)
+    }
+
+    pub fn benchmarks(&self) -> BenchRepo<'_> {
+        BenchRepo::new(&self.pool)
     }
 
     /// Names of the application tables (excludes SQLite internals). Test helper.

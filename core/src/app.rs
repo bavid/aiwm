@@ -96,14 +96,17 @@ impl App {
         runtimes.register(comfyui.clone());
         let budget = resolve_vram_budget(&config, &telemetry);
         let scheduler = Arc::new(HybridScheduler::new(runtimes.clone(), budget));
-        let jobs = Arc::new(JobEngine::new(
-            db.clone(),
-            runtimes.clone(),
-            scheduler.clone(),
-            llama.clone(),
-            comfyui.clone(),
-            paths.outputs_dir(),
-        ));
+        let jobs = Arc::new(
+            JobEngine::new(
+                db.clone(),
+                runtimes.clone(),
+                scheduler.clone(),
+                llama.clone(),
+                comfyui.clone(),
+                paths.outputs_dir(),
+            )
+            .with_telemetry(telemetry.subscribe()),
+        );
         let coding = Arc::new(LlamaCodingRuntime::new(
             runtimes.clone(),
             scheduler.clone(),
