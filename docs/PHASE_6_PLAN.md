@@ -38,7 +38,7 @@ den letzten Cache + „offline" statt Fehler.
 |---|---|---|
 | **6.0** | **Registry-/Benchmark-Spike** (Voraussetzung, wie 5.0 / 4.0, **kein Feature-Code**): HF-Hub-API real testen, Ollama-Library prüfen, Benchmark-Datenquelle festlegen. Ergebnisse in `MODELS.md` / `RUNTIMES.md` / `BENCHMARKS.md`, **ADR-022** (Registry) + **ADR-024** (Score-Heuristik). Schließt R9 / R10 / „Zu untersuchen vor Phase 6". | ✅ *(siehe „## 6.0 — Ergebnis")* |
 | **6.1** | **`core::registry` — HF-Hub-Quellen-Adapter** (read-only, gegen ein Fixture): `ModelSource`-Trait + `HuggingFaceSource`, `Registry`-Wrapper mit TTL-JSON-Cache (`<data>/cache/registry/`) + `Freshness` (Live/Stale/Offline). SHA-256 aus `lfs.oid`. `aiwm-fake-hfhub`-Fixture + Integrationstest + `#[ignore]`-Live-Test. | ✅ *(siehe „## 6.1 — Ergebnis")* |
-| **6.2** | **Discovery-UI** (`ui/src/features/models/` erweitert): „Discover"-Panel im Models-Tab — Suchfeld, Filter nach Rolle/Capability + „passt in mein VRAM-Budget", Ergebnis-Karten (Name, Params, Downloads, Lizenz, `🟢/🟡/🔴`-Fit via `core::compat`, Quant-Dropdown mit Größen). Aktion vorerst nur „Copy link" + „Set import type" (Auto-Download = 6.4). `useRegistrySearch` (debounced), dev-mock. | offen |
+| **6.2** | **Discovery-UI** — `App.registry` + `GET /registry/search` + `GET /registry/models/{*id}` + 2 Tauri-Commands + DTOs (`FitLevel`, `RegistryFileDto` mit Fit + Download-Link, `RegistryDetailsDto`). „Discover"-Panel im Models-Tab (`Discover.tsx`): Suchfeld, „GGUF only", Sort; Ergebnis-Karten (id, Params, Downloads/Likes, Lizenz, Gated-Badge, `base_model`); „Files" → Dateiliste mit Quant + Größe + `🟢/🟡/🔴`-Fit-Punkt (via `core::compat`) + „Copy link" + „Set import type". `Freshness`-Banner bei Stale/Offline. `useRegistrySearch` (400 ms debounced). | ✅ *(siehe „## 6.2 — Ergebnis")* |
 | **6.3** | **Kompatibilitäts-Engine v2** (`core::compat` erweitert — verlängert ADR-016): `.safetensors`-Header-Inspektion (Arch/Precision — der seit 3.3 vertagte TODO), Diffusions-/Video-Modell-VRAM-Heuristik statt der Datei-Namens-`+2,5 GB`-Faustregel, `FitVerdict { Green, Yellow(grund), Red(grund) }` das Gewichte + KV/Aktivierungen + Overhead gegen `vram_budget_mb` **und** freien System-RAM prüft. Flat-Overhead gegen echte `HARDWARE.md`-Messungen kalibrieren (R3). Genutzt von Discovery + Upgrade-Check + dem bestehenden Job-Preflight. | offen |
 | **6.4** | **Download-Manager** (`core::download` erweitert — ADR-023): `downloads`-Tabelle (Migration `0006`: id, url, dest, sha256, size, bytes_done, state {queued\|running\|paused\|verifying\|done\|failed}), Queue mit einem aktiven Slot, **Resume über HTTP-Range**, Verify gegen die erwartete SHA-256 (aus 6.1), dann Übergabe an `import_model`. `GET/POST /downloads`, `POST /downloads/{id}/{pause,resume,cancel}`, Fortschritts-Events (`job_events`-Muster). `offline_mode` → Ablehnung. UI: „Download & import"-Knopf auf den Discovery-Karten + eine Downloads-Liste. Speicherplanung: freier Platz auf dem Store-Volume vs. Download-Größe, Klartext-Warnung. | offen |
 | **6.5** | **`core::bench` — lokale Mikro-Benchmarks**: `benchmarks`-Tabelle (Migration `0006`: model_id, ts, tokens_per_sec, load_ms, vram_peak_mb, ram_peak_mb, stability_score, notes), ein „Test model"-Job pro Modell (kurzer Prompt → tok/s Prompt+Gen, Ladezeit vom Adapter, VRAM-Peak via NVML, RAM-Peak via sysinfo). Für Bild/Video analog: Generierungszeit + VRAM. Optionaler Fetch der externen Benchmark-Scores (Quelle aus 6.0), lokal gecacht. `Overall Score` = klar gekennzeichnete gewichtete Heuristik (lokale Perf + externer Score + Stabilität). UI: „Test"-Knopf + eine Score-Spalte in der Model Library. | offen |
@@ -314,3 +314,51 @@ Rust-Client klar einfacher. ADR-022 hält das fest.
 - Noch **nicht** an `App` / API / Tauri / UI verdrahtet — das ist 6.2.
   `HF_TOKEN` aus der Config, `ETag`/`If-None-Match` beim Refresh und der
   `RateLimit`-Header-Backoff kommen mit 6.9.
+
+---
+
+## 6.2 — Ergebnis (abgeschlossen)
+
+Die Discovery-Vertikale: `core::registry` an `App` + API + Tauri + ein
+„Discover"-Panel im Models-Tab. UI-only-Aktionen (kein Download-Manager bis
+6.4).
+
+- **`App.registry: Registry`** (in `App::load` gebaut: `HuggingFaceSource::new()`
+  + `paths.cache_dir().join("registry")` + der `offline`-`Arc`). `App::with_registry`
+  für Tests (zeigt auf `aiwm-fake-hfhub`). `AppPaths::cache_dir()` =
+  `<local_root>/cache` (schon in 6.1).
+- **Handlers** (`api/handlers.rs`): `registry_search(app, RegistrySearchDto) ->
+  Fetched<Vec<RemoteModel>>` (der `Registry`-Wrapper regelt offline/stale),
+  `registry_details(app, id) -> RegistryDetailsDto`. `enrich_file` hängt pro
+  Datei den Browser-Link (`https://huggingface.co/<id>/resolve/<rev>/<path>`)
+  und ein Fit-Verdikt an: für GGUF-/safetensors-Gewichtsdateien
+  `compat::estimate(ModelDims { size_bytes: file.size, ctx_max, param_count })`
+  gegen `scheduler.budget_mb()` → `FitLevel` (Green < 85 % Budget, Yellow bis
+  100 %, Red darüber, Unknown sonst). **Erste Näherung** — 6.3 ersetzt das durch
+  das echte `FitVerdict` mit `.safetensors`-Header, Aktivierungen, System-RAM
+  und Begründung.
+- **DTOs** (`api/dto.rs`): `RegistrySearchDto` (`q` / `base_model` / `gguf` /
+  `sort`-String / `limit`) + `into_query()`, `FitLevel`, `RegistryFileDto`
+  (`path`, `size_bytes`, `sha256`, `quant`, `shard: [u32;2]`, `download_url`,
+  `vram_estimate_mb`, `fit`), `RegistryDetailsDto` (flattenes `RemoteModel` +
+  `revision` + `files` + `freshness`).
+- **HTTP** (`api/http.rs`): `GET /registry/search` (`Query<RegistrySearchDto>`)
+  + `GET /registry/models/{*id}` (Wildcard — die id trägt ein `/`). **Tauri**:
+  `registry_search(params)` / `registry_model(id)`.
+- **UI**: `ipc.ts` — `Freshness`/`RemoteModel`/`RegistryFile`/`RegistryDetails`
+  + `registrySearch`/`registryModel`. `hooks.ts` — `useRegistrySearch(params,
+  enabled)` (400 ms debounce, nicht gepollt, erst ab 2 Zeichen). `Discover.tsx`
+  (neu, `ui/src/features/models/`): Suchfeld + „GGUF only" + Sort → Ergebnis-
+  Karten; „Files" lädt `registryModel` on-demand → Zeilen mit Fit-Punkt
+  (`--load-ok`/`--load-warn`/`--load-crit`), Quant, Größe, „Copy link",
+  Gated-Hinweis. `Stale`/`Offline` → gelber Banner. „Set import type"
+  (`gguf`→`chat`, sonst `checkpoint`) setzt den Import-Typ oben.
+  `Models.tsx` rendert `<Discover>`; `dev-mock` beide Commands.
+- **Tests:** +4 Unit (`fit_of`-Schwellen, `is_weight_file`,
+  `RegistrySearchDto::into_query` Sort-Mapping + Blank-Trim) + **1 Integration**
+  (`discovery_endpoints_over_http` in `core/tests/registry.rs` — echter `App` +
+  `ApiServer` + `aiwm-fake-hfhub`: `/registry/search` → `freshness: live` +
+  geparste Felder, `/registry/models/{id}` → Dateien mit `download_url` +
+  SHA-256 + `fit`, Nicht-Gewichtsdatei → `fit: unknown`). **320 Lib + 49 integ.**
+  `check.ps1` grün, Browser-Smoke (dev-mock): Suche → Karten → „Files" zeigt
+  Q4_K_M grün / Q8_0 gelb, keine Konsolenfehler.

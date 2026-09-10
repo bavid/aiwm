@@ -10,12 +10,15 @@ import {
   listJobs,
   listKnownModels,
   listModels,
+  registrySearch,
   type AboutInfo,
   type Agent,
   type AgentRuntime,
   type Job,
   type KnownModel,
   type Model,
+  type RegistrySearchParams,
+  type RegistrySearchResult,
   type RuntimeStatus,
   type SystemTelemetry,
 } from "./ipc";
@@ -90,3 +93,41 @@ export const useModels = () => usePolled<Model[]>("models", listModels, 3000);
 export const useAgents = () => usePolled<Agent[]>("agents", listAgents, 4000);
 export const useAgentRuntimes = () =>
   usePolled<AgentRuntime[]>("agent-runtimes", listAgentRuntimes, 3000);
+
+/** Debounced Hugging Face search for the Discover panel. Runs when `params`
+ *  change (400 ms after the last one) and `enabled`; not polled. */
+export function useRegistrySearch(params: RegistrySearchParams, enabled: boolean) {
+  const [result, setResult] = useState<RegistrySearchResult | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const key = JSON.stringify(params);
+
+  useEffect(() => {
+    if (!enabled) {
+      setResult(null);
+      setError(null);
+      return;
+    }
+    let alive = true;
+    setLoading(true);
+    const id = setTimeout(() => {
+      registrySearch(params)
+        .then((r) => {
+          if (alive) {
+            setResult(r);
+            setError(null);
+          }
+        })
+        .catch((e) => alive && setError(e instanceof Error ? e.message : String(e)))
+        .finally(() => alive && setLoading(false));
+    }, 400);
+    return () => {
+      alive = false;
+      clearTimeout(id);
+    };
+    // `key` is the serialized params — the real dependency; `params` itself is
+    // a fresh object each render.
+  }, [key, enabled]);
+
+  return { result, error, loading };
+}

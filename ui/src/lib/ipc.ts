@@ -451,3 +451,80 @@ export const exportBackup = () => invoke<string>("export_backup");
  *  untouched until the app restarts. */
 export const importBackup = (path: string) =>
   invoke<ImportSummary>("import_backup", { path });
+
+// --- model discovery (Phase 6.2) ---
+
+/** Where a registry answer came from. `stale` = the Hub was unreachable and this
+ *  is the last cached answer; `offline` = offline mode is on. */
+export type Freshness =
+  | { kind: "live" }
+  | { kind: "stale"; age_secs: number }
+  | { kind: "offline"; age_secs: number };
+
+/** One search hit from the Hugging Face Hub (`GET /registry/search`). */
+export interface RemoteModel {
+  /** `owner/repo`. */
+  id: string;
+  author: string | null;
+  downloads: number;
+  likes: number;
+  trending_score: number | null;
+  created_at: string | null;
+  last_modified: string | null;
+  pipeline_tag: string | null;
+  library_name: string | null;
+  gated: "no" | "auto" | "manual";
+  license: string | null;
+  /** The upstream repo this is a quant / fine-tune of. */
+  base_model: string | null;
+  tags: string[];
+  param_count: number | null;
+  arch: string | null;
+  ctx_max: number | null;
+  precision: string | null;
+  format: "gguf" | "safetensors" | "other";
+}
+
+/** VRAM fit of one file against the current budget (a first-cut check — 6.3
+ *  refines it). */
+export type FitLevel = "green" | "yellow" | "red" | "unknown";
+
+export interface RegistryFile {
+  path: string;
+  size_bytes: number;
+  sha256: string | null;
+  quant: string | null;
+  /** `[index, total]` for a split file. */
+  shard: [number, number] | null;
+  /** Opens in the browser — the app has no download manager yet (6.4). */
+  download_url: string;
+  vram_estimate_mb: number | null;
+  fit: FitLevel;
+}
+
+export interface RegistryDetails extends RemoteModel {
+  revision: string;
+  files: RegistryFile[];
+  freshness: Freshness;
+}
+
+export interface RegistrySearchParams {
+  q?: string;
+  base_model?: string;
+  gguf?: boolean;
+  sort?: "downloads" | "likes" | "trending" | "updated" | "new";
+  limit?: number;
+}
+
+export interface RegistrySearchResult {
+  data: RemoteModel[];
+  freshness: Freshness;
+}
+
+/** Search the Hugging Face Hub. Offline-gated (ADR-009) — offline mode returns a
+ *  cached answer or a plain error. */
+export const registrySearch = (params: RegistrySearchParams) =>
+  invoke<RegistrySearchResult>("registry_search", { params });
+/** One repo with every file (size, SHA-256, quant, fit). `id` is `owner/repo`. */
+export const registryModel = (id: string) =>
+  invoke<RegistryDetails>("registry_model", { id });

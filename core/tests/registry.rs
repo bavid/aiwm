@@ -4,13 +4,17 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::io::{BufRead, BufReader};
+use std::net::{Ipv4Addr, SocketAddr};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::Duration;
 
 use aiwm_core::registry::{Gated, RemoteFormat};
-use aiwm_core::{Freshness, HuggingFaceSource, ModelSource, Registry, SearchQuery, SearchSort};
+use aiwm_core::{
+    ApiServer, AppPaths, Freshness, HuggingFaceSource, ModelSource, Registry, SearchQuery,
+    SearchSort,
+};
 
 /// The fixture process + the base URL it bound.
 struct FakeHub {
@@ -217,4 +221,75 @@ async fn a_dead_source_falls_back_to_a_stale_cache() {
     tokio::time::sleep(Duration::from_millis(50)).await;
     let stale = reg.search(&q).await.unwrap();
     assert!(matches!(stale.freshness, Freshness::Stale { .. }));
+}
+
+/// `GET /registry/search` + `GET /registry/models/{id}` over the real loopback
+/// HTTP server, with the app's registry pointed at the fixture (6.2).
+#[tokio::test]
+async fn discovery_endpoints_over_http() {
+    let hub = start_fake_hub();
+    let data = tempfile::tempdir().unwrap();
+    let cache = tempfile::tempdir().unwrap();
+    let reg = Registry::new(
+        Box::new(source(&hub.base)),
+        cache.path().to_path_buf(),
+        Arc::new(AtomicBool::new(false)),
+    );
+    let app = Arc::new(
+        aiwm_core::App::load(AppPaths::rooted(data.path()))
+            .await
+            .unwrap()
+            .with_registry(reg),
+    );
+    let server = ApiServer::bind(app, SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
+        .await
+        .unwrap();
+    let base = format!("http://{}", server.addr);
+
+    // Search: the gguf filter narrows to the one quant repo; freshness = live.
+    let search: serde_json::Value =
+        reqwest::get(format!("{base}/registry/search?q=coder&gguf=true"))
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+    assert_eq!(search["freshness"]["kind"], "live");
+    let hits = search["data"].as_array().unwrap();
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0]["id"], "Qwen/Qwen2.5-Coder-7B-Instruct-GGUF");
+    assert_eq!(hits[0]["param_count"], 7_615_616_512_u64);
+
+    // Details: files carry the browser link, a sha256 from lfs.oid, and a fit.
+    let details: serde_json::Value = reqwest::get(format!(
+        "{base}/registry/models/Qwen/Qwen2.5-Coder-7B-Instruct-GGUF"
+    ))
+    .await
+    .unwrap()
+    .json()
+    .await
+    .unwrap();
+    assert_eq!(details["id"], "Qwen/Qwen2.5-Coder-7B-Instruct-GGUF");
+    let files = details["files"].as_array().unwrap();
+    let gguf = files
+        .iter()
+        .find(|f| f["path"].as_str().unwrap().ends_with("q4_k_m.gguf"))
+        .unwrap();
+    let url = gguf["download_url"].as_str().unwrap();
+    assert!(
+        url.starts_with("https://huggingface.co/Qwen/Qwen2.5-Coder-7B-Instruct-GGUF/resolve/"),
+        "{url}"
+    );
+    assert!(
+        url.ends_with("/qwen2.5-coder-7b-instruct-q4_k_m.gguf"),
+        "{url}"
+    );
+    assert_eq!(gguf["sha256"].as_str().unwrap().len(), 64);
+    assert!(gguf["vram_estimate_mb"].as_u64().unwrap() > 4_000);
+    assert!(["green", "yellow", "red"].contains(&gguf["fit"].as_str().unwrap()));
+
+    // A non-weight file has no estimate and an unknown fit.
+    let readme = files.iter().find(|f| f["path"] == "README.md").unwrap();
+    assert!(readme["vram_estimate_mb"].is_null());
+    assert_eq!(readme["fit"], "unknown");
 }

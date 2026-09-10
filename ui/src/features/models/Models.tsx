@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useKnownModels, useModels } from "../../lib/hooks";
 import { importModel, type KnownModel, type Model, type ModelType } from "../../lib/ipc";
+import { Discover } from "./Discover";
 import "./models.css";
 
 const ROLES = ["chat", "coding", "reasoning", "embedding"];
@@ -76,6 +77,8 @@ export function Models() {
           </div>
         )}
       </section>
+
+      <Discover onUseType={setModelType} />
 
       <KnownModels onUseType={setModelType} />
     </div>

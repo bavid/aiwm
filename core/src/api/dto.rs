@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use crate::agent::{HermesInstallStatus, PermissionDecision};
 use crate::config::{ComfyConfig, LlamaConfig};
 use crate::db::{AgentSession, AgentSessionEvent, Job, JobEvent};
+use crate::registry::{Freshness, RemoteModel, SearchQuery, SearchSort};
 use crate::runtime::{Health, RuntimeKind};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -133,4 +134,87 @@ pub struct AgentRuntimeDto {
     pub installed: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub install: Option<HermesInstallStatus>,
+}
+
+// --- model discovery (Phase 6.2) -----------------------------------------
+
+/// Query for `GET /registry/search` — the "Discover" panel on the Models tab.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct RegistrySearchDto {
+    /// Free-text search on the repo id.
+    #[serde(default)]
+    pub q: Option<String>,
+    /// `filter=base_model:<id>` — every quant / derivative of one base.
+    #[serde(default)]
+    pub base_model: Option<String>,
+    /// Restrict to `gguf`-tagged repos.
+    #[serde(default)]
+    pub gguf: bool,
+    /// `downloads` | `likes` | `trending` | `updated` | `new`.
+    #[serde(default)]
+    pub sort: Option<String>,
+    #[serde(default)]
+    pub limit: Option<u32>,
+}
+
+impl RegistrySearchDto {
+    pub fn into_query(self) -> SearchQuery {
+        let sort = match self.sort.as_deref() {
+            Some("likes") => SearchSort::Likes,
+            Some("trending") => SearchSort::Trending,
+            Some("updated") => SearchSort::RecentlyUpdated,
+            Some("new") => SearchSort::RecentlyCreated,
+            _ => SearchSort::Downloads,
+        };
+        SearchQuery {
+            text: self.q.filter(|s| !s.trim().is_empty()),
+            base_model: self.base_model.filter(|s| !s.trim().is_empty()),
+            gguf_only: self.gguf,
+            sort,
+            limit: self.limit.unwrap_or(25),
+        }
+    }
+}
+
+/// The VRAM fit of a specific file against the current budget. A first-cut
+/// weights + rough-KV check (6.2); slice 6.3 replaces it with the real
+/// `FitVerdict` (`.safetensors` header, activations, system RAM, reasons).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FitLevel {
+    /// Comfortably within budget.
+    Green,
+    /// Fits, but tight — expect eviction pressure.
+    Yellow,
+    /// Over the VRAM budget.
+    Red,
+    /// Not a model file, or no budget / size to judge against.
+    Unknown,
+}
+
+/// One downloadable file, enriched with the browser link + a fit verdict.
+#[derive(Debug, Clone, Serialize)]
+pub struct RegistryFileDto {
+    pub path: String,
+    pub size_bytes: u64,
+    pub sha256: Option<String>,
+    pub quant: Option<String>,
+    /// `[index, total]` for a split file `…-00001-of-00003.gguf`.
+    pub shard: Option<[u32; 2]>,
+    /// `https://huggingface.co/<id>/resolve/<rev>/<path>` — "Copy link".
+    pub download_url: String,
+    /// `null` for non-model files (README, `config.json`).
+    pub vram_estimate_mb: Option<u64>,
+    pub fit: FitLevel,
+}
+
+/// `GET /registry/models/{id}` — the model plus every file with size, hash and
+/// fit.
+#[derive(Debug, Clone, Serialize)]
+pub struct RegistryDetailsDto {
+    #[serde(flatten)]
+    pub model: RemoteModel,
+    pub revision: String,
+    pub files: Vec<RegistryFileDto>,
+    pub freshness: Freshness,
 }

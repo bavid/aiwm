@@ -39,6 +39,8 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/runtimes/comfyui/install", post(install_comfyui))
         .route("/runtimes/hermes/install", post(install_hermes))
         .route("/agent-runtimes", get(agent_runtimes))
+        .route("/registry/search", get(registry_search))
+        .route("/registry/models/{*id}", get(registry_details))
         .route("/agents", get(list_agents).post(create_agent))
         .route("/agents/{id}", axum::routing::delete(delete_agent))
         .route("/agent-sessions", post(open_agent_session))
@@ -239,6 +241,20 @@ async fn install_hermes(
 
 async fn agent_runtimes(State(app): AppState) -> Json<Vec<super::dto::AgentRuntimeDto>> {
     Json(handlers::agent_runtimes(&app))
+}
+
+async fn registry_search(
+    State(app): AppState,
+    Query(params): Query<super::dto::RegistrySearchDto>,
+) -> Result<Json<crate::registry::Fetched<Vec<crate::registry::RemoteModel>>>, ApiError> {
+    Ok(Json(handlers::registry_search(&app, params).await?))
+}
+
+async fn registry_details(
+    State(app): AppState,
+    Path(id): Path<String>,
+) -> Result<Json<super::dto::RegistryDetailsDto>, ApiError> {
+    Ok(Json(handlers::registry_details(&app, &id).await?))
 }
 
 async fn export_backup(State(app): AppState) -> Result<Response, ApiError> {

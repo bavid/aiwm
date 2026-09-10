@@ -202,7 +202,10 @@ suchen, verifiziert laden, lokal messen, Upgrade-Check. Alles offline-first
   (nativer `reqwest`-Client, kein Sidecar — ADR-022), `Registry`-Wrapper mit
   wegwerfbarem TTL-JSON-Cache + `Freshness` (Live/Stale/Offline), SHA-256 aus
   `lfs.oid`. `aiwm-fake-hfhub` + `#[ignore]`-Live-Test
-- 6.2 **Discovery-UI** — Suche + Filter + Fit-Ampel im Models-Tab
+- [x] 6.2 **Discovery-UI** — `App.registry` + `GET /registry/{search,models/{id}}`
+  + Tauri + ein „Discover"-Panel im Models-Tab (Suche, „GGUF only", Sort,
+  Ergebnis-Karten, „Files" mit 🟢/🟡/🔴-Fit-Punkt via `core::compat` + „Copy
+  link"). `Freshness`-Banner bei Stale/Offline. Kein Download-Manager (6.4)
 - 6.3 **Kompatibilitäts-Engine v2** — `.safetensors`-Header, `FitVerdict`
   🟢/🟡/🔴, Overhead gegen echte Messungen kalibriert (verlängert ADR-016)
 - 6.4 **Download-Manager** — `downloads`-Tabelle, Queue, Range/Resume, Verify →

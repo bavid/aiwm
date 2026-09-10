@@ -12,6 +12,7 @@ use crate::config::{Config, FALLBACK_VRAM_BUDGET_MB};
 use crate::db::{now_rfc3339, Database};
 use crate::orchestrator::JobEngine;
 use crate::paths::AppPaths;
+use crate::registry::{HuggingFaceSource, Registry};
 use crate::runtime::{ComfyDirs, ComfyUiAdapter, LlamaCppAdapter, RuntimeRegistry};
 use crate::scheduler::HybridScheduler;
 use crate::telemetry::{GpuStatus, Sampler};
@@ -46,6 +47,9 @@ pub struct App {
     /// typed so handlers can report install state and drive Hermes' installer.
     pub opencode: Arc<OpenCodeAdapter>,
     pub hermes: Arc<HermesAgentAdapter>,
+    /// Online model discovery (Phase 6.1). Wraps the Hugging Face source with a
+    /// disposable cache and the same `offline` switch.
+    pub registry: Registry,
     /// Live offline switch (ADR-009). Seeded from `config.offline_mode`; the
     /// Settings UI flips it without a restart, and every outbound-call site
     /// checks [`offline`](Self::offline) rather than `config.offline_mode`.
@@ -109,6 +113,11 @@ impl App {
                 .with_adapter(hermes.clone()),
         );
         let offline = Arc::new(AtomicBool::new(config.offline_mode));
+        let registry = Registry::new(
+            Box::new(HuggingFaceSource::new()?),
+            paths.cache_dir().join("registry"),
+            offline.clone(),
+        );
 
         Ok(Self {
             paths,
@@ -123,8 +132,15 @@ impl App {
             agents,
             opencode,
             hermes,
+            registry,
             offline,
         })
+    }
+
+    /// Swap the discovery registry — tests point it at a fixture.
+    pub fn with_registry(mut self, registry: Registry) -> Self {
+        self.registry = registry;
+        self
     }
 
     /// Whether outbound network calls are currently forbidden (ADR-009). This is

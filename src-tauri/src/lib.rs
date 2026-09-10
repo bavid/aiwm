@@ -8,13 +8,14 @@ use std::sync::{Arc, Mutex};
 
 use aiwm_core::api::dto::{
     AboutDto, AgentPermissionDto, AgentSessionDetailDto, ConfigUpdate, JobDetailDto, NewAgentDto,
-    OpenAgentSessionDto, RuntimeStatusDto, SubmitJobDto,
+    OpenAgentSessionDto, RegistryDetailsDto, RegistrySearchDto, RuntimeStatusDto, SubmitJobDto,
 };
 use aiwm_core::api::handlers;
 use aiwm_core::config::Config;
 use aiwm_core::db::{Agent, AgentSession, Job, JobFilter, Model};
 use aiwm_core::model::{ImportOutcome, ImportRequest};
 use aiwm_core::orchestrator::JobState;
+use aiwm_core::registry::{Fetched, RemoteModel};
 use aiwm_core::telemetry::SystemTelemetry;
 use aiwm_core::{api, app, App};
 use tauri::{Emitter, Manager};
@@ -99,6 +100,22 @@ async fn list_agent_runtimes(
     app: tauri::State<'_, Arc<App>>,
 ) -> Result<Vec<aiwm_core::api::dto::AgentRuntimeDto>, String> {
     Ok(handlers::agent_runtimes(&app))
+}
+
+#[tauri::command]
+async fn registry_search(
+    app: tauri::State<'_, Arc<App>>,
+    params: RegistrySearchDto,
+) -> Result<Fetched<Vec<RemoteModel>>, String> {
+    to_ipc(handlers::registry_search(&app, params).await)
+}
+
+#[tauri::command]
+async fn registry_model(
+    app: tauri::State<'_, Arc<App>>,
+    id: String,
+) -> Result<RegistryDetailsDto, String> {
+    to_ipc(handlers::registry_details(&app, &id).await)
 }
 
 #[tauri::command]
@@ -266,6 +283,8 @@ fn try_run() -> anyhow::Result<()> {
             install_comfyui,
             install_hermes,
             list_agent_runtimes,
+            registry_search,
+            registry_model,
             export_backup,
             import_backup,
             cancel_job,

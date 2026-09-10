@@ -6,13 +6,15 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use super::dto::{
-    AboutDto, AgentPermissionDto, AgentSessionDetailDto, ConfigUpdate, JobDetailDto, NewAgentDto,
-    OpenAgentSessionDto, RuntimeStatusDto, SubmitJobDto,
+    AboutDto, AgentPermissionDto, AgentSessionDetailDto, ConfigUpdate, FitLevel, JobDetailDto,
+    NewAgentDto, OpenAgentSessionDto, RegistryDetailsDto, RegistryFileDto, RegistrySearchDto,
+    RuntimeStatusDto, SubmitJobDto,
 };
 use crate::config::Config;
 use crate::db::{Agent, AgentSession, Job, JobFilter, Model, NewAgent, NewJob};
 use crate::model::{ImportOutcome, ImportRequest};
 use crate::orchestrator::JobOutcome;
+use crate::registry::{Fetched, RemoteFile, RemoteFormat, RemoteModel};
 use crate::telemetry::SystemTelemetry;
 use crate::{App, CoreError, Result};
 
@@ -391,6 +393,89 @@ pub async fn import_backup_from_file(
     import_backup(app, &bytes).await
 }
 
+// --- model discovery (Phase 6.2) ---------------------------------------------
+
+/// `GET /registry/search` — the "Discover" panel. `Fetched.freshness` tells the
+/// UI whether this is `live`, a `stale` cache (the Hub was unreachable) or an
+/// `offline` cache.
+pub async fn registry_search(
+    app: &App,
+    params: RegistrySearchDto,
+) -> Result<Fetched<Vec<RemoteModel>>> {
+    app.registry.search(&params.into_query()).await
+}
+
+/// `GET /registry/models/{id}` — one repo, with every file enriched with the
+/// browser link and a VRAM fit verdict against the current budget.
+pub async fn registry_details(app: &App, id: &str) -> Result<RegistryDetailsDto> {
+    let fetched = app.registry.details(id).await?;
+    let budget_mb = app.scheduler.budget_mb();
+    let d = fetched.data;
+    let files = d
+        .files
+        .iter()
+        .map(|f| enrich_file(id, &d.revision, &d.model, f, budget_mb))
+        .collect();
+    Ok(RegistryDetailsDto {
+        model: d.model,
+        revision: d.revision,
+        files,
+        freshness: fetched.freshness,
+    })
+}
+
+/// The GGUF / safetensors weight files, not `README.md` / `config.json`.
+fn is_weight_file(model: &RemoteModel, path: &str) -> bool {
+    matches!(model.format, RemoteFormat::Gguf | RemoteFormat::Safetensors)
+        && (path.ends_with(".gguf") || path.ends_with(".safetensors"))
+}
+
+fn enrich_file(
+    id: &str,
+    revision: &str,
+    model: &RemoteModel,
+    f: &RemoteFile,
+    budget_mb: u64,
+) -> RegistryFileDto {
+    let (vram_estimate_mb, fit) = if is_weight_file(model, &f.path) && f.size > 0 {
+        let dims = crate::compat::ModelDims {
+            size_bytes: f.size,
+            ctx_max: model.ctx_max,
+            param_count: model.param_count,
+            ..Default::default()
+        };
+        let est = crate::compat::estimate(&dims, crate::compat::effective_ctx(model.ctx_max));
+        (Some(est.total_mb), fit_of(est.total_mb, budget_mb))
+    } else {
+        (None, FitLevel::Unknown)
+    };
+    RegistryFileDto {
+        download_url: format!("https://huggingface.co/{id}/resolve/{revision}/{}", f.path),
+        path: f.path.clone(),
+        size_bytes: f.size,
+        sha256: f.sha256.clone(),
+        quant: f.quant.clone(),
+        shard: f.shard.map(|(a, b)| [a, b]),
+        vram_estimate_mb,
+        fit,
+    }
+}
+
+/// 🟢/🟡/🔴 against the VRAM budget. `yellow` at 85 % — enough head-room for the
+/// runtime to breathe.
+fn fit_of(total_mb: u64, budget_mb: u64) -> FitLevel {
+    if budget_mb == 0 {
+        return FitLevel::Unknown;
+    }
+    if total_mb > budget_mb {
+        FitLevel::Red
+    } else if total_mb.saturating_mul(100) > budget_mb.saturating_mul(85) {
+        FitLevel::Yellow
+    } else {
+        FitLevel::Green
+    }
+}
+
 /// Tail of the current day's log file.
 pub fn recent_logs(app: &App, lines: usize) -> Result<Vec<String>> {
     let dir = app.paths.logs_dir();
@@ -408,4 +493,93 @@ pub fn recent_logs(app: &App, lines: usize) -> Result<Vec<String>> {
     let all: Vec<&str> = content.lines().collect();
     let start = all.len().saturating_sub(lines);
     Ok(all[start..].iter().map(|s| s.to_string()).collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::registry::SearchSort;
+
+    #[test]
+    fn fit_of_thresholds() {
+        assert_eq!(fit_of(9_000, 0), FitLevel::Unknown);
+        assert_eq!(fit_of(8_000, 16_000), FitLevel::Green);
+        assert_eq!(fit_of(13_600, 16_000), FitLevel::Green); // 85 % exactly is still green
+        assert_eq!(fit_of(13_601, 16_000), FitLevel::Yellow);
+        assert_eq!(fit_of(16_000, 16_000), FitLevel::Yellow); // fits, tight
+        assert_eq!(fit_of(16_001, 16_000), FitLevel::Red);
+    }
+
+    #[test]
+    fn is_weight_file_needs_the_format_and_the_extension() {
+        let gguf = RemoteModel {
+            format: RemoteFormat::Gguf,
+            ..sample_model()
+        };
+        assert!(is_weight_file(&gguf, "model-q4_k_m.gguf"));
+        assert!(!is_weight_file(&gguf, "README.md"));
+        assert!(!is_weight_file(&gguf, "config.json"));
+
+        let other = RemoteModel {
+            format: RemoteFormat::Other,
+            ..sample_model()
+        };
+        assert!(!is_weight_file(&other, "weights.gguf"));
+    }
+
+    #[test]
+    fn search_dto_maps_the_sort_strings() {
+        assert_eq!(dto_sort(None), SearchSort::Downloads);
+        assert_eq!(dto_sort(Some("downloads")), SearchSort::Downloads);
+        assert_eq!(dto_sort(Some("likes")), SearchSort::Likes);
+        assert_eq!(dto_sort(Some("trending")), SearchSort::Trending);
+        assert_eq!(dto_sort(Some("updated")), SearchSort::RecentlyUpdated);
+        assert_eq!(dto_sort(Some("new")), SearchSort::RecentlyCreated);
+        assert_eq!(dto_sort(Some("garbage")), SearchSort::Downloads);
+    }
+
+    fn dto_sort(s: Option<&str>) -> SearchSort {
+        RegistrySearchDto {
+            sort: s.map(str::to_string),
+            ..RegistrySearchDto::default()
+        }
+        .into_query()
+        .sort
+    }
+
+    #[test]
+    fn search_dto_drops_blank_text_and_defaults_the_limit() {
+        let q = RegistrySearchDto {
+            q: Some("   ".into()),
+            base_model: Some(String::new()),
+            ..RegistrySearchDto::default()
+        }
+        .into_query();
+        assert_eq!(q.text, None);
+        assert_eq!(q.base_model, None);
+        assert_eq!(q.limit, 25);
+    }
+
+    fn sample_model() -> RemoteModel {
+        RemoteModel {
+            id: "x/y".into(),
+            author: None,
+            downloads: 0,
+            likes: 0,
+            trending_score: None,
+            created_at: None,
+            last_modified: None,
+            pipeline_tag: None,
+            library_name: None,
+            gated: crate::registry::Gated::No,
+            license: None,
+            base_model: None,
+            tags: vec![],
+            param_count: None,
+            arch: None,
+            ctx_max: None,
+            precision: None,
+            format: RemoteFormat::Gguf,
+        }
+    }
 }

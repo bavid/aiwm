@@ -31,7 +31,7 @@ noch keine echte AI-Capability (die kommt ab Phase 2).
 | WP-9 | CI-Workflow, Git-Hooks (pre-commit fmt, pre-push voller Gate) |
 | WP-10 | ADRs finalisiert, Stub-Docs (MODELS/RUNTIMES/SECURITY/BENCHMARKS) |
 
-**316 Rust-Unit + 48 Integrationstests + 5 pytest** grün · `scripts/check.ps1` grün ·
+**320 Rust-Unit + 49 Integrationstests + 5 pytest** grün · `scripts/check.ps1` grün ·
 **null `unsafe`** im Produktivcode.
 
 **Phase 2 (MVP) ✅ abgeschlossen** — Scheiben 2.1–2.7 + durchgehender
@@ -119,7 +119,7 @@ Command-Approval (UI) + erzwungene Offline-Config.
   Tauri + Settings-Karte „Backup & restore". Politur (Kompaktierungs-Anzeige,
   Pause-Fluss, Diagnostics-Zeile) = 5.5c, vertagt.
 
-**Phase 6 (Automatisierung & Model-Manager v2) — Plan + 6.0 + 6.1 ✅:** [docs/PHASE_6_PLAN.md](docs/PHASE_6_PLAN.md).
+**Phase 6 (Automatisierung & Model-Manager v2) — Plan + 6.0 + 6.1 + 6.2 ✅:** [docs/PHASE_6_PLAN.md](docs/PHASE_6_PLAN.md).
 Aus dem manuellen Modell-Umgang wird ein Model-Manager: online suchen, verifiziert
 laden, lokal messen, Upgrade-Check, Dedup-/Unused-Reports. Alles offline-first
 (ADR-009).
@@ -136,6 +136,12 @@ laden, lokal messen, Upgrade-Check, Dedup-/Unused-Reports. Alles offline-first
   ein `GET /api/models`-Call mit `expand[]`; `details` + `/tree?recursive=true`
   → Dateien mit Größe + SHA-256 aus `lfs.oid` (nie `xetHash`). Gegen
   `aiwm-fake-hfhub` + ein `#[ignore]`-Test gegen das echte `huggingface.co`.
+- **6.2** ✅ **Discovery-UI** — `App.registry` + `GET /registry/search` + `GET
+  /registry/models/{id}` + Tauri + ein „Discover"-Panel im Models-Tab
+  (`Discover.tsx`): Suchfeld, „GGUF only", Sort, Ergebnis-Karten; „Files" lädt
+  die Dateiliste on-demand mit Quant + Größe + `🟢/🟡/🔴`-Fit-Punkt (via
+  `core::compat` gegen das VRAM-Budget) + „Copy link" (Browser-Download; kein
+  Download-Manager bis 6.4). `Stale`/`Offline` → gelber Cache-Banner.
 
 - **4.1** ✅ **`capability::video`**: `job_type=video` → feste `wan_ti2v`-Pipeline
   (`WanImageToVideo` → `KSampler` → `VAEDecode` → `CreateVideo` → `SaveVideo`,

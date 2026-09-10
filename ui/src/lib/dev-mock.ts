@@ -73,6 +73,23 @@ type DevSession = {
 let DEV_SESSION: DevSession | null = null;
 let HERMES_INSTALLED = false;
 
+const DISCOVER_MODELS: AnyRecord[] = [
+  {
+    id: "Qwen/Qwen2.5-Coder-7B-Instruct-GGUF", author: "Qwen", downloads: 1_780_676, likes: 436,
+    trending_score: 12, created_at: now(), last_modified: now(), pipeline_tag: "text-generation",
+    library_name: "transformers", gated: "no", license: "apache-2.0",
+    base_model: "Qwen/Qwen2.5-Coder-7B-Instruct", tags: ["gguf", "code"],
+    param_count: 7_615_616_512, arch: "qwen2", ctx_max: 131_072, precision: null, format: "gguf",
+  },
+  {
+    id: "bartowski/Qwen2.5-Coder-14B-Instruct-GGUF", author: "bartowski", downloads: 402_113, likes: 88,
+    trending_score: 5, created_at: now(), last_modified: now(), pipeline_tag: "text-generation",
+    library_name: null, gated: "no", license: "apache-2.0",
+    base_model: "Qwen/Qwen2.5-Coder-14B-Instruct", tags: ["gguf"],
+    param_count: 14_770_000_000, arch: "qwen2", ctx_max: 131_072, precision: null, format: "gguf",
+  },
+];
+
 function devSession(): AnyRecord {
   const s = DEV_SESSION!;
   return {
@@ -174,6 +191,44 @@ export function installDevMock(): void {
       case "install_hermes":
         HERMES_INSTALLED = true;
         return "started";
+      case "registry_search": {
+        const q = String((a.params as AnyRecord)?.q ?? "").toLowerCase();
+        const all = DISCOVER_MODELS.filter(
+          (m) => !q || String(m.id).toLowerCase().includes(q),
+        );
+        return { data: all, freshness: { kind: "live" } };
+      }
+      case "registry_model": {
+        const id = String(a.id ?? "");
+        const m = DISCOVER_MODELS.find((x) => x.id === id) ?? DISCOVER_MODELS[0];
+        const mid = String(m.id);
+        const repo = mid.split("/")[1].toLowerCase();
+        return {
+          ...m,
+          revision: "main",
+          freshness: { kind: "live" },
+          files: [
+            {
+              path: "README.md", size_bytes: 4200, sha256: null, quant: null,
+              shard: null, download_url: `https://huggingface.co/${mid}/resolve/main/README.md`,
+              vram_estimate_mb: null, fit: "unknown",
+            },
+            {
+              path: `${repo}-q4_k_m.gguf`, size_bytes: 4_683_073_536,
+              sha256: "509287f78cb4d4cf6b3843734733b914b2c158e43e22a7f4bf5e963800894d3c",
+              quant: "Q4_K_M", shard: null,
+              download_url: `https://huggingface.co/${mid}/resolve/main/model-q4_k_m.gguf`,
+              vram_estimate_mb: 5_800, fit: "green",
+            },
+            {
+              path: `${repo}-q8_0.gguf`, size_bytes: 8_100_000_000,
+              sha256: "aa".repeat(32), quant: "Q8_0", shard: null,
+              download_url: `https://huggingface.co/${mid}/resolve/main/model-q8_0.gguf`,
+              vram_estimate_mb: 9_200, fit: "yellow",
+            },
+          ],
+        };
+      }
       case "export_backup":
         return "E:\\AI\\data\\exports\\aiwm-export-2026-01-01T00-00-00Z.zip";
       case "import_backup":
