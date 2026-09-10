@@ -144,6 +144,14 @@ pub trait ModelSource: Send + Sync + std::fmt::Debug {
     async fn search(&self, query: &SearchQuery) -> Result<Vec<RemoteModel>>;
     /// `id` is `owner/repo`.
     async fn details(&self, id: &str) -> Result<RemoteModelDetails>;
+
+    /// Last-fetch / rate-limit / token status for the Diagnostics line.
+    fn status(&self) -> RegistryStatus {
+        RegistryStatus {
+            source_id: self.id().to_string(),
+            ..RegistryStatus::default()
+        }
+    }
 }
 
 /// Where an answer came from.
@@ -163,6 +171,24 @@ pub enum Freshness {
 pub struct Fetched<T> {
     pub data: T,
     pub freshness: Freshness,
+}
+
+/// Health line for the Diagnostics tab (Phase 6.9).
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct RegistryStatus {
+    /// The source's stable id, e.g. `"huggingface"`.
+    pub source_id: String,
+    /// RFC 3339 of the last successful fetch, if any this session.
+    pub last_fetch: Option<String>,
+    /// `RateLimit-Remaining` from the last response.
+    pub rate_limit_remaining: Option<i64>,
+    /// Seconds until the current rate-limit window clears — `Some` only while
+    /// actually limited.
+    pub rate_limited_secs: Option<i64>,
+    /// A Hugging Face token is configured (never the value).
+    pub token_set: bool,
+    /// JSON entries in the disposable cache.
+    pub cache_entries: u64,
 }
 
 /// A [`ModelSource`] plus the disposable TTL cache and the offline switch.
@@ -195,6 +221,15 @@ impl Registry {
     pub async fn details(&self, id: &str) -> Result<Fetched<RemoteModelDetails>> {
         let key = cache::key(&["details", id]);
         self.resolve(&key, self.source.details(id)).await
+    }
+
+    /// The Diagnostics health line — the source's status plus the local cache
+    /// size.
+    pub fn status(&self) -> RegistryStatus {
+        RegistryStatus {
+            cache_entries: self.cache.count(),
+            ..self.source.status()
+        }
     }
 
     /// Offline → serve the cache or refuse. Online → the source, falling back to

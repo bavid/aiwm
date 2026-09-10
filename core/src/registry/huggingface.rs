@@ -10,14 +10,30 @@
 //! - `GET /api/models/{id}/tree/{rev}?recursive=true` — every file with its
 //!   size and **SHA-256** (`lfs.oid`; **not** `xetHash`).
 
+use std::sync::Mutex;
+use std::time::{SystemTime, UNIX_EPOCH};
+
 use async_trait::async_trait;
 use serde_json::Value;
 
 use super::{
-    Gated, ModelSource, RemoteFile, RemoteFormat, RemoteModel, RemoteModelDetails, SearchQuery,
-    SearchSort,
+    Gated, ModelSource, RegistryStatus, RemoteFile, RemoteFormat, RemoteModel, RemoteModelDetails,
+    SearchQuery, SearchSort,
 };
+use crate::db::now_rfc3339;
 use crate::{CoreError, Result};
+
+/// When a `429` carries no usable reset hint, back off this long.
+const DEFAULT_BACKOFF_SECS: i64 = 90;
+
+/// Live rate-limit / last-fetch bookkeeping (Phase 6.9).
+#[derive(Debug, Default)]
+struct HubState {
+    last_fetch: Option<String>,
+    remaining: Option<i64>,
+    /// Unix seconds; while `now < limited_until` every request fails fast.
+    limited_until: Option<i64>,
+}
 
 /// The real Hub. Overridden in tests with [`HuggingFaceSource::with_base_url`].
 const DEFAULT_BASE: &str = "https://huggingface.co";
@@ -39,6 +55,7 @@ pub struct HuggingFaceSource {
     base: String,
     token: Option<String>,
     client: reqwest::Client,
+    state: Mutex<HubState>,
 }
 
 impl HuggingFaceSource {
@@ -68,12 +85,61 @@ impl HuggingFaceSource {
             base: base.trim_end_matches('/').to_string(),
             token,
             client,
+            state: Mutex::new(HubState::default()),
         })
     }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, HubState> {
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+}
+
+fn unix_now() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+/// Pull `RateLimit-Remaining` and a reset hint out of the response headers. HF
+/// sends the IETF draft `RateLimit: "…";r=<remaining>;t=<seconds-to-reset>`, and
+/// `Retry-After: <seconds>` on a `429`.
+fn parse_rate_headers(headers: &reqwest::header::HeaderMap) -> (Option<i64>, Option<i64>) {
+    let get = |name: &str| headers.get(name).and_then(|v| v.to_str().ok());
+
+    let mut remaining = get("ratelimit-remaining").and_then(|v| v.trim().parse().ok());
+    let mut reset_in = None;
+
+    if let Some(rl) = get("ratelimit") {
+        for part in rl.split(';') {
+            let part = part.trim();
+            if let Some(r) = part.strip_prefix("r=") {
+                remaining = r.trim().parse().ok().or(remaining);
+            } else if let Some(t) = part.strip_prefix("t=") {
+                reset_in = t.trim().parse().ok();
+            }
+        }
+    }
+    if reset_in.is_none() {
+        reset_in = get("retry-after").and_then(|v| v.trim().parse().ok());
+    }
+    (remaining, reset_in)
 }
 
 impl HuggingFaceSource {
     async fn get_json(&self, url: &str, params: &[(&str, String)]) -> Result<Value> {
+        // Fast-fail while we know we're rate-limited — don't spend a call.
+        if let Some(until) = self.lock().limited_until {
+            let wait = until - unix_now();
+            if wait > 0 {
+                return Err(err(format!(
+                    "Hugging Face rate limit — try again in {wait}s"
+                )));
+            }
+        }
+
         let url = reqwest::Url::parse_with_params(url, params)
             .map_err(|e| err(format!("build url {url}: {e}")))?;
         let mut req = self.client.get(url.clone());
@@ -85,10 +151,25 @@ impl HuggingFaceSource {
             .await
             .map_err(|e| err(format!("GET {url}: {e}")))?;
         let status = resp.status();
+        let (remaining, reset_in) = parse_rate_headers(resp.headers());
+
+        {
+            let mut st = self.lock();
+            st.remaining = remaining.or(st.remaining);
+            if status.as_u16() == 429 {
+                let backoff = reset_in.filter(|s| *s > 0).unwrap_or(DEFAULT_BACKOFF_SECS);
+                st.limited_until = Some(unix_now() + backoff);
+            } else if status.is_success() {
+                st.limited_until = None;
+                st.last_fetch = Some(now_rfc3339());
+            }
+        }
+
         if status.as_u16() == 429 {
-            return Err(err(
-                "Hugging Face rate limit hit — try again in a few minutes",
-            ));
+            let wait = reset_in.filter(|s| *s > 0).unwrap_or(DEFAULT_BACKOFF_SECS);
+            return Err(err(format!(
+                "Hugging Face rate limit hit — backing off for {wait}s"
+            )));
         }
         if !status.is_success() {
             return Err(err(format!("Hugging Face returned {status}")));
@@ -101,6 +182,22 @@ impl HuggingFaceSource {
 impl ModelSource for HuggingFaceSource {
     fn id(&self) -> &'static str {
         "huggingface"
+    }
+
+    fn status(&self) -> RegistryStatus {
+        let st = self.lock();
+        let rate_limited_secs = st
+            .limited_until
+            .map(|until| until - unix_now())
+            .filter(|s| *s > 0);
+        RegistryStatus {
+            source_id: "huggingface".to_string(),
+            last_fetch: st.last_fetch.clone(),
+            rate_limit_remaining: st.remaining,
+            rate_limited_secs,
+            token_set: self.token.is_some(),
+            cache_entries: 0,
+        }
     }
 
     async fn search(&self, query: &SearchQuery) -> Result<Vec<RemoteModel>> {
@@ -414,7 +511,44 @@ fn gated_of(v: &Value) -> Gated {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use reqwest::header::HeaderMap;
     use serde_json::json;
+
+    #[test]
+    fn parse_rate_headers_reads_the_draft_and_retry_after_forms() {
+        let mut h = HeaderMap::new();
+        h.insert("ratelimit", "\"api\";r=487;t=142".parse().unwrap());
+        assert_eq!(parse_rate_headers(&h), (Some(487), Some(142)));
+
+        let mut h = HeaderMap::new();
+        h.insert("ratelimit-remaining", "12".parse().unwrap());
+        h.insert("retry-after", "58".parse().unwrap());
+        assert_eq!(parse_rate_headers(&h), (Some(12), Some(58)));
+
+        assert_eq!(parse_rate_headers(&HeaderMap::new()), (None, None));
+    }
+
+    #[test]
+    fn status_reports_the_token_and_a_live_backoff() {
+        let src = HuggingFaceSource::with_base_url("http://x").unwrap();
+        assert!(!src.status().token_set);
+        assert!(src.status().rate_limited_secs.is_none());
+
+        let src = src.with_token(Some("hf_abc".into()));
+        assert!(src.status().token_set);
+
+        src.lock().limited_until = Some(unix_now() + 30);
+        let s = src.status();
+        assert!(s.rate_limited_secs.unwrap() > 25 && s.rate_limited_secs.unwrap() <= 30);
+    }
+
+    #[tokio::test]
+    async fn a_known_backoff_fails_fast_without_a_call() {
+        let src = HuggingFaceSource::with_base_url("http://127.0.0.1:1").unwrap();
+        src.lock().limited_until = Some(unix_now() + 60);
+        let err = src.search(&SearchQuery::default()).await.unwrap_err();
+        assert!(err.to_string().contains("try again in"), "{err}");
+    }
 
     #[test]
     fn quant_from_filename_reads_the_common_labels() {

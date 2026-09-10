@@ -99,8 +99,12 @@ impl App {
         let scheduler = Arc::new(HybridScheduler::new(runtimes.clone(), budget));
         let auto_pref = config.models.auto_preference;
         let offline = Arc::new(AtomicBool::new(config.offline_mode));
+        let hf_token = std::fs::read_to_string(paths.hf_token_file())
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
         let registry = Arc::new(Registry::new(
-            Box::new(HuggingFaceSource::new()?),
+            Box::new(HuggingFaceSource::new()?.with_token(hf_token)),
             paths.cache_dir().join("registry"),
             offline.clone(),
         ));

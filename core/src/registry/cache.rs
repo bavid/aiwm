@@ -43,6 +43,17 @@ impl Cache {
         }
     }
 
+    /// Number of cached `.json` entries — best-effort, `0` on any error.
+    pub(super) fn count(&self) -> u64 {
+        std::fs::read_dir(&self.dir)
+            .map(|it| {
+                it.flatten()
+                    .filter(|e| e.path().extension().is_some_and(|x| x == "json"))
+                    .count() as u64
+            })
+            .unwrap_or(0)
+    }
+
     fn try_put<T: Serialize>(&self, key: &str, value: &T) -> std::io::Result<()> {
         std::fs::create_dir_all(&self.dir)?;
         let env = EnvelopeSer {

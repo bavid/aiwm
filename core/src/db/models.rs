@@ -377,6 +377,58 @@ impl<'a> ModelRepo<'a> {
         Ok(map)
     }
 
+    // --- tags (model_tags, 6.9) ---------------------------------------------
+
+    /// This model's tags, alphabetical.
+    pub async fn tags(&self, id: &str) -> Result<Vec<String>> {
+        let rows: Vec<(String,)> =
+            sqlx::query_as("SELECT tag FROM model_tags WHERE model_id = $1 ORDER BY tag")
+                .bind(id)
+                .fetch_all(self.pool)
+                .await?;
+        Ok(rows.into_iter().map(|(t,)| t).collect())
+    }
+
+    /// Replace this model's tag set. Tags are trimmed, lower-cased, de-duped;
+    /// empties and anything over 32 chars are dropped.
+    pub async fn set_tags(&self, id: &str, tags: &[String]) -> Result<Vec<String>> {
+        let mut clean: Vec<String> = tags
+            .iter()
+            .map(|t| t.trim().to_lowercase())
+            .filter(|t| !t.is_empty() && t.chars().count() <= 32)
+            .collect();
+        clean.sort();
+        clean.dedup();
+
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("DELETE FROM model_tags WHERE model_id = $1")
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+        for tag in &clean {
+            sqlx::query("INSERT INTO model_tags (model_id, tag) VALUES ($1, $2)")
+                .bind(id)
+                .bind(tag)
+                .execute(&mut *tx)
+                .await?;
+        }
+        tx.commit().await?;
+        Ok(clean)
+    }
+
+    /// `model_id -> [tags]` for every tagged model.
+    pub async fn all_tags(&self) -> Result<BTreeMap<String, Vec<String>>> {
+        let rows: Vec<(String, String)> =
+            sqlx::query_as("SELECT model_id, tag FROM model_tags ORDER BY tag")
+                .fetch_all(self.pool)
+                .await?;
+        let mut map: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        for (id, tag) in rows {
+            map.entry(id).or_default().push(tag);
+        }
+        Ok(map)
+    }
+
     // --- links (model_links) -------------------------------------------------
 
     /// Record how `runtime_id` reaches this model's file (ADR-007). Upsert.
@@ -694,5 +746,43 @@ mod tests {
             "charlie"
         );
         let _ = a;
+    }
+
+    #[tokio::test]
+    async fn set_tags_cleans_and_all_tags_indexes() {
+        let db = Database::connect_in_memory().await.unwrap();
+        let a = db.models().insert(gguf_model("a", "ha")).await.unwrap();
+        let b = db.models().insert(gguf_model("b", "hb")).await.unwrap();
+
+        let stored = db
+            .models()
+            .set_tags(
+                &a.id,
+                &[
+                    "  Coding ".into(),
+                    "coding".into(),
+                    "".into(),
+                    "Favourite".into(),
+                ],
+            )
+            .await
+            .unwrap();
+        assert_eq!(stored, ["coding", "favourite"]); // trimmed, lowered, deduped, sorted
+        assert_eq!(
+            db.models().tags(&a.id).await.unwrap(),
+            ["coding", "favourite"]
+        );
+
+        db.models()
+            .set_tags(&b.id, &["coding".into()])
+            .await
+            .unwrap();
+        let all = db.models().all_tags().await.unwrap();
+        assert_eq!(all.get(&a.id).unwrap(), &["coding", "favourite"]);
+        assert_eq!(all.get(&b.id).unwrap(), &["coding"]);
+
+        // Re-setting replaces the whole set.
+        db.models().set_tags(&a.id, &["keep".into()]).await.unwrap();
+        assert_eq!(db.models().tags(&a.id).await.unwrap(), ["keep"]);
     }
 }

@@ -111,6 +111,12 @@ impl AppPaths {
         self.local_root.join(".downloads")
     }
 
+    /// Optional Hugging Face token (6.9) — a bare file, machine-local only so it
+    /// is **never roamed and never in a backup export** (ADR-022).
+    pub fn hf_token_file(&self) -> PathBuf {
+        self.local_root.join("hf_token.txt")
+    }
+
     /// Where `POST /export` writes backup archives (roamed — small).
     pub fn exports_dir(&self) -> PathBuf {
         self.root.join("exports")
