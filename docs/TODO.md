@@ -32,7 +32,10 @@ hierher, damit nichts verloren geht.
   (`[llama]` in `config.toml`, `GET`/`PUT /config`, ADR-017). Offen: die Optionen
   live anwenden statt neustart-pflichtig (`Mutex<LlamaServerOptions>` +
   `set_options` auf dem Adapter); ebenso `store_path` / `vram_budget_mb` /
-  `log_filter` (Letzteres braucht einen `tracing`-`reload::Handle`)
+  `log_filter` (Letzteres braucht einen `tracing`-`reload::Handle`) /
+  `[paths].{outputs,runtimes,cache}_path` (ADR-026, neustart-pflichtig weil
+  `runtimes_dir` schon beim `LlamaCppAdapter`/`ComfyUiAdapter`-Constructor
+  gebraucht wird)
 - ~~Phase-2-Abschluss: durchgehender End-to-End-Test Modell-Wechsel~~ → ✅
   `core/tests/model_swap.rs`
 - `core::compat` (2.6): die 650-MB-Overhead-Konstante + die grobe KV-Reserve

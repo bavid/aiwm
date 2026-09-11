@@ -355,6 +355,79 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn paths_override_round_trips_over_http_and_blank_clears_it() {
+        let (app, _tmp) = test_app().await;
+        let server = ApiServer::bind(app, SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
+            .await
+            .unwrap();
+        let base = format!("http://{}", server.addr);
+        let http = reqwest::Client::new();
+
+        let base_update = serde_json::json!({
+            "store_path": "E:\\m", "offline_mode": false, "vram_budget_mb": 0,
+            "llama": { "gpu_layers": 999, "ctx_size": 0, "flash_attention": true, "load_timeout_secs": 180 },
+        });
+
+        // No `paths` key at all -- defaults to no overrides.
+        let saved: serde_json::Value = http
+            .put(format!("{base}/config"))
+            .json(&base_update)
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(saved["paths"]["outputs_path"], serde_json::Value::Null);
+
+        // Set an override, with padding whitespace the handler should trim.
+        let mut with_paths = base_update.clone();
+        with_paths["paths"] = serde_json::json!({
+            "outputs_path": "  E:\\media\\outputs  ",
+            "runtimes_path": "",
+            "cache_path": "E:\\fast\\cache",
+        });
+        let saved: serde_json::Value = http
+            .put(format!("{base}/config"))
+            .json(&with_paths)
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(saved["paths"]["outputs_path"], "E:\\media\\outputs");
+        assert_eq!(saved["paths"]["runtimes_path"], serde_json::Value::Null);
+        assert_eq!(saved["paths"]["cache_path"], "E:\\fast\\cache");
+
+        // A re-read from disk agrees (not just the in-memory response).
+        let reread: serde_json::Value = reqwest::get(format!("{base}/config"))
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(reread["paths"]["outputs_path"], "E:\\media\\outputs");
+
+        // Blanking it out again clears the override.
+        let mut cleared = base_update;
+        cleared["paths"] = serde_json::json!({
+            "outputs_path": "", "runtimes_path": "", "cache_path": "",
+        });
+        let saved: serde_json::Value = http
+            .put(format!("{base}/config"))
+            .json(&cleared)
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(saved["paths"]["outputs_path"], serde_json::Value::Null);
+        assert_eq!(saved["paths"]["cache_path"], serde_json::Value::Null);
+    }
+
+    #[tokio::test]
     async fn save_config_rejects_an_invalid_ctx_size_with_400() {
         let (app, _tmp) = test_app().await;
         let server = ApiServer::bind(app, SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))

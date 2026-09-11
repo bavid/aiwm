@@ -62,7 +62,8 @@ OS-Isolation. Für OpenCode (`agent::opencode::forced_config`, via
 
 ## Config / Secrets
 
-- `config.toml` unter `%APPDATA%`, keine Secrets darin.
+- `config.toml` unter dem App-Datenverzeichnis (portabel per Default,
+  ADR-026 — kein `%APPDATA%` mehr im Normalfall), keine Secrets darin.
 - `.env` ist in `.gitignore`.
 - Erforderliche Werte werden beim Start validiert (`Config::validate`), kaputte
   `AIWM_*`-Overrides sind harte Startfehler (kein stilles Fallback).
@@ -72,7 +73,7 @@ OS-Isolation. Für OpenCode (`agent::opencode::forced_config`, via
 - Das Export-`.zip` enthält einen **`aiwm.db`-Snapshot** (Agent-Transkripte,
   Modell-Pfade, Job-Historie), `config.toml` und ein Modell-Manifest (Namen +
   SHA-256) — **nie** die Modell-Dateien. Es ist **unverschlüsselt**; behandle es
-  wie den `%APPDATA%`-Ordner selbst (lokal, nicht unbedacht teilen).
+  wie das App-Datenverzeichnis selbst (lokal, nicht unbedacht teilen).
 - Export/Import laufen rein lokal (Datei rein, Datei raus) — kein Netz, kein
   `offline_mode`-Bezug.
 - Import **überschreibt nichts sofort**: `stage_import` schreibt nur nach

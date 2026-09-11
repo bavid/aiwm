@@ -91,6 +91,14 @@ dort als Unterordner); `tauri.conf.json`s `beforeDevCommand` (`pnpm dev`,
 Die Loopback-API läuft bei allen Varianten auf `http://127.0.0.1:48160`
 (`GET /about /telemetry /jobs /runtimes /logs`, `GET /ws` Telemetrie-Stream).
 
+**Datenablage ist portabel (ADR-026):** `config.toml`, `aiwm.db`, `logs/`,
+generierte Bilder/Videos, verwaltete Laufzeit-Installationen (llama.cpp,
+ComfyUI) und der Registry-Cache landen standardmäßig unter `<repo>\data\` —
+läuft die App aus `E:\AI`, bleibt alles auf `E:`, kein `%APPDATA%`. Override
+für alles zusammen: `AIWM_DATA_DIR`. Einzeln überschreibbar (Settings → „Data
+locations" oder `config.toml`s `[paths]`-Tabelle): `outputs_path`,
+`runtimes_path`, `cache_path`.
+
 ## Quality Gate
 
 ```powershell

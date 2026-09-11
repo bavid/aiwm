@@ -1009,6 +1009,81 @@ voll erfundener „Qwen3.8-27B"-Repos), und „besser" ist ohne Qualitäts-Bench
 
 ---
 
+## ADR-026 — Datenablage: portabel per Default (`<app_root>/data`), drei Ordner einzeln überschreibbar
+
+**Status:** Entschieden — direkt umgesetzt (kein Slice-Vorlauf; Nutzeranfrage
+nach dem 6.9-Abschluss: „warum liegt Anwendungsdaten auf C:, ich will da
+nichts drauf").
+
+**Kontext:** ADR-005 hatte die DB unter `%APPDATA%\AIWorkstationManager\`
+verortet; `AppPaths` (WP-1) spiegelte das für alles außer dem Modell-Store
+(der schon immer separat + konfigurierbar war, ADR-012). In der Praxis landete
+damit **fast alles außer den Modell-Dateien** auf `C:` — `config.toml`,
+`aiwm.db`, `logs/`, generierte Bilder/Videos (`outputs/`, wächst unbegrenzt),
+verwaltete Laufzeit-Installationen (`runtimes/` — llama.cpp + ComfyUI-Venv,
+mehrere GB), der Registry-Cache. Auf einer Workstation, bei der der Nutzer die
+App bewusst von `E:\AI` aus betreibt (dort liegt auch der Modell-Store), ist
+das unerwartet und ungewollt — ein privates Single-Machine-Tool (ADR-011)
+braucht keine Windows-Profil-Roaming-Semantik.
+
+**Entscheidung:**
+- **Default = portabel, neben der laufenden `.exe`.** `AppPaths::for_app()`
+  ermittelt über `std::env::current_exe()` das Anwendungs-Root
+  (`app_root_from_exe`) und setzt den Default auf `<app_root>/data/`. Läuft
+  die App von `E:\AI` (egal ob `cargo run`/`tauri dev` oder ein späterer
+  portabler Build), landet **alles** dort — kein `%APPDATA%` mehr im
+  Normalfall.
+- **`cargo run`/`cargo test` legen die `.exe` tief in `target/{debug,release}
+  [/deps]/` ab** — ein `data/`-Ordner dort würde `cargo clean` zum Opfer
+  fallen. `app_root_from_exe` wickelt dieses bekannte Layout ab (steigt aus
+  `deps/` und `target/{debug,release}/` auf den Workspace-Root), eine echte
+  Installation (die `.exe` sitzt direkt im eigenen Ordner, z. B. ein
+  portables Bundle) wird unverändert übernommen.
+- **`AIWM_DATA_DIR` bleibt der Fluchtweg** (unverändert seit WP-1) — kollabiert
+  weiterhin alles auf einen frei gewählten Pfad, hat Vorrang vor dem
+  exe-relativen Default.
+- **Drei Ordner zusätzlich einzeln überschreibbar** (`config.toml`s neue
+  `[paths]`-Tabelle, `PathsConfig { outputs_path, runtimes_path, cache_path:
+  Option<PathBuf> }`, `AppPaths::with_{outputs,runtimes,cache}_override`,
+  angewandt in `App::load` direkt nach dem Config-Load): `outputs_path` (wächst
+  unbegrenzt — evtl. auf ein Medien-/NAS-Laufwerk), `runtimes_path`
+  (mehrere GB llama.cpp/ComfyUI — evtl. auf eine schnellere SSD),
+  `cache_path` (der wegwerfbare Registry-Cache). `None` (leeres Feld in der
+  Settings-UI) = der portable Default. `config.toml` / `aiwm.db` / `logs/` /
+  `exports/` bleiben **nicht** einzeln konfigurierbar — sie sind klein, sitzen
+  ohnehin am `root`, kein Bedarf für eine vierte Stellschraube.
+- **`AboutDto`** trägt jetzt zusätzlich `runtimes_dir` / `cache_dir` (vorher
+  nur `data_dir` / `store_path` / `outputs_dir`) → Diagnostics zeigt alle vier
+  lokalen Ordner, Settings' „Data locations"-Karte zeigt den aktuell
+  wirksamen Pfad pro Feld als Hinweistext.
+- **Keine Auto-Migration.** Bereits vorhandene Daten unter `%APPDATA%`/
+  `%LOCALAPPDATA%\AIWorkstationManager` (aus der bisherigen Entwicklung dieser
+  Session) bleiben dort liegen — der nächste Start beginnt am neuen Ort frisch.
+  Für dieses Projekt (früher Dev-Stand, nur Test-/Smoke-Daten) unkritisch;
+  wer etwas behalten will, kopiert von Hand.
+
+**Konsequenzen:**
+- (+) Löst die eigentliche Nutzerfrage direkt: „läuft die App von E:, bleibt
+  auch alles auf E:" — ohne Konfiguration nötig.
+- (+) `AIWM_DATA_DIR` und `AppPaths::rooted()` (Tests) unverändert kompatibel —
+  reiner Default-Wechsel plus additive Overrides.
+- (+) Die drei Overrides decken die drei Ordner ab, die tatsächlich groß
+  werden oder von einer bewussten Laufwerks-Wahl profitieren; `config.toml`/DB
+  bleiben schlicht.
+- (−) Ein Nutzer, der die App **innerhalb** von `target/` per Hand aufruft
+  (nicht über `cargo run`), oder ein Bundle, das zufällig unter einem Ordner
+  namens `debug`/`release`/`deps` liegt, würde falsch erkannt — Rand­fall,
+  über `AIWM_DATA_DIR` umgehbar.
+- (−) Ein System-weiter Installer (z. B. nach `C:\Program Files\`) würde ohne
+  Schreibrechte dort scheitern — für dieses private, nicht verteilte Tool
+  (ADR-011) aktuell irrelevant; bei Bedarf später ein `install_dir vs.
+  data_dir`-Unterschied nachrüstbar.
+- (−) Keine Migration alter Installationen — bewusst (siehe oben), aber ein
+  Nutzer mit echtem `%APPDATA%`-Datenbestand müsste ihn von Hand umziehen oder
+  per `AIWM_DATA_DIR` weiter dorthin zeigen.
+
+---
+
 ## Offene Entscheidungen
 
 | # | Frage | Status |

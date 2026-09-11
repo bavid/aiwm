@@ -30,6 +30,8 @@ pub fn about(app: &App) -> AboutDto {
         store_path: app.config.store_path.display().to_string(),
         outputs_dir: outputs_dir.display().to_string(),
         outputs_bytes: dir_file_bytes(&outputs_dir),
+        runtimes_dir: app.paths.runtimes_dir().display().to_string(),
+        cache_dir: app.paths.cache_dir().display().to_string(),
         core_api_port: app.config.core_api_port,
         vram_budget_mb: app.scheduler.budget_mb(),
         offline_mode: app.offline(),
@@ -72,9 +74,18 @@ pub fn save_config(app: &App, update: ConfigUpdate) -> Result<Config> {
     cfg.llama = update.llama;
     cfg.comfyui = update.comfyui;
     cfg.models = update.models;
+    cfg.paths.outputs_path = non_empty_path(&update.paths.outputs_path);
+    cfg.paths.runtimes_path = non_empty_path(&update.paths.runtimes_path);
+    cfg.paths.cache_path = non_empty_path(&update.paths.cache_path);
     cfg.save(&app.paths)?;
     app.set_offline(cfg.offline_mode);
     Ok(cfg)
+}
+
+/// A blank field means "use the portable default", not a literal path.
+fn non_empty_path(s: &str) -> Option<PathBuf> {
+    let trimmed = s.trim();
+    (!trimmed.is_empty()).then(|| PathBuf::from(trimmed))
 }
 
 pub fn telemetry(app: &App) -> SystemTelemetry {

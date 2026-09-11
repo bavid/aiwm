@@ -11,6 +11,7 @@ import {
   type ConfigUpdate,
   type LlamaConfig,
   type ModelsConfig,
+  type PathsUpdate,
 } from "../../lib/ipc";
 import { getTheme, setTheme, type Theme } from "../../lib/theme";
 import { BackupCard } from "./BackupCard";
@@ -40,6 +41,8 @@ const AUTO_PREFS: { value: AutoPreference; label: string }[] = [
 
 type Form = ConfigUpdate;
 
+const orEmpty = (v: string | null): string => v ?? "";
+
 const toForm = (c: AppConfig): Form => ({
   store_path: c.store_path,
   offline_mode: c.offline_mode,
@@ -47,6 +50,11 @@ const toForm = (c: AppConfig): Form => ({
   llama: { ...c.llama },
   comfyui: { ...c.comfyui },
   models: { ...c.models },
+  paths: {
+    outputs_path: orEmpty(c.paths.outputs_path),
+    runtimes_path: orEmpty(c.paths.runtimes_path),
+    cache_path: orEmpty(c.paths.cache_path),
+  },
 });
 
 const sameForm = (a: Form, b: Form): boolean =>
@@ -62,7 +70,10 @@ const sameForm = (a: Form, b: Form): boolean =>
   a.comfyui.vram_mode === b.comfyui.vram_mode &&
   a.comfyui.reserve_vram_mb === b.comfyui.reserve_vram_mb &&
   a.comfyui.extra_args === b.comfyui.extra_args &&
-  a.models.auto_preference === b.models.auto_preference;
+  a.models.auto_preference === b.models.auto_preference &&
+  a.paths.outputs_path === b.paths.outputs_path &&
+  a.paths.runtimes_path === b.paths.runtimes_path &&
+  a.paths.cache_path === b.paths.cache_path;
 
 export function Settings() {
   const about = useAbout();
@@ -109,6 +120,8 @@ export function Settings() {
     patch({ comfyui: { ...form.comfyui, ...next } });
   const patchModels = (next: Partial<ModelsConfig>) =>
     patch({ models: { ...form.models, ...next } });
+  const patchPaths = (next: Partial<PathsUpdate>) =>
+    patch({ paths: { ...form.paths, ...next } });
 
   const chooseTheme = (t: Theme) => {
     setTheme(t);
@@ -125,7 +138,7 @@ export function Settings() {
       setForm(f);
       setStatus({
         kind: "ok",
-        text: "Saved. Offline mode applies now; store path, VRAM budget, model selection, llama.cpp and ComfyUI options take effect after a restart.",
+        text: "Saved. Offline mode applies now; store path, data locations, VRAM budget, model selection, llama.cpp and ComfyUI options take effect after a restart.",
       });
     } catch (e) {
       setStatus({ kind: "err", text: e instanceof Error ? e.message : String(e) });
@@ -177,6 +190,58 @@ export function Settings() {
             value={form.store_path}
             spellCheck={false}
             onChange={(e) => patch({ store_path: e.target.value })}
+          />
+        </label>
+      </section>
+
+      <section className="card set-group">
+        <header className="card__head">
+          <h2>Data locations</h2>
+          <span className="card__sub">restart to apply</span>
+        </header>
+        <p className="muted">
+          By default AIWM is portable — everything lives next to the app, wherever
+          that is (no <code>%APPDATA%</code>). Leave a field blank to use that
+          default; set one to move just that folder elsewhere (e.g. a faster or
+          roomier drive).
+        </p>
+        <label className="set-field">
+          <span>
+            Generated images / video — grows over time
+            {about ? ` · currently ${about.outputs_dir}` : ""}
+          </span>
+          <input
+            type="text"
+            value={form.paths.outputs_path}
+            placeholder="leave blank for the default"
+            spellCheck={false}
+            onChange={(e) => patchPaths({ outputs_path: e.target.value })}
+          />
+        </label>
+        <label className="set-field">
+          <span>
+            Managed runtime installs (llama.cpp, ComfyUI) — several GB
+            {about ? ` · currently ${about.runtimes_dir}` : ""}
+          </span>
+          <input
+            type="text"
+            value={form.paths.runtimes_path}
+            placeholder="leave blank for the default"
+            spellCheck={false}
+            onChange={(e) => patchPaths({ runtimes_path: e.target.value })}
+          />
+        </label>
+        <label className="set-field">
+          <span>
+            Registry cache — disposable, safe to delete
+            {about ? ` · currently ${about.cache_dir}` : ""}
+          </span>
+          <input
+            type="text"
+            value={form.paths.cache_path}
+            placeholder="leave blank for the default"
+            spellCheck={false}
+            onChange={(e) => patchPaths({ cache_path: e.target.value })}
           />
         </label>
       </section>

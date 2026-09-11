@@ -72,6 +72,10 @@ impl App {
             tracing::warn!("a backup import was applied on startup");
         }
         let config = Config::load(&paths)?;
+        let paths = paths
+            .with_outputs_override(config.paths.outputs_path.clone())
+            .with_runtimes_override(config.paths.runtimes_path.clone())
+            .with_cache_override(config.paths.cache_path.clone());
         let db = Database::connect(&paths.db_file()).await?;
         Self::seed(&db).await?;
 
@@ -222,9 +226,10 @@ fn resolve_vram_budget(config: &Config, telemetry: &Sampler) -> u64 {
     }
 }
 
-/// Full process bootstrap for a binary: resolve `%APPDATA%`, load config, open
-/// the database, install logging, emit a startup line. Returns the [`App`] and
-/// the logging guard, which the caller must keep alive.
+/// Full process bootstrap for a binary: resolve the data directory (portable
+/// by default, see [`AppPaths::for_app`]), load config, open the database,
+/// install logging, emit a startup line. Returns the [`App`] and the logging
+/// guard, which the caller must keep alive.
 pub async fn bootstrap_process() -> Result<(Arc<App>, WorkerGuard)> {
     let app = Arc::new(App::load(AppPaths::for_app()?).await?);
     let guard = crate::logging::init(&app.config.log_filter, &app.paths.logs_dir())?;
@@ -283,6 +288,29 @@ mod tests {
             second.db.settings().get("first_run_at").await.unwrap(),
             seeded_at
         );
+    }
+
+    #[tokio::test]
+    async fn load_applies_paths_overrides_from_config() {
+        let tmp = tempfile::tempdir().unwrap();
+        let outputs = tmp.path().join("elsewhere-outputs");
+        let paths = AppPaths::rooted(tmp.path().join("aiwm"));
+        std::fs::create_dir_all(paths.root()).unwrap();
+        std::fs::write(
+            paths.config_file(),
+            format!(
+                "[paths]\noutputs_path = '{}'\n",
+                outputs.display().to_string().replace('\\', "\\\\")
+            ),
+        )
+        .unwrap();
+
+        let app = App::load(paths.clone()).await.unwrap();
+
+        assert_eq!(app.paths.outputs_dir(), outputs);
+        // Untouched folders (and the config/db location itself) stay put.
+        assert_eq!(app.paths.runtimes_dir(), paths.runtimes_dir());
+        assert_eq!(app.paths.root(), paths.root());
     }
 
     #[tokio::test]

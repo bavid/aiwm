@@ -8,7 +8,7 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 //!
 //! Module map (see `docs/PHASE_1_PLAN.md`):
-//! - [`paths`]        — `%APPDATA%` layout resolution (WP-1)
+//! - [`paths`]        — data-directory layout resolution, portable by default (WP-1)
 //! - [`config`]       — load & validate `config.toml`, `AIWM_*` overrides (WP-1)
 //! - [`logging`]      — process-wide tracing setup (WP-1)
 //! - [`app`]          — bootstrap paths + config + logging into an [`app::App`] (WP-1)

@@ -198,6 +198,7 @@ function devEvents(): AnyRecord[] {
 const ABOUT: AnyRecord = {
   core_version: "0.0.1-dev", data_dir: "E:\\AI\\data", store_path: "E:\\AI\\models",
   outputs_dir: "E:\\AI\\data\\outputs", outputs_bytes: 4_812_300_000,
+  runtimes_dir: "E:\\AI\\data\\runtimes", cache_dir: "E:\\AI\\data\\cache",
   core_api_port: 48096, vram_budget_mb: 14848, offline_mode: false,
 };
 
@@ -210,6 +211,7 @@ const CONFIG: AnyRecord = {
   },
   comfyui: { vram_mode: "auto", reserve_vram_mb: 0, extra_args: "" },
   models: { auto_preference: "balanced" },
+  paths: { outputs_path: null, runtimes_path: null, cache_path: null },
 };
 
 const TELEMETRY: AnyRecord = {

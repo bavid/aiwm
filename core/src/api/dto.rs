@@ -20,6 +20,10 @@ pub struct AboutDto {
     /// Total bytes of the files in `outputs_dir` — the Settings retention card
     /// shows it (video clips are large).
     pub outputs_bytes: u64,
+    /// Where managed runtime installs (llama.cpp, ComfyUI) land.
+    pub runtimes_dir: String,
+    /// Where the disposable registry cache lands.
+    pub cache_dir: String,
     pub core_api_port: u16,
     pub vram_budget_mb: u64,
     pub offline_mode: bool,
@@ -40,6 +44,19 @@ pub struct ConfigUpdate {
     /// New in 6.6; older clients that omit it keep `Auto` on `balanced`.
     #[serde(default)]
     pub models: ModelsConfig,
+    /// Per-folder location overrides (outputs/runtimes/cache). New in this
+    /// slice; older clients that omit it leave existing overrides untouched.
+    #[serde(default)]
+    pub paths: PathsUpdateDto,
+}
+
+/// The `paths` slice of [`ConfigUpdate`] — plain strings from the Settings
+/// form. An empty string means "use the portable default", not a literal path.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PathsUpdateDto {
+    pub outputs_path: String,
+    pub runtimes_path: String,
+    pub cache_path: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

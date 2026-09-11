@@ -5,8 +5,9 @@
 //!   path — nothing to create (llama.cpp).
 //! - [`ExtraPath`](LinkStrategy::ExtraPath): the runtime is *told* about the
 //!   store directory through its own config — ComfyUI's `extra_model_paths.yaml`
-//!   (3.3). No filesystem link; works across volumes, which a junction would not
-//!   (the store is on `E:`, the ComfyUI install under `%LOCALAPPDATA%`).
+//!   (3.3). No filesystem link; works across volumes, which a junction would
+//!   not (the store defaults to `E:`, the ComfyUI install can land on a
+//!   different volume depending on `crate::paths` config).
 //! - [`Junction`](LinkStrategy::Junction): an NTFS directory reparse point —
 //!   same volume, no admin. Built for LM Studio-style consumers with no
 //!   config-path feature.

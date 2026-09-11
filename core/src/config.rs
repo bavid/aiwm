@@ -1,4 +1,5 @@
-//! User configuration: `%APPDATA%\AIWorkstationManager\config.toml`.
+//! User configuration: `config.toml` under [`AppPaths::root`] (by default a
+//! `data/` folder next to the app — see `crate::paths`).
 //!
 //! Precedence: environment overrides (`AIWM_*`) > `config.toml` > built-in
 //! defaults. A missing file is created with the defaults on first load.
@@ -46,6 +47,10 @@ pub struct Config {
     pub comfyui: ComfyConfig,
     /// How `Auto` picks a model (Phase 6.6).
     pub models: ModelsConfig,
+    /// Per-folder overrides for the bulkier local directories (outputs,
+    /// runtime installs, cache). `None` = the portable default next to the
+    /// app (see `crate::paths`).
+    pub paths: PathsConfig,
 }
 
 /// Upper bound for `[comfyui].reserve_vram_mb` — reserving more than this on a
@@ -172,6 +177,21 @@ pub struct ModelsConfig {
     pub auto_preference: crate::select::AutoPreference,
 }
 
+/// The `[paths]` table — per-folder overrides for the bulkier directories
+/// under `AppPaths`' local root. `None` (the default) means "use the portable
+/// default next to the app". Applied at startup; a change needs a restart.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct PathsConfig {
+    /// Where generated images / videos land instead of the default.
+    pub outputs_path: Option<PathBuf>,
+    /// Where managed runtime installs (llama.cpp, ComfyUI) land instead of
+    /// the default.
+    pub runtimes_path: Option<PathBuf>,
+    /// Where the disposable registry cache lands instead of the default.
+    pub cache_path: Option<PathBuf>,
+}
+
 /// Used when `vram_budget_mb` is `0` and no NVIDIA GPU is detected.
 pub const FALLBACK_VRAM_BUDGET_MB: u64 = 8192;
 
@@ -186,6 +206,7 @@ impl Default for Config {
             llama: LlamaConfig::default(),
             comfyui: ComfyConfig::default(),
             models: ModelsConfig::default(),
+            paths: PathsConfig::default(),
         }
     }
 }
@@ -591,6 +612,44 @@ mod tests {
             cfg.models.auto_preference,
             crate::select::AutoPreference::Balanced
         );
+    }
+
+    #[test]
+    fn config_without_a_paths_table_still_loads_with_no_overrides() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = AppPaths::rooted(tmp.path());
+        std::fs::write(paths.config_file(), "vram_budget_mb = 8000\n").unwrap();
+
+        let cfg = Config::load(&paths).unwrap();
+        assert_eq!(cfg.paths, PathsConfig::default());
+        assert_eq!(cfg.paths.outputs_path, None);
+    }
+
+    #[test]
+    fn paths_table_round_trips_through_save_and_read() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = AppPaths::rooted(tmp.path());
+        let cfg = Config {
+            paths: PathsConfig {
+                outputs_path: Some(PathBuf::from("E:\\media\\outputs")),
+                runtimes_path: Some(PathBuf::from("E:\\fast\\runtimes")),
+                cache_path: None,
+            },
+            ..Config::default()
+        };
+
+        cfg.save(&paths).unwrap();
+        let reloaded = Config::read_from(&paths).unwrap();
+
+        assert_eq!(
+            reloaded.paths.outputs_path.as_deref(),
+            Some(Path::new("E:\\media\\outputs"))
+        );
+        assert_eq!(
+            reloaded.paths.runtimes_path.as_deref(),
+            Some(Path::new("E:\\fast\\runtimes"))
+        );
+        assert_eq!(reloaded.paths.cache_path, None);
     }
 
     #[test]

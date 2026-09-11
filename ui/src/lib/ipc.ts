@@ -12,6 +12,10 @@ export interface AboutInfo {
   outputs_dir: string;
   /** Total bytes of the files in `outputs_dir` (the retention card shows it). */
   outputs_bytes: number;
+  /** Where managed runtime installs (llama.cpp, ComfyUI) land. */
+  runtimes_dir: string;
+  /** Where the disposable registry cache lands. */
+  cache_dir: string;
   core_api_port: number;
   vram_budget_mb: number;
   offline_mode: boolean;
@@ -49,6 +53,23 @@ export interface ModelsConfig {
   auto_preference: AutoPreference;
 }
 
+/** The `[paths]` table — per-folder location overrides. `null` = the portable
+ *  default next to the app (see `AboutInfo.runtimes_dir` / `.cache_dir` for
+ *  the effective path). */
+export interface PathsConfig {
+  outputs_path: string | null;
+  runtimes_path: string | null;
+  cache_path: string | null;
+}
+
+/** The `paths` slice of a `ConfigUpdate` — plain strings; blank means "use
+ *  the portable default", not a literal path. */
+export interface PathsUpdate {
+  outputs_path: string;
+  runtimes_path: string;
+  cache_path: string;
+}
+
 /** The full config.toml as the core sees it. */
 export interface AppConfig {
   store_path: string;
@@ -60,6 +81,7 @@ export interface AppConfig {
   llama: LlamaConfig;
   comfyui: ComfyConfig;
   models: ModelsConfig;
+  paths: PathsConfig;
 }
 
 /** The user-editable subset the Settings tab sends back. */
@@ -70,6 +92,7 @@ export interface ConfigUpdate {
   llama: LlamaConfig;
   comfyui: ComfyConfig;
   models: ModelsConfig;
+  paths: PathsUpdate;
 }
 
 export interface GpuProcess {

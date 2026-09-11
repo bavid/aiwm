@@ -57,7 +57,9 @@ genutzt.
   `cudart-…-12.4-x64.zip`), SHA-256 + Größe fest im Code (Werte aus dem
   `digest`-Feld der Releases-API). Streaming-Download mit mitlaufendem Hash →
   Mismatch = Abbruch; `zip`-Entpacken (flach) in
-  `%LOCALAPPDATA%\…\runtimes\llamacpp\b10855\`. `offline_mode` = Hard-Refusal.
+  `<runtimes_dir>\llamacpp\b10855\` (portabel per Default, ADR-026 — auch
+  einzeln nach `config.toml`s `[paths].runtimes_path` verschiebbar).
+  `offline_mode` = Hard-Refusal.
   Idempotent. `POST /runtimes/llamacpp/install` (202) startet es im Hintergrund;
   Fortschritt in `GET /runtimes` → `detail`. `RuntimeRepo` hält Version + Zustand.
 - **Version-Bump:** Tag + beide Digests in `install::PINNED_ARCHIVES` ändern.
