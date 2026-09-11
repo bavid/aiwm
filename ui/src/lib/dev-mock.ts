@@ -214,6 +214,79 @@ const CONFIG: AnyRecord = {
   paths: { outputs_path: null, runtimes_path: null, cache_path: null },
 };
 
+const KNOWN_MOCK: AnyRecord[] = [
+  {
+    id: "sdxl-base-1.0", name: "Stable Diffusion XL 1.0 (base)", kind: "checkpoint",
+    family: "sdxl", publisher: "Stability AI", repo: "stabilityai/stable-diffusion-xl-base-1.0",
+    file: "sd_xl_base_1.0.safetensors",
+    url: "https://huggingface.co/stabilityai/stable-diffusion-xl-base-1.0/resolve/main/sd_xl_base_1.0.safetensors",
+    sha256: "3".repeat(64), size_bytes: 6_938_078_334,
+    license: "CreativeML Open RAIL++-M (commercial use allowed)",
+    note: "The default. Fits comfortably in 16 GB, huge LoRA/ControlNet ecosystem.",
+    is_default: true, media: "image", fit: { level: "green" },
+  },
+  {
+    id: "flux1-dev-q8", name: "FLUX.1-dev — Q8_0 (GGUF)", kind: "diffusion_model",
+    family: "flux", publisher: "Black Forest Labs / city96", repo: "city96/FLUX.1-dev-gguf",
+    file: "flux1-dev-Q8_0.gguf",
+    url: "https://huggingface.co/city96/FLUX.1-dev-gguf/resolve/main/flux1-dev-Q8_0.gguf",
+    sha256: "1".repeat(64), size_bytes: 12_708_281_504,
+    license: "FLUX.1 [dev] Non-Commercial License",
+    note: "Best prompt fidelity + in-image text. Needs the T5, CLIP-L and VAE below.",
+    is_default: false, media: "image",
+    fit: { level: "yellow", reason: "needs ~13.4 GB of your ~14.5 GB VRAM budget — little head-room for a longer context or a second resident model" },
+  },
+  {
+    id: "wan22-ti2v-5b", name: "Wan 2.2 TI2V-5B — fp16 (video, default)", kind: "video",
+    family: "wan", publisher: "Alibaba / Comfy-Org", repo: "Comfy-Org/Wan_2.2_ComfyUI_Repackaged",
+    file: "wan2.2_ti2v_5B_fp16.safetensors",
+    url: "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/diffusion_models/wan2.2_ti2v_5B_fp16.safetensors",
+    sha256: "4".repeat(64), size_bytes: 9_999_658_848,
+    license: "Apache-2.0 (commercial use allowed)",
+    note: "The default video model. One model for text→video and image→video. Needs the umt5 encoder and the Wan VAE.",
+    is_default: true, media: "video", fit: { level: "green" },
+  },
+  {
+    id: "ltx-video-2b-095", name: "LTX-Video 2B v0.9.5 (video, second template)", kind: "video",
+    family: "ltx", publisher: "Lightricks", repo: "Lightricks/LTX-Video",
+    file: "ltx-video-2b-v0.9.5.safetensors",
+    url: "https://huggingface.co/Lightricks/LTX-Video/resolve/main/ltx-video-2b-v0.9.5.safetensors",
+    sha256: "7".repeat(64), size_bytes: 6_340_729_500,
+    license: "LTXV License (OpenRAIL-M-style; check the repo for commercial terms)",
+    note: "Fast, light. One .safetensors carries model + VAE — only needs a t5xxl encoder.",
+    is_default: false, media: "video", fit: { level: "green" },
+  },
+];
+
+const FEATURED_MOCK: AnyRecord[] = [
+  {
+    id: "qwen2.5-7b-instruct", role: "chat", label: "Qwen2.5-7B-Instruct",
+    repo: "bartowski/Qwen2.5-7B-Instruct-GGUF", quant_hint: "Q5_K_M", typical_vram_mb: 8704,
+    license: "Apache-2.0", note: "Strong general-purpose chat model with native tool-calling.",
+    import_roles: ["chat"], is_default: true, fit: { level: "green" },
+  },
+  {
+    id: "qwen2.5-14b-instruct", role: "chat", label: "Qwen2.5-14B-Instruct",
+    repo: "bartowski/Qwen2.5-14B-Instruct-GGUF", quant_hint: "Q4_K_M", typical_vram_mb: 12800,
+    license: "Apache-2.0", note: "Bigger and sharper if you can spare the VRAM — fills most of a 16 GB card.",
+    import_roles: ["chat"], is_default: false,
+    fit: { level: "yellow", reason: "needs ~12.5 GB of your ~14.5 GB VRAM budget — little head-room for a longer context or a second resident model" },
+  },
+  {
+    id: "qwen2.5-coder-7b-instruct", role: "coding", label: "Qwen2.5-Coder-7B-Instruct",
+    repo: "bartowski/Qwen2.5-Coder-7B-Instruct-GGUF", quant_hint: "Q5_K_M", typical_vram_mb: 8704,
+    license: "Apache-2.0", note: "Best tool-calling/VRAM ratio for agent sessions (OpenCode) on 16 GB.",
+    import_roles: ["chat", "coding"], is_default: true, fit: { level: "green" },
+  },
+  {
+    id: "hermes-3-llama-3.1-8b", role: "coding", label: "Hermes-3-Llama-3.1-8B",
+    repo: "NousResearch/Hermes-3-Llama-3.1-8B-GGUF", quant_hint: "Q5_K_M", typical_vram_mb: 9216,
+    license: "Llama-3.1 Community License",
+    note: "Nous Research's own agent-tuned model — the natural pick for the Hermes runtime.",
+    import_roles: ["chat", "coding"], is_default: false, fit: { level: "green" },
+  },
+];
+
 const TELEMETRY: AnyRecord = {
   captured_at_ms: Date.now(),
   gpu: { state: "available", name: "NVIDIA RTX 4080 SUPER", vram_total_mb: 16376, vram_used_mb: 2100, vram_free_mb: 14276, utilization_pct: 3, temperature_c: 41, processes: [] },
@@ -237,7 +310,9 @@ export function installDevMock(): void {
         // (e.g. after delete_model splices MODELS).
         return MODELS.map((m) => ({ ...m }));
       case "list_known_models":
-        return [];
+        return KNOWN_MOCK;
+      case "list_featured_models":
+        return FEATURED_MOCK;
       case "list_jobs":
         progressBenchJobs();
         progressUpgradeJobs();
@@ -406,6 +481,12 @@ export function installDevMock(): void {
               quant: "Q4_K_M", shard: null,
               download_url: `https://huggingface.co/${mid}/resolve/main/model-q4_k_m.gguf`,
               vram_estimate_mb: 5_800, fit: { level: "green" },
+            },
+            {
+              path: `${repo}-q5_k_m.gguf`, size_bytes: 5_444_832_000,
+              sha256: "bb".repeat(32), quant: "Q5_K_M", shard: null,
+              download_url: `https://huggingface.co/${mid}/resolve/main/model-q5_k_m.gguf`,
+              vram_estimate_mb: 6_900, fit: { level: "green" },
             },
             {
               path: `${repo}-q8_0.gguf`, size_bytes: 8_100_000_000,

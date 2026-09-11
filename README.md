@@ -31,7 +31,7 @@ noch keine echte AI-Capability (die kommt ab Phase 2).
 | WP-9 | CI-Workflow, Git-Hooks (pre-commit fmt, pre-push voller Gate) |
 | WP-10 | ADRs finalisiert, Stub-Docs (MODELS/RUNTIMES/SECURITY/BENCHMARKS) |
 
-**371 Rust-Unit + 57 Integrationstests + 5 pytest** grün · `scripts/check.ps1` grün ·
+**391 Rust-Unit + 57 Integrationstests + 5 pytest** grün · `scripts/check.ps1` grün ·
 **null `unsafe`** im Produktivcode.
 
 **Phase 2 (MVP) ✅ abgeschlossen** — Scheiben 2.1–2.7 + durchgehender
@@ -205,6 +205,15 @@ Reports, Tags + Discovery-Verlauf. Alles offline-first (ADR-009), loopback-only
   Face"-Karte in Settings. **Registry-Zeile in Diagnostics** (`RegistryStatus`:
   letzter Fetch, Cache-Einträge, Rate-Limit-Rest, Token). `GET /models/tags`,
   `PUT /models/{id}/tags`, `GET /registry/status`, `PUT /registry/token`.
+- **Post-6.9 Politur** — `scripts/start.ps1`/`install.ps1` (Dev-Launcher +
+  Bootstrap), **ADR-026** (Datenablage portabel per Default: `<app_root>/data`
+  statt `%APPDATA%`, `[paths]`-Overrides für outputs/runtimes/cache), und ein
+  **kategorisierter Models-Tab**: „Recommended models" in vier Reitern
+  (Image/Video/Chat/Code) aus `KNOWN_MODELS` + dem neuen `FEATURED_MODELS`
+  (kuratierte Chat-/Coding-HF-Repos aus [AGENT_MODELS.md](docs/AGENT_MODELS.md)),
+  jeder Eintrag mit einem **serverseitig berechneten Fit-Verdict** gegen das
+  aktuelle VRAM-Budget (kein Netz-Call) und einem „★ recommended"-Pick pro
+  Kategorie.
 
 - **4.1** ✅ **`capability::video`**: `job_type=video` → feste `wan_ti2v`-Pipeline
   (`WanImageToVideo` → `KSampler` → `VAEDecode` → `CreateVideo` → `SaveVideo`,

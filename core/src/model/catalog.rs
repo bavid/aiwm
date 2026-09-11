@@ -32,6 +32,15 @@ pub struct KnownModel {
     pub license: &'static str,
     /// One line for the UI — what it is / when to pick it.
     pub note: &'static str,
+    /// The curated "pick this one" base model for its role (one `true` among
+    /// the `checkpoint`/`diffusion_model` entries, one among the `video`
+    /// entries; always `false` for required companions — VAE/text encoder —
+    /// which aren't alternatives to each other).
+    pub is_default: bool,
+    /// `"image"` or `"video"` — which stack this entry belongs to. Not
+    /// derivable from `kind`/`family` alone: a VAE/text-encoder companion has
+    /// `family: None`, and both stacks have one.
+    pub media: &'static str,
 }
 
 /// The catalogue. Order is display order (default first, then the Flux stack).
@@ -49,6 +58,8 @@ pub const KNOWN_MODELS: &[KnownModel] = &[
         size_bytes: 6_938_078_334,
         license: "CreativeML Open RAIL++-M (commercial use allowed)",
         note: "The default. Fits comfortably in 16 GB, huge LoRA/ControlNet ecosystem.",
+        is_default: true,
+        media: "image",
     },
     KnownModel {
         id: "flux1-dev-q8",
@@ -63,6 +74,8 @@ pub const KNOWN_MODELS: &[KnownModel] = &[
         size_bytes: 12_708_281_504,
         license: "FLUX.1 [dev] Non-Commercial License",
         note: "Best prompt fidelity + in-image text. Needs the T5, CLIP-L and VAE below.",
+        is_default: false,
+        media: "image",
     },
     KnownModel {
         id: "flux1-dev-q4",
@@ -77,6 +90,8 @@ pub const KNOWN_MODELS: &[KnownModel] = &[
         size_bytes: 6_805_988_640,
         license: "FLUX.1 [dev] Non-Commercial License",
         note: "Smaller Flux for tighter VRAM; some quality loss vs Q8.",
+        is_default: false,
+        media: "image",
     },
     KnownModel {
         id: "t5xxl-fp8",
@@ -91,6 +106,8 @@ pub const KNOWN_MODELS: &[KnownModel] = &[
         size_bytes: 4_893_934_904,
         license: "Apache-2.0",
         note: "Flux prompt encoder. ComfyUI offloads it after encoding, so it is not resident during sampling.",
+        is_default: false,
+        media: "image",
     },
     KnownModel {
         id: "t5xxl-q8-gguf",
@@ -105,6 +122,8 @@ pub const KNOWN_MODELS: &[KnownModel] = &[
         size_bytes: 5_061_584_064,
         license: "Apache-2.0",
         note: "Alternative to the fp8 T5; slightly smaller, needs the GGUF node (already installed).",
+        is_default: false,
+        media: "image",
     },
     KnownModel {
         id: "clip-l",
@@ -119,6 +138,8 @@ pub const KNOWN_MODELS: &[KnownModel] = &[
         size_bytes: 246_144_152,
         license: "MIT",
         note: "The second Flux encoder. Small.",
+        is_default: false,
+        media: "image",
     },
     KnownModel {
         id: "flux-vae",
@@ -133,6 +154,8 @@ pub const KNOWN_MODELS: &[KnownModel] = &[
         size_bytes: 335_304_388,
         license: "FLUX.1 [dev] Non-Commercial License",
         note: "The Flux autoencoder. Byte-identical across every Flux re-upload.",
+        is_default: false,
+        media: "image",
     },
     // --- video (Phase 4) ---
     KnownModel {
@@ -148,6 +171,8 @@ pub const KNOWN_MODELS: &[KnownModel] = &[
         size_bytes: 9_999_658_848,
         license: "Apache-2.0 (commercial use allowed)",
         note: "The default video model. One model for text→video and image→video. Needs the umt5 encoder and the Wan VAE below.",
+        is_default: true,
+        media: "video",
     },
     KnownModel {
         id: "wan-umt5-xxl-fp8",
@@ -162,6 +187,8 @@ pub const KNOWN_MODELS: &[KnownModel] = &[
         size_bytes: 6_735_906_897,
         license: "Apache-2.0",
         note: "Wan's prompt encoder (multilingual T5). Offloaded to the CPU during sampling.",
+        is_default: false,
+        media: "video",
     },
     KnownModel {
         id: "wan22-vae",
@@ -176,6 +203,8 @@ pub const KNOWN_MODELS: &[KnownModel] = &[
         size_bytes: 1_409_400_960,
         license: "Apache-2.0",
         note: "The Wan 2.2 autoencoder. Import as VAE.",
+        is_default: false,
+        media: "video",
     },
     KnownModel {
         id: "ltx-video-2b-095",
@@ -190,6 +219,8 @@ pub const KNOWN_MODELS: &[KnownModel] = &[
         size_bytes: 6_340_729_500,
         license: "LTXV License (OpenRAIL-M-style; check the repo for commercial terms)",
         note: "Fast, light. One .safetensors carries model + VAE — only needs a t5xxl encoder (the fp8 one above works). Wants long, descriptive prompts.",
+        is_default: false,
+        media: "video",
     },
 ];
 
@@ -199,6 +230,104 @@ pub fn find_by_sha256(sha256: &str) -> Option<&'static KnownModel> {
         .iter()
         .find(|m| m.sha256.eq_ignore_ascii_case(sha256))
 }
+
+/// A curated LLM recommendation — chat or coding. Unlike [`KnownModel`] this
+/// only pins a Hugging Face **repo** and a preferred quant, not a single
+/// file's hash: GGUF quant repos get re-uploaded/re-quantized over time, and
+/// the download manager (6.4) already verifies whatever file is actually
+/// fetched against `lfs.oid` from the live HF API (`core::registry`) — the
+/// same way Discovery does. `typical_vram_mb` is a rough, documented estimate
+/// (weights plus ~8k ctx plus runtime overhead, see `docs/AGENT_MODELS.md`)
+/// shown before the real file is looked up; [`crate::compat::verdict_from_total_mb`]
+/// turns it into an honest 🟢/🟡/🔴 against the user's actual VRAM budget.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub struct FeaturedModel {
+    pub id: &'static str,
+    /// The role this fills once imported: `"chat"` or `"coding"`.
+    pub role: &'static str,
+    pub label: &'static str,
+    /// Hugging Face `owner/repo` — a GGUF quant repo, resolved live via
+    /// `GET /registry/models/{repo}` when the user asks to see it.
+    pub repo: &'static str,
+    /// Substring to find the recommended quant in the repo's file list
+    /// (e.g. `"Q5_K_M"`).
+    pub quant_hint: &'static str,
+    pub typical_vram_mb: u32,
+    pub license: &'static str,
+    /// One line for the UI — what it is / when to pick it.
+    pub note: &'static str,
+    /// Roles to check on import (`chat` alone, or `chat` + `coding` for an
+    /// agent model — see `docs/AGENT_MODELS.md`).
+    pub import_roles: &'static [&'static str],
+    /// The curated "pick this one" model for its role — one `true` per role.
+    pub is_default: bool,
+}
+
+/// Sourced from `docs/AGENT_MODELS.md`'s researched candidates (coding) plus
+/// the same family's base instruct models (chat) — all single-file GGUF
+/// quants (no split parts), all verified to exist on Hugging Face.
+pub const FEATURED_MODELS: &[FeaturedModel] = &[
+    FeaturedModel {
+        id: "qwen2.5-7b-instruct",
+        role: "chat",
+        label: "Qwen2.5-7B-Instruct",
+        repo: "bartowski/Qwen2.5-7B-Instruct-GGUF",
+        quant_hint: "Q5_K_M",
+        typical_vram_mb: 8704,
+        license: "Apache-2.0",
+        note: "Strong general-purpose chat model with native tool-calling.",
+        import_roles: &["chat"],
+        is_default: true,
+    },
+    FeaturedModel {
+        id: "qwen2.5-14b-instruct",
+        role: "chat",
+        label: "Qwen2.5-14B-Instruct",
+        repo: "bartowski/Qwen2.5-14B-Instruct-GGUF",
+        quant_hint: "Q4_K_M",
+        typical_vram_mb: 12800,
+        license: "Apache-2.0",
+        note: "Bigger and sharper if you can spare the VRAM — fills most of a 16 GB card.",
+        import_roles: &["chat"],
+        is_default: false,
+    },
+    FeaturedModel {
+        id: "qwen2.5-coder-7b-instruct",
+        role: "coding",
+        label: "Qwen2.5-Coder-7B-Instruct",
+        repo: "bartowski/Qwen2.5-Coder-7B-Instruct-GGUF",
+        quant_hint: "Q5_K_M",
+        typical_vram_mb: 8704,
+        license: "Apache-2.0",
+        note: "Best tool-calling/VRAM ratio for agent sessions (OpenCode) on 16 GB.",
+        import_roles: &["chat", "coding"],
+        is_default: true,
+    },
+    FeaturedModel {
+        id: "qwen2.5-coder-14b-instruct",
+        role: "coding",
+        label: "Qwen2.5-Coder-14B-Instruct",
+        repo: "bartowski/Qwen2.5-Coder-14B-Instruct-GGUF",
+        quant_hint: "Q4_K_M",
+        typical_vram_mb: 12800,
+        license: "Apache-2.0",
+        note: "Noticeably better code; fills most of a 16 GB card.",
+        import_roles: &["chat", "coding"],
+        is_default: false,
+    },
+    FeaturedModel {
+        id: "hermes-3-llama-3.1-8b",
+        role: "coding",
+        label: "Hermes-3-Llama-3.1-8B",
+        repo: "NousResearch/Hermes-3-Llama-3.1-8B-GGUF",
+        quant_hint: "Q5_K_M",
+        typical_vram_mb: 9216,
+        license: "Llama-3.1 Community License",
+        note: "Nous Research's own agent-tuned model — the natural pick for the Hermes runtime.",
+        import_roles: &["chat", "coding"],
+        is_default: false,
+    },
+];
 
 #[cfg(test)]
 mod tests {
@@ -215,6 +344,7 @@ mod tests {
             assert!(m.url.ends_with(m.file), "{}: url/file mismatch", m.id);
             // The declared kind must parse back to a real ModelKind.
             assert!(ModelKind::from_hint(m.kind).is_some(), "{}: bad kind", m.id);
+            assert!(matches!(m.media, "image" | "video"), "{}: bad media", m.id);
         }
     }
 
@@ -232,5 +362,65 @@ mod tests {
             find_by_sha256("31E35C80FC4829D14F90153F4C74CD59C90B779F6AFE05A74CD6120B893F7E5B");
         assert_eq!(got.map(|m| m.id), Some("sdxl-base-1.0"));
         assert!(find_by_sha256("deadbeef").is_none());
+    }
+
+    #[test]
+    fn exactly_one_default_base_model_per_group() {
+        let base_image = KNOWN_MODELS
+            .iter()
+            .filter(|m| matches!(m.kind, "checkpoint" | "diffusion_model") && m.is_default)
+            .count();
+        assert_eq!(base_image, 1, "exactly one default image base model");
+
+        let base_video = KNOWN_MODELS
+            .iter()
+            .filter(|m| m.kind == "video" && m.is_default)
+            .count();
+        assert_eq!(base_video, 1, "exactly one default video base model");
+
+        // Companions (vae/text_encoder) are required, not alternatives -- none
+        // of them should be marked "the pick".
+        assert!(KNOWN_MODELS
+            .iter()
+            .filter(|m| matches!(m.kind, "vae" | "text_encoder"))
+            .all(|m| !m.is_default));
+    }
+
+    #[test]
+    fn featured_ids_are_unique_and_every_entry_is_consistent() {
+        let mut ids: Vec<_> = FEATURED_MODELS.iter().map(|m| m.id).collect();
+        ids.sort_unstable();
+        ids.dedup();
+        assert_eq!(ids.len(), FEATURED_MODELS.len());
+
+        for m in FEATURED_MODELS {
+            assert!(matches!(m.role, "chat" | "coding"), "{}: bad role", m.id);
+            assert_eq!(
+                m.repo.matches('/').count(),
+                1,
+                "{}: repo must be owner/repo",
+                m.id
+            );
+            assert!(m.typical_vram_mb > 0, "{}", m.id);
+            assert!(!m.quant_hint.is_empty(), "{}", m.id);
+            assert!(!m.license.is_empty(), "{}", m.id);
+            assert!(!m.note.is_empty(), "{}", m.id);
+            assert!(
+                m.import_roles.contains(&"chat"),
+                "{}: chat.cpp only imports as chat",
+                m.id
+            );
+        }
+    }
+
+    #[test]
+    fn exactly_one_default_featured_model_per_role() {
+        for role in ["chat", "coding"] {
+            let count = FEATURED_MODELS
+                .iter()
+                .filter(|m| m.role == role && m.is_default)
+                .count();
+            assert_eq!(count, 1, "role {role} should have exactly one default");
+        }
     }
 }

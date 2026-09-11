@@ -69,6 +69,13 @@ Wenn ein GGUF-Template das Tool-Format nicht kennt: in den Settings
 `llama.chat_template` setzen (z. B. `qwen2.5-coder`, `hermes-3`) — `--jinja`
 bleibt an.
 
+**Diese Tabelle ist jetzt auch im Code** (`core::model::FEATURED_MODELS`,
+post-6.9) — der Models-Tab zeigt Qwen2.5-Coder-7B/14B + Hermes-3-Llama-3.1-8B
+im „Code"-Reiter von „Recommended models", mit Fit gegen das aktuelle
+VRAM-Budget. Der Ein-Klick-Download bleibt dort bewusst aus (die `coding`-Rolle
+lässt sich über den Download-Pfad noch nicht setzen) — „Copy repo link" +
+Import oben mit `roles: chat, coding`, wie unten beschrieben.
+
 ---
 
 ## Import (Models-Tab)
@@ -128,7 +135,10 @@ curl -s localhost:<port>/agent-sessions/<session-id>/stop -X POST
 
 ## Bewusst (noch) nicht
 
-- **Download-Manager / kuratierter Katalog** wie bei den Bild-/Video-Modellen —
-  Phase 6; bis dahin ist diese Liste die „Quelle".
+- **Ein-Klick-Download** für diese Kandidaten — der kuratierte Katalog
+  (`core::model::FEATURED_MODELS`, post-6.9) zeigt sie jetzt im Models-Tab,
+  aber der Download-Manager kann die `coding`-Rolle beim Import noch nicht
+  setzen (`downloads`-Tabelle hat keine `roles`-Spalte) — bleibt manueller
+  Import, diese Liste bleibt die „Quelle" für die Kandidaten selbst.
 - **Nicht-lokale Endpoints** (OpenRouter etc.) — hart aus (ADR-009).
 - **Auto-Benchmark der Tool-Call-Zuverlässigkeit** — Post-MVP.

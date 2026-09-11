@@ -7,8 +7,8 @@ use std::path::PathBuf;
 
 use super::dto::{
     AboutDto, AgentPermissionDto, AgentSessionDetailDto, ConfigUpdate, EnqueueDownloadDto,
-    JobDetailDto, NewAgentDto, OpenAgentSessionDto, RegistryDetailsDto, RegistryFileDto,
-    RegistrySearchDto, RuntimeStatusDto, SubmitJobDto,
+    FeaturedModelDto, JobDetailDto, KnownModelDto, NewAgentDto, OpenAgentSessionDto,
+    RegistryDetailsDto, RegistryFileDto, RegistrySearchDto, RuntimeStatusDto, SubmitJobDto,
 };
 use crate::compat::FitVerdict;
 use crate::config::Config;
@@ -245,9 +245,75 @@ pub async fn delete_model(app: &App, id: &str) -> Result<crate::model::DeleteOut
 }
 
 /// The curated "known models" list the Models tab shows for assisted import
-/// (`GET /models/known`). Static — no `App` needed, but kept here for symmetry.
-pub fn known_models(_app: &App) -> &'static [crate::model::KnownModel] {
+/// (`GET /models/known`), each enriched with a fit verdict against the
+/// current VRAM budget (from its known on-disk size — no network call).
+pub fn known_models(app: &App) -> Vec<KnownModelDto> {
+    let (budget_mb, free_ram_mb) = fit_inputs(app);
     crate::model::KNOWN_MODELS
+        .iter()
+        .map(|m| {
+            let dims = crate::compat::ModelDims {
+                size_bytes: m.size_bytes,
+                ..Default::default()
+            };
+            let ctx = crate::compat::effective_ctx(None);
+            KnownModelDto {
+                id: m.id.to_string(),
+                name: m.name.to_string(),
+                kind: m.kind.to_string(),
+                family: m.family.map(str::to_string),
+                publisher: m.publisher.to_string(),
+                repo: m.repo.to_string(),
+                file: m.file.to_string(),
+                url: m.url.to_string(),
+                sha256: m.sha256.to_string(),
+                size_bytes: m.size_bytes,
+                license: m.license.to_string(),
+                note: m.note.to_string(),
+                is_default: m.is_default,
+                media: m.media.to_string(),
+                fit: crate::compat::verdict(&dims, ctx, budget_mb, free_ram_mb),
+            }
+        })
+        .collect()
+}
+
+/// The curated chat/coding recommendations (`GET /models/featured`), each
+/// enriched with a fit verdict from `typical_vram_mb` — see
+/// [`FeaturedModelDto`].
+pub fn featured_models(app: &App) -> Vec<FeaturedModelDto> {
+    let (budget_mb, free_ram_mb) = fit_inputs(app);
+    crate::model::FEATURED_MODELS
+        .iter()
+        .map(|m| FeaturedModelDto {
+            id: m.id.to_string(),
+            role: m.role.to_string(),
+            label: m.label.to_string(),
+            repo: m.repo.to_string(),
+            quant_hint: m.quant_hint.to_string(),
+            typical_vram_mb: m.typical_vram_mb,
+            license: m.license.to_string(),
+            note: m.note.to_string(),
+            import_roles: m.import_roles.iter().map(|s| (*s).to_string()).collect(),
+            is_default: m.is_default,
+            fit: crate::compat::verdict_from_total_mb(
+                u64::from(m.typical_vram_mb),
+                budget_mb,
+                free_ram_mb,
+            ),
+        })
+        .collect()
+}
+
+/// `(vram_budget_mb, free_ram_mb)` for a local (no-network) fit judgement —
+/// shared by [`known_models`] and [`featured_models`].
+fn fit_inputs(app: &App) -> (u64, u64) {
+    let budget_mb = app.scheduler.budget_mb();
+    let host = app.telemetry.latest().host;
+    (
+        budget_mb,
+        host.ram_total_mb.saturating_sub(host.ram_used_mb),
+    )
 }
 
 pub async fn import_model(app: &App, req: ImportRequest) -> Result<ImportOutcome> {

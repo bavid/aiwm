@@ -225,6 +225,55 @@ pub struct RegistryDetailsDto {
     pub freshness: Freshness,
 }
 
+/// `GET /models/known` — the curated image/video catalogue
+/// ([`crate::model::KnownModel`]), each entry enriched with a fit verdict
+/// against the current VRAM budget (computed from its known on-disk size —
+/// no network call).
+#[derive(Debug, Clone, Serialize)]
+pub struct KnownModelDto {
+    pub id: String,
+    pub name: String,
+    /// [`crate::model::ModelKind::as_str`] value.
+    pub kind: String,
+    pub family: Option<String>,
+    pub publisher: String,
+    pub repo: String,
+    pub file: String,
+    pub url: String,
+    pub sha256: String,
+    pub size_bytes: u64,
+    pub license: String,
+    pub note: String,
+    /// The curated "pick this one" model for its role.
+    pub is_default: bool,
+    /// `"image"` or `"video"` — which stack this entry belongs to.
+    pub media: String,
+    pub fit: crate::compat::FitVerdict,
+}
+
+/// `GET /models/featured` — the curated chat/coding recommendations
+/// ([`crate::model::FeaturedModel`]), enriched with a fit verdict computed
+/// from `typical_vram_mb` (a documented estimate, not a live file lookup —
+/// see `GET /registry/models/{repo}` for the real thing).
+#[derive(Debug, Clone, Serialize)]
+pub struct FeaturedModelDto {
+    pub id: String,
+    /// `"chat"` or `"coding"`.
+    pub role: String,
+    pub label: String,
+    /// Hugging Face `owner/repo`.
+    pub repo: String,
+    pub quant_hint: String,
+    pub typical_vram_mb: u32,
+    pub license: String,
+    pub note: String,
+    /// Roles to check on import.
+    pub import_roles: Vec<String>,
+    /// The curated "pick this one" model for its role.
+    pub is_default: bool,
+    pub fit: crate::compat::FitVerdict,
+}
+
 /// Body for `POST /downloads` — queue a model download (a Discover card's
 /// "Download & import").
 #[derive(Debug, Clone, Deserialize)]

@@ -7,7 +7,7 @@ mod import;
 mod kind;
 mod safetensors;
 
-pub use catalog::{KnownModel, KNOWN_MODELS};
+pub use catalog::{FeaturedModel, KnownModel, FEATURED_MODELS, KNOWN_MODELS};
 pub use delete::{delete_model, DeleteOutcome};
 pub use gguf::{read_gguf_info, GgufInfo};
 pub use import::{import_model, ImportOutcome, ImportRequest};

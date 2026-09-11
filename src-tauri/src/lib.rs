@@ -8,8 +8,8 @@ use std::sync::{Arc, Mutex};
 
 use aiwm_core::api::dto::{
     AboutDto, AgentPermissionDto, AgentSessionDetailDto, ConfigUpdate, EnqueueDownloadDto,
-    JobDetailDto, NewAgentDto, OpenAgentSessionDto, RegistryDetailsDto, RegistrySearchDto,
-    RuntimeStatusDto, SubmitJobDto,
+    FeaturedModelDto, JobDetailDto, KnownModelDto, NewAgentDto, OpenAgentSessionDto,
+    RegistryDetailsDto, RegistrySearchDto, RuntimeStatusDto, SubmitJobDto,
 };
 use aiwm_core::api::handlers;
 use aiwm_core::config::Config;
@@ -184,8 +184,13 @@ async fn list_models(app: tauri::State<'_, Arc<App>>) -> Result<Vec<Model>, Stri
 }
 
 #[tauri::command]
-fn list_known_models(app: tauri::State<'_, Arc<App>>) -> &'static [aiwm_core::model::KnownModel] {
+fn list_known_models(app: tauri::State<'_, Arc<App>>) -> Vec<KnownModelDto> {
     handlers::known_models(&app)
+}
+
+#[tauri::command]
+fn list_featured_models(app: tauri::State<'_, Arc<App>>) -> Vec<FeaturedModelDto> {
+    handlers::featured_models(&app)
 }
 
 #[tauri::command]
@@ -371,6 +376,7 @@ fn try_run() -> anyhow::Result<()> {
             get_recent_logs,
             list_models,
             list_known_models,
+            list_featured_models,
             import_model,
             list_benchmarks,
             model_benchmarks,

@@ -467,6 +467,39 @@ mod tests {
         assert!(arr
             .iter()
             .all(|m| m["sha256"].as_str().unwrap().len() == 64));
+        // Every entry now carries a computed fit verdict + the curated pick flag.
+        // (Not asserting a specific level -- it depends on the test machine's
+        // real detected VRAM budget, unlike `test_app()`'s other fixed fields.)
+        assert!(arr.iter().all(|m| m["fit"]["level"].is_string()));
+        let sdxl = arr.iter().find(|m| m["id"] == "sdxl-base-1.0").unwrap();
+        assert_eq!(sdxl["is_default"], true);
+    }
+
+    #[tokio::test]
+    async fn featured_models_lists_curated_chat_and_coding_picks_with_fit() {
+        let (app, _tmp) = test_app().await;
+        let server = ApiServer::bind(app, SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
+            .await
+            .unwrap();
+
+        let list: serde_json::Value =
+            reqwest::get(format!("http://{}/models/featured", server.addr))
+                .await
+                .unwrap()
+                .json()
+                .await
+                .unwrap();
+        let arr = list.as_array().unwrap();
+        assert!(arr
+            .iter()
+            .any(|m| m["role"] == "chat" && m["is_default"] == true));
+        assert!(arr
+            .iter()
+            .any(|m| m["role"] == "coding" && m["is_default"] == true));
+        assert!(arr
+            .iter()
+            .all(|m| m["repo"].as_str().unwrap().contains('/')));
+        assert!(arr.iter().all(|m| m["fit"]["level"].is_string()));
     }
 
     #[tokio::test]

@@ -317,7 +317,8 @@ export const registryStatus = () => invoke<RegistryStatus>("registry_status");
  *  a backup. Takes effect on the next restart. */
 export const setHfToken = (token: string) => invoke<void>("set_hf_token", { token });
 
-/** One entry of the curated image-model catalogue (`GET /models/known`). */
+/** One entry of the curated image/video catalogue (`GET /models/known`),
+ *  enriched with a fit verdict against the current VRAM budget. */
 export interface KnownModel {
   id: string;
   name: string;
@@ -331,7 +332,33 @@ export interface KnownModel {
   size_bytes: number;
   license: string;
   note: string;
+  /** The curated "pick this one" model for its role. */
+  is_default: boolean;
+  /** Which stack this entry belongs to. */
+  media: "image" | "video";
+  fit: FitVerdict;
 }
+
+/** One curated chat/coding recommendation (`GET /models/featured`) — a
+ *  Hugging Face repo + preferred quant, not a pinned file. `fit` is judged
+ *  from `typical_vram_mb`, a documented estimate; click through to Discover
+ *  (or "Check exact fit") for the real file list. */
+export interface FeaturedModel {
+  id: string;
+  role: "chat" | "coding";
+  label: string;
+  /** Hugging Face `owner/repo`. */
+  repo: string;
+  quant_hint: string;
+  typical_vram_mb: number;
+  license: string;
+  note: string;
+  import_roles: string[];
+  is_default: boolean;
+  fit: FitVerdict;
+}
+
+export const listFeaturedModels = () => invoke<FeaturedModel[]>("list_featured_models");
 
 export const listKnownModels = () => invoke<KnownModel[]>("list_known_models");
 

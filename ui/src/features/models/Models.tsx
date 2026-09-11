@@ -1,6 +1,8 @@
 import { useMemo, useState } from "react";
 import {
+  useAbout,
   useBenchmarks,
+  useFeaturedModels,
   useJobs,
   useKnownModels,
   useModels,
@@ -8,14 +10,19 @@ import {
 } from "../../lib/hooks";
 import {
   benchmarkModel,
+  enqueueDownload,
   importModel,
+  registryModel,
   setModelTags,
   upgradeCheck,
   type Benchmark,
+  type FeaturedModel,
+  type FitVerdict,
   type Job,
   type KnownModel,
   type Model,
   type ModelType,
+  type RegistryDetails,
 } from "../../lib/ipc";
 import { Discover } from "./Discover";
 import { Downloads } from "./Downloads";
@@ -66,6 +73,8 @@ export function Models() {
     <div className="models">
       <ImportForm modelType={modelType} setModelType={setModelType} onImported={refetch} />
 
+      <Catalog onUseType={setModelType} />
+
       <ModelLibrary models={models} error={error} />
 
       <Downloads />
@@ -75,8 +84,6 @@ export function Models() {
       <StoragePanel />
 
       <Discover onUseType={setModelType} />
-
-      <KnownModels onUseType={setModelType} />
     </div>
   );
 }
@@ -433,25 +440,123 @@ function ImportForm({
   );
 }
 
-function KnownModels({ onUseType }: { onUseType: (t: ModelType) => void }) {
+const FIT_COLOR: Record<FitVerdict["level"], string> = {
+  green: "var(--load-ok)",
+  yellow: "var(--load-warn)",
+  red: "var(--load-crit)",
+  unknown: "var(--border)",
+};
+
+const FIT_LABEL: Record<FitVerdict["level"], string> = {
+  green: "Fits comfortably",
+  yellow: "Tight fit",
+  red: "Won't fit well",
+  unknown: "Fit unknown",
+};
+
+const fitTitle = (fit: FitVerdict): string =>
+  fit.level === "yellow" || fit.level === "red" ? fit.reason : FIT_LABEL[fit.level];
+
+/** A colored dot + plain-language label for a `FitVerdict` — shared by the
+ *  Image/Video/Chat/Code catalog rows below. */
+function FitBadge({ fit }: { fit: FitVerdict }) {
+  return (
+    <span className="known__fit" title={fitTitle(fit)}>
+      <span className="known__fitdot" style={{ background: FIT_COLOR[fit.level] }} />
+      {FIT_LABEL[fit.level]}
+    </span>
+  );
+}
+
+// Values match `KnownModel.media` / `FeaturedModel.role` exactly, so the
+// filters below are a plain equality check.
+type CatalogTab = "image" | "video" | "chat" | "coding";
+const CATALOG_TABS: { value: CatalogTab; label: string; blurb: string }[] = [
+  {
+    value: "image",
+    label: "Image",
+    blurb: "A base checkpoint or diffusion model for the Image tab, plus the encoders/VAE it needs.",
+  },
+  {
+    value: "video",
+    label: "Video",
+    blurb: "A base model for the Video tab, plus its text encoder and VAE.",
+  },
+  {
+    value: "chat",
+    label: "Chat",
+    blurb: "A general assistant for the Chat tab.",
+  },
+  {
+    value: "coding",
+    label: "Code",
+    blurb: "Powers an agent session (OpenCode/Hermes) via the coding role.",
+  },
+];
+
+/** "What should I install, and for what?" — the curated image/video catalogue
+ *  (6.x) plus the chat/coding recommendations, grouped into tabs, each
+ *  fit-checked against the current VRAM budget and with one pick per group
+ *  flagged "★ recommended for your hardware". */
+function Catalog({ onUseType }: { onUseType: (t: ModelType) => void }) {
   const known = useKnownModels();
-  if (!known || known.length === 0) return null;
+  const featured = useFeaturedModels();
+  const about = useAbout();
+  const [tab, setTab] = useState<CatalogTab>("image");
+
+  const active = CATALOG_TABS.find((t) => t.value === tab)!;
+  const knownRows = known?.filter((m) => m.media === tab);
+  const featuredRows = featured?.filter((m) => m.role === tab);
+  const loading = tab === "image" || tab === "video" ? !known : !featured;
 
   return (
     <section className="card card--wide">
       <header className="card__head">
-        <h2>Known models</h2>
-        <span className="card__sub">download from Hugging Face, then import above</span>
+        <h2>Recommended models</h2>
+        <span className="card__sub">
+          {about
+            ? `fit-checked against your ~${(about.vram_budget_mb / 1024).toFixed(0)} GB VRAM budget`
+            : "what to install, and for what"}
+        </span>
       </header>
-      <p className="muted">
-        A Flux job needs all four pieces: the diffusion GGUF, a T5 encoder, CLIP-L, and the VAE.
-        The importer recognizes these by their SHA-256 and fills in the metadata.
-      </p>
-      <ul className="known">
-        {known.map((m) => (
-          <KnownRow key={m.id} model={m} onUseType={onUseType} />
+
+      <div className="catalog__tabs" role="tablist">
+        {CATALOG_TABS.map((t) => (
+          <button
+            key={t.value}
+            type="button"
+            role="tab"
+            aria-selected={tab === t.value}
+            className={`chip ${tab === t.value ? "chip--on" : ""}`}
+            onClick={() => setTab(t.value)}
+          >
+            {t.label}
+          </button>
         ))}
-      </ul>
+      </div>
+      <p className="muted">{active.blurb}</p>
+
+      {loading && <p className="muted">Loading…</p>}
+      {!loading && (tab === "image" || tab === "video") && (knownRows?.length ?? 0) === 0 && (
+        <p className="muted">Nothing curated here yet.</p>
+      )}
+      {(tab === "image" || tab === "video") && knownRows && knownRows.length > 0 && (
+        <ul className="known">
+          {knownRows.map((m) => (
+            <KnownRow key={m.id} model={m} onUseType={onUseType} />
+          ))}
+        </ul>
+      )}
+      {!loading && (tab === "chat" || tab === "coding") && (featuredRows?.length ?? 0) === 0 && (
+        <p className="muted">Nothing curated here yet.</p>
+      )}
+      {(tab === "chat" || tab === "coding") && featuredRows && featuredRows.length > 0 && (
+        <ul className="known">
+          {featuredRows.map((m) => (
+            <FeaturedRow key={m.id} model={m} onUseType={onUseType} />
+          ))}
+        </ul>
+      )}
     </section>
   );
 }
@@ -471,10 +576,14 @@ function KnownRow({ model, onUseType }: { model: KnownModel; onUseType: (t: Mode
   return (
     <li className="known__row">
       <div className="known__main">
-        <span className="known__name">{model.name}</span>
+        <div className="known__name">
+          {model.name}
+          {model.is_default && <span className="badge badge--pick">★ recommended</span>}
+        </div>
         <span className="known__badges">
           <span className="badge">{model.kind.replace("_", " ")}</span>
           {model.family && <span className="badge">{model.family}</span>}
+          <FitBadge fit={model.fit} />
         </span>
         <span className="known__note">{model.note}</span>
         <span className="known__file numeric">
@@ -487,6 +596,140 @@ function KnownRow({ model, onUseType }: { model: KnownModel; onUseType: (t: Mode
         </button>
         <button type="button" onClick={copyLink}>
           {copied ? "Copied ✓" : "Copy link"}
+        </button>
+      </div>
+    </li>
+  );
+}
+
+/** A curated chat/coding pick — only a repo + preferred quant is pinned (see
+ *  `core::model::FeaturedModel`), so "Check exact fit" resolves the real file
+ *  list live, the same way Discover does. A coding pick needs the `coding`
+ *  role stamped at import time, which the one-click download path can't do
+ *  yet — so it gets "Copy link" + explicit instructions instead of a
+ *  download button that would silently produce an unusable import. */
+function FeaturedRow({ model, onUseType }: { model: FeaturedModel; onUseType: (t: ModelType) => void }) {
+  const [open, setOpen] = useState(false);
+  const [details, setDetails] = useState<RegistryDetails | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+  const [dl, setDl] = useState<"idle" | "queued" | "error">("idle");
+
+  const toggle = async () => {
+    const next = !open;
+    setOpen(next);
+    if (next && !details && !loading) {
+      setLoading(true);
+      setErr(null);
+      try {
+        setDetails(await registryModel(model.repo));
+      } catch (e) {
+        setErr(e instanceof Error ? e.message : String(e));
+      } finally {
+        setLoading(false);
+      }
+    }
+  };
+
+  const hint = model.quant_hint.toUpperCase();
+  const file = details?.files.find(
+    (f) => f.quant?.toUpperCase().includes(hint) || f.path.toUpperCase().includes(hint),
+  );
+  const gated = details ? details.gated !== "no" : false;
+  // Downloading imports with no roles today (a known gap) -- fine for a plain
+  // chat pick, but a coding pick would silently lose the role that is the
+  // entire point of recommending it, so that path stays manual.
+  const canDownload = model.role === "chat" && !!file && !file.shard && !gated;
+
+  const copyLink = async () => {
+    try {
+      await navigator.clipboard.writeText(
+        file ? file.download_url : `https://huggingface.co/${model.repo}`,
+      );
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      /* clipboard blocked — the link is still visible below */
+    }
+  };
+
+  const download = async () => {
+    if (!file) return;
+    setDl("idle");
+    try {
+      await enqueueDownload({
+        url: file.download_url,
+        filename: file.path,
+        model_type: "chat",
+        sha256: file.sha256 ?? undefined,
+        size_bytes: file.size_bytes,
+      });
+      setDl("queued");
+    } catch {
+      setDl("error");
+    }
+  };
+
+  return (
+    <li className="known__row">
+      <div className="known__main">
+        <div className="known__name">
+          {model.label}
+          {model.is_default && <span className="badge badge--pick">★ recommended</span>}
+        </div>
+        <span className="known__badges">
+          <span className="badge">{model.role}</span>
+          <FitBadge fit={model.fit} />
+        </span>
+        <span className="known__note">{model.note}</span>
+        <span className="known__file numeric">
+          {model.quant_hint} · ~{(model.typical_vram_mb / 1024).toFixed(1)} GB VRAM (estimate) ·{" "}
+          {model.license}
+        </span>
+        <span className="known__note">
+          Download, then Import above with role{model.import_roles.length > 1 ? "s" : ""}:{" "}
+          <code>{model.import_roles.join(", ")}</code>
+        </span>
+
+        {open && (
+          <div className="discover__files">
+            {loading && <p className="muted">Looking up the real file list…</p>}
+            {err && <p className="import__err">{err}</p>}
+            {details && !file && (
+              <p className="muted">
+                Could not find a {model.quant_hint} file right now — open the repo on Hugging Face.
+              </p>
+            )}
+            {file && (
+              <div className="discover__file">
+                <span
+                  className="discover__dot"
+                  style={{ background: FIT_COLOR[file.fit.level] }}
+                  title={fitTitle(file.fit)}
+                />
+                <span className="discover__quant">{file.quant ?? file.path}</span>
+                <span className="numeric muted">{gbBytes(file.size_bytes)}</span>
+                {gated && <span className="badge badge--warn">accept licence on HF</span>}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+      <div className="known__actions">
+        <button type="button" onClick={toggle}>
+          {open ? "Hide files" : "Check exact fit"}
+        </button>
+        {canDownload && (
+          <button type="button" onClick={download} disabled={dl === "queued"}>
+            {dl === "queued" ? "Queued ✓" : dl === "error" ? "Failed — retry" : "Download & import"}
+          </button>
+        )}
+        <button type="button" onClick={() => onUseType("chat")}>
+          Set import type
+        </button>
+        <button type="button" onClick={copyLink}>
+          {copied ? "Copied ✓" : file ? "Copy file link" : "Copy repo link"}
         </button>
       </div>
     </li>

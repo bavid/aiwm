@@ -8,6 +8,7 @@ import {
   listAgentRuntimes,
   listAgents,
   listBenchmarks,
+  listFeaturedModels,
   listJobs,
   listKnownModels,
   listDownloads,
@@ -24,6 +25,7 @@ import {
   type Job,
   type RegistryStatus,
   type StorageReport,
+  type FeaturedModel,
   type KnownModel,
   type Model,
   type RegistrySearchParams,
@@ -57,11 +59,22 @@ export function useAbout() {
   return info;
 }
 
-/** The curated image-model catalogue. Static — fetched once. */
+/** The curated image/video catalogue, fit-checked against the VRAM budget.
+ *  Fetched once. */
 export function useKnownModels() {
   const [data, setData] = useState<KnownModel[] | null>(null);
   useEffect(() => {
     listKnownModels().then(setData).catch(() => setData([]));
+  }, []);
+  return data;
+}
+
+/** The curated chat/coding recommendations, fit-checked against the VRAM
+ *  budget. Fetched once. */
+export function useFeaturedModels() {
+  const [data, setData] = useState<FeaturedModel[] | null>(null);
+  useEffect(() => {
+    listFeaturedModels().then(setData).catch(() => setData([]));
   }, []);
   return data;
 }

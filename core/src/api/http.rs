@@ -35,6 +35,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/jobs/{id}/output", get(job_output))
         .route("/models", get(list_models).post(import_model))
         .route("/models/known", get(known_models))
+        .route("/models/featured", get(featured_models))
         .route("/models/{id}", axum::routing::delete(delete_model))
         .route("/models/tags", get(model_tags))
         .route("/models/{id}/tags", put(set_model_tags))
@@ -227,8 +228,12 @@ async fn list_models(State(app): AppState) -> Result<Json<Vec<crate::db::Model>>
     Ok(Json(handlers::list_models(&app).await?))
 }
 
-async fn known_models(State(app): AppState) -> Json<&'static [crate::model::KnownModel]> {
+async fn known_models(State(app): AppState) -> Json<Vec<super::dto::KnownModelDto>> {
     Json(handlers::known_models(&app))
+}
+
+async fn featured_models(State(app): AppState) -> Json<Vec<super::dto::FeaturedModelDto>> {
+    Json(handlers::featured_models(&app))
 }
 
 async fn storage_report(

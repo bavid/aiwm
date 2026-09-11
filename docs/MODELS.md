@@ -76,8 +76,36 @@ Details + empfohlene Settings:
 
 Für **Agent-Sessions** (Phase 5) braucht es ein Chat-GGUF mit der zusätzlichen
 Rolle **`coding`** und verlässlichem Tool-Calling (`llama-server --jinja`).
-Kandidaten + Import + Smoke: [AGENT_MODELS.md](AGENT_MODELS.md). Noch nicht im
-`KNOWN_MODELS`-Katalog (Phase 6).
+Kandidaten + Import + Smoke: [AGENT_MODELS.md](AGENT_MODELS.md) — dieselben
+Kandidaten stehen jetzt auch im Models-Tab (`core::model::FEATURED_MODELS`,
+siehe „Kategorisierter Katalog" unten).
+
+## Kategorisierter Katalog + Chat/Code-Empfehlungen (post-6.9)
+
+Der Models-Tab zeigt „Recommended models" in vier Reitern — **Image / Video**
+(`KNOWN_MODELS`, wie oben) und **Chat / Code** (`core::model::FEATURED_MODELS`,
+neu). Jeder Eintrag trägt jetzt einen **Fit-Verdict gegen das aktuelle
+VRAM-Budget** (`GET /models/known` + `GET /models/featured` reichern serverseitig
+mit `compat::verdict`/`compat::verdict_from_total_mb` an — kein Netz-Call, reine
+lokale Rechnung) und ein `is_default`-Flag, das die kuratierte Empfehlung als
+„★ recommended" markiert (ein Pick pro Bild-Basis, Video-Basis, Chat, Code).
+
+`FEATURED_MODELS` pinnt anders als `KNOWN_MODELS` **kein** SHA-256 — nur ein
+HF-**Repo** + die bevorzugte Quant (`quant_hint`), weil GGUF-Quant-Repos
+öfter neu hochgeladen werden. „Check exact fit" löst die echte Datei erst
+**on demand** über `core::registry` auf (derselbe Weg wie Discovery) — kein
+automatischer Netz-Call beim Öffnen des Tabs.
+
+**Bewusste Lücke:** ein Download-getriggerter Import (egal ob aus Discover,
+Upgrade-Check oder diesem neuen Katalog) übergibt `import_model` bislang immer
+`roles: []` — die `downloads`-Tabelle hat keine `roles`-Spalte. Für eine
+**Code**-Empfehlung wäre das fatal (die `coding`-Rolle ist der einzige Grund,
+sie überhaupt vorzuschlagen), deshalb bekommen Coding-Einträge **keinen**
+Ein-Klick-„Download & import"-Knopf, nur „Copy repo link" + den expliziten
+Hinweis, welche Rollen beim manuellen Import anzuhaken sind. Chat-Einträge
+(ohne `coding`-Anspruch) behalten den bestehenden Ein-Klick-Download — gleiches
+Verhalten wie Discover/Upgrade-Check heute, keine Regression. Die eigentliche
+Lücke (Migration für `downloads.roles`) ist als Folge-Task vorgemerkt.
 
 ## Status
 
@@ -102,6 +130,7 @@ Kandidaten + Import + Smoke: [AGENT_MODELS.md](AGENT_MODELS.md). Noch nicht im
 | HF-Rate-Limit-Backoff | ✅ 6.9 `HuggingFaceSource` — `Mutex<HubState>` parst `RateLimit: r=;t=` (IETF-Draft) + `Retry-After`, **fail-fast solange ein bekanntes Backoff-Fenster läuft**, `429` → Fenster aus Reset-Hint (sonst 90 s). `ETag`/`If-None-Match` verworfen (spart nur Bandbreite, kein Rate-Budget) |
 | Optionales `HF_TOKEN` | ✅ 6.9 `<local_root>/hf_token.txt` — **nie Pflicht** (nur Gated-Repos / höhere Limits), **nie geroamt, nie im Backup** (ADR-022). „Hugging Face"-Karte in Settings (`PUT /registry/token`, leer = löschen), erst nach Neustart aktiv |
 | Registry-Health in Diagnostics | ✅ 6.9 `RegistryStatus { source_id, last_fetch, rate_limit_remaining, rate_limited_secs, token_set, cache_entries }` (`GET /registry/status`) → „Model registry"-Karte in Diagnostics |
+| Kategorisierter Katalog (Image/Video/Chat/Code) + Hardware-Empfehlung | ✅ post-6.9 „Recommended models" im Models-Tab, 4 Reiter. `KnownModel`/`FeaturedModel` bekamen `is_default` (★ Empfehlung) + serverseitig berechnetes `fit` (`compat::verdict`/`verdict_from_total_mb`, kein Netz-Call). `core::model::FEATURED_MODELS` (neu) — kuratierte Chat-/Coding-HF-Repos (aus [AGENT_MODELS.md](AGENT_MODELS.md)), Datei-Auflösung on-demand über `core::registry`. `GET /models/known` + `GET /models/featured`. Coding-Picks: kein Ein-Klick-Download (roles-Lücke, s. o.), nur Chat |
 
 ## Hardware-Realität
 

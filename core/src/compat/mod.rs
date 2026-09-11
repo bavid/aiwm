@@ -54,18 +54,29 @@ pub enum FitVerdict {
 /// Judge `dims` at context length `ctx` against the VRAM budget and the amount
 /// of free system RAM (for the offload fallback).
 pub fn verdict(dims: &ModelDims, ctx: u32, vram_budget_mb: u64, free_ram_mb: u64) -> FitVerdict {
-    if vram_budget_mb == 0 || dims.size_bytes == 0 {
+    if dims.size_bytes == 0 {
         return FitVerdict::Unknown;
     }
-    let total = estimate(dims, ctx).total_mb;
+    verdict_from_total_mb(estimate(dims, ctx).total_mb, vram_budget_mb, free_ram_mb)
+}
 
-    if total <= vram_budget_mb {
-        if total.saturating_mul(100) > vram_budget_mb.saturating_mul(FIT_TIGHT_PCT) {
+/// Judge an already-computed total VRAM figure (weights + KV + overhead)
+/// against the budget + free RAM. [`verdict`] is this fed from a GGUF/
+/// safetensors file's real dims; a caller that only has a rough all-in
+/// estimate — the curated chat/coding picks in `core::model::catalog`, sized
+/// from public numbers rather than a live file — can call this directly.
+pub fn verdict_from_total_mb(total_mb: u64, vram_budget_mb: u64, free_ram_mb: u64) -> FitVerdict {
+    if vram_budget_mb == 0 || total_mb == 0 {
+        return FitVerdict::Unknown;
+    }
+
+    if total_mb <= vram_budget_mb {
+        if total_mb.saturating_mul(100) > vram_budget_mb.saturating_mul(FIT_TIGHT_PCT) {
             return FitVerdict::Yellow {
                 reason: format!(
                     "needs ~{} of your ~{} VRAM budget — little head-room for a longer \
                      context or a second resident model",
-                    gb(total),
+                    gb(total_mb),
                     gb(vram_budget_mb),
                 ),
             };
@@ -75,13 +86,13 @@ pub fn verdict(dims: &ModelDims, ctx: u32, vram_budget_mb: u64, free_ram_mb: u64
 
     // Over the VRAM budget — the runtime can offload layers to system RAM if
     // there is room, at a large speed cost.
-    let overflow = total - vram_budget_mb;
+    let overflow = total_mb - vram_budget_mb;
     if free_ram_mb >= overflow.saturating_add(OFFLOAD_RAM_RESERVE_MB) {
         FitVerdict::Yellow {
             reason: format!(
                 "needs ~{}, over your ~{} VRAM budget — about {} would run in system RAM \
                  (much slower)",
-                gb(total),
+                gb(total_mb),
                 gb(vram_budget_mb),
                 gb(overflow),
             ),
@@ -91,7 +102,7 @@ pub fn verdict(dims: &ModelDims, ctx: u32, vram_budget_mb: u64, free_ram_mb: u64
             reason: format!(
                 "needs ~{}, over your ~{} VRAM budget, and only ~{} RAM is free to offload \
                  the rest",
-                gb(total),
+                gb(total_mb),
                 gb(vram_budget_mb),
                 gb(free_ram_mb),
             ),
@@ -407,5 +418,35 @@ mod tests {
             verdict(&ModelDims::default(), 8192, 16_000, 32_000),
             FitVerdict::Unknown
         );
+    }
+
+    #[test]
+    fn verdict_from_total_mb_matches_verdict_on_the_same_total() {
+        // `verdict` on 6 GB weights at 8192 ctx lands at the same total
+        // `estimate` would report -- feeding that total straight in must agree.
+        let total = estimate(&weights(6_000), 8192).total_mb;
+        assert_eq!(
+            verdict_from_total_mb(total, 16_000, 32_000),
+            FitVerdict::Green
+        );
+        assert_eq!(
+            verdict(&weights(6_000), 8192, 16_000, 32_000),
+            FitVerdict::Green
+        );
+    }
+
+    #[test]
+    fn verdict_from_total_mb_is_unknown_without_a_budget_or_a_total() {
+        assert_eq!(verdict_from_total_mb(8_000, 0, 32_000), FitVerdict::Unknown);
+        assert_eq!(
+            verdict_from_total_mb(0, 16_000, 32_000),
+            FitVerdict::Unknown
+        );
+    }
+
+    #[test]
+    fn verdict_from_total_mb_is_red_when_it_cannot_offload() {
+        let v = verdict_from_total_mb(20_000, 16_000, 1_000);
+        assert!(matches!(v, FitVerdict::Red { .. }), "{v:?}");
     }
 }

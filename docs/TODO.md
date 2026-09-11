@@ -270,6 +270,22 @@ ADRs 022–025. 371 Lib / 57 integ / 5 pytest.
   `media_headroom_mb`) gegen echte `nvidia-smi`-Peaks kalibrieren →
   [HARDWARE.md](HARDWARE.md), zusammen mit dem 4.0-ComfyUI-Smoke
 
+### Post-6.9: kategorisierter Models-Tab + Datenablage (ADR-026)
+- ✅ `scripts/start.ps1`/`install.ps1`, ADR-026 (Datenablage portabel per
+  Default), Models-Tab „Recommended models" (Image/Video/Chat/Code-Reiter,
+  `core::model::FEATURED_MODELS`, Fit-Verdicts). Details:
+  [MODELS.md](MODELS.md) „Kategorisierter Katalog".
+- **Offene Lücke (gefunden, nicht in diesem Zug behoben):**
+  Download-getriggerte Importe (Discover/Upgrade-Check/der neue Katalog)
+  übergeben `import_model` immer `roles: []` — die `downloads`-Tabelle hat
+  keine `roles`-Spalte. Macht ein so geladenes Modell für `pick_for_role`
+  unsichtbar, auch für einfache `chat`-Importe. Braucht eine Migration
+  (`downloads.roles`) + Durchreichen bis zum Worker, oder minimal einen
+  Empty-roles-Fallback in `import_model` für `model_type=="chat"`. Deshalb hat
+  der Code-Reiter (`coding`-Rolle wäre sonst der einzige Sinn des Vorschlags)
+  bewusst **keinen** Ein-Klick-Download, nur „Copy link" + manuelle
+  Import-Anleitung.
+
 ## Offen / später zu entscheiden
 - App-Selbst-Update offline (manueller Installer + Signaturprüfung angenommen)
 - Parallele Jobs: Policy verfeinern (klein-LLM + Upscale gleichzeitig)
