@@ -73,12 +73,20 @@ scripts/start.ps1 -Install     # einmalig: Deps installieren, dann starten
 scripts/start.ps1 -Headless    # nur Core + Loopback-API, kein UI-Fenster
 ```
 
-Ohne das Skript, per Hand:
+Ohne das Skript, per Hand (aus `E:\AI` ausführen):
 
 ```powershell
 cargo run -p aiwm-core --bin aiwm-cored   # headless core + Loopback-API, Ctrl-C beendet
-pnpm -C ui exec tauri dev                 # Desktop-App (aus E:\AI ausführen)
+.\ui\node_modules\.bin\tauri.cmd dev      # Desktop-App
 ```
+
+**Nicht** `pnpm -C ui exec tauri dev` — das setzt das Arbeitsverzeichnis des
+Kindprozesses auf `ui/`, und die Tauri-CLI sucht `src-tauri/tauri.conf.json`
+nur in **Unterordnern** des cwd. Von `ui/` aus ist `src-tauri` aber ein
+Geschwister-, kein Kindordner → Panic „Couldn't recognize the current folder
+as a Tauri project". Die CLI direkt aus `E:\AI` starten (`src-tauri` liegt
+dort als Unterordner); `tauri.conf.json`s `beforeDevCommand` (`pnpm dev`,
+`cwd: "../ui"`) startet den Vite-Dev-Server unabhängig davon richtig.
 
 Die Loopback-API läuft bei allen Varianten auf `http://127.0.0.1:48160`
 (`GET /about /telemetry /jobs /runtimes /logs`, `GET /ws` Telemetrie-Stream).

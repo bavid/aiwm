@@ -47,16 +47,22 @@ try {
         Write-Host "API on http://127.0.0.1:48160 -- Ctrl-C to stop`n" -ForegroundColor DarkGray
         cargo run -p aiwm-core --bin aiwm-cored
     } else {
-        if (-not (Has 'pnpm')) {
-            throw "pnpm not found on PATH -- see docs/DEV_SETUP.md"
-        }
-        if (-not (Test-Path "$root/ui/node_modules")) {
-            Write-Host "ui/node_modules missing -- run 'scripts/start.ps1 -Install' first" -ForegroundColor Yellow
+        # Invoke the tauri CLI binary directly with cwd = repo root, NOT via
+        # `pnpm -C ui exec` (that sets the child process's cwd to ui/, and the
+        # tauri CLI locates the project by finding `src-tauri/tauri.conf.json`
+        # in a SUBFOLDER of cwd -- from ui/ that search fails since src-tauri
+        # is ui's *sibling*, not its child: "Couldn't recognize the current
+        # folder as a Tauri project"). tauri.conf.json's own
+        # `build.beforeDevCommand` (`pnpm dev`, cwd `../ui`) still starts the
+        # Vite dev server correctly regardless of where the CLI itself runs.
+        $tauriBin = Join-Path $root 'ui\node_modules\.bin\tauri.cmd'
+        if (-not (Test-Path $tauriBin)) {
+            Write-Host "$tauriBin missing -- run 'scripts/start.ps1 -Install' first" -ForegroundColor Yellow
             exit 1
         }
         Write-Host "`n=== AI Workstation Manager (Tauri dev) ===" -ForegroundColor Cyan
         Write-Host "API on http://127.0.0.1:48160 -- close the window to stop`n" -ForegroundColor DarkGray
-        pnpm -C ui exec tauri dev
+        & $tauriBin dev
     }
 }
 finally {
