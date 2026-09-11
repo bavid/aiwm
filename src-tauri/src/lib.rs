@@ -356,6 +356,7 @@ fn try_run() -> anyhow::Result<()> {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .manage(core)
         .manage(HostState {
             _log_guard: Mutex::new(log_guard),

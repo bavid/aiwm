@@ -1,9 +1,10 @@
-import { useEffect, useRef, useState } from "react";
-import { useModels, useRuntimes } from "../../lib/hooks";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useJobs, useModels, useRuntimes } from "../../lib/hooks";
 import {
   cancelJob,
   jobDetail,
   submitJob,
+  type Job,
   type JobEvent,
   type JobState,
 } from "../../lib/ipc";
@@ -34,18 +35,55 @@ function statsFromEvents(events: JobEvent[]): string | null {
   return m ? `${m[1]} tokens · ${m[2]} tok/s` : null;
 }
 
+function promptOf(job: Job): string {
+  const p = job.params;
+  return p && typeof p === "object" && typeof (p as { prompt?: unknown }).prompt === "string"
+    ? (p as { prompt: string }).prompt
+    : "";
+}
+
 export function Chat() {
   const [turns, setTurns] = useState<Turn[]>([]);
   const [prompt, setPrompt] = useState("");
   const [pendingId, setPendingId] = useState<string | null>(null);
   const [sendError, setSendError] = useState<string | null>(null);
   const logRef = useRef<HTMLDivElement>(null);
+  const hydrated = useRef(false);
 
   const { data: models } = useModels();
   const { data: runtimes } = useRuntimes();
+  const { data: jobs } = useJobs();
   const hasChatModel = (models ?? []).some((m) => m.roles.includes("chat"));
   const llama = (runtimes ?? []).find((r) => r.id === "llamacpp");
   const llamaReady = !llama || !(llama.detail ?? "").includes("not installed");
+  const modelNames = useMemo(
+    () => new Map((models ?? []).map((m) => [m.id, m.name])),
+    [models],
+  );
+
+  // Past turns live in the jobs table already (job_type "chat") -- pull them in
+  // once on mount so the conversation survives switching tabs or restarting the
+  // app, instead of vanishing with this component's local state.
+  useEffect(() => {
+    if (hydrated.current || !jobs) return;
+    hydrated.current = true;
+    const history = jobs
+      .filter((j) => j.job_type === "chat")
+      .slice()
+      .sort((a, b) => a.created_at.localeCompare(b.created_at))
+      .map(
+        (j): Turn => ({
+          jobId: j.id,
+          prompt: promptOf(j),
+          answer: j.result ?? "",
+          state: j.state,
+          model: j.model_id ? (modelNames.get(j.model_id) ?? j.model_id) : null,
+          stats: null,
+          error: j.error_text,
+        }),
+      );
+    if (history.length > 0) setTurns(history);
+  }, [jobs, modelNames]);
 
   useEffect(() => {
     if (!pendingId) return;
@@ -88,10 +126,20 @@ export function Chat() {
     if (el) el.scrollTop = el.scrollHeight;
   }, [turns]);
 
+  // A `blocked` job (not enough VRAM right now) isn't actively running -- it's
+  // just waiting for room, and may sit there indefinitely if none frees up.
+  // Don't lock the composer forever: let the user try again instead of being
+  // stuck until they cancel or switch tabs.
+  const stuck = turns.find((t) => t.jobId === pendingId)?.state === "blocked";
+
   const send = async () => {
     const text = prompt.trim();
-    if (!text || pendingId) return;
+    if (!text || (pendingId && !stuck)) return;
     setSendError(null);
+    // An optimistic turn is about to be appended -- never let the history
+    // hydration effect (which can still be waiting on its first `jobs` poll)
+    // overwrite it.
+    hydrated.current = true;
     try {
       const job = await submitJob({ job_type: "chat", params: { prompt: text } });
       setTurns((ts) => [
@@ -155,11 +203,13 @@ export function Chat() {
           rows={2}
           spellCheck
           placeholder={
-            pendingId ? "Waiting for the answer…" : "Message — Enter to send, Shift+Enter for a newline"
+            pendingId && !stuck
+              ? "Waiting for the answer…"
+              : "Message — Enter to send, Shift+Enter for a newline"
           }
         />
-        <button type="submit" disabled={!prompt.trim() || !!pendingId}>
-          {pendingId ? "…" : "Send"}
+        <button type="submit" disabled={!prompt.trim() || (!!pendingId && !stuck)}>
+          {pendingId && !stuck ? "…" : "Send"}
         </button>
       </form>
       {sendError && <p className="chat__err">{sendError}</p>}
@@ -169,7 +219,7 @@ export function Chat() {
 
 function ChatTurn({ turn, onCancel }: { turn: Turn; onCancel: () => void }) {
   const running = !DONE.includes(turn.state);
-  const waiting = running && !turn.answer;
+  const waiting = running && !turn.answer && turn.state !== "blocked";
 
   return (
     <div className="turn">
@@ -188,6 +238,9 @@ function ChatTurn({ turn, onCancel }: { turn: Turn; onCancel: () => void }) {
         )}
         {turn.state === "failed" && (
           <span className="turn__err">{turn.error ?? "failed"}</span>
+        )}
+        {turn.state === "blocked" && (
+          <span className="turn__err">{turn.error ?? "not enough VRAM free right now"}</span>
         )}
         {turn.state === "cancelled" && !turn.answer && <span className="muted">cancelled</span>}
       </div>

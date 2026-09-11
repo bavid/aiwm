@@ -25,3 +25,4 @@ serde_json.workspace = true
 anyhow.workspace = true
 tracing-appender.workspace = true
 aiwm-core = { path = "../core" }
+tauri-plugin-dialog = "2.7.3"

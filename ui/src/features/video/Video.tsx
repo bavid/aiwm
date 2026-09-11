@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { open } from "@tauri-apps/plugin-dialog";
 import { NumField } from "../../components/NumField";
 import { useAbout, useJobs, useModels, useRuntimes } from "../../lib/hooks";
 import {
@@ -140,9 +141,27 @@ export function VideoStudio() {
 
   const startImage = startPath.trim() || (startJob === "none" ? "" : startJob);
 
+  const browseForImage = async () => {
+    try {
+      const picked = await open({
+        multiple: false,
+        filters: [{ name: "Images", extensions: ["png", "jpg", "jpeg", "webp"] }],
+      });
+      if (typeof picked === "string") setStartPath(picked);
+    } catch {
+      // Not running inside Tauri (e.g. the browser dev preview) — no-op.
+    }
+  };
+
+  // A `blocked` job (not enough VRAM right now) isn't actively running -- it's
+  // just waiting for room, and may sit there indefinitely if none frees up.
+  // Don't lock the form forever: let the user start a fresh (e.g. smaller)
+  // request instead of being stuck until they cancel or switch tabs.
+  const stuck = detail?.job.state === "blocked";
+
   const generate = async () => {
     const text = prompt.trim();
-    if (!text || pendingId) return;
+    if (!text || (pendingId && !stuck)) return;
     setSendError(null);
 
     const params: Record<string, unknown> = {
@@ -173,7 +192,7 @@ export function VideoStudio() {
     }
   };
 
-  const canGenerate = !!prompt.trim() && !pendingId && comfyReady;
+  const canGenerate = !!prompt.trim() && (!pendingId || stuck) && comfyReady;
 
   return (
     <div className="image">
@@ -297,14 +316,19 @@ export function VideoStudio() {
               </select>
             </label>
             <label className="imgform__field">
-              <span>…or an image file path</span>
-              <input
-                type="text"
-                value={startPath}
-                onChange={(e) => setStartPath(e.target.value)}
-                placeholder="E:\\shots\\frame_01.png"
-                spellCheck={false}
-              />
+              <span>…or an image file</span>
+              <div className="pathpick">
+                <input
+                  type="text"
+                  value={startPath}
+                  onChange={(e) => setStartPath(e.target.value)}
+                  placeholder="E:\\shots\\frame_01.png"
+                  spellCheck={false}
+                />
+                <button type="button" className="chip" onClick={browseForImage}>
+                  Browse…
+                </button>
+              </div>
             </label>
             {startImage && about && startPath.trim() === "" && (
               <img
@@ -324,7 +348,7 @@ export function VideoStudio() {
           </p>
 
           <button type="submit" className="imgform__go" disabled={!canGenerate}>
-            {pendingId ? "Rendering…" : "Generate"}
+            {pendingId && !stuck ? "Rendering…" : "Generate"}
           </button>
         </form>
         {sendError && <p className="image__err">{sendError}</p>}
@@ -427,6 +451,10 @@ function Result({
           <video src={jobOutputUrl(port, job.id)} controls preload="metadata" playsInline />
         ) : job.state === "failed" ? (
           <span className="result__err">{job.error_text ?? "generation failed"}</span>
+        ) : job.state === "blocked" ? (
+          <span className="result__err">
+            {job.error_text ?? "not enough VRAM free right now"}
+          </span>
         ) : job.state === "cancelled" ? (
           <span className="muted">cancelled</span>
         ) : (

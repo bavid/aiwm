@@ -95,9 +95,15 @@ export function ImageStudio() {
     (jobs ?? []).find((j) => j.id === selectedId) ??
     null;
 
+  // A `blocked` job (not enough VRAM right now) isn't actively running -- it's
+  // just waiting for room, and may sit there indefinitely if none frees up.
+  // Don't lock the form forever: let the user start a fresh (e.g. smaller)
+  // request instead of being stuck until they cancel or switch tabs.
+  const stuck = detail?.job.state === "blocked";
+
   const generate = async () => {
     const text = prompt.trim();
-    if (!text || pendingId) return;
+    if (!text || (pendingId && !stuck)) return;
     setSendError(null);
 
     const params: Record<string, unknown> = {
@@ -125,7 +131,7 @@ export function ImageStudio() {
     }
   };
 
-  const canGenerate = !!prompt.trim() && !pendingId && comfyReady;
+  const canGenerate = !!prompt.trim() && (!pendingId || stuck) && comfyReady;
 
   return (
     <div className="image">
@@ -248,7 +254,7 @@ export function ImageStudio() {
           </div>
 
           <button type="submit" className="imgform__go" disabled={!canGenerate}>
-            {pendingId ? "Generating…" : "Generate"}
+            {pendingId && !stuck ? "Generating…" : "Generate"}
           </button>
         </form>
         {sendError && <p className="image__err">{sendError}</p>}
@@ -328,6 +334,10 @@ function Result({
           <img src={imageOutputUrl(port, job.id)} alt={p.prompt ?? "generated image"} />
         ) : job.state === "failed" ? (
           <span className="result__err">{job.error_text ?? "generation failed"}</span>
+        ) : job.state === "blocked" ? (
+          <span className="result__err">
+            {job.error_text ?? "not enough VRAM free right now"}
+          </span>
         ) : job.state === "cancelled" ? (
           <span className="muted">cancelled</span>
         ) : (

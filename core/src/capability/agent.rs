@@ -98,6 +98,9 @@ impl CodingRuntime for LlamaCodingRuntime {
             model_id: model_id.into(),
             vram_needed_mb: vram_mb,
             is_agent_session: true,
+            // Agent sessions don't currently see live telemetry (5.5c polish);
+            // the scheduler falls back to its own budget bookkeeping.
+            live_free_vram_mb: None,
         };
         match self.scheduler.plan(&req).await {
             Decision::RunNow => {}

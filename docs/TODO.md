@@ -298,6 +298,56 @@ ADRs 022–025. 371 Lib / 57 integ / 5 pytest.
   Pflichtbestandteil eines Setups, anders als VAE/Text-Encoder) — aktuell
   behandelt `member_ids` jedes Mitglied als Pflicht.
 
+### Post-6.9b: VRAM scheduling was blind to other GPU applications, plus UI polish
+User report: "all picture and video generation fails due to block or fail" — traced to
+`HybridScheduler` planning purely against the config/GPU-total budget minus its own
+bookkeeping, with **no live check of the GPU's actual free VRAM**. On a machine where
+other applications (browser, games, desktop compositor) already hold several GB, the
+scheduler either wrongly reported `Blocked` (bad bookkeeping) or wrongly said
+`LoadThenRun` and then hit a real CUDA out-of-memory `failed` — both symptoms the user
+saw, from the same root cause. **Also clarified:** "blocked" has never been a content
+filter — grepped the whole codebase, there is no NSFW/safety-checker/censorship code
+anywhere; `Blocked` is purely `core::scheduler::Decision` (not enough VRAM right now).
+- ✅ `scheduler::PlanRequest` gained `live_free_vram_mb: Option<u64>`, populated by
+  `JobEngine` from the live NVML telemetry reading (`Sampler`, already wired to the
+  engine for `bench`). `HybridScheduler::effective_free_mb` caps the budget-derived
+  free figure by this live reading, and the eviction path now only evicts a resident
+  model when doing so would **actually** close the gap (`free + victim_vram >=
+  needed`) rather than evicting for nothing. `blocked_reason` names the live free MB
+  and points at "other running applications" when that's the actual constraint. +3
+  scheduler unit tests.
+- ✅ **UI**: a `blocked` job isn't running — it just waits for room, and can wait
+  forever if none frees up. Image/Video/Chat all showed a bare `"blocked…"` spinner
+  with no explanation, and the Generate/Send button stayed disabled until the tab was
+  switched away and back (which only *looked* like a fix — the stuck job was still
+  sitting there server-side). Fixed: the Result/turn panel now shows `error_text`
+  (the human-readable reason) for a blocked job, and the submit button only disables
+  on a genuinely *running* job — a blocked one no longer locks the form.
+- ✅ **Image/Video gallery overlap**: `.image__form { position: sticky; top: 0 }`
+  visually overlapped the Gallery card once the page scrolled past the form (grid
+  track sizing edge case, confirmed by injecting extra gallery items and scrolling in
+  the browser preview). Removed the sticky positioning.
+- ✅ **Chat has no history** — `Chat.tsx`'s `turns` was pure local component state,
+  wiped every time the tab unmounted (`App.tsx` conditionally renders `{tab ===
+  "chat" && <Chat />}`) or the app restarted. Past chat turns were already sitting in
+  the `jobs` table (`job_type: "chat"`, `result` progressively updated) exactly like
+  Image/Video's Gallery — just never read back. Added a one-time hydration effect
+  that rebuilds `turns` from `useJobs()` on mount, same data source the Image/Video
+  galleries already used.
+- ✅ **Video "start frame" needed a typed path** — added a native file-picker
+  ("Browse…") next to the path field via `@tauri-apps/plugin-dialog` (new dependency,
+  JS + `tauri-plugin-dialog` Rust crate + `dialog:default` capability — mirrors the
+  existing `tauri-plugin-opener` wiring). Chose a picker over real OS drag-and-drop:
+  Tauri's native drag-drop is window-scoped (needs hit-testing against the target
+  element and `dragDropEnabled` config), while a picker is the simpler, robust option
+  the user also explicitly named as acceptable. The manual path field stays for power
+  users / scripted paths. Image capability has no img2img input yet, so nothing to
+  wire there.
+- +3 lib tests → **399 lib + 58 integ + 5 pytest**. check.ps1 green; browser smoke
+  (dev-mock): chat turn survives a tab switch, Image gallery no longer hides behind
+  the form after scrolling, Browse… button no-ops cleanly outside Tauri, no new
+  console errors on any tab.
+
 ## Offen / später zu entscheiden
 - App-Selbst-Update offline (manueller Installer + Signaturprüfung angenommen)
 - Parallele Jobs: Policy verfeinern (klein-LLM + Upscale gleichzeitig)

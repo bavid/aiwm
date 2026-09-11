@@ -48,6 +48,20 @@
   border-radius: var(--radius-sm);
 }
 
+.pathpick {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.pathpick input {
+  flex: 1;
+  min-width: 0;
+}
+
+.pathpick .chip {
+  flex-shrink: 0;
+}
+
 .startframe legend {
   padding: 0 var(--space-2);
   font-size: var(--text-xs);

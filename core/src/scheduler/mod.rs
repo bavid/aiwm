@@ -25,6 +25,13 @@ pub struct PlanRequest {
     pub vram_needed_mb: u64,
     /// True when a long-running agent owns this model — it must not be evicted.
     pub is_agent_session: bool,
+    /// The GPU driver's actual free VRAM right now (from NVML, `None` when the
+    /// caller has no live reading) — covers VRAM other applications are using
+    /// that the scheduler's own budget bookkeeping never sees. Caps how much
+    /// room `plan` believes is available, so a machine with other GPU load
+    /// gets an honest `Blocked` instead of a `LoadThenRun` that then fails
+    /// with a real CUDA out-of-memory error.
+    pub live_free_vram_mb: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -92,12 +99,28 @@ impl HybridScheduler {
         self.budget_mb
     }
 
-    /// VRAM (MB) available for a new model right now.
+    /// VRAM (MB) available for a new model right now, from the scheduler's own
+    /// budget bookkeeping alone — does not know about other applications' GPU
+    /// usage. See [`Self::effective_free_mb`] for the live-capped figure `plan`
+    /// actually uses.
     pub fn free_mb(&self) -> u64 {
         self.budget_mb
             .saturating_sub(self.driver_overhead_mb)
             .saturating_sub(self.headroom_mb)
             .saturating_sub(self.registry.total_vram_used_mb())
+    }
+
+    /// `free_mb`, capped by a live NVML reading when the caller has one. The
+    /// budget alone can't see VRAM other processes are holding (a browser, a
+    /// game, a leftover ComfyUI process) — without this cap the scheduler would
+    /// promise room that isn't really there and the load would fail with a raw
+    /// CUDA out-of-memory error instead of an honest `Blocked`.
+    fn effective_free_mb(&self, live_free_vram_mb: Option<u64>) -> u64 {
+        let budgeted = self.free_mb();
+        match live_free_vram_mb {
+            Some(live) => budgeted.min(live.saturating_sub(self.headroom_mb)),
+            None => budgeted,
+        }
     }
 
     fn pinned(&self) -> std::sync::MutexGuard<'_, BTreeSet<String>> {
@@ -148,7 +171,7 @@ impl Scheduler for HybridScheduler {
             }
         }
 
-        let free = self.free_mb();
+        let free = self.effective_free_mb(req.live_free_vram_mb);
         if req.vram_needed_mb <= free {
             return Decision::LoadThenRun;
         }
@@ -157,7 +180,11 @@ impl Scheduler for HybridScheduler {
         let candidates = self.eviction_candidates(&req.model_id);
 
         // Prefer the smallest single non-pinned model that closes the deficit;
-        // otherwise the largest non-pinned model.
+        // otherwise the largest non-pinned model. Either way, only commit to it
+        // if evicting it would actually leave enough room -- with a live VRAM
+        // cap in play, freeing a small resident model may still not be enough
+        // (the rest of the shortfall is other applications' GPU usage, which
+        // eviction can't touch).
         let mut evictable: Vec<_> = candidates
             .iter()
             .filter(|(_, _, pinned)| !pinned)
@@ -165,12 +192,13 @@ impl Scheduler for HybridScheduler {
             .collect();
         evictable.sort_by_key(|(_, vram, _)| *vram);
 
-        if let Some((victim, _, _)) = evictable.iter().find(|(_, vram, _)| *vram >= deficit) {
-            return Decision::EvictThenLoad {
-                victim_model: victim.clone(),
-            };
-        }
-        if let Some((victim, _, _)) = evictable.last() {
+        let victim = evictable
+            .iter()
+            .find(|(_, vram, _)| *vram >= deficit)
+            .or_else(|| evictable.last())
+            .filter(|(_, vram, _)| free + vram >= req.vram_needed_mb);
+
+        if let Some((victim, _, _)) = victim {
             return Decision::EvictThenLoad {
                 victim_model: victim.clone(),
             };
@@ -195,6 +223,13 @@ fn blocked_reason(req: &PlanRequest, free_mb: u64, candidates: &[(String, u64, b
             req.vram_needed_mb,
             free_mb,
             pinned_blockers.join(", "),
+        )
+    } else if let Some(live) = req.live_free_vram_mb {
+        format!(
+            "{} MB needed, only {} MB free on the GPU right now ({} MB total reported by the driver) \
+             — other running applications are using the rest of the VRAM. Close them, or lower the \
+             resolution/model size, and try again",
+            req.vram_needed_mb, free_mb, live,
         )
     } else {
         format!(
@@ -223,12 +258,22 @@ mod tests {
     }
 
     fn req(model: &str, vram: u64, agent: bool) -> PlanRequest {
+        req_with_live(model, vram, agent, None)
+    }
+
+    fn req_with_live(
+        model: &str,
+        vram: u64,
+        agent: bool,
+        live_free_vram_mb: Option<u64>,
+    ) -> PlanRequest {
         PlanRequest {
             job_id: "j".into(),
             runtime_id: "llamacpp".into(),
             model_id: model.into(),
             vram_needed_mb: vram,
             is_agent_session: agent,
+            live_free_vram_mb,
         }
     }
 
@@ -314,5 +359,53 @@ mod tests {
         assert!(sched.is_pinned("m"));
         sched.unpin("m");
         assert!(!sched.is_pinned("m"));
+    }
+
+    #[tokio::test]
+    async fn scenario_blocked_when_live_vram_is_scarce_despite_budget_headroom() {
+        // Nothing loaded (budget says 14848 MB free), but another application is
+        // holding most of the real VRAM -- the driver reports only 4000 MB free.
+        let (reg, _) = registry_with(&[]).await;
+        let sched = scheduler(reg);
+        let decision = sched
+            .plan(&req_with_live("flux", 6_000, false, Some(4_000)))
+            .await;
+        match decision {
+            Decision::Blocked { reason } => {
+                assert!(reason.contains("4000"));
+                assert!(reason.contains("other running applications"));
+            }
+            other => panic!("expected Blocked, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn scenario_eviction_still_helps_under_a_live_vram_cap() {
+        // Live free is only 2000 MB (headroom eats 512 -> effective 1488), but the
+        // resident 10 GB model really is on the GPU -- evicting it frees that much
+        // for real, so 1488 + 10000 covers the 6000 MB job.
+        let (reg, _) = registry_with(&[("qwen-14b", 10_000)]).await;
+        let sched = scheduler(reg);
+        assert_eq!(
+            sched
+                .plan(&req_with_live("flux", 6_000, false, Some(2_000)))
+                .await,
+            Decision::EvictThenLoad {
+                victim_model: "qwen-14b".into()
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn scenario_eviction_would_not_help_under_a_live_vram_cap() {
+        // Live free is only 500 MB (effective ~0 after headroom); the resident
+        // model is small (1000 MB) so evicting it still leaves the 6000 MB job
+        // short -- must not evict for nothing.
+        let (reg, _) = registry_with(&[("small", 1_000)]).await;
+        let sched = scheduler(reg);
+        let decision = sched
+            .plan(&req_with_live("flux", 6_000, false, Some(500)))
+            .await;
+        assert!(matches!(decision, Decision::Blocked { .. }));
     }
 }

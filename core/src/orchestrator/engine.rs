@@ -27,7 +27,7 @@ use crate::db::{EventLevel, Job, JobPatch, Model, NewJob};
 use crate::registry::Registry;
 use crate::runtime::{ComfyUiAdapter, LlamaCppAdapter, RuntimeRegistry};
 use crate::scheduler::{Decision, PlanRequest, Scheduler};
-use crate::telemetry::SystemTelemetry;
+use crate::telemetry::{GpuStatus, SystemTelemetry};
 use crate::{upgrade, CoreError, Database, Result};
 
 const CANCEL_REASON: &str = "cancelled by user";
@@ -439,6 +439,17 @@ impl JobEngine {
             .map_or_else(|| model_id.to_string(), |m| m.name)
     }
 
+    /// The GPU driver's real free VRAM right now (all processes, not just ours),
+    /// from the live telemetry sampler; `None` with no NVIDIA GPU (or the frozen
+    /// pre-`with_telemetry` reading in tests) — the scheduler then falls back to
+    /// its own budget bookkeeping alone.
+    fn live_free_vram_mb(&self) -> Option<u64> {
+        match self.telemetry.borrow().gpu {
+            GpuStatus::Available(ref gpu) => Some(gpu.vram_free_mb),
+            GpuStatus::Unavailable { .. } => None,
+        }
+    }
+
     /// `(display name, fit estimate)` for a library model; `(None, None)` when the
     /// job names a model that was never imported (e.g. a synthetic test id).
     async fn vram_estimate(&self, model_id: &str) -> (Option<String>, Option<VramEstimate>) {
@@ -473,6 +484,7 @@ impl JobEngine {
             model_id: model_id.clone(),
             vram_needed_mb: vram_mb,
             is_agent_session: job.is_agent_session(),
+            live_free_vram_mb: self.live_free_vram_mb(),
         };
 
         // A job already resting in `blocked` is still in the runnable set, so the
