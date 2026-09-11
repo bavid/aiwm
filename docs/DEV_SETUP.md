@@ -2,6 +2,25 @@
 
 Einmalige Einrichtung der Toolchain. Danach ist das Projekt offline baubar.
 
+## Kurzform: `scripts/install.ps1`
+
+```powershell
+scripts/install.ps1              # Toolchain (winget) + build/sync + git hooks
+scripts/install.ps1 -SkipWinget  # nur build/sync/hooks (Toolchain schon da)
+```
+
+Idempotent — jeder Schritt überspringt, was schon installiert ist; einzelne
+fehlgeschlagene Toolchain-Installs (`-Optional`) brechen den Lauf nicht ab, nur
+die Build-Schritte (`cargo build`/`pnpm install`) sind hart. Deckt Node.js,
+Rust/rustup, uv, die MSVC-C++-Build-Tools, `rustup default stable`,
+`uv python install 3.11`, pnpm (`corepack`, mit `npm install -g pnpm`-Fallback
+falls corepack an Programm-Verzeichnis-Rechten scheitert — siehe unten), sowie
+`cargo build` / `uv sync` / `pnpm install` / die Git-Hooks in einem Lauf ab.
+**Nach einem frischen Node/Rust/uv-Install eine neue Shell öffnen und
+erneut laufen lassen** (PATH).
+
+Von Hand, Schritt für Schritt (was das Skript automatisiert):
+
 ## Voraussetzungen installieren
 
 ```powershell
@@ -76,7 +95,8 @@ für den Sidecar. Schritte, deren Toolchain fehlt, werden übersprungen.
 
 ## Git-Hooks
 
-`git config core.hooksPath scripts/githooks` (einmalig; für frische Clones nötig).
+`git config core.hooksPath scripts/githooks` (einmalig; für frische Clones nötig
+— `scripts/install.ps1` setzt es mit).
 
 - **pre-commit** — `cargo fmt --check` (instant)
 - **pre-push** — vollständiges `scripts/check.ps1`
