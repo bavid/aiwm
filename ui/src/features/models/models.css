@@ -510,6 +510,50 @@
   margin-top: var(--space-2);
 }
 
+.stacklist {
+  display: grid;
+  gap: var(--space-3);
+  margin-top: var(--space-3);
+}
+
+.stackcard {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-3);
+  background: var(--surface);
+}
+
+.stackcard__head {
+  display: grid;
+  gap: var(--space-1);
+  margin-bottom: var(--space-2);
+}
+
+.stackcard__members {
+  margin: 0;
+  padding-left: var(--space-4);
+  border-left: 2px solid var(--border);
+}
+
+.stackcard__actions {
+  margin-top: var(--space-2);
+}
+
+.stackcard__actions button {
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  background: var(--accent);
+  color: var(--accent-fg);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.stackcard__actions button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
 .badge {
   padding: 0 var(--space-2);
   border: 1px solid var(--border);

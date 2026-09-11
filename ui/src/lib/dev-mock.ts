@@ -237,6 +237,35 @@ const KNOWN_MOCK: AnyRecord[] = [
     fit: { level: "yellow", reason: "needs ~13.4 GB of your ~14.5 GB VRAM budget — little head-room for a longer context or a second resident model" },
   },
   {
+    id: "t5xxl-fp8", name: "T5-XXL — fp8 (Flux text encoder)", kind: "text_encoder",
+    family: null, publisher: "Comfy-Org", repo: "comfyanonymous/flux_text_encoders",
+    file: "t5xxl_fp8_e4m3fn.safetensors",
+    url: "https://huggingface.co/comfyanonymous/flux_text_encoders/resolve/main/t5xxl_fp8_e4m3fn.safetensors",
+    sha256: "5".repeat(64), size_bytes: 4_893_934_904,
+    license: "Apache-2.0",
+    note: "Flux prompt encoder. ComfyUI offloads it after encoding, so it is not resident during sampling.",
+    is_default: false, media: "image", fit: { level: "green" },
+  },
+  {
+    id: "clip-l", name: "CLIP-L (Flux text encoder)", kind: "text_encoder",
+    family: null, publisher: "Comfy-Org", repo: "comfyanonymous/flux_text_encoders",
+    file: "clip_l.safetensors",
+    url: "https://huggingface.co/comfyanonymous/flux_text_encoders/resolve/main/clip_l.safetensors",
+    sha256: "6".repeat(64), size_bytes: 246_144_152,
+    license: "MIT", note: "The second Flux encoder. Small.",
+    is_default: false, media: "image", fit: { level: "green" },
+  },
+  {
+    id: "flux-vae", name: "FLUX.1 VAE (ae)", kind: "vae",
+    family: "flux", publisher: "Black Forest Labs", repo: "second-state/FLUX.1-dev-GGUF",
+    file: "ae.safetensors",
+    url: "https://huggingface.co/second-state/FLUX.1-dev-GGUF/resolve/main/ae.safetensors",
+    sha256: "8".repeat(64), size_bytes: 335_304_388,
+    license: "FLUX.1 [dev] Non-Commercial License",
+    note: "The Flux autoencoder. Byte-identical across every Flux re-upload.",
+    is_default: false, media: "image", fit: { level: "green" },
+  },
+  {
     id: "wan22-ti2v-5b", name: "Wan 2.2 TI2V-5B — fp16 (video, default)", kind: "video",
     family: "wan", publisher: "Alibaba / Comfy-Org", repo: "Comfy-Org/Wan_2.2_ComfyUI_Repackaged",
     file: "wan2.2_ti2v_5B_fp16.safetensors",
@@ -245,6 +274,25 @@ const KNOWN_MOCK: AnyRecord[] = [
     license: "Apache-2.0 (commercial use allowed)",
     note: "The default video model. One model for text→video and image→video. Needs the umt5 encoder and the Wan VAE.",
     is_default: true, media: "video", fit: { level: "green" },
+  },
+  {
+    id: "wan-umt5-xxl-fp8", name: "umt5-XXL — fp8 (Wan text encoder)", kind: "text_encoder",
+    family: null, publisher: "Comfy-Org", repo: "Comfy-Org/Wan_2.2_ComfyUI_Repackaged",
+    file: "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
+    url: "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors",
+    sha256: "9".repeat(64), size_bytes: 6_735_906_897,
+    license: "Apache-2.0",
+    note: "Wan's prompt encoder (multilingual T5). Offloaded to the CPU during sampling.",
+    is_default: false, media: "video", fit: { level: "green" },
+  },
+  {
+    id: "wan22-vae", name: "Wan 2.2 VAE", kind: "vae",
+    family: "wan", publisher: "Alibaba / Comfy-Org", repo: "Comfy-Org/Wan_2.2_ComfyUI_Repackaged",
+    file: "wan2.2_vae.safetensors",
+    url: "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/vae/wan2.2_vae.safetensors",
+    sha256: "a".repeat(64), size_bytes: 1_409_400_960,
+    license: "Apache-2.0", note: "The Wan 2.2 autoencoder. Import as VAE.",
+    is_default: false, media: "video", fit: { level: "green" },
   },
   {
     id: "ltx-video-2b-095", name: "LTX-Video 2B v0.9.5 (video, second template)", kind: "video",
@@ -257,6 +305,37 @@ const KNOWN_MOCK: AnyRecord[] = [
     is_default: false, media: "video", fit: { level: "green" },
   },
 ];
+
+/** Mirrors `core::model::MODEL_STACKS` — base model first, then companions. */
+const STACK_MEMBER_IDS: Record<string, string[]> = {
+  sdxl: ["sdxl-base-1.0"],
+  flux: ["flux1-dev-q8", "t5xxl-fp8", "clip-l", "flux-vae"],
+  wan22: ["wan22-ti2v-5b", "wan-umt5-xxl-fp8", "wan22-vae"],
+  ltx: ["ltx-video-2b-095", "t5xxl-fp8"],
+};
+const STACK_META: Record<string, AnyRecord> = {
+  sdxl: {
+    label: "Stable Diffusion XL", media: "image", is_default: true,
+    note: "One file — the checkpoint carries its own VAE and text encoder.",
+  },
+  flux: {
+    label: "FLUX.1-dev", media: "image", is_default: false,
+    note: "Best prompt fidelity + in-image text. Four files: the diffusion model plus its T5 and CLIP-L text encoders and its VAE.",
+  },
+  wan22: {
+    label: "Wan 2.2 TI2V-5B", media: "video", is_default: true,
+    note: "The default video setup. Three files: the model, its umt5 text encoder, and its VAE.",
+  },
+  ltx: {
+    label: "LTX-Video 0.9.5 (2B)", media: "video", is_default: false,
+    note: "Fast and light. Two files: model + VAE bundled in one, plus a shared T5 text encoder.",
+  },
+};
+const STACKS_MOCK: AnyRecord[] = Object.entries(STACK_MEMBER_IDS).map(([id, memberIds]) => ({
+  id,
+  ...STACK_META[id],
+  members: memberIds.map((mid) => KNOWN_MOCK.find((m) => m.id === mid)),
+}));
 
 const FEATURED_MOCK: AnyRecord[] = [
   {
@@ -311,6 +390,8 @@ export function installDevMock(): void {
         return MODELS.map((m) => ({ ...m }));
       case "list_known_models":
         return KNOWN_MOCK;
+      case "list_model_stacks":
+        return STACKS_MOCK;
       case "list_featured_models":
         return FEATURED_MOCK;
       case "list_jobs":

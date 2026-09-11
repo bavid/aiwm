@@ -118,6 +118,41 @@ es über den Download-Manager (`enqueueDownload`, Rollen inklusive) statt über
 frischen Download keinen Sinn). Kein Pfad-Tippen mehr nötig, wenn man nicht
 über Discover/den Katalog gehen will.
 
+### Stacks — „das ganze Paket" in einem Klick (post-6.9b)
+
+Bild-/Video-Setups brauchen fast nie nur eine Datei — Flux etwa VAE + zwei
+Text-Encoder zusätzlich zum Diffusionsmodell. Bisher hatte „Known models" für
+Image/Video **gar keinen** Download-Knopf (nur Chat/Code aus `FEATURED_MODELS`
+bekamen einen) und zeigte Bild/Video ohnehin als Flachliste ohne
+Gruppierung. `core::model::catalog::ModelStack` behebt beides: eine kuratierte
+Liste (`MODEL_STACKS`, 4 Einträge — SDXL/Flux fürs Bild, Wan 2.2/LTX fürs
+Video), die per `member_ids` auf bestehende `KnownModel`-Einträge verweist
+(keine Datenduplikation — URL/SHA-256/Größe bleiben Single-Source-of-Truth in
+`KNOWN_MODELS`). `GET /models/stacks` / `list_model_stacks` reichert jedes
+Mitglied mit `compat::verdict` an (derselbe `enrich_known`-Helper wie
+`known_models()`) und liefert zusätzlich das schlechteste Fit-Urteil über den
+ganzen Stack (`worstFit`, UI-seitig).
+
+Im Models-Tab rendert der Image/Video-Reiter jetzt `StackCard`s statt
+`KnownRow`s: Kopfzeile mit Label, ★-Empfehlung, Dateianzahl, Gesamtgröße,
+Fit-Badge; darunter jedes Mitglied als kompakte `KnownRow` (eigener „Download &
+import"-Knopf, `.known__note` ausgeblendet) plus ein „Download entire stack
+(N files)"-Knopf, der `enqueueDownload` sequenziell für jedes Mitglied
+aufruft. **Rollen brauchen dabei keine Extra-Behandlung** — anders als beim
+GGUF-Pfad übergibt `import_model` für `.safetensors` (Bild/Video) ohnehin
+`ModelKind::default_role()` statt der Caller-Rollen, die Migration-`0009`-Lücke
+betraf nur Chat/Code.
+
+Ein Detail: LTX-Video (`ltx`-Stack, `media: "video"`) teilt sich seinen
+T5-Text-Encoder mit dem Flux-Stack (`t5xxl-fp8`, dort als `media: "image"`
+katalogisiert) — Begleit-Dateien dürfen media-übergreifend geteilt werden,
+nur die **Basis** (erstes Mitglied) muss zur deklarierten Stack-`media`
+passen.
+
+**Noch nicht Teil eines Stacks:** LoRA-Dateien — `KNOWN_MODELS` hat aktuell
+keinen einzigen LoRA-Eintrag, „Paket" deckt bisher nur Basismodell + Pflicht-
+Begleiter ab. Siehe [TODO.md](TODO.md).
+
 **Rollen nachträglich korrigieren:** `db::ModelRepo::set_roles` +
 `PUT /models/{id}/roles` — ersetzt den ganzen Rollen-Satz eines Modells (wie
 `set_tags` bei Tags: trim/dedup/sortiert, kein Whitelist-Zwang auf DB-Ebene).
@@ -152,6 +187,7 @@ automatisch aus der Datei-Art gesetzt, kein Sinn, sie hier umzuschalten).
 | Registry-Health in Diagnostics | ✅ 6.9 `RegistryStatus { source_id, last_fetch, rate_limit_remaining, rate_limited_secs, token_set, cache_entries }` (`GET /registry/status`) → „Model registry"-Karte in Diagnostics |
 | Kategorisierter Katalog (Image/Video/Chat/Code) + Hardware-Empfehlung | ✅ post-6.9 „Recommended models" im Models-Tab, 4 Reiter. `KnownModel`/`FeaturedModel` bekamen `is_default` (★ Empfehlung) + serverseitig berechnetes `fit` (`compat::verdict`/`verdict_from_total_mb`, kein Netz-Call). `core::model::FEATURED_MODELS` (neu) — kuratierte Chat-/Coding-HF-Repos (aus [AGENT_MODELS.md](AGENT_MODELS.md)), **alle** Quant-Dateien on-demand über `core::registry` aufgelöst, nicht nur die kuratierte. `GET /models/known` + `GET /models/featured` |
 | Download → Rolle (Migration `0009`) + Rollen nachträglich editieren | ✅ post-6.9 `downloads.roles` (Komma-Liste), durchgereicht `EnqueueRequest` → Worker → `import_model` — ein Download-getriggerter Import (Discover/Upgrade-Check/Katalog/Link-Import) bekommt jetzt seine Rollen, vorher immer `[]` (unsichtbar für `pick_for_role`). `db::ModelRepo::set_roles` + `PUT /models/{id}/roles` — Rollen eines Modells nachträglich ändern, Model-Library zeigt Toggle-Chips (`chat`/`coding`/`reasoning`/`embedding`) für GGUF-Modelle. „Import a model" akzeptiert jetzt auch einen Link statt eines lokalen Pfads (routet über den Download-Manager) |
+| Bild/Video-„Stacks" — Basismodell + alle Pflicht-Begleiter in einem Klick | ✅ post-6.9b `core::model::catalog::{ModelStack, MODEL_STACKS}` (4 kuratierte Stacks: SDXL, Flux, Wan 2.2, LTX), `GET /models/stacks` / `list_model_stacks`. Image/Video-Reiter im Models-Tab zeigt `StackCard`s (Fit-Badge über den ganzen Stack, „Download entire stack"-Knopf) statt einer Flachliste; jedes Mitglied bleibt einzeln herunterladbar. Keine Extra-Rollen-Arbeit nötig (`.safetensors`-Import setzt die Rolle ohnehin aus `ModelKind`). LoRA-Dateien noch nicht Teil eines Stacks (`KNOWN_MODELS` hat keine) |
 
 ## Hardware-Realität
 

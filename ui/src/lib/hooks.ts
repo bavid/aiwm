@@ -11,6 +11,7 @@ import {
   listFeaturedModels,
   listJobs,
   listKnownModels,
+  listModelStacks,
   listDownloads,
   listModels,
   modelTags,
@@ -28,6 +29,7 @@ import {
   type FeaturedModel,
   type KnownModel,
   type Model,
+  type ModelStack,
   type RegistrySearchParams,
   type RegistrySearchResult,
   type RuntimeStatus,
@@ -65,6 +67,16 @@ export function useKnownModels() {
   const [data, setData] = useState<KnownModel[] | null>(null);
   useEffect(() => {
     listKnownModels().then(setData).catch(() => setData([]));
+  }, []);
+  return data;
+}
+
+/** The curated image/video "stacks" — a base model plus every companion
+ *  file it needs — fit-checked against the VRAM budget. Fetched once. */
+export function useModelStacks() {
+  const [data, setData] = useState<ModelStack[] | null>(null);
+  useEffect(() => {
+    listModelStacks().then(setData).catch(() => setData([]));
   }, []);
   return data;
 }

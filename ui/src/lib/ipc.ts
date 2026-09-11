@@ -339,10 +339,27 @@ export interface KnownModel {
   note: string;
   /** The curated "pick this one" model for its role. */
   is_default: boolean;
-  /** Which stack this entry belongs to. */
+  /** Which media type this entry belongs to. */
   media: "image" | "video";
   fit: FitVerdict;
 }
+
+/** A base image/video model bundled with every companion file it needs to
+ *  actually run (`GET /models/stacks`) — e.g. Flux's diffusion model + T5 +
+ *  CLIP-L + VAE, one "Download entire stack" instead of hunting down each
+ *  piece separately. */
+export interface ModelStack {
+  id: string;
+  label: string;
+  media: "image" | "video";
+  note: string;
+  /** The curated "pick this one" stack for its media type. */
+  is_default: boolean;
+  /** Base model first, then companions — display order. */
+  members: KnownModel[];
+}
+
+export const listModelStacks = () => invoke<ModelStack[]>("list_model_stacks");
 
 /** One curated chat/coding recommendation (`GET /models/featured`) — a
  *  Hugging Face repo + preferred quant, not a pinned file. `fit` is judged

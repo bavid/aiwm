@@ -7,7 +7,7 @@ use std::path::PathBuf;
 
 use super::dto::{
     AboutDto, AgentPermissionDto, AgentSessionDetailDto, ConfigUpdate, EnqueueDownloadDto,
-    FeaturedModelDto, JobDetailDto, KnownModelDto, NewAgentDto, OpenAgentSessionDto,
+    FeaturedModelDto, JobDetailDto, KnownModelDto, ModelStackDto, NewAgentDto, OpenAgentSessionDto,
     RegistryDetailsDto, RegistryFileDto, RegistrySearchDto, RuntimeStatusDto, SubmitJobDto,
 };
 use crate::compat::FitVerdict;
@@ -262,31 +262,56 @@ pub fn known_models(app: &App) -> Vec<KnownModelDto> {
     let (budget_mb, free_ram_mb) = fit_inputs(app);
     crate::model::KNOWN_MODELS
         .iter()
-        .map(|m| {
-            let dims = crate::compat::ModelDims {
-                size_bytes: m.size_bytes,
-                ..Default::default()
-            };
-            let ctx = crate::compat::effective_ctx(None);
-            KnownModelDto {
-                id: m.id.to_string(),
-                name: m.name.to_string(),
-                kind: m.kind.to_string(),
-                family: m.family.map(str::to_string),
-                publisher: m.publisher.to_string(),
-                repo: m.repo.to_string(),
-                file: m.file.to_string(),
-                url: m.url.to_string(),
-                sha256: m.sha256.to_string(),
-                size_bytes: m.size_bytes,
-                license: m.license.to_string(),
-                note: m.note.to_string(),
-                is_default: m.is_default,
-                media: m.media.to_string(),
-                fit: crate::compat::verdict(&dims, ctx, budget_mb, free_ram_mb),
-            }
+        .map(|m| enrich_known(m, budget_mb, free_ram_mb))
+        .collect()
+}
+
+/// The curated "stacks" — a base image/video model plus every companion file
+/// (VAE, text encoder, …) it needs to actually run — for the Models tab's
+/// "download the whole thing" button (`GET /models/stacks`).
+pub fn model_stacks(app: &App) -> Vec<ModelStackDto> {
+    let (budget_mb, free_ram_mb) = fit_inputs(app);
+    crate::model::MODEL_STACKS
+        .iter()
+        .map(|s| ModelStackDto {
+            id: s.id.to_string(),
+            label: s.label.to_string(),
+            media: s.media.to_string(),
+            note: s.note.to_string(),
+            is_default: s.is_default,
+            members: s
+                .member_ids
+                .iter()
+                .filter_map(|id| crate::model::KNOWN_MODELS.iter().find(|m| &m.id == id))
+                .map(|m| enrich_known(m, budget_mb, free_ram_mb))
+                .collect(),
         })
         .collect()
+}
+
+fn enrich_known(m: &crate::model::KnownModel, budget_mb: u64, free_ram_mb: u64) -> KnownModelDto {
+    let dims = crate::compat::ModelDims {
+        size_bytes: m.size_bytes,
+        ..Default::default()
+    };
+    let ctx = crate::compat::effective_ctx(None);
+    KnownModelDto {
+        id: m.id.to_string(),
+        name: m.name.to_string(),
+        kind: m.kind.to_string(),
+        family: m.family.map(str::to_string),
+        publisher: m.publisher.to_string(),
+        repo: m.repo.to_string(),
+        file: m.file.to_string(),
+        url: m.url.to_string(),
+        sha256: m.sha256.to_string(),
+        size_bytes: m.size_bytes,
+        license: m.license.to_string(),
+        note: m.note.to_string(),
+        is_default: m.is_default,
+        media: m.media.to_string(),
+        fit: crate::compat::verdict(&dims, ctx, budget_mb, free_ram_mb),
+    }
 }
 
 /// The curated chat/coding recommendations (`GET /models/featured`), each

@@ -476,6 +476,35 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn model_stacks_bundles_every_companion_file_with_a_base_model() {
+        let (app, _tmp) = test_app().await;
+        let server = ApiServer::bind(app, SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
+            .await
+            .unwrap();
+
+        let list: serde_json::Value = reqwest::get(format!("http://{}/models/stacks", server.addr))
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let arr = list.as_array().unwrap();
+        assert!(arr.len() >= 4);
+
+        let flux = arr.iter().find(|s| s["id"] == "flux").unwrap();
+        let members = flux["members"].as_array().unwrap();
+        assert_eq!(members.len(), 4, "flux stack: model + T5 + CLIP-L + VAE");
+        assert!(members.iter().any(|m| m["id"] == "flux1-dev-q8"));
+        assert!(members.iter().any(|m| m["id"] == "flux-vae"));
+        // Every member carries the same enrichment as GET /models/known.
+        assert!(members.iter().all(|m| m["fit"]["level"].is_string()));
+
+        let sdxl = arr.iter().find(|s| s["id"] == "sdxl").unwrap();
+        assert_eq!(sdxl["is_default"], true);
+        assert_eq!(sdxl["members"].as_array().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
     async fn featured_models_lists_curated_chat_and_coding_picks_with_fit() {
         let (app, _tmp) = test_app().await;
         let server = ApiServer::bind(app, SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))

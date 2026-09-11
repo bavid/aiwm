@@ -285,6 +285,19 @@ ADRs 022–025. 371 Lib / 57 integ / 5 pytest.
   gefundene Quant (nicht nur die kuratierte); „Import a model" akzeptiert einen
   Link als Alternative zum lokalen Pfad. Details: [MODELS.md](MODELS.md).
 
+### Post-6.9b: Bild/Video-„Stacks" (Basismodell + Pflicht-Begleiter)
+- ✅ `core::model::catalog::{ModelStack, MODEL_STACKS}` — 4 kuratierte Stacks
+  (SDXL, Flux, Wan 2.2, LTX), referenzieren bestehende `KnownModel`-Einträge
+  per `member_ids` (keine Datenduplikation). `GET /models/stacks` /
+  `list_model_stacks`, Image/Video-Reiter zeigt `StackCard`s mit „Download
+  entire stack"-Knopf. Details: [MODELS.md](MODELS.md) „Stacks".
+- **Offen:** LoRA-Dateien sind noch nicht Teil eines Stacks oder überhaupt des
+  Katalogs — `KNOWN_MODELS` hat aktuell keinen einzigen LoRA-Eintrag. Sobald
+  kuratierte LoRAs (z. B. ein Flux-Style-LoRA) ins Sortiment kommen, bräuchte
+  `ModelStack` optionale/nicht-Pflicht-Mitglieder (LoRAs sind nie
+  Pflichtbestandteil eines Setups, anders als VAE/Text-Encoder) — aktuell
+  behandelt `member_ids` jedes Mitglied als Pflicht.
+
 ## Offen / später zu entscheiden
 - App-Selbst-Update offline (manueller Installer + Signaturprüfung angenommen)
 - Parallele Jobs: Policy verfeinern (klein-LLM + Upscale gleichzeitig)

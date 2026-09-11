@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 
 use aiwm_core::api::dto::{
     AboutDto, AgentPermissionDto, AgentSessionDetailDto, ConfigUpdate, EnqueueDownloadDto,
-    FeaturedModelDto, JobDetailDto, KnownModelDto, NewAgentDto, OpenAgentSessionDto,
+    FeaturedModelDto, JobDetailDto, KnownModelDto, ModelStackDto, NewAgentDto, OpenAgentSessionDto,
     RegistryDetailsDto, RegistrySearchDto, RuntimeStatusDto, SubmitJobDto,
 };
 use aiwm_core::api::handlers;
@@ -186,6 +186,11 @@ async fn list_models(app: tauri::State<'_, Arc<App>>) -> Result<Vec<Model>, Stri
 #[tauri::command]
 fn list_known_models(app: tauri::State<'_, Arc<App>>) -> Vec<KnownModelDto> {
     handlers::known_models(&app)
+}
+
+#[tauri::command]
+fn list_model_stacks(app: tauri::State<'_, Arc<App>>) -> Vec<ModelStackDto> {
+    handlers::model_stacks(&app)
 }
 
 #[tauri::command]
@@ -385,6 +390,7 @@ fn try_run() -> anyhow::Result<()> {
             get_recent_logs,
             list_models,
             list_known_models,
+            list_model_stacks,
             list_featured_models,
             import_model,
             list_benchmarks,

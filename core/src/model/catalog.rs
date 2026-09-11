@@ -231,6 +231,65 @@ pub fn find_by_sha256(sha256: &str) -> Option<&'static KnownModel> {
         .find(|m| m.sha256.eq_ignore_ascii_case(sha256))
 }
 
+/// A base image/video model bundled with every companion file it needs to
+/// actually run — a checkpoint is complete on its own, but Flux/Wan/LTX need
+/// a VAE and one or two text encoders too. References [`KnownModel::id`]s
+/// rather than duplicating their data, so there is exactly one place that
+/// knows a file's URL/SHA-256/size.
+#[derive(Debug, Clone, Copy)]
+pub struct ModelStack {
+    pub id: &'static str,
+    pub label: &'static str,
+    /// `"image"` or `"video"`.
+    pub media: &'static str,
+    /// [`KnownModel::id`]s that make up one working setup — base model first,
+    /// then companions (display order).
+    pub member_ids: &'static [&'static str],
+    /// One line for the UI — what it is, how many files, why that many.
+    pub note: &'static str,
+    /// The curated "pick this one" stack for its media type (one per media).
+    pub is_default: bool,
+}
+
+/// The stacks. Order is display order (default first per media type).
+pub const MODEL_STACKS: &[ModelStack] = &[
+    ModelStack {
+        id: "sdxl",
+        label: "Stable Diffusion XL",
+        media: "image",
+        member_ids: &["sdxl-base-1.0"],
+        note: "One file — the checkpoint carries its own VAE and text encoder.",
+        is_default: true,
+    },
+    ModelStack {
+        id: "flux",
+        label: "FLUX.1-dev",
+        media: "image",
+        member_ids: &["flux1-dev-q8", "t5xxl-fp8", "clip-l", "flux-vae"],
+        note: "Best prompt fidelity + in-image text. Four files: the diffusion \
+               model plus its T5 and CLIP-L text encoders and its VAE.",
+        is_default: false,
+    },
+    ModelStack {
+        id: "wan22",
+        label: "Wan 2.2 TI2V-5B",
+        media: "video",
+        member_ids: &["wan22-ti2v-5b", "wan-umt5-xxl-fp8", "wan22-vae"],
+        note: "The default video setup. Three files: the model, its umt5 text \
+               encoder, and its VAE.",
+        is_default: true,
+    },
+    ModelStack {
+        id: "ltx",
+        label: "LTX-Video 0.9.5 (2B)",
+        media: "video",
+        member_ids: &["ltx-video-2b-095", "t5xxl-fp8"],
+        note: "Fast and light. Two files: model + VAE bundled in one, plus a \
+               shared T5 text encoder.",
+        is_default: false,
+    },
+];
+
 /// A curated LLM recommendation — chat or coding. Unlike [`KnownModel`] this
 /// only pins a Hugging Face **repo** and a preferred quant, not a single
 /// file's hash: GGUF quant repos get re-uploaded/re-quantized over time, and
@@ -384,6 +443,55 @@ mod tests {
             .iter()
             .filter(|m| matches!(m.kind, "vae" | "text_encoder"))
             .all(|m| !m.is_default));
+    }
+
+    #[test]
+    fn every_stack_member_id_resolves_to_a_real_known_model() {
+        for s in MODEL_STACKS {
+            assert!(!s.member_ids.is_empty(), "{}: empty stack", s.id);
+            for id in s.member_ids {
+                assert!(
+                    KNOWN_MODELS.iter().any(|m| &m.id == id),
+                    "{}: member {id:?} is not in KNOWN_MODELS",
+                    s.id
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn stack_ids_are_unique_and_the_base_model_matches_its_media() {
+        let mut ids: Vec<_> = MODEL_STACKS.iter().map(|s| s.id).collect();
+        ids.sort_unstable();
+        ids.dedup();
+        assert_eq!(ids.len(), MODEL_STACKS.len());
+
+        // Only the *base* model (first member) has to match the stack's
+        // declared media -- a companion can be shared across media (LTX's
+        // video stack borrows Flux's image-tagged T5 text encoder).
+        for s in MODEL_STACKS {
+            let base_id = s.member_ids[0];
+            let base = KNOWN_MODELS.iter().find(|m| m.id == base_id).unwrap();
+            assert_eq!(
+                base.media, s.media,
+                "{}: base model {base_id:?} is {} media, stack is {}",
+                s.id, base.media, s.media
+            );
+        }
+    }
+
+    #[test]
+    fn exactly_one_default_stack_per_media() {
+        for media in ["image", "video"] {
+            let count = MODEL_STACKS
+                .iter()
+                .filter(|s| s.media == media && s.is_default)
+                .count();
+            assert_eq!(
+                count, 1,
+                "media {media} should have exactly one default stack"
+            );
+        }
     }
 
     #[test]

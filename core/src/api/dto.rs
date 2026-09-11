@@ -251,6 +251,22 @@ pub struct KnownModelDto {
     pub fit: crate::compat::FitVerdict,
 }
 
+/// `GET /models/stacks` — a base image/video model bundled with every
+/// companion file it needs (VAE, text encoder, …), so "download the whole
+/// thing" is one button instead of hunting down each piece separately.
+#[derive(Debug, Clone, Serialize)]
+pub struct ModelStackDto {
+    pub id: String,
+    pub label: String,
+    /// `"image"` or `"video"`.
+    pub media: String,
+    pub note: String,
+    /// The curated "pick this one" stack for its media type.
+    pub is_default: bool,
+    /// Base model first, then companions — display order.
+    pub members: Vec<KnownModelDto>,
+}
+
 /// `GET /models/featured` — the curated chat/coding recommendations
 /// ([`crate::model::FeaturedModel`]), enriched with a fit verdict computed
 /// from `typical_vram_mb` (a documented estimate, not a live file lookup —

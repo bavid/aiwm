@@ -4,8 +4,8 @@ import {
   useBenchmarks,
   useFeaturedModels,
   useJobs,
-  useKnownModels,
   useModels,
+  useModelStacks,
   useModelTags,
 } from "../../lib/hooks";
 import {
@@ -22,6 +22,7 @@ import {
   type Job,
   type KnownModel,
   type Model,
+  type ModelStack,
   type ModelType,
   type RegistryDetails,
 } from "../../lib/ipc";
@@ -587,15 +588,15 @@ const CATALOG_TABS: { value: CatalogTab; label: string; blurb: string }[] = [
  *  fit-checked against the current VRAM budget and with one pick per group
  *  flagged "★ recommended for your hardware". */
 function Catalog({ onUseType }: { onUseType: (t: ModelType) => void }) {
-  const known = useKnownModels();
+  const stacks = useModelStacks();
   const featured = useFeaturedModels();
   const about = useAbout();
   const [tab, setTab] = useState<CatalogTab>("image");
 
   const active = CATALOG_TABS.find((t) => t.value === tab)!;
-  const knownRows = known?.filter((m) => m.media === tab);
+  const stackRows = stacks?.filter((s) => s.media === tab);
   const featuredRows = featured?.filter((m) => m.role === tab);
-  const loading = tab === "image" || tab === "video" ? !known : !featured;
+  const loading = tab === "image" || tab === "video" ? !stacks : !featured;
 
   return (
     <section className="card card--wide">
@@ -625,15 +626,15 @@ function Catalog({ onUseType }: { onUseType: (t: ModelType) => void }) {
       <p className="muted">{active.blurb}</p>
 
       {loading && <p className="muted">Loading…</p>}
-      {!loading && (tab === "image" || tab === "video") && (knownRows?.length ?? 0) === 0 && (
+      {!loading && (tab === "image" || tab === "video") && (stackRows?.length ?? 0) === 0 && (
         <p className="muted">Nothing curated here yet.</p>
       )}
-      {(tab === "image" || tab === "video") && knownRows && knownRows.length > 0 && (
-        <ul className="known">
-          {knownRows.map((m) => (
-            <KnownRow key={m.id} model={m} onUseType={onUseType} />
+      {(tab === "image" || tab === "video") && stackRows && stackRows.length > 0 && (
+        <div className="stacklist">
+          {stackRows.map((s) => (
+            <StackCard key={s.id} stack={s} onUseType={onUseType} />
           ))}
-        </ul>
+        </div>
       )}
       {!loading && (tab === "chat" || tab === "coding") && (featuredRows?.length ?? 0) === 0 && (
         <p className="muted">Nothing curated here yet.</p>
@@ -649,8 +650,22 @@ function Catalog({ onUseType }: { onUseType: (t: ModelType) => void }) {
   );
 }
 
-function KnownRow({ model, onUseType }: { model: KnownModel; onUseType: (t: ModelType) => void }) {
+/** One catalogue file. The URL/SHA-256/size are already pinned (unlike a
+ *  Featured pick), so "Download & import" needs no registry lookup — it
+ *  queues straight away. `compact` drops the note/file-details line, for use
+ *  inside a `StackCard`'s already-labelled member list. */
+function KnownRow({
+  model,
+  onUseType,
+  compact,
+}: {
+  model: KnownModel;
+  onUseType: (t: ModelType) => void;
+  compact?: boolean;
+}) {
   const [copied, setCopied] = useState(false);
+  const [dl, setDl] = useState<"idle" | "queued" | "error">("idle");
+
   const copyLink = async () => {
     try {
       await navigator.clipboard.writeText(model.url);
@@ -658,6 +673,22 @@ function KnownRow({ model, onUseType }: { model: KnownModel; onUseType: (t: Mode
       setTimeout(() => setCopied(false), 1500);
     } catch {
       /* clipboard blocked — the link is still visible below */
+    }
+  };
+
+  const download = async () => {
+    setDl("idle");
+    try {
+      await enqueueDownload({
+        url: model.url,
+        filename: model.file,
+        model_type: model.kind,
+        sha256: model.sha256,
+        size_bytes: model.size_bytes,
+      });
+      setDl("queued");
+    } catch {
+      setDl("error");
     }
   };
 
@@ -673,12 +704,15 @@ function KnownRow({ model, onUseType }: { model: KnownModel; onUseType: (t: Mode
           {model.family && <span className="badge">{model.family}</span>}
           <FitBadge fit={model.fit} />
         </span>
-        <span className="known__note">{model.note}</span>
+        {!compact && <span className="known__note">{model.note}</span>}
         <span className="known__file numeric">
           {model.file} · {gbBytes(model.size_bytes)} · {model.license}
         </span>
       </div>
       <div className="known__actions">
+        <button type="button" onClick={download} disabled={dl === "queued"}>
+          {dl === "queued" ? "Queued ✓" : dl === "error" ? "Failed — retry" : "Download & import"}
+        </button>
         <button type="button" onClick={() => onUseType(model.kind)}>
           Set import type
         </button>
@@ -687,6 +721,89 @@ function KnownRow({ model, onUseType }: { model: KnownModel; onUseType: (t: Mode
         </button>
       </div>
     </li>
+  );
+}
+
+/** The worst fit among a stack's members — a companion that won't fit blocks
+ *  the setup just as much as the base model not fitting. */
+function worstFit(members: KnownModel[]): FitVerdict {
+  const red = members.find((m) => m.fit.level === "red");
+  if (red) return red.fit;
+  const yellow = members.find((m) => m.fit.level === "yellow");
+  if (yellow) return yellow.fit;
+  const green = members.find((m) => m.fit.level === "green");
+  if (green) return green.fit;
+  return members[0].fit;
+}
+
+/** A base image/video model plus every companion file it needs (VAE, text
+ *  encoder, …) — "Download entire stack" queues all of them in one go, so
+ *  you don't have to know Flux needs four separate files or hunt them down
+ *  one at a time. Every file is still individually downloadable below, for
+ *  topping up just the one piece you're missing. */
+function StackCard({ stack, onUseType }: { stack: ModelStack; onUseType: (t: ModelType) => void }) {
+  const [busy, setBusy] = useState(false);
+  const [status, setStatus] = useState<"idle" | "queued" | "error">("idle");
+
+  const totalBytes = stack.members.reduce((sum, m) => sum + m.size_bytes, 0);
+  const fit = worstFit(stack.members);
+
+  const downloadAll = async () => {
+    setBusy(true);
+    setStatus("idle");
+    try {
+      for (const m of stack.members) {
+        await enqueueDownload({
+          url: m.url,
+          filename: m.file,
+          model_type: m.kind,
+          sha256: m.sha256,
+          size_bytes: m.size_bytes,
+        });
+      }
+      setStatus("queued");
+    } catch {
+      setStatus("error");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <section className="stackcard">
+      <header className="stackcard__head">
+        <div className="known__name">
+          {stack.label}
+          {stack.is_default && <span className="badge badge--pick">★ recommended</span>}
+        </div>
+        <span className="known__badges">
+          <span className="badge">
+            {stack.members.length} file{stack.members.length > 1 ? "s" : ""}
+          </span>
+          <span className="badge numeric">{gbBytes(totalBytes)} total</span>
+          <FitBadge fit={fit} />
+        </span>
+        <span className="known__note">{stack.note}</span>
+      </header>
+
+      <ul className="known stackcard__members">
+        {stack.members.map((m) => (
+          <KnownRow key={m.id} model={m} onUseType={onUseType} compact />
+        ))}
+      </ul>
+
+      <div className="stackcard__actions">
+        <button type="button" onClick={downloadAll} disabled={busy || status === "queued"}>
+          {status === "queued"
+            ? `Queued all ${stack.members.length} ✓`
+            : status === "error"
+              ? "Some failed to queue — check below"
+              : busy
+                ? "Queuing…"
+                : `Download entire stack (${stack.members.length} file${stack.members.length > 1 ? "s" : ""})`}
+        </button>
+      </div>
+    </section>
   );
 }
 
