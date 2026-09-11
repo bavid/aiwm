@@ -49,11 +49,19 @@ pnpm -C ui install                # UI-Abhängigkeiten
 ## Ausführen
 
 ```powershell
+scripts/start.ps1              # Desktop-App, Dev-Modus (Kurzform)
+scripts/start.ps1 -Install     # einmalig: Deps installieren, dann starten
+scripts/start.ps1 -Headless    # nur Core + Loopback-API, kein UI-Fenster
+```
+
+Ohne das Skript, per Hand:
+
+```powershell
 cargo run -p aiwm-core --bin aiwm-cored   # headless core + Loopback-API, Ctrl-C beendet
 pnpm -C ui exec tauri dev                 # Desktop-App (aus E:\AI ausführen)
 ```
 
-Die Loopback-API läuft bei beiden auf `http://127.0.0.1:48160`
+Die Loopback-API läuft bei allen Varianten auf `http://127.0.0.1:48160`
 (`GET /about /telemetry /jobs /runtimes /logs`, `GET /ws` Telemetrie-Stream).
 
 ## Quality Gate
