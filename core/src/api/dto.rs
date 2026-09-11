@@ -289,12 +289,24 @@ pub struct EnqueueDownloadDto {
     pub sha256: Option<String>,
     #[serde(default)]
     pub size_bytes: Option<u64>,
+    /// Roles to stamp on the model once imported (e.g. `["chat", "coding"]`
+    /// for an agent pick). Older clients that omit it get a plain download.
+    #[serde(default)]
+    pub roles: Vec<String>,
 }
 
 /// Body for `PUT /models/{id}/tags` — replace a model's tag set (Phase 6.9).
 #[derive(Debug, Clone, Deserialize)]
 pub struct SetTagsDto {
     pub tags: Vec<String>,
+}
+
+/// Body for `PUT /models/{id}/roles` — replace a model's role set. Lets a
+/// model fixed up after the fact (e.g. a chat GGUF downloaded before its
+/// `coding` role was set) get the role without re-importing.
+#[derive(Debug, Clone, Deserialize)]
+pub struct SetRolesDto {
+    pub roles: Vec<String>,
 }
 
 /// Body for `PUT /registry/token` — set (or clear, when blank) the Hugging Face

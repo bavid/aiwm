@@ -202,6 +202,7 @@ async fn downloads_verifies_and_imports_a_model() {
             model_type: Some("chat".into()),
             sha256: Some(sha256_hex(&body).to_uppercase()),
             size_bytes: Some(body.len() as u64),
+            roles: vec![],
         })
         .await
         .unwrap();
@@ -218,6 +219,33 @@ async fn downloads_verifies_and_imports_a_model() {
 }
 
 #[tokio::test]
+async fn a_download_with_roles_stamps_them_on_the_imported_model() {
+    let tmp = tempfile::tempdir().unwrap();
+    let body = gguf_body();
+    let server = start_server(body.clone()).await;
+    let (m, db) = manager(tmp.path()).await;
+
+    let d = m
+        .enqueue(EnqueueRequest {
+            url: format!("{}/model.gguf", server.base),
+            filename: "coder.Q5_K_M.gguf".into(),
+            model_type: Some("chat".into()),
+            sha256: Some(sha256_hex(&body)),
+            size_bytes: Some(body.len() as u64),
+            roles: vec!["chat".into(), "coding".into()],
+        })
+        .await
+        .unwrap();
+
+    let done = wait_for(&m, &d.id, DownloadState::Done).await;
+    assert_eq!(done.state, DownloadState::Done, "{:?}", done.error_text);
+    let model_id = done.model_id.expect("model_id set after import");
+
+    let model = db.models().get(&model_id).await.unwrap().unwrap();
+    assert_eq!(model.roles, vec!["chat".to_string(), "coding".to_string()]);
+}
+
+#[tokio::test]
 async fn a_partial_file_resumes_with_a_range_request() {
     let tmp = tempfile::tempdir().unwrap();
     let body = gguf_body();
@@ -231,6 +259,7 @@ async fn a_partial_file_resumes_with_a_range_request() {
             model_type: Some("chat".into()),
             sha256: Some(sha256_hex(&body)),
             size_bytes: Some(body.len() as u64),
+            roles: vec![],
         })
         .await
         .unwrap();
@@ -264,6 +293,7 @@ async fn pause_stops_a_running_transfer_and_keeps_the_partial() {
             model_type: Some("chat".into()),
             sha256: Some(sha256_hex(&body)),
             size_bytes: Some(body.len() as u64),
+            roles: vec![],
         })
         .await
         .unwrap();
@@ -305,6 +335,7 @@ async fn a_sha_mismatch_fails_the_download_and_removes_the_file() {
             model_type: Some("chat".into()),
             sha256: Some(sha256_hex(&body)), // the *uncorrupted* hash
             size_bytes: Some(body.len() as u64),
+            roles: vec![],
         })
         .await
         .unwrap();
@@ -401,6 +432,7 @@ async fn enqueue_is_refused_in_offline_mode() {
             model_type: None,
             sha256: None,
             size_bytes: None,
+            roles: vec![],
         })
         .await
         .unwrap_err();

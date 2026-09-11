@@ -12,8 +12,8 @@ use axum::{Json, Router};
 use serde::Deserialize;
 
 use super::dto::{
-    AgentMessageDto, AgentPermissionDto, NewAgentDto, OpenAgentSessionDto, SetTagsDto, SetTokenDto,
-    SubmitJobDto,
+    AgentMessageDto, AgentPermissionDto, NewAgentDto, OpenAgentSessionDto, SetRolesDto, SetTagsDto,
+    SetTokenDto, SubmitJobDto,
 };
 use super::handlers;
 use crate::db::JobFilter;
@@ -39,6 +39,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/models/{id}", axum::routing::delete(delete_model))
         .route("/models/tags", get(model_tags))
         .route("/models/{id}/tags", put(set_model_tags))
+        .route("/models/{id}/roles", put(set_model_roles))
         .route("/registry/status", get(registry_status))
         .route("/registry/token", put(set_hf_token))
         .route("/storage", get(storage_report))
@@ -254,6 +255,16 @@ async fn set_model_tags(
     Json(body): Json<SetTagsDto>,
 ) -> Result<Json<Vec<String>>, ApiError> {
     Ok(Json(handlers::set_model_tags(&app, &id, &body.tags).await?))
+}
+
+async fn set_model_roles(
+    State(app): AppState,
+    Path(id): Path<String>,
+    Json(body): Json<SetRolesDto>,
+) -> Result<Json<Vec<String>>, ApiError> {
+    Ok(Json(
+        handlers::set_model_roles(&app, &id, &body.roles).await?,
+    ))
 }
 
 async fn registry_status(State(app): AppState) -> Json<crate::registry::RegistryStatus> {

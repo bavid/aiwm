@@ -72,17 +72,36 @@ pub struct Download {
     pub model_id: Option<String>,
     pub created_at: String,
     pub updated_at: String,
+    /// Roles to stamp on the model once imported (e.g. `["chat", "coding"]`
+    /// for an agent pick) — empty for a plain download.
+    pub roles: Vec<String>,
 }
 
 /// Fields a caller supplies to queue a download. `dest_path` is filled in from
 /// the generated id.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct NewDownload {
     pub url: String,
     pub filename: String,
     pub model_type: Option<String>,
     pub sha256: Option<String>,
     pub size_bytes: Option<u64>,
+    pub roles: Vec<String>,
+}
+
+/// `["chat", "coding"]` <-> `"chat,coding"` — plenty for a handful of short,
+/// comma-free role names; no need for a join table like `model_roles`.
+fn join_roles(roles: &[String]) -> String {
+    roles.join(",")
+}
+
+fn split_roles(joined: &str) -> Vec<String> {
+    joined
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .collect()
 }
 
 #[derive(Debug)]
@@ -106,6 +125,7 @@ struct Row {
     model_id: Option<String>,
     created_at: String,
     updated_at: String,
+    roles: String,
 }
 
 impl Row {
@@ -125,12 +145,13 @@ impl Row {
             model_id: self.model_id,
             created_at: self.created_at,
             updated_at: self.updated_at,
+            roles: split_roles(&self.roles),
         })
     }
 }
 
 const COLS: &str = "id, url, filename, dest_path, model_type, sha256, size_bytes, bytes_done, \
-     retries, state, error_text, model_id, created_at, updated_at";
+     retries, state, error_text, model_id, created_at, updated_at, roles";
 
 impl<'a> DownloadRepo<'a> {
     pub(super) fn new(pool: &'a SqlitePool) -> Self {
@@ -157,8 +178,8 @@ impl<'a> DownloadRepo<'a> {
 
         sqlx::query(
             "INSERT INTO downloads (id, url, filename, dest_path, model_type, sha256, size_bytes,
-                 state, created_at, updated_at)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,'queued',$8,$8)",
+                 state, created_at, updated_at, roles)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,'queued',$8,$8,$9)",
         )
         .bind(&id)
         .bind(new.url.trim())
@@ -168,6 +189,7 @@ impl<'a> DownloadRepo<'a> {
         .bind(new.sha256.map(|s| s.to_lowercase()))
         .bind(new.size_bytes.and_then(|n| i64::try_from(n).ok()))
         .bind(&now)
+        .bind(join_roles(&new.roles))
         .execute(self.pool)
         .await?;
 
@@ -308,6 +330,7 @@ mod tests {
             model_type: Some("chat".into()),
             sha256: Some("ABCDEF".into()),
             size_bytes: Some(1024),
+            roles: vec![],
         }
     }
 
@@ -406,5 +429,31 @@ mod tests {
         assert_eq!(got.size_bytes, Some(2048));
         assert_eq!(got.retries, 1);
         assert_eq!(got.model_id.as_deref(), Some("m-123"));
+    }
+
+    #[tokio::test]
+    async fn roles_round_trip_and_default_to_empty() {
+        let db = Database::connect_in_memory().await.unwrap();
+        let staging = std::path::Path::new("/tmp/dl");
+
+        let plain = db.downloads().create(new_dl(), staging).await.unwrap();
+        assert_eq!(plain.roles, Vec::<String>::new());
+
+        let coding = db
+            .downloads()
+            .create(
+                NewDownload {
+                    roles: vec!["chat".into(), "coding".into()],
+                    ..new_dl()
+                },
+                staging,
+            )
+            .await
+            .unwrap();
+        assert_eq!(coding.roles, vec!["chat".to_string(), "coding".to_string()]);
+
+        // Survives a re-read from disk, not just the insert's own echo.
+        let reread = db.downloads().get(&coding.id).await.unwrap().unwrap();
+        assert_eq!(reread.roles, vec!["chat".to_string(), "coding".to_string()]);
     }
 }

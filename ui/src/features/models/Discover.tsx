@@ -230,14 +230,26 @@ function ResultCard({ model, onUseType }: { model: RemoteModel; onUseType: (t: M
   );
 }
 
-function FileRow({
+/** One resolved file row: fit dot, quant, size, "Download & import", "Copy
+ *  link". Shared by Discover's own results and the Models tab's Featured
+ *  catalog (`Models.tsx`), which passes `roles` so a coding pick actually
+ *  gets the `coding` role on import, and `recommended` to flag the curated
+ *  quant among every option Hugging Face offers. */
+export function FileRow({
   file,
   gated,
   modelType,
+  roles,
+  recommended,
 }: {
   file: RegistryFile;
   gated: boolean;
   modelType: ModelType;
+  /** Roles to stamp on import (e.g. `["chat", "coding"]`); omit for a plain
+   *  download. */
+  roles?: string[];
+  /** Marks this as the curated "pick this one" quant among several shown. */
+  recommended?: boolean;
 }) {
   const [copied, setCopied] = useState(false);
   const [dl, setDl] = useState<"idle" | "queued" | "error">("idle");
@@ -261,6 +273,7 @@ function FileRow({
         model_type: modelType,
         sha256: file.sha256 ?? undefined,
         size_bytes: file.size_bytes,
+        roles,
       });
       setDl("queued");
     } catch {
@@ -282,6 +295,7 @@ function FileRow({
       <span className="discover__quant">
         {file.quant ?? file.path}
         {file.shard && ` · part ${file.shard[0]}/${file.shard[1]}`}
+        {recommended && <span className="badge badge--pick">★</span>}
       </span>
       <span className="numeric muted">{gb(file.size_bytes)}</span>
       {warn && "reason" in file.fit && (

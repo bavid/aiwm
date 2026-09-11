@@ -195,6 +195,17 @@ pub async fn set_model_tags(app: &App, id: &str, tags: &[String]) -> Result<Vec<
     app.db.models().set_tags(id, tags).await
 }
 
+/// Replace one model's roles (e.g. add `coding` after the fact); returns the
+/// cleaned set.
+pub async fn set_model_roles(app: &App, id: &str, roles: &[String]) -> Result<Vec<String>> {
+    if app.db.models().get(id).await?.is_none() {
+        return Err(CoreError::Config(format!(
+            "model {id} is not in the library"
+        )));
+    }
+    app.db.models().set_roles(id, roles).await
+}
+
 /// The registry health line (last fetch, cache size, rate-limit, token).
 pub fn registry_status(app: &App) -> crate::registry::RegistryStatus {
     app.registry.status()
@@ -636,6 +647,7 @@ pub async fn enqueue_download(app: &App, dto: EnqueueDownloadDto) -> Result<Down
             model_type: dto.model_type.filter(|s| !s.trim().is_empty()),
             sha256: dto.sha256.filter(|s| !s.trim().is_empty()),
             size_bytes: dto.size_bytes,
+            roles: dto.roles,
         })
         .await
 }

@@ -92,20 +92,40 @@ lokale Rechnung) und ein `is_default`-Flag, das die kuratierte Empfehlung als
 
 `FEATURED_MODELS` pinnt anders als `KNOWN_MODELS` **kein** SHA-256 — nur ein
 HF-**Repo** + die bevorzugte Quant (`quant_hint`), weil GGUF-Quant-Repos
-öfter neu hochgeladen werden. „Check exact fit" löst die echte Datei erst
-**on demand** über `core::registry` auf (derselbe Weg wie Discovery) — kein
-automatischer Netz-Call beim Öffnen des Tabs.
+öfter neu hochgeladen werden. „Show download options" löst **alle** Gewichts-
+Dateien des Repos erst **on demand** über `core::registry` auf (derselbe Weg
+wie Discovery) — kein automatischer Netz-Call beim Öffnen des Tabs, und man ist
+nicht auf die eine kuratierte Quant festgelegt: jede gefundene Quant (Q4/Q5/Q6/
+Q8/…) bekommt ihre eigene Fit-Ampel + einen eigenen „Download & import"-Knopf,
+die kuratierte trägt zusätzlich ein „★".
 
-**Bewusste Lücke:** ein Download-getriggerter Import (egal ob aus Discover,
-Upgrade-Check oder diesem neuen Katalog) übergibt `import_model` bislang immer
-`roles: []` — die `downloads`-Tabelle hat keine `roles`-Spalte. Für eine
-**Code**-Empfehlung wäre das fatal (die `coding`-Rolle ist der einzige Grund,
-sie überhaupt vorzuschlagen), deshalb bekommen Coding-Einträge **keinen**
-Ein-Klick-„Download & import"-Knopf, nur „Copy repo link" + den expliziten
-Hinweis, welche Rollen beim manuellen Import anzuhaken sind. Chat-Einträge
-(ohne `coding`-Anspruch) behalten den bestehenden Ein-Klick-Download — gleiches
-Verhalten wie Discover/Upgrade-Check heute, keine Regression. Die eigentliche
-Lücke (Migration für `downloads.roles`) ist als Folge-Task vorgemerkt.
+### Download → Rolle: die Lücke ist behoben (Migration `0009`)
+
+Ein Download-getriggerter Import (Discover, Upgrade-Check, dieser Katalog,
+oder ein per Link ins „Import a model"-Feld gegebener Download) übergab
+`import_model` früher immer `roles: []` — die `downloads`-Tabelle hatte keine
+`roles`-Spalte, ein so geladenes Modell war für `pick_for_role` unsichtbar.
+**Migration `0009_download_roles`** fügt `downloads.roles` (Komma-Liste) hinzu;
+`EnqueueRequest`/`EnqueueDownloadDto` tragen jetzt `roles`, durchgereicht bis
+zum finalen `import_model`-Aufruf im Worker. Damit bekommen **Code**-Empfehlungen
+jetzt denselben Ein-Klick-„Download & import"-Knopf wie Chat — mit
+`import_roles` (`["chat","coding"]`) im Gepäck.
+
+**Import a model** (die Karte oben im Tab) akzeptiert jetzt **auch einen Link**
+statt eines lokalen Pfads — sieht das Feld wie eine `http(s)://`-URL aus, geht
+es über den Download-Manager (`enqueueDownload`, Rollen inklusive) statt über
+`import_model`; „keep the original file" verschwindet dann (ergibt für einen
+frischen Download keinen Sinn). Kein Pfad-Tippen mehr nötig, wenn man nicht
+über Discover/den Katalog gehen will.
+
+**Rollen nachträglich korrigieren:** `db::ModelRepo::set_roles` +
+`PUT /models/{id}/roles` — ersetzt den ganzen Rollen-Satz eines Modells (wie
+`set_tags` bei Tags: trim/dedup/sortiert, kein Whitelist-Zwang auf DB-Ebene).
+Die Model-Library hat dafür in der „Roles"-Spalte **Toggle-Chips** für die vier
+Agent-Rollen (`chat`/`coding`/`reasoning`/`embedding`) bei jedem GGUF-Modell —
+z. B. `coding` nachträglich anhaken, ohne neu zu importieren.
+`base_diffusion`/`base_video`/`vae`/`text_encoder` bleiben Klartext (die sind
+automatisch aus der Datei-Art gesetzt, kein Sinn, sie hier umzuschalten).
 
 ## Status
 
@@ -130,7 +150,8 @@ Lücke (Migration für `downloads.roles`) ist als Folge-Task vorgemerkt.
 | HF-Rate-Limit-Backoff | ✅ 6.9 `HuggingFaceSource` — `Mutex<HubState>` parst `RateLimit: r=;t=` (IETF-Draft) + `Retry-After`, **fail-fast solange ein bekanntes Backoff-Fenster läuft**, `429` → Fenster aus Reset-Hint (sonst 90 s). `ETag`/`If-None-Match` verworfen (spart nur Bandbreite, kein Rate-Budget) |
 | Optionales `HF_TOKEN` | ✅ 6.9 `<local_root>/hf_token.txt` — **nie Pflicht** (nur Gated-Repos / höhere Limits), **nie geroamt, nie im Backup** (ADR-022). „Hugging Face"-Karte in Settings (`PUT /registry/token`, leer = löschen), erst nach Neustart aktiv |
 | Registry-Health in Diagnostics | ✅ 6.9 `RegistryStatus { source_id, last_fetch, rate_limit_remaining, rate_limited_secs, token_set, cache_entries }` (`GET /registry/status`) → „Model registry"-Karte in Diagnostics |
-| Kategorisierter Katalog (Image/Video/Chat/Code) + Hardware-Empfehlung | ✅ post-6.9 „Recommended models" im Models-Tab, 4 Reiter. `KnownModel`/`FeaturedModel` bekamen `is_default` (★ Empfehlung) + serverseitig berechnetes `fit` (`compat::verdict`/`verdict_from_total_mb`, kein Netz-Call). `core::model::FEATURED_MODELS` (neu) — kuratierte Chat-/Coding-HF-Repos (aus [AGENT_MODELS.md](AGENT_MODELS.md)), Datei-Auflösung on-demand über `core::registry`. `GET /models/known` + `GET /models/featured`. Coding-Picks: kein Ein-Klick-Download (roles-Lücke, s. o.), nur Chat |
+| Kategorisierter Katalog (Image/Video/Chat/Code) + Hardware-Empfehlung | ✅ post-6.9 „Recommended models" im Models-Tab, 4 Reiter. `KnownModel`/`FeaturedModel` bekamen `is_default` (★ Empfehlung) + serverseitig berechnetes `fit` (`compat::verdict`/`verdict_from_total_mb`, kein Netz-Call). `core::model::FEATURED_MODELS` (neu) — kuratierte Chat-/Coding-HF-Repos (aus [AGENT_MODELS.md](AGENT_MODELS.md)), **alle** Quant-Dateien on-demand über `core::registry` aufgelöst, nicht nur die kuratierte. `GET /models/known` + `GET /models/featured` |
+| Download → Rolle (Migration `0009`) + Rollen nachträglich editieren | ✅ post-6.9 `downloads.roles` (Komma-Liste), durchgereicht `EnqueueRequest` → Worker → `import_model` — ein Download-getriggerter Import (Discover/Upgrade-Check/Katalog/Link-Import) bekommt jetzt seine Rollen, vorher immer `[]` (unsichtbar für `pick_for_role`). `db::ModelRepo::set_roles` + `PUT /models/{id}/roles` — Rollen eines Modells nachträglich ändern, Model-Library zeigt Toggle-Chips (`chat`/`coding`/`reasoning`/`embedding`) für GGUF-Modelle. „Import a model" akzeptiert jetzt auch einen Link statt eines lokalen Pfads (routet über den Download-Manager) |
 
 ## Hardware-Realität
 

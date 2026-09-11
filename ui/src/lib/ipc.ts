@@ -302,6 +302,11 @@ export const modelTags = () => invoke<Record<string, string[]>>("model_tags");
 export const setModelTags = (id: string, tags: string[]) =>
   invoke<string[]>("set_model_tags", { id, tags });
 
+/** Replace a model's roles (e.g. add `coding` to a model downloaded before
+ *  that role existed) without re-importing. Returns the cleaned set. */
+export const setModelRoles = (id: string, roles: string[]) =>
+  invoke<string[]>("set_model_roles", { id, roles });
+
 /** The registry health line for Diagnostics (`GET /registry/status`). */
 export interface RegistryStatus {
   source_id: string;
@@ -693,6 +698,8 @@ export interface Download {
   model_id: string | null;
   created_at: string;
   updated_at: string;
+  /** Roles stamped on the model once imported (e.g. a Featured coding pick). */
+  roles: string[];
 }
 
 export interface EnqueueDownloadBody {
@@ -701,6 +708,8 @@ export interface EnqueueDownloadBody {
   model_type?: string;
   sha256?: string;
   size_bytes?: number;
+  /** Roles to stamp on the model once imported (e.g. `["chat", "coding"]`). */
+  roles?: string[];
 }
 
 export const listDownloads = () => invoke<Download[]>("list_downloads");

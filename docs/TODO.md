@@ -275,16 +275,15 @@ ADRs 022–025. 371 Lib / 57 integ / 5 pytest.
   Default), Models-Tab „Recommended models" (Image/Video/Chat/Code-Reiter,
   `core::model::FEATURED_MODELS`, Fit-Verdicts). Details:
   [MODELS.md](MODELS.md) „Kategorisierter Katalog".
-- **Offene Lücke (gefunden, nicht in diesem Zug behoben):**
-  Download-getriggerte Importe (Discover/Upgrade-Check/der neue Katalog)
-  übergeben `import_model` immer `roles: []` — die `downloads`-Tabelle hat
-  keine `roles`-Spalte. Macht ein so geladenes Modell für `pick_for_role`
-  unsichtbar, auch für einfache `chat`-Importe. Braucht eine Migration
-  (`downloads.roles`) + Durchreichen bis zum Worker, oder minimal einen
-  Empty-roles-Fallback in `import_model` für `model_type=="chat"`. Deshalb hat
-  der Code-Reiter (`coding`-Rolle wäre sonst der einzige Sinn des Vorschlags)
-  bewusst **keinen** Ein-Klick-Download, nur „Copy link" + manuelle
-  Import-Anleitung.
+- ✅ **Behoben:** Download-getriggerte Importe übergaben `import_model` immer
+  `roles: []` (die `downloads`-Tabelle hatte keine `roles`-Spalte) — unsichtbar
+  für `pick_for_role`, fatal für eine `coding`-Empfehlung. **Migration
+  `0009_download_roles`** (`downloads.roles`, Komma-Liste) + Durchreichen bis
+  zum Worker; `db::ModelRepo::set_roles` + `PUT /models/{id}/roles` für die
+  nachträgliche Korrektur (Model-Library: Toggle-Chips). Code-Reiter hat jetzt
+  denselben Ein-Klick-Download wie Chat; „Show download options" zeigt jede
+  gefundene Quant (nicht nur die kuratierte); „Import a model" akzeptiert einen
+  Link als Alternative zum lokalen Pfad. Details: [MODELS.md](MODELS.md).
 
 ## Offen / später zu entscheiden
 - App-Selbst-Update offline (manueller Installer + Signaturprüfung angenommen)

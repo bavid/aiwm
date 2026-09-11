@@ -409,6 +409,15 @@ export function installDevMock(): void {
         else delete TAGS[String(a.id)];
         return clean;
       }
+      case "set_model_roles": {
+        const m = MODELS.find((x) => x.id === a.id);
+        if (!m) throw new Error(`model ${a.id} is not in the library`);
+        const clean = [
+          ...new Set(((a.roles as string[]) ?? []).map((r) => r.trim()).filter(Boolean)),
+        ].sort();
+        m.roles = clean;
+        return clean;
+      }
       case "registry_status":
         return {
           source_id: "huggingface",
@@ -522,7 +531,7 @@ export function installDevMock(): void {
           model_type: body.model_type ?? null, sha256: body.sha256 ?? null,
           size_bytes: body.size_bytes ?? 4_683_073_536, bytes_done: 0, retries: 0,
           state: "running", error_text: null, model_id: null,
-          created_at: now(), updated_at: now(),
+          created_at: now(), updated_at: now(), roles: body.roles ?? [],
         };
         DOWNLOADS.unshift(d);
         return d;

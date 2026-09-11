@@ -377,6 +377,19 @@
   max-width: 16rem;
 }
 
+.rolecell {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  max-width: 14rem;
+}
+
+.rolecell .chip {
+  font-size: var(--text-xs);
+  padding: 1px var(--space-2);
+}
+
 .tagcell__chip {
   display: inline-flex;
   align-items: center;

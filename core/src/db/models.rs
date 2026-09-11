@@ -377,6 +377,31 @@ impl<'a> ModelRepo<'a> {
         Ok(map)
     }
 
+    /// Replace this model's role set (trimmed, de-duped, sorted — same
+    /// cleaning as at import time). Lets a model fixed up after the fact —
+    /// e.g. a chat GGUF downloaded before its `coding` role was set — get the
+    /// role without re-importing. Doesn't check the role names against a
+    /// fixed list: the callers (the Settings-style checkbox UI, `import_model`)
+    /// already constrain that.
+    pub async fn set_roles(&self, id: &str, roles: &[String]) -> Result<Vec<String>> {
+        let clean = dedup_sorted(roles);
+
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("DELETE FROM model_roles WHERE model_id = $1")
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+        for role in &clean {
+            sqlx::query("INSERT INTO model_roles (model_id, role) VALUES ($1, $2)")
+                .bind(id)
+                .bind(role)
+                .execute(&mut *tx)
+                .await?;
+        }
+        tx.commit().await?;
+        Ok(clean)
+    }
+
     // --- tags (model_tags, 6.9) ---------------------------------------------
 
     /// This model's tags, alphabetical.
@@ -746,6 +771,46 @@ mod tests {
             "charlie"
         );
         let _ = a;
+    }
+
+    #[tokio::test]
+    async fn set_roles_replaces_the_whole_set_and_cleans_it() {
+        let db = Database::connect_in_memory().await.unwrap();
+        let a = db.models().insert(gguf_model("a", "ha")).await.unwrap();
+        assert_eq!(a.roles, ["chat", "coding"]); // gguf_model's default roles
+
+        let stored = db
+            .models()
+            .set_roles(
+                &a.id,
+                &[
+                    "  embedding ".into(),
+                    "reasoning".into(),
+                    "".into(),
+                    "reasoning".into(),
+                ],
+            )
+            .await
+            .unwrap();
+        assert_eq!(stored, ["embedding", "reasoning"]); // trimmed, deduped, sorted, and fully replaced
+
+        assert_eq!(
+            db.models().roles(&a.id).await.unwrap(),
+            ["embedding", "reasoning"]
+        );
+        assert_eq!(
+            db.models().get(&a.id).await.unwrap().unwrap().roles,
+            ["embedding", "reasoning"]
+        );
+
+        // Re-setting replaces the whole set, doesn't accumulate.
+        let replaced = db
+            .models()
+            .set_roles(&a.id, &["reasoning".into()])
+            .await
+            .unwrap();
+        assert_eq!(replaced, ["reasoning"]);
+        assert_eq!(db.models().roles(&a.id).await.unwrap(), ["reasoning"]);
     }
 
     #[tokio::test]

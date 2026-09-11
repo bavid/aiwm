@@ -1069,6 +1069,77 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn set_model_roles_over_http_replaces_the_set_and_rejects_a_ghost() {
+        use crate::db::NewModel;
+
+        let (app, _tmp) = test_app().await;
+        let model = app
+            .db
+            .models()
+            .insert(NewModel {
+                name: "Qwen".into(),
+                format: "gguf".into(),
+                file_path: "E:\\AI\\models\\llm\\qwen\\q.gguf".into(),
+                size_bytes: 1,
+                source: "manual".into(),
+                ..NewModel::default()
+            })
+            .await
+            .unwrap();
+        let server = ApiServer::bind(app, SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
+            .await
+            .unwrap();
+        let base = format!("http://{}", server.addr);
+        let http = reqwest::Client::new();
+
+        let set: serde_json::Value = http
+            .put(format!("{base}/models/{}/roles", model.id))
+            .json(&serde_json::json!({ "roles": ["coding", " chat ", "chat"] }))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(set, serde_json::json!(["chat", "coding"]));
+
+        // GET /models shows it embedded directly (unlike tags -- no separate map).
+        let models: serde_json::Value = reqwest::get(format!("{base}/models"))
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let m = models
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|m| m["id"] == model.id)
+            .unwrap();
+        assert_eq!(m["roles"], serde_json::json!(["chat", "coding"]));
+
+        // Re-setting replaces, doesn't accumulate.
+        let replaced: serde_json::Value = http
+            .put(format!("{base}/models/{}/roles", model.id))
+            .json(&serde_json::json!({ "roles": ["reasoning"] }))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(replaced, serde_json::json!(["reasoning"]));
+
+        let ghost = http
+            .put(format!("{base}/models/ghost/roles"))
+            .json(&serde_json::json!({ "roles": ["chat"] }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(ghost.status(), 400);
+    }
+
+    #[tokio::test]
     async fn upgrade_check_queues_a_job_and_refuses_offline() {
         use crate::db::NewModel;
 

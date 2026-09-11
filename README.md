@@ -31,7 +31,7 @@ noch keine echte AI-Capability (die kommt ab Phase 2).
 | WP-9 | CI-Workflow, Git-Hooks (pre-commit fmt, pre-push voller Gate) |
 | WP-10 | ADRs finalisiert, Stub-Docs (MODELS/RUNTIMES/SECURITY/BENCHMARKS) |
 
-**391 Rust-Unit + 57 Integrationstests + 5 pytest** grün · `scripts/check.ps1` grün ·
+**392 Rust-Unit + 58 Integrationstests + 5 pytest** grün · `scripts/check.ps1` grün ·
 **null `unsafe`** im Produktivcode.
 
 **Phase 2 (MVP) ✅ abgeschlossen** — Scheiben 2.1–2.7 + durchgehender
@@ -213,7 +213,15 @@ Reports, Tags + Discovery-Verlauf. Alles offline-first (ADR-009), loopback-only
   (kuratierte Chat-/Coding-HF-Repos aus [AGENT_MODELS.md](docs/AGENT_MODELS.md)),
   jeder Eintrag mit einem **serverseitig berechneten Fit-Verdict** gegen das
   aktuelle VRAM-Budget (kein Netz-Call) und einem „★ recommended"-Pick pro
-  Kategorie.
+  Kategorie. „Show download options" zeigt **jede** auf HF gefundene Quant
+  (nicht nur die kuratierte), jede mit eigenem Download-Knopf. **Migration
+  `0009`**: `downloads.roles` — ein Download-getriggerter Import (Discover/
+  Upgrade-Check/Katalog/Link) übergibt jetzt die richtigen Rollen an
+  `import_model` (vorher immer `[]`, für `pick_for_role` unsichtbar) — der
+  Code-Reiter hat damit denselben Ein-Klick-Download wie Chat.
+  `db::ModelRepo::set_roles` + `PUT /models/{id}/roles` + Toggle-Chips in der
+  Model Library korrigieren Rollen nachträglich. „Import a model" akzeptiert
+  jetzt auch einen Link statt eines lokalen Pfads.
 
 - **4.1** ✅ **`capability::video`**: `job_type=video` → feste `wan_ti2v`-Pipeline
   (`WanImageToVideo` → `KSampler` → `VAEDecode` → `CreateVideo` → `SaveVideo`,

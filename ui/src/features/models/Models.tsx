@@ -13,6 +13,7 @@ import {
   enqueueDownload,
   importModel,
   registryModel,
+  setModelRoles,
   setModelTags,
   upgradeCheck,
   type Benchmark,
@@ -24,7 +25,7 @@ import {
   type ModelType,
   type RegistryDetails,
 } from "../../lib/ipc";
-import { Discover } from "./Discover";
+import { Discover, FileRow } from "./Discover";
 import { Downloads } from "./Downloads";
 import { DeleteButton, StoragePanel } from "./StoragePanel";
 import { UpgradeChecks } from "./UpgradeChecks";
@@ -41,6 +42,18 @@ const MODEL_TYPES: { value: ModelType; label: string; ext: string }[] = [
   { value: "text_encoder", label: "Text encoder / CLIP", ext: ".safetensors, .gguf" },
   { value: "video", label: "Video model", ext: ".safetensors, .gguf" },
 ];
+
+/** The last path segment of a URL, query/fragment stripped -- a reasonable
+ *  download filename when the user pastes a plain link instead of a path. */
+function filenameFromUrl(url: string): string {
+  try {
+    const { pathname } = new URL(url);
+    const last = pathname.split("/").filter(Boolean).pop();
+    return last ? decodeURIComponent(last) : "download";
+  } catch {
+    return "download";
+  }
+}
 
 const gb = (mb: number | null) => (mb == null ? "—" : `${(mb / 1024).toFixed(1)} GB`);
 const gbBytes = (b: number) => `${(b / 1024 ** 3).toFixed(2)} GB`;
@@ -193,7 +206,9 @@ function ModelLibrary({ models, error }: { models: Model[] | null; error: string
                   <td>
                     <TagCell modelId={m.id} tags={tags[m.id] ?? []} />
                   </td>
-                  <td className="muted">{m.roles.join(", ") || "—"}</td>
+                  <td>
+                    <RoleCell modelId={m.id} roles={m.roles} editable={m.format === "gguf"} />
+                  </td>
                   <td className="muted">{m.runtimes.join(", ") || "—"}</td>
                   <td className="model-table__actions">
                     <UpgradeCell model={m} checking={checking.has(m.id)} />
@@ -309,6 +324,62 @@ function TagCell({ modelId, tags }: { modelId: string; tags: string[] }) {
   );
 }
 
+/** The four functional roles the UI lets you toggle by hand (see `ROLES`
+ *  above the import form). `base_diffusion`/`base_video`/`vae`/`text_encoder`
+ *  are auto-assigned at import from the file kind and stay out of this list —
+ *  toggling them here wouldn't mean anything. */
+const EDITABLE_ROLES = ["chat", "coding", "reasoning", "embedding"];
+
+/** Toggle chips for a GGUF model's roles — e.g. add `coding` to a model that
+ *  was downloaded before that role existed, without re-importing it.
+ *  Non-GGUF models (image/video) show their roles as plain text; those are
+ *  auto-managed and not meant to be hand-edited here. */
+function RoleCell({
+  modelId,
+  roles,
+  editable,
+}: {
+  modelId: string;
+  roles: string[];
+  editable: boolean;
+}) {
+  const [local, setLocal] = useState<string[] | null>(null);
+  const [busy, setBusy] = useState(false);
+  const shown = local ?? roles;
+
+  if (!editable) return <span className="muted">{shown.join(", ") || "—"}</span>;
+
+  const toggle = async (role: string) => {
+    const next = shown.includes(role) ? shown.filter((r) => r !== role) : [...shown, role];
+    setLocal(next);
+    setBusy(true);
+    try {
+      const clean = await setModelRoles(modelId, next);
+      setLocal(clean);
+    } catch {
+      setLocal(null); // let the poll restore the truth
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <span className="rolecell">
+      {EDITABLE_ROLES.map((r) => (
+        <button
+          key={r}
+          type="button"
+          className={`chip ${shown.includes(r) ? "chip--on" : ""}`}
+          disabled={busy}
+          onClick={() => toggle(r)}
+        >
+          {r}
+        </button>
+      ))}
+    </span>
+  );
+}
+
 /** "Is there something better?" — one online request, so ask first. */
 function UpgradeCell({ model, checking }: { model: Model; checking: boolean }) {
   const [state, setState] = useState<"idle" | "error">("idle");
@@ -353,23 +424,38 @@ function ImportForm({
 
   const isChat = modelType === "chat";
   const typeInfo = MODEL_TYPES.find((t) => t.value === modelType)!;
+  const trimmed = path.trim();
+  const isLink = /^https?:\/\//i.test(trimmed);
 
   const toggle = (role: string) =>
     setRoles((rs) => (rs.includes(role) ? rs.filter((r) => r !== role) : [...rs, role]));
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!path.trim() || busy) return;
+    if (!trimmed || busy) return;
     setBusy(true);
     setMessage(null);
     try {
-      const out = await importModel(path.trim(), isChat ? roles : [], keepOriginal, modelType);
-      setMessage({
-        kind: "ok",
-        text: out.already_present
-          ? `Already imported as “${out.model.name}”.`
-          : `Imported “${out.model.name}” — ${out.model.runtimes.join(", ") || "no runtime"}.`,
-      });
+      if (isLink) {
+        // A link -> queue it (the download manager verifies + auto-imports
+        // once it lands, same as Discover's "Download & import").
+        const filename = filenameFromUrl(trimmed);
+        await enqueueDownload({
+          url: trimmed,
+          filename,
+          model_type: modelType,
+          roles: isChat ? roles : [],
+        });
+        setMessage({ kind: "ok", text: `Queued “${filename}” — see Downloads below.` });
+      } else {
+        const out = await importModel(trimmed, isChat ? roles : [], keepOriginal, modelType);
+        setMessage({
+          kind: "ok",
+          text: out.already_present
+            ? `Already imported as “${out.model.name}”.`
+            : `Imported “${out.model.name}” — ${out.model.runtimes.join(", ") || "no runtime"}.`,
+        });
+      }
       setPath("");
       onImported();
     } catch (err) {
@@ -397,14 +483,14 @@ function ImportForm({
         </label>
 
         <label className="import__field">
-          <span>Path to a {typeInfo.ext} file</span>
+          <span>Path to a {typeInfo.ext} file, or a download link</span>
           <input
             type="text"
             value={path}
             placeholder={
               isChat
-                ? "E:\\downloads\\qwen2.5-coder-14b.Q4_K_M.gguf"
-                : "E:\\downloads\\sd_xl_base_1.0.safetensors"
+                ? "E:\\downloads\\qwen2.5-coder-14b.Q4_K_M.gguf, or https://huggingface.co/…/resolve/main/…gguf"
+                : "E:\\downloads\\sd_xl_base_1.0.safetensors, or a link"
             }
             onChange={(e) => setPath(e.target.value)}
             spellCheck={false}
@@ -422,17 +508,19 @@ function ImportForm({
           </div>
         )}
 
-        <label className="chip">
-          <input
-            type="checkbox"
-            checked={keepOriginal}
-            onChange={(e) => setKeepOriginal(e.target.checked)}
-          />
-          keep the original file (copy instead of move)
-        </label>
+        {!isLink && (
+          <label className="chip">
+            <input
+              type="checkbox"
+              checked={keepOriginal}
+              onChange={(e) => setKeepOriginal(e.target.checked)}
+            />
+            keep the original file (copy instead of move)
+          </label>
+        )}
 
-        <button type="submit" disabled={busy || !path.trim()}>
-          {busy ? "Importing…" : "Import"}
+        <button type="submit" disabled={busy || !trimmed}>
+          {busy ? (isLink ? "Queuing…" : "Importing…") : isLink ? "Download & import" : "Import"}
         </button>
       </form>
       {message && <p className={message.kind === "ok" ? "import__ok" : "import__err"}>{message.text}</p>}
@@ -603,18 +691,17 @@ function KnownRow({ model, onUseType }: { model: KnownModel; onUseType: (t: Mode
 }
 
 /** A curated chat/coding pick — only a repo + preferred quant is pinned (see
- *  `core::model::FeaturedModel`), so "Check exact fit" resolves the real file
- *  list live, the same way Discover does. A coding pick needs the `coding`
- *  role stamped at import time, which the one-click download path can't do
- *  yet — so it gets "Copy link" + explicit instructions instead of a
- *  download button that would silently produce an unusable import. */
+ *  `core::model::FeaturedModel`), so "Show download options" resolves the
+ *  real file list live (the same way Discover does) and lists **every**
+ *  weight file Hugging Face offers, not just the recommended one — pick a
+ *  smaller/bigger quant if you want. Each one-click download carries
+ *  `model.import_roles`, so a coding pick actually gets the `coding` role. */
 function FeaturedRow({ model, onUseType }: { model: FeaturedModel; onUseType: (t: ModelType) => void }) {
   const [open, setOpen] = useState(false);
   const [details, setDetails] = useState<RegistryDetails | null>(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
-  const [dl, setDl] = useState<"idle" | "queued" | "error">("idle");
 
   const toggle = async () => {
     const next = !open;
@@ -633,41 +720,16 @@ function FeaturedRow({ model, onUseType }: { model: FeaturedModel; onUseType: (t
   };
 
   const hint = model.quant_hint.toUpperCase();
-  const file = details?.files.find(
-    (f) => f.quant?.toUpperCase().includes(hint) || f.path.toUpperCase().includes(hint),
-  );
+  const weightFiles = details?.files.filter((f) => f.quant || f.vram_estimate_mb != null) ?? [];
   const gated = details ? details.gated !== "no" : false;
-  // Downloading imports with no roles today (a known gap) -- fine for a plain
-  // chat pick, but a coding pick would silently lose the role that is the
-  // entire point of recommending it, so that path stays manual.
-  const canDownload = model.role === "chat" && !!file && !file.shard && !gated;
 
-  const copyLink = async () => {
+  const copyRepoLink = async () => {
     try {
-      await navigator.clipboard.writeText(
-        file ? file.download_url : `https://huggingface.co/${model.repo}`,
-      );
+      await navigator.clipboard.writeText(`https://huggingface.co/${model.repo}`);
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
     } catch {
       /* clipboard blocked — the link is still visible below */
-    }
-  };
-
-  const download = async () => {
-    if (!file) return;
-    setDl("idle");
-    try {
-      await enqueueDownload({
-        url: file.download_url,
-        filename: file.path,
-        model_type: "chat",
-        sha256: file.sha256 ?? undefined,
-        size_bytes: file.size_bytes,
-      });
-      setDl("queued");
-    } catch {
-      setDl("error");
     }
   };
 
@@ -688,7 +750,7 @@ function FeaturedRow({ model, onUseType }: { model: FeaturedModel; onUseType: (t
           {model.license}
         </span>
         <span className="known__note">
-          Download, then Import above with role{model.import_roles.length > 1 ? "s" : ""}:{" "}
+          Imports with role{model.import_roles.length > 1 ? "s" : ""}:{" "}
           <code>{model.import_roles.join(", ")}</code>
         </span>
 
@@ -696,40 +758,31 @@ function FeaturedRow({ model, onUseType }: { model: FeaturedModel; onUseType: (t
           <div className="discover__files">
             {loading && <p className="muted">Looking up the real file list…</p>}
             {err && <p className="import__err">{err}</p>}
-            {details && !file && (
-              <p className="muted">
-                Could not find a {model.quant_hint} file right now — open the repo on Hugging Face.
-              </p>
+            {details && weightFiles.length === 0 && (
+              <p className="muted">No weight files found right now — open the repo on Hugging Face.</p>
             )}
-            {file && (
-              <div className="discover__file">
-                <span
-                  className="discover__dot"
-                  style={{ background: FIT_COLOR[file.fit.level] }}
-                  title={fitTitle(file.fit)}
-                />
-                <span className="discover__quant">{file.quant ?? file.path}</span>
-                <span className="numeric muted">{gbBytes(file.size_bytes)}</span>
-                {gated && <span className="badge badge--warn">accept licence on HF</span>}
-              </div>
-            )}
+            {weightFiles.map((f) => (
+              <FileRow
+                key={f.path}
+                file={f}
+                gated={gated}
+                modelType="chat"
+                roles={model.import_roles}
+                recommended={f.quant?.toUpperCase().includes(hint) ?? f.path.toUpperCase().includes(hint)}
+              />
+            ))}
           </div>
         )}
       </div>
       <div className="known__actions">
         <button type="button" onClick={toggle}>
-          {open ? "Hide files" : "Check exact fit"}
+          {open ? "Hide" : "Show download options"}
         </button>
-        {canDownload && (
-          <button type="button" onClick={download} disabled={dl === "queued"}>
-            {dl === "queued" ? "Queued ✓" : dl === "error" ? "Failed — retry" : "Download & import"}
-          </button>
-        )}
         <button type="button" onClick={() => onUseType("chat")}>
           Set import type
         </button>
-        <button type="button" onClick={copyLink}>
-          {copied ? "Copied ✓" : file ? "Copy file link" : "Copy repo link"}
+        <button type="button" onClick={copyRepoLink}>
+          {copied ? "Copied ✓" : "Copy repo link"}
         </button>
       </div>
     </li>

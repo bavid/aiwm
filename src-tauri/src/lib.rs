@@ -240,6 +240,15 @@ async fn set_model_tags(
 }
 
 #[tauri::command]
+async fn set_model_roles(
+    app: tauri::State<'_, Arc<App>>,
+    id: String,
+    roles: Vec<String>,
+) -> Result<Vec<String>, String> {
+    to_ipc(handlers::set_model_roles(&app, &id, &roles).await)
+}
+
+#[tauri::command]
 fn registry_status(app: tauri::State<'_, Arc<App>>) -> aiwm_core::RegistryStatus {
     handlers::registry_status(&app)
 }
@@ -386,6 +395,7 @@ fn try_run() -> anyhow::Result<()> {
             delete_model,
             model_tags,
             set_model_tags,
+            set_model_roles,
             registry_status,
             set_hf_token,
             install_llamacpp,

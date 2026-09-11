@@ -72,9 +72,11 @@ bleibt an.
 **Diese Tabelle ist jetzt auch im Code** (`core::model::FEATURED_MODELS`,
 post-6.9) — der Models-Tab zeigt Qwen2.5-Coder-7B/14B + Hermes-3-Llama-3.1-8B
 im „Code"-Reiter von „Recommended models", mit Fit gegen das aktuelle
-VRAM-Budget. Der Ein-Klick-Download bleibt dort bewusst aus (die `coding`-Rolle
-lässt sich über den Download-Pfad noch nicht setzen) — „Copy repo link" +
-Import oben mit `roles: chat, coding`, wie unten beschrieben.
+VRAM-Budget. „Show download options" listet jede auf HF gefundene Quant mit
+einem eigenen „Download & import"-Knopf — die `coding`-Rolle wird jetzt korrekt
+mitgegeben (Migration `0009_download_roles`, s. [MODELS.md](MODELS.md)). Der
+manuelle Import (unten) bleibt eine Alternative, ebenso das direkte Einfügen
+eines HF-Links ins „Import a model"-Feld oben im Tab.
 
 ---
 
@@ -135,10 +137,9 @@ curl -s localhost:<port>/agent-sessions/<session-id>/stop -X POST
 
 ## Bewusst (noch) nicht
 
-- **Ein-Klick-Download** für diese Kandidaten — der kuratierte Katalog
-  (`core::model::FEATURED_MODELS`, post-6.9) zeigt sie jetzt im Models-Tab,
-  aber der Download-Manager kann die `coding`-Rolle beim Import noch nicht
-  setzen (`downloads`-Tabelle hat keine `roles`-Spalte) — bleibt manueller
-  Import, diese Liste bleibt die „Quelle" für die Kandidaten selbst.
 - **Nicht-lokale Endpoints** (OpenRouter etc.) — hart aus (ADR-009).
 - **Auto-Benchmark der Tool-Call-Zuverlässigkeit** — Post-MVP.
+
+*(Der Ein-Klick-Download mit korrekt gesetzter `coding`-Rolle — ursprünglich
+hier als offen vermerkt — ist seit Migration `0009_download_roles` erledigt,
+siehe oben.)*

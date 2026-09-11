@@ -52,6 +52,9 @@ pub struct EnqueueRequest {
     /// Expected SHA-256 (from the registry, 6.1). `None` → no hash check.
     pub sha256: Option<String>,
     pub size_bytes: Option<u64>,
+    /// Roles to stamp on the model once imported (e.g. `["chat", "coding"]`
+    /// for an agent pick from the Models tab) — empty for a plain download.
+    pub roles: Vec<String>,
 }
 
 /// The queue + the single-slot worker.
@@ -125,6 +128,7 @@ impl DownloadManager {
                     model_type: req.model_type,
                     sha256: req.sha256,
                     size_bytes: req.size_bytes,
+                    roles: req.roles,
                 },
                 &self.staging_root,
             )
@@ -285,7 +289,7 @@ impl DownloadManager {
             &self.store_root,
             ImportRequest {
                 source_path: dest,
-                roles: vec![],
+                roles: d.roles.clone(),
                 keep_original: false,
                 model_type: d.model_type.clone(),
             },
