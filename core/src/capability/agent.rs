@@ -29,7 +29,7 @@ use crate::agent::{
     SessionSpec,
 };
 use crate::db::{Agent, AgentSession, AgentSessionState, Database, Model};
-use crate::runtime::{LlamaCppAdapter, RuntimeAdapter, RuntimeRegistry};
+use crate::runtime::{LlamaCppAdapter, RuntimeRegistry};
 use crate::scheduler::{Decision, HybridScheduler, PlanRequest, Scheduler};
 use crate::{CoreError, Result};
 
@@ -104,13 +104,13 @@ impl CodingRuntime for LlamaCodingRuntime {
         };
         match self.scheduler.plan(&req).await {
             Decision::RunNow => {}
-            Decision::LoadThenRun => self.llama.load_model(model_id, vram_mb).await?,
+            Decision::LoadThenRun => self.llama.load_model_for_agent(model_id, vram_mb).await?,
             Decision::EvictThenLoad { victim_model } => {
                 if let Some(rt) = self.registry.runtime_with_model(&victim_model) {
                     self.scheduler.unpin(&victim_model);
                     rt.unload_model(&victim_model).await?;
                 }
-                self.llama.load_model(model_id, vram_mb).await?;
+                self.llama.load_model_for_agent(model_id, vram_mb).await?;
             }
             Decision::Blocked { reason } => return Err(CoreError::SchedulerBlocked(reason)),
         }

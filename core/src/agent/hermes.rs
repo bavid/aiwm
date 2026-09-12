@@ -106,6 +106,14 @@ pub struct HermesAgentAdapter {
     /// Root for the per-session `HERMES_HOME` directories.
     home_root: PathBuf,
     http: reqwest::Client,
+    /// No timeout — dedicated to `POST .../chat/stream`, whose SSE body
+    /// stays open for as long as that turn's generation runs. `reqwest`'s
+    /// `Client`-level timeout bounds the *whole* request including reading a
+    /// streamed body, not just connecting: reusing `http`'s 30s timeout here
+    /// killed a real turn mid-generation, and `drain_events` then read the
+    /// closed stream as "the runtime died" and released the model out from
+    /// under an active session.
+    stream_http: reqwest::Client,
     sessions: Mutex<HashMap<String, Session>>,
     install: Mutex<InstallStatus>,
     /// Held for the duration of an install.
@@ -130,10 +138,15 @@ impl HermesAgentAdapter {
             .timeout(Duration::from_secs(30))
             .build()
             .unwrap_or_else(|_| reqwest::Client::new());
+        let stream_http = reqwest::Client::builder()
+            .connect_timeout(Duration::from_secs(10))
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new());
         Self {
             launch,
             home_root,
             http,
+            stream_http,
             sessions: Mutex::new(HashMap::new()),
             install: Mutex::new(InstallStatus::Idle),
             install_lock: AsyncMutex::new(()),
@@ -289,8 +302,12 @@ impl AgentAdapter for HermesAgentAdapter {
                 .json()
                 .await
                 .map_err(|e| err(format!("bad session response: {e}")))?;
+            // The real API server nests it under `session.id`, not top-level
+            // (found against a real install, not just the fixture).
             let id = created
-                .get("id")
+                .get("session")
+                .and_then(|s| s.get("id"))
+                .or_else(|| created.get("id"))
                 .and_then(Value::as_str)
                 .ok_or_else(|| err("session response had no id"))?
                 .to_string();
@@ -336,7 +353,7 @@ impl AgentAdapter for HermesAgentAdapter {
         };
 
         let resp = self
-            .http
+            .stream_http
             .post(format!("{base}/api/sessions/{session}/chat/stream"))
             .bearer_auth(&key)
             .json(&json!({ "input": text }))
@@ -439,6 +456,17 @@ fn write_home(home: &Path, spec: &SessionSpec) -> std::io::Result<()> {
     std::fs::write(home.join("config.yaml"), forced_config_yaml(spec))
 }
 
+/// Hermes Agent refuses to start against a model declaring less than this —
+/// found against a real 0.19.0 run ("context window ... below the minimum
+/// 64,000 required by Hermes Agent"), not documented anywhere beforehand.
+/// This is what we *tell* Hermes, independent of whether the backing model's
+/// real trained context actually reaches it (today it's a flat number, not
+/// derived from the model — a real GGUF smaller than this can still error on
+/// an actual long conversation; threading the model's own `ctx_max` through
+/// `SessionSpec` is the proper fix, left for when that turns out to matter in
+/// practice).
+const HERMES_MIN_CONTEXT_LENGTH: u32 = 64_000;
+
 /// The forced `config.yaml`: only the local `llama-server`, redaction on. The
 /// sandbox keys here are a best guess (docs incomplete) — 5.4b's real run
 /// calibrates them.
@@ -450,7 +478,7 @@ fn forced_config_yaml(spec: &SessionSpec) -> String {
         \x20 default: {model}\n\
         \x20 provider: custom\n\
         \x20 base_url: {base}\n\
-        \x20 context_length: 32000\n\
+        \x20 context_length: {HERMES_MIN_CONTEXT_LENGTH}\n\
         providers:\n\
         \x20 aiwm-local:\n\
         \x20   api: {base}\n\

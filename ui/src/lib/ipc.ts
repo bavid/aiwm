@@ -357,6 +357,11 @@ export interface ModelStack {
   is_default: boolean;
   /** Base model first, then companions — display order. */
   members: KnownModel[];
+  /** Fit for every member's size **summed** — a real render needs the base
+   *  model and every companion in VRAM at once, so this is the number that
+   *  actually answers "can I run this stack" (each member's own `fit` is
+   *  just that one file in isolation). */
+  fit: FitVerdict;
 }
 
 export const listModelStacks = () => invoke<ModelStack[]>("list_model_stacks");

@@ -205,12 +205,21 @@ impl Scheduler for HybridScheduler {
         }
 
         Decision::Blocked {
-            reason: blocked_reason(req, free, &candidates),
+            reason: blocked_reason(req, free, self.free_mb(), &candidates),
         }
     }
 }
 
-fn blocked_reason(req: &PlanRequest, free_mb: u64, candidates: &[(String, u64, bool)]) -> String {
+/// `budget_free_mb` is the scheduler's own budget-only figure (ignoring any
+/// live VRAM cap) — it tells us whether the *model itself* is simply too big
+/// for this card (no live reading would ever change that), versus a live
+/// reading being the actual, situational limiter (other applications).
+fn blocked_reason(
+    req: &PlanRequest,
+    free_mb: u64,
+    budget_free_mb: u64,
+    candidates: &[(String, u64, bool)],
+) -> String {
     let pinned_blockers: Vec<&str> = candidates
         .iter()
         .filter(|(_, _, pinned)| *pinned)
@@ -225,12 +234,22 @@ fn blocked_reason(req: &PlanRequest, free_mb: u64, candidates: &[(String, u64, b
             pinned_blockers.join(", "),
         )
     } else if let Some(live) = req.live_free_vram_mb {
-        format!(
-            "{} MB needed, only {} MB free on the GPU right now ({} MB total reported by the driver) \
-             — other running applications are using the rest of the VRAM. Close them, or lower the \
-             resolution/model size, and try again",
-            req.vram_needed_mb, free_mb, live,
-        )
+        if req.vram_needed_mb > budget_free_mb {
+            // Doesn't fit even in the best case (nothing else loaded, no other
+            // app competing) -- blaming other applications would be misleading.
+            format!(
+                "{} MB needed, but this GPU only has {} MB usable in total — this model doesn't fit \
+                 this card no matter what else is running. Try a smaller quant/model.",
+                req.vram_needed_mb, budget_free_mb,
+            )
+        } else {
+            format!(
+                "{} MB needed, only {} MB actually free on the GPU right now (driver reports {} MB free) \
+                 — other running applications are using the rest of the VRAM. Close them, or lower the \
+                 resolution/model size, and try again",
+                req.vram_needed_mb, free_mb, live,
+            )
+        }
     } else {
         format!(
             "{} MB needed but only {} MB free and nothing can be evicted",
@@ -394,6 +413,26 @@ mod tests {
                 victim_model: "qwen-14b".into()
             }
         );
+    }
+
+    #[tokio::test]
+    async fn blocked_reason_does_not_blame_other_apps_when_the_model_never_fits() {
+        // 20 GB job on a 16 GB card: no live reading, no eviction, would ever
+        // make this fit -- the message must say so plainly, not point at
+        // other running applications (misleading when the model itself is
+        // just too big).
+        let (reg, _) = registry_with(&[]).await;
+        let sched = scheduler(reg);
+        let decision = sched
+            .plan(&req_with_live("giant-model", 20_000, false, Some(14_000)))
+            .await;
+        match decision {
+            Decision::Blocked { reason } => {
+                assert!(reason.contains("doesn't fit this card"));
+                assert!(!reason.contains("other running applications"));
+            }
+            other => panic!("expected Blocked, got {other:?}"),
+        }
     }
 
     #[tokio::test]

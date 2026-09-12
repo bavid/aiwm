@@ -165,7 +165,7 @@ fn same_dir(a: &Path, b: &Path) -> bool {
 }
 
 #[cfg(windows)]
-fn create_junction(target_dir: &Path, link_dir: &Path) -> Result<()> {
+pub(crate) fn create_junction(target_dir: &Path, link_dir: &Path) -> Result<()> {
     ensure_parent(link_dir)?;
     if junction::exists(link_dir).unwrap_or(false) {
         if junction::get_target(link_dir).is_ok_and(|t| same_dir(&t, target_dir)) {
@@ -194,7 +194,7 @@ fn remove_junction(link_dir: &Path) -> Result<()> {
 }
 
 #[cfg(not(windows))]
-fn create_junction(target_dir: &Path, link_dir: &Path) -> Result<()> {
+pub(crate) fn create_junction(target_dir: &Path, link_dir: &Path) -> Result<()> {
     // Non-Windows is dev-only; a symlink stands in for a junction.
     ensure_parent(link_dir)?;
     if link_dir.exists() {

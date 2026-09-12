@@ -317,18 +317,26 @@ const STACK_META: Record<string, AnyRecord> = {
   sdxl: {
     label: "Stable Diffusion XL", media: "image", is_default: true,
     note: "One file — the checkpoint carries its own VAE and text encoder.",
+    fit: { level: "green" },
   },
   flux: {
     label: "FLUX.1-dev", media: "image", is_default: false,
     note: "Best prompt fidelity + in-image text. Four files: the diffusion model plus its T5 and CLIP-L text encoders and its VAE.",
+    // All four members individually look green/yellow, but a real render
+    // needs them all resident at once (~17 GB combined) — the whole-stack
+    // verdict is what actually answers "can I run this", and on a 16 GB
+    // card it's red even though no single file looks that bad alone.
+    fit: { level: "red", reason: "needs ~17 GB combined (model + T5 + CLIP-L + VAE) of your ~16 GB VRAM budget" },
   },
   wan22: {
     label: "Wan 2.2 TI2V-5B", media: "video", is_default: true,
     note: "The default video setup. Three files: the model, its umt5 text encoder, and its VAE.",
+    fit: { level: "green" },
   },
   ltx: {
     label: "LTX-Video 0.9.5 (2B)", media: "video", is_default: false,
     note: "Fast and light. Two files: model + VAE bundled in one, plus a shared T5 text encoder.",
+    fit: { level: "green" },
   },
 };
 const STACKS_MOCK: AnyRecord[] = Object.entries(STACK_MEMBER_IDS).map(([id, memberIds]) => ({

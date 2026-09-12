@@ -17,7 +17,7 @@ use crate::{CoreError, Result};
 /// sampler activations + VAE decode + CUDA/compute buffers, per family. Still a
 /// documented heuristic (`docs/HARDWARE.md` ranges); real calibration waits on
 /// the hands-on ComfyUI run (slice 4.0).
-fn media_headroom_mb(family: Option<&str>) -> i64 {
+pub(crate) fn media_headroom_mb(family: Option<&str>) -> i64 {
     match family {
         // Wan / LTX video: temporal attention over a long latent is dear.
         Some("wan") => 6144,
@@ -242,7 +242,19 @@ fn media_new_model(
     size_bytes: u64,
 ) -> NewModel {
     let family = media_family(name);
-    let headroom_mb = media_headroom_mb(family.as_deref());
+    // The headroom (sampler activations + VAE decode + compute buffers) is a
+    // cost the *base* model incurs while it drives a render -- a VAE/text-
+    // encoder/LoRA companion doesn't carry it, and adding it there inflated a
+    // 235 MB CLIP-L encoder's estimate to ~2.8 GB.
+    let is_base_model = matches!(
+        kind,
+        ModelKind::Checkpoint | ModelKind::DiffusionModel | ModelKind::VideoModel
+    );
+    let headroom_mb = if is_base_model {
+        media_headroom_mb(family.as_deref())
+    } else {
+        0
+    };
     let size_mb = i64::try_from(size_bytes / MIB).unwrap_or(i64::MAX);
     let arch = safet
         .and_then(|s| s.metadata.get("modelspec.architecture").cloned())
@@ -733,6 +745,36 @@ mod tests {
             .file_path
             .replace('\\', "/")
             .contains("/image/vae/"));
+    }
+
+    #[tokio::test]
+    async fn a_text_encoder_does_not_get_the_diffusion_model_headroom() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = tmp.path().join("store");
+        let db = Database::connect_in_memory().await.unwrap();
+        // The diffusion-model headroom (2.5-4 GB, see `media_headroom_mb`) is
+        // sampler activations + VAE decode + compute buffers -- a cost the
+        // *base* model incurs while it runs, not something a VAE/text-encoder
+        // companion carries too. A ~10 MB companion file must not balloon to
+        // multiple GB just because it went through the same import path.
+        let src = write_safetensors(tmp.path(), "clip_l.safetensors", &vec![0u8; 10_000_000]);
+
+        let out = import_model(
+            &db,
+            &store,
+            ImportRequest {
+                model_type: Some("text_encoder".into()),
+                ..req(&src)
+            },
+        )
+        .await
+        .unwrap();
+
+        let estimate = out.model.vram_estimate_mb.unwrap();
+        assert!(
+            estimate < 200,
+            "expected the estimate to track the ~10 MB file size, got {estimate} MB"
+        );
     }
 
     #[tokio::test]

@@ -273,20 +273,43 @@ pub fn model_stacks(app: &App) -> Vec<ModelStackDto> {
     let (budget_mb, free_ram_mb) = fit_inputs(app);
     crate::model::MODEL_STACKS
         .iter()
-        .map(|s| ModelStackDto {
-            id: s.id.to_string(),
-            label: s.label.to_string(),
-            media: s.media.to_string(),
-            note: s.note.to_string(),
-            is_default: s.is_default,
-            members: s
+        .map(|s| {
+            let resolved: Vec<&crate::model::KnownModel> = s
                 .member_ids
                 .iter()
                 .filter_map(|id| crate::model::KNOWN_MODELS.iter().find(|m| &m.id == id))
-                .map(|m| enrich_known(m, budget_mb, free_ram_mb))
-                .collect(),
+                .collect();
+            ModelStackDto {
+                id: s.id.to_string(),
+                label: s.label.to_string(),
+                media: s.media.to_string(),
+                note: s.note.to_string(),
+                is_default: s.is_default,
+                fit: combined_fit(&resolved, budget_mb, free_ram_mb),
+                members: resolved
+                    .iter()
+                    .map(|m| enrich_known(m, budget_mb, free_ram_mb))
+                    .collect(),
+            }
         })
         .collect()
+}
+
+/// Fit for every member's size **summed** — a real render needs the base
+/// model and every companion resident in VRAM at once, so judging a stack's
+/// fit off any single member (even the largest) understates what it actually
+/// takes. Found live: Flux's four members each showed green/yellow
+/// individually while the combined ~19 GB plainly doesn't fit a 16 GB card.
+fn combined_fit(
+    members: &[&crate::model::KnownModel],
+    budget_mb: u64,
+    free_ram_mb: u64,
+) -> crate::compat::FitVerdict {
+    let total_mb: u64 = members
+        .iter()
+        .map(|m| m.size_bytes / crate::model::MIB)
+        .sum();
+    crate::compat::verdict_from_total_mb(total_mb, budget_mb, free_ram_mb)
 }
 
 fn enrich_known(m: &crate::model::KnownModel, budget_mb: u64, free_ram_mb: u64) -> KnownModelDto {
@@ -768,6 +791,36 @@ pub fn recent_logs(app: &App, lines: usize) -> Result<Vec<String>> {
 mod tests {
     use super::*;
     use crate::registry::SearchSort;
+
+    #[test]
+    fn combined_fit_sums_every_members_size_not_just_the_base() {
+        let flux: Vec<&crate::model::KnownModel> = crate::model::MODEL_STACKS
+            .iter()
+            .find(|s| s.id == "flux")
+            .unwrap()
+            .member_ids
+            .iter()
+            .filter_map(|id| crate::model::KNOWN_MODELS.iter().find(|m| &m.id == id))
+            .collect();
+        assert_eq!(flux.len(), 4, "flux stack: model + T5 + CLIP-L + VAE");
+
+        // A budget sized for the base model alone plus real headroom --
+        // comfortable for member [0] by itself, but not for all four summed.
+        let base_alone_mb = flux[0].size_bytes / crate::model::MIB;
+        let budget_mb = base_alone_mb + 4_000;
+
+        let base_only = crate::compat::verdict_from_total_mb(base_alone_mb, budget_mb, 32_000);
+        assert_eq!(base_only, crate::compat::FitVerdict::Green);
+
+        let combined = combined_fit(&flux, budget_mb, 32_000);
+        assert!(
+            matches!(
+                combined,
+                crate::compat::FitVerdict::Red { .. } | crate::compat::FitVerdict::Yellow { .. }
+            ),
+            "expected the whole stack to be tight/red at a budget sized for the base model alone, got {combined:?}"
+        );
+    }
 
     #[test]
     fn is_weight_file_needs_the_format_and_the_extension() {

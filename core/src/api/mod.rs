@@ -106,8 +106,8 @@ pub async fn spawn_on(app: Arc<App>, api_addr: SocketAddr) -> Result<Services> {
 async fn run_job_loop(app: Arc<App>) {
     loop {
         match app.jobs.run_next().await {
-            Ok(Some(JobOutcome::Blocked { job_id, .. })) => {
-                tracing::debug!(%job_id, "job blocked — backing off");
+            Ok(Some(JobOutcome::Blocked { job_id, reason })) => {
+                tracing::debug!(%job_id, %reason, "job blocked — backing off");
                 tokio::time::sleep(JOB_LOOP_BLOCKED_BACKOFF).await;
             }
             Ok(Some(outcome)) => tracing::info!(?outcome, "job finished"),

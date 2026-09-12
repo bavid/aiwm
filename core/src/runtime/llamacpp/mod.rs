@@ -147,6 +147,23 @@ pub enum InstallState {
     },
 }
 
+/// The context (tokens) to actually serve a load at. An explicit
+/// `[llama].ctx_size` config override always wins. Otherwise: the chat-sized
+/// cap (`compat::effective_ctx`) for a normal load, or the model's own full
+/// trained context for an agent session (`uncapped`) — a coding agent's
+/// tool-calling system prompt alone can run well past the 8K chat default.
+fn resolve_load_ctx(configured: Option<u32>, ctx_max: Option<u32>, uncapped: bool) -> u32 {
+    configured.unwrap_or_else(|| {
+        if uncapped {
+            ctx_max
+                .filter(|c| *c > 0)
+                .unwrap_or(crate::compat::DEFAULT_CHAT_CTX)
+        } else {
+            crate::compat::effective_ctx(ctx_max)
+        }
+    })
+}
+
 #[derive(Debug)]
 pub struct LlamaCppAdapter {
     bin: BinSource,
@@ -423,37 +440,27 @@ impl LlamaCppAdapter {
             tokio::time::sleep(HEALTH_POLL_INTERVAL).await;
         }
     }
-}
 
-#[async_trait]
-impl RuntimeAdapter for LlamaCppAdapter {
-    fn id(&self) -> &str {
-        RUNTIME_ID
+    /// Load `model_id`, serving it at the model's own trained context instead
+    /// of the chat-sized cap (`compat::effective_ctx`, 8192) — for an agent
+    /// session, whose tool-calling system prompt alone can run well past that
+    /// (found via a real OpenCode run: "request (25938 tokens) exceeds the
+    /// available context size (8192 tokens)"). An explicit `[llama].ctx_size`
+    /// config override still wins either way, same as a normal chat load.
+    pub async fn load_model_for_agent(&self, model_id: &str, vram_mb: u64) -> Result<()> {
+        self.load_model_at(model_id, vram_mb, true).await
     }
 
-    fn kind(&self) -> RuntimeKind {
-        RuntimeKind::LlamaCpp
-    }
-
-    fn spawn_spec(&self) -> Option<SpawnSpec> {
-        // No runtime-level process: a server exists only per loaded model.
-        None
-    }
-
-    async fn health(&self) -> Health {
-        let probe_port = {
-            match &*self.slot() {
-                Slot::Empty => return Health::Unknown,
-                Slot::Loading { .. } => return Health::Starting,
-                Slot::Loaded { port, .. } => *port,
-            }
-        };
-        self.client.health(probe_port).await
-    }
-
-    async fn load_model(&self, model_id: &str, vram_mb: u64) -> Result<()> {
+    async fn load_model_at(&self, model_id: &str, vram_mb: u64, uncapped: bool) -> Result<()> {
         let _op = self.op_lock.lock().await;
 
+        // Known gap: if this exact model is already resident from a normal
+        // chat load (chat-sized context), an agent session that then wants it
+        // `uncapped` gets stuck with the smaller context already running —
+        // `Slot` doesn't track which context a resident server is actually
+        // serving at, so there's nothing here to compare against yet. Rare in
+        // practice (chat and a coding profile sharing one model, back to
+        // back) but worth closing if it turns out to bite.
         if let Resident::Same = self.resident(model_id) {
             return Ok(());
         }
@@ -462,10 +469,7 @@ impl RuntimeAdapter for LlamaCppAdapter {
             llama_err("llama-server is not installed — run llama.cpp setup first")
         })?;
         let (model_path, label, ctx_max) = self.resolve_model(model_id).await?;
-        let ctx = self
-            .opts
-            .ctx_size
-            .unwrap_or_else(|| crate::compat::effective_ctx(ctx_max));
+        let ctx = resolve_load_ctx(self.opts.ctx_size, ctx_max, uncapped);
         let port = free_loopback_port()?;
 
         // One server per model: loading a different model here means swapping the
@@ -496,6 +500,37 @@ impl RuntimeAdapter for LlamaCppAdapter {
             origin: Origin::Managed(supervisor),
         };
         Ok(())
+    }
+}
+
+#[async_trait]
+impl RuntimeAdapter for LlamaCppAdapter {
+    fn id(&self) -> &str {
+        RUNTIME_ID
+    }
+
+    fn kind(&self) -> RuntimeKind {
+        RuntimeKind::LlamaCpp
+    }
+
+    fn spawn_spec(&self) -> Option<SpawnSpec> {
+        // No runtime-level process: a server exists only per loaded model.
+        None
+    }
+
+    async fn health(&self) -> Health {
+        let probe_port = {
+            match &*self.slot() {
+                Slot::Empty => return Health::Unknown,
+                Slot::Loading { .. } => return Health::Starting,
+                Slot::Loaded { port, .. } => *port,
+            }
+        };
+        self.client.health(probe_port).await
+    }
+
+    async fn load_model(&self, model_id: &str, vram_mb: u64) -> Result<()> {
+        self.load_model_at(model_id, vram_mb, false).await
     }
 
     async fn unload_model(&self, model_id: &str) -> Result<()> {
@@ -576,6 +611,35 @@ mod tests {
 
     use super::*;
     use crate::db::Database;
+
+    #[test]
+    fn resolve_load_ctx_caps_a_normal_load_at_the_chat_default() {
+        assert_eq!(
+            resolve_load_ctx(None, Some(131_072), false),
+            crate::compat::DEFAULT_CHAT_CTX
+        );
+    }
+
+    #[test]
+    fn resolve_load_ctx_gives_an_agent_load_the_full_model_context() {
+        // The whole point of `uncapped` -- a coding agent's tool-calling
+        // system prompt alone can exceed the 8K chat default.
+        assert_eq!(resolve_load_ctx(None, Some(32_768), true), 32_768);
+    }
+
+    #[test]
+    fn resolve_load_ctx_falls_back_to_the_chat_default_uncapped_with_no_ctx_max() {
+        assert_eq!(
+            resolve_load_ctx(None, None, true),
+            crate::compat::DEFAULT_CHAT_CTX
+        );
+    }
+
+    #[test]
+    fn resolve_load_ctx_an_explicit_config_override_always_wins() {
+        assert_eq!(resolve_load_ctx(Some(4_096), Some(131_072), true), 4_096);
+        assert_eq!(resolve_load_ctx(Some(4_096), Some(131_072), false), 4_096);
+    }
 
     #[test]
     fn same_file_path_ignores_case_and_separators() {

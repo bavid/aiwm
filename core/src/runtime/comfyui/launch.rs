@@ -64,16 +64,50 @@ impl ComfyDirs {
         self.base.join("input")
     }
 
-    /// Create the base + output directories and (re)write the model-paths YAML.
+    /// Create the base + output directories, junction `custom_nodes` in from
+    /// the real install (see below), and (re)write the model-paths YAML.
     /// Idempotent; called before every server start so a changed store path or
     /// a fresh install is picked up.
-    pub(super) fn ensure(&self) -> Result<()> {
+    ///
+    /// `install_dir` is the ComfyUI checkout (`main.py`'s parent) when known —
+    /// `None` for the test fixture, which has no real `custom_nodes` to link.
+    pub(super) fn ensure(&self, install_dir: Option<&Path>) -> Result<()> {
         for dir in [&self.base, &self.output] {
             std::fs::create_dir_all(dir).map_err(|e| dir_err(dir, e))?;
+        }
+        if let Some(install_dir) = install_dir {
+            self.ensure_custom_nodes_link(install_dir)?;
         }
         let yaml = self.model_paths_yaml();
         std::fs::write(&yaml, model_paths_yaml_body(&self.models_store))
             .map_err(|e| dir_err(&yaml, e))
+    }
+
+    /// `--base-directory` redirects `custom_nodes` there too (confirmed
+    /// against the real ComfyUI's own `--help` — its doc comment above only
+    /// mentions models/input/temp because this was never run against a real
+    /// checkout before, only the fake fixture). Without this, ComfyUI crashes
+    /// on startup (`os.listdir` on a `custom_nodes` that doesn't exist under
+    /// `base`) and the installed nodes (`ComfyUI-GGUF`) would never load even
+    /// if it didn't. A junction keeps the real, single copy authoritative —
+    /// same volume only, which holds by default (both live under the app's
+    /// data root, ADR-026) but not if `runtimes_path` was moved to another
+    /// drive in Settings.
+    fn ensure_custom_nodes_link(&self, install_dir: &Path) -> Result<()> {
+        let real_nodes = install_dir.join("custom_nodes");
+        if !real_nodes.is_dir() {
+            return Ok(()); // nothing installed yet — `ensure_server_locked` won't get this far anyway
+        }
+        crate::link::create_junction(&real_nodes, &self.base.join("custom_nodes")).map_err(|e| {
+            CoreError::Runtime {
+                runtime: RUNTIME_ID.into(),
+                message: format!(
+                    "couldn't expose ComfyUI's custom_nodes under its data directory: {e}. \
+                     The data directory and the ComfyUI install need to be on the same drive \
+                     (see Settings → Data locations)."
+                ),
+            }
+        })
     }
 }
 
@@ -243,11 +277,37 @@ mod tests {
             output: tmp.path().join("out"),
             models_store: tmp.path().join("store"),
         };
-        d.ensure().unwrap();
+        d.ensure(None).unwrap();
         assert!(d.base.is_dir() && d.output.is_dir());
         let yaml = std::fs::read_to_string(d.model_paths_yaml()).unwrap();
         assert!(yaml.contains("base_path:") && yaml.contains("checkpoints:"));
-        d.ensure().unwrap(); // idempotent
+        d.ensure(None).unwrap(); // idempotent
+    }
+
+    #[test]
+    fn ensure_exposes_the_real_custom_nodes_under_the_data_directory() {
+        // `--base-directory` redirects ComfyUI's own `custom_nodes` lookup
+        // there too (real ComfyUI, not just the fake fixture) — without this,
+        // ComfyUI crashes on startup instead of finding the installed nodes
+        // (e.g. ComfyUI-GGUF) at all.
+        let tmp = tempfile::tempdir().unwrap();
+        let install_dir = tmp.path().join("checkout");
+        let real_nodes = install_dir.join("custom_nodes");
+        std::fs::create_dir_all(&real_nodes).unwrap();
+        std::fs::write(real_nodes.join("marker.txt"), b"comfyui-gguf").unwrap();
+
+        let d = ComfyDirs {
+            base: tmp.path().join("data"),
+            output: tmp.path().join("out"),
+            models_store: tmp.path().join("store"),
+        };
+        d.ensure(Some(&install_dir)).unwrap();
+
+        let linked = d.base.join("custom_nodes").join("marker.txt");
+        assert_eq!(std::fs::read(linked).unwrap(), b"comfyui-gguf");
+
+        // Idempotent: a second `ensure` (every server start) must not error.
+        d.ensure(Some(&install_dir)).unwrap();
     }
 
     #[test]

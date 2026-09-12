@@ -96,8 +96,14 @@ async fn create_session(State(fx): State<Fx>, headers: HeaderMap) -> Response {
     if !authed(&fx, &headers) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
-    Json(json!({ "id": SESSION_ID, "title": "Untitled", "created_at": "2026-01-01T00:00:00Z" }))
-        .into_response()
+    // Matches the real `hermes-agent` 0.19.0 API server: the id is nested
+    // under `session`, not top-level (found against a real install — the
+    // adapter originally expected a flat `{"id": ...}`).
+    Json(json!({
+        "object": "hermes.session",
+        "session": { "id": SESSION_ID, "title": Value::Null, "started_at": 0 }
+    }))
+    .into_response()
 }
 
 async fn delete_session(

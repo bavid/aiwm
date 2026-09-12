@@ -20,8 +20,8 @@ use tokio::sync::watch;
 use super::JobState;
 use crate::bench::{self, BenchOutcome};
 use crate::capability::chat::{self, ChatOutcome};
-use crate::capability::image::{self, ImageOutcome};
-use crate::capability::video::{self, VideoOutcome};
+use crate::capability::image::{self, ImageOutcome, ImageRequest};
+use crate::capability::video::{self, VideoOutcome, VideoRequest};
 use crate::compat::{self, VramEstimate};
 use crate::db::{EventLevel, Job, JobPatch, Model, NewJob};
 use crate::registry::Registry;
@@ -39,6 +39,18 @@ const COMFYUI: &str = "comfyui";
 const IMAGE_VRAM_FALLBACK_MB: u64 = 8192;
 /// Same, for a video model (Wan 2.2 5B is ~10 GB of weights).
 const VIDEO_VRAM_FALLBACK_MB: u64 = 11_264;
+/// The job "shape" `media_headroom_mb`'s per-family constants were sized for
+/// (matches the UI's own "getting heavy" cutoff — `EASY_PIXELS`/`EASY_FRAMES`
+/// in `ui/src/features/video/Video.tsx`, and `Image.tsx`'s 1024×1024 default).
+/// A request below this needs proportionally less sampler/VAE-decode memory,
+/// a bigger one needs more — a flat per-model number can't tell a small test
+/// clip from a full one apart and blocked *every* video job identically on a
+/// 16 GB card, no matter what was actually asked for.
+const REFERENCE_IMAGE_PIXELS: u64 = 1024 * 1024;
+const REFERENCE_VIDEO_PIXEL_FRAMES: u64 = 832 * 480 * 81;
+/// Never scale the headroom below this fraction of the per-family constant —
+/// some fixed sampler/VAE-decode cost remains no matter how small the ask.
+const MIN_HEADROOM_RATIO: f64 = 0.4;
 
 /// How a job came to rest.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -418,11 +430,22 @@ impl JobEngine {
         };
 
         self.db.jobs().assign(&job.id, COMFYUI, &model.id).await?;
+
+        let (width, height, frames) = if job.job_type == "video" {
+            let req = VideoRequest::from_params(&job.params)?;
+            (req.width, req.height, req.length)
+        } else {
+            let req = ImageRequest::from_params(&job.params)?;
+            (req.width, req.height, 1)
+        };
+
         Ok(Target {
             runtime_id: COMFYUI.into(),
             model_id: model.id.clone(),
             model_name: model.name.clone(),
-            vram_mb: job.vram_needed_mb().max(media_vram_mb(&model)),
+            vram_mb: job
+                .vram_needed_mb()
+                .max(media_vram_mb(&model, width, height, frames)),
             estimate: None,
         })
     }
@@ -969,19 +992,45 @@ fn hf_repo_from_url(url: &str) -> Option<String> {
     (parts.next() == Some("resolve")).then(|| format!("{owner}/{repo}"))
 }
 
-/// VRAM (MB) to reserve for a ComfyUI model. Uses the estimate `import`
-/// computed (on-disk size + a family-shaped headroom); falls back to a
-/// family-aware default when an older import left it unset.
-fn media_vram_mb(model: &Model) -> u64 {
-    let fallback = match model.family.as_deref() {
+/// VRAM (MB) to reserve for this specific image/video job. Starts from the
+/// model's import estimate (on-disk weight size + a family-shaped headroom —
+/// falls back to a family-aware default when an older import left it unset),
+/// then rescales the headroom portion to the job's actual pixel count (and,
+/// for video, frame count) instead of always charging the full reference-size
+/// headroom — see `REFERENCE_IMAGE_PIXELS`/`REFERENCE_VIDEO_PIXEL_FRAMES`.
+fn media_vram_mb(model: &Model, width: u32, height: u32, frames: u32) -> u64 {
+    let family = model.family.as_deref();
+    let fallback = match family {
         Some("wan" | "ltx") => VIDEO_VRAM_FALLBACK_MB,
         _ => IMAGE_VRAM_FALLBACK_MB,
     };
-    model
+    let stored = model
         .vram_estimate_mb
         .and_then(|mb| u64::try_from(mb).ok())
         .filter(|mb| *mb > 0)
-        .unwrap_or(fallback)
+        .unwrap_or(fallback);
+
+    // Split the stored (weights + headroom) figure back into its two parts
+    // using today's per-family headroom constant, so the scaling below only
+    // ever touches the headroom -- the weights themselves don't shrink just
+    // because a smaller image/clip was asked for.
+    let base_headroom = u64::try_from(crate::model::media_headroom_mb(family)).unwrap_or(0);
+    let weights = stored.saturating_sub(base_headroom);
+
+    let pixel_units = u64::from(width) * u64::from(height) * u64::from(frames.max(1));
+    let reference = if frames > 1 {
+        REFERENCE_VIDEO_PIXEL_FRAMES
+    } else {
+        REFERENCE_IMAGE_PIXELS
+    };
+    let ratio = if reference == 0 {
+        1.0
+    } else {
+        (pixel_units as f64 / reference as f64).max(MIN_HEADROOM_RATIO)
+    };
+    let scaled_headroom = (base_headroom as f64 * ratio).round() as u64;
+
+    weights + scaled_headroom
 }
 
 /// Turn the scheduler's terse `Blocked` reason into a plain-language sentence
@@ -1006,6 +1055,7 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
+    use crate::db::NewModel;
     use crate::runtime::{ComfyDirs, FakeRuntimeAdapter, RuntimeAdapter};
     use crate::scheduler::HybridScheduler;
 
@@ -1316,5 +1366,66 @@ mod tests {
             fx.db.jobs().get(&job.id).await.unwrap().unwrap().state,
             JobState::Failed
         );
+    }
+
+    async fn model_with(db: &Database, family: Option<&str>, vram_estimate_mb: i64) -> Model {
+        let id = db
+            .models()
+            .insert(NewModel {
+                name: "m".into(),
+                family: family.map(str::to_string),
+                format: "safetensors".into(),
+                file_path: "m.safetensors".into(),
+                vram_estimate_mb: Some(vram_estimate_mb),
+                source: "manual".into(),
+                ..NewModel::default()
+            })
+            .await
+            .unwrap()
+            .id;
+        db.models().get(&id).await.unwrap().unwrap()
+    }
+
+    #[tokio::test]
+    async fn media_vram_mb_is_unchanged_at_the_reference_shape() {
+        let db = Database::connect_in_memory().await.unwrap();
+        let model = model_with(&db, Some("wan"), 15_680).await;
+        assert_eq!(media_vram_mb(&model, 832, 480, 81), 15_680);
+    }
+
+    #[tokio::test]
+    async fn media_vram_mb_scales_the_headroom_down_for_a_small_video_request() {
+        let db = Database::connect_in_memory().await.unwrap();
+        // Wan headroom is 6144 MB; a 15680 MB stored estimate at the default
+        // 832x480x81 shape decomposes to ~9536 MB weights + 6144 MB headroom.
+        let model = model_with(&db, Some("wan"), 15_680).await;
+
+        // A tiny test clip needs far less headroom, but the weights -- which
+        // must be loaded onto the GPU no matter the resolution -- don't
+        // shrink. This is exactly the case that blocked a small test clip the
+        // same as a full-size render before this fix.
+        let small = media_vram_mb(&model, 256, 256, 9);
+        assert!(
+            small < 15_680,
+            "expected less than the unscaled estimate, got {small}"
+        );
+        assert!(
+            small > 9_536,
+            "the weights alone should still be reserved, got {small}"
+        );
+    }
+
+    #[tokio::test]
+    async fn media_vram_mb_never_drops_the_headroom_below_the_floor() {
+        let db = Database::connect_in_memory().await.unwrap();
+        let model = model_with(&db, Some("sdxl"), 8_000).await;
+
+        // Some fixed sampler/VAE-decode cost remains no matter how small the
+        // request -- the headroom never scales below `MIN_HEADROOM_RATIO`.
+        let tiny = media_vram_mb(&model, 256, 256, 1);
+        let sdxl_headroom = 2_048.0;
+        let weights = 8_000.0 - sdxl_headroom;
+        let expected = (weights + sdxl_headroom * MIN_HEADROOM_RATIO).round() as u64;
+        assert_eq!(tiny, expected);
     }
 }

@@ -9,6 +9,21 @@
   grid-column: 1 / -1;
 }
 
+/* Brief highlight so "Set import type" (clicked from the catalog, further up
+   the page) has a visible effect after scrolling the form into view. */
+.models__flash .card {
+  animation: models-flash 1.2s ease-out;
+}
+
+@keyframes models-flash {
+  0% {
+    box-shadow: 0 0 0 2px var(--accent);
+  }
+  100% {
+    box-shadow: 0 0 0 0 transparent;
+  }
+}
+
 .import {
   display: flex;
   flex-direction: column;

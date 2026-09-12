@@ -83,6 +83,8 @@ impl Drop for Session {
 pub struct OpenCodeAdapter {
     launch: LaunchSource,
     http: reqwest::Client,
+    /// No timeout — dedicated to the long-lived `/global/event` SSE stream.
+    stream_http: reqwest::Client,
     /// adapter session id → its process + stream.
     sessions: Mutex<HashMap<String, Session>>,
 }
@@ -109,9 +111,20 @@ impl OpenCodeAdapter {
             .timeout(Duration::from_secs(30))
             .build()
             .unwrap_or_else(|_| reqwest::Client::new());
+        // No overall request timeout: this one drives the long-lived
+        // `/global/event` SSE stream, which must stay open for the entire
+        // session. Reusing `http`'s 30s timeout here killed the stream mid
+        // turn on a real run -- `drain_events` then read that as "the
+        // runtime died" and released the model out from under an active
+        // session (found generating a real file: it just stopped ~30s in).
+        let stream_http = reqwest::Client::builder()
+            .connect_timeout(Duration::from_secs(10))
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new());
         Self {
             launch,
             http,
+            stream_http,
             sessions: Mutex::new(HashMap::new()),
         }
     }
@@ -209,7 +222,7 @@ impl AgentAdapter for OpenCodeAdapter {
 
         let (tx, rx) = mpsc::unbounded_channel();
         let reader = tokio::spawn(sse::run(
-            self.http.clone(),
+            self.stream_http.clone(),
             base.clone(),
             session_id.clone(),
             tx,

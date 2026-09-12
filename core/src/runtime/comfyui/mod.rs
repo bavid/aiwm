@@ -424,7 +424,8 @@ impl ComfyUiAdapter {
         let launch = self
             .server_launch()
             .ok_or_else(|| comfy_err("ComfyUI is not installed — run ComfyUI setup first"))?;
-        self.dirs.ensure()?;
+        let install_dir = launch.main.as_deref().and_then(Path::parent);
+        self.dirs.ensure(install_dir)?;
         let port = free_loopback_port()?;
         let spec = build_spawn_spec(&launch, port, &self.dirs, &self.opts);
 

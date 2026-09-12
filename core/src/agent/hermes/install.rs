@@ -150,8 +150,17 @@ where
 
     on_progress(InstallPhase::InstallingHermes, 0, 0);
     let pkg = format!("hermes-agent=={version}");
+    // `aiohttp` alongside it: AIWM drives Hermes over its HTTP "API Server"
+    // component (API_SERVER_ENABLED=1), which Hermes's own install does not
+    // pull in by default -- without it the API server never starts, so our
+    // `GET /health` readiness check never responds and every session open
+    // times out (found via the first real hands-on Hermes run).
     runner
-        .run(&uv, &["pip", "install", "--python", &py_s, &pkg], &env)
+        .run(
+            &uv,
+            &["pip", "install", "--python", &py_s, &pkg, "aiohttp"],
+            &env,
+        )
         .await?;
 
     if !py.is_file() || !hermes.is_file() {
@@ -303,6 +312,12 @@ mod tests {
             calls[1].contains(&"hermes-agent==0.19.0".to_string()),
             "{calls:?}"
         );
+        // AIWM talks to Hermes over its HTTP "API Server" component
+        // (API_SERVER_ENABLED=1), which needs `aiohttp` -- Hermes's own
+        // install doesn't pull it in by default, and without it the API
+        // server never starts, so `GET /health` never responds and every
+        // session open times out with "hermes gateway did not become ready".
+        assert!(calls[1].contains(&"aiohttp".to_string()), "{calls:?}");
         assert_eq!(calls[2], vec!["postinstall".to_string()]);
         let phases = phases.into_inner().unwrap();
         assert!(phases.contains(&InstallPhase::CreatingVenv));

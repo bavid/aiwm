@@ -265,6 +265,14 @@ pub struct ModelStackDto {
     pub is_default: bool,
     /// Base model first, then companions — display order.
     pub members: Vec<KnownModelDto>,
+    /// Fit for the **whole stack loaded together** (every member's size
+    /// summed) — a real render needs the base model *and* every companion in
+    /// VRAM at once, so judging fit off the base model alone (or the best
+    /// individual member) understates the requirement. Each member's own
+    /// `fit` is still its size in isolation, useful for "is this one file by
+    /// itself reasonable" — this field is the number that actually matters
+    /// for "can I run this stack".
+    pub fit: crate::compat::FitVerdict,
 }
 
 /// `GET /models/featured` — the curated chat/coding recommendations

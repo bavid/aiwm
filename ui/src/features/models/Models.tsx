@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import {
   useAbout,
   useBenchmarks,
@@ -82,12 +82,27 @@ function scoreTitle(b: Benchmark): string {
 export function Models() {
   const { data: models, error, refetch } = useModels();
   const [modelType, setModelType] = useState<ModelType>("chat");
+  const importRef = useRef<HTMLDivElement>(null);
+  const [importFlash, setImportFlash] = useState(false);
+
+  // "Set import type" (on a catalog/Discover row) changes a dropdown that
+  // lives in the Import form further down the page -- with no feedback,
+  // clicking it while scrolled past the form does nothing visible. Scroll it
+  // into view and flash it so the effect is obvious.
+  const useType = (t: ModelType) => {
+    setModelType(t);
+    importRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+    setImportFlash(true);
+    setTimeout(() => setImportFlash(false), 1200);
+  };
 
   return (
     <div className="models">
-      <ImportForm modelType={modelType} setModelType={setModelType} onImported={refetch} />
+      <Catalog onUseType={useType} />
 
-      <Catalog onUseType={setModelType} />
+      <div ref={importRef} className={importFlash ? "models__flash" : undefined}>
+        <ImportForm modelType={modelType} setModelType={setModelType} onImported={refetch} />
+      </div>
 
       <ModelLibrary models={models} error={error} />
 
@@ -97,7 +112,7 @@ export function Models() {
 
       <StoragePanel />
 
-      <Discover onUseType={setModelType} />
+      <Discover onUseType={useType} />
     </div>
   );
 }
@@ -724,18 +739,6 @@ function KnownRow({
   );
 }
 
-/** The worst fit among a stack's members — a companion that won't fit blocks
- *  the setup just as much as the base model not fitting. */
-function worstFit(members: KnownModel[]): FitVerdict {
-  const red = members.find((m) => m.fit.level === "red");
-  if (red) return red.fit;
-  const yellow = members.find((m) => m.fit.level === "yellow");
-  if (yellow) return yellow.fit;
-  const green = members.find((m) => m.fit.level === "green");
-  if (green) return green.fit;
-  return members[0].fit;
-}
-
 /** A base image/video model plus every companion file it needs (VAE, text
  *  encoder, …) — "Download entire stack" queues all of them in one go, so
  *  you don't have to know Flux needs four separate files or hunt them down
@@ -746,7 +749,7 @@ function StackCard({ stack, onUseType }: { stack: ModelStack; onUseType: (t: Mod
   const [status, setStatus] = useState<"idle" | "queued" | "error">("idle");
 
   const totalBytes = stack.members.reduce((sum, m) => sum + m.size_bytes, 0);
-  const fit = worstFit(stack.members);
+  const fit = stack.fit;
 
   const downloadAll = async () => {
     setBusy(true);

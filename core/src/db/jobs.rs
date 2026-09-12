@@ -247,12 +247,18 @@ impl<'a> JobRepo<'a> {
             .collect()
     }
 
-    /// The oldest job the engine may act on (queued or blocked).
+    /// The job the engine should act on next: any `queued` job (oldest first)
+    /// takes priority over every `blocked` one. A `blocked` job is just
+    /// waiting for room and can sit that way indefinitely (no VRAM freeing
+    /// up) — always re-trying the oldest row regardless of state let one
+    /// stuck job starve every other job forever, since the single job slot
+    /// never got a chance to attempt anything newer. `blocked` jobs are only
+    /// retried once there is nothing else runnable.
     pub async fn next_runnable(&self) -> Result<Option<Job>> {
         let row: Option<JobRow> = sqlx::query_as(AssertSqlSafe(format!(
             "SELECT {SELECT_COLS} FROM jobs
              WHERE state IN ('queued', 'blocked')
-             ORDER BY created_at ASC LIMIT 1"
+             ORDER BY (state = 'blocked'), created_at ASC LIMIT 1"
         )))
         .fetch_optional(self.pool)
         .await?;
@@ -518,6 +524,33 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(db.jobs().next_runnable().await.unwrap().unwrap().id, b.id);
+    }
+
+    #[tokio::test]
+    async fn a_blocked_job_never_starves_a_newer_queued_one() {
+        let db = db().await;
+        let a = db.jobs().insert(NewJob::new("a")).await.unwrap();
+        let b = db.jobs().insert(NewJob::new("b")).await.unwrap();
+
+        // `a` is older but stuck waiting for VRAM; `b` is younger but ready.
+        // The single job slot must not spend forever re-checking `a` while
+        // `b` never even gets a chance.
+        db.jobs()
+            .set_state(&a.id, JobState::Scheduled, JobPatch::default())
+            .await
+            .unwrap();
+        db.jobs()
+            .set_state(&a.id, JobState::Blocked, JobPatch::default())
+            .await
+            .unwrap();
+        assert_eq!(db.jobs().next_runnable().await.unwrap().unwrap().id, b.id);
+
+        // Once nothing else is runnable, the blocked job gets retried.
+        db.jobs()
+            .set_state(&b.id, JobState::Scheduled, JobPatch::default())
+            .await
+            .unwrap();
+        assert_eq!(db.jobs().next_runnable().await.unwrap().unwrap().id, a.id);
     }
 
     #[tokio::test]
