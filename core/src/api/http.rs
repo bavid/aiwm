@@ -12,8 +12,8 @@ use axum::{Json, Router};
 use serde::Deserialize;
 
 use super::dto::{
-    AgentMessageDto, AgentPermissionDto, NewAgentDto, OpenAgentSessionDto, SetRolesDto, SetTagsDto,
-    SetTokenDto, SubmitJobDto,
+    AgentMessageDto, AgentPermissionDto, NewAgentDto, NewSessionDto, OpenAgentSessionDto,
+    RenameSessionDto, SetArchivedDto, SetRolesDto, SetTagsDto, SetTokenDto, SubmitJobDto,
 };
 use super::handlers;
 use crate::db::JobFilter;
@@ -30,6 +30,9 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/settings", get(settings))
         .route("/settings/{key}", put(set_setting))
         .route("/jobs", get(list_jobs).post(submit_job))
+        .route("/sessions", get(list_sessions).post(create_session))
+        .route("/sessions/{id}", put(rename_session).delete(delete_session))
+        .route("/sessions/{id}/archived", put(set_session_archived))
         .route("/jobs/{id}", get(job_detail))
         .route("/jobs/{id}/cancel", post(cancel_job))
         .route("/jobs/{id}/output", get(job_output))
@@ -173,6 +176,52 @@ async fn submit_job(
 ) -> Result<(StatusCode, Json<crate::db::Job>), ApiError> {
     let job = handlers::submit_job(&app, body).await?;
     Ok((StatusCode::CREATED, Json(job)))
+}
+
+#[derive(Deserialize)]
+struct SessionQuery {
+    capability: String,
+}
+
+async fn list_sessions(
+    State(app): AppState,
+    Query(q): Query<SessionQuery>,
+) -> Result<Json<Vec<crate::db::Session>>, ApiError> {
+    Ok(Json(handlers::list_sessions(&app, &q.capability).await?))
+}
+
+async fn create_session(
+    State(app): AppState,
+    Json(body): Json<NewSessionDto>,
+) -> Result<(StatusCode, Json<crate::db::Session>), ApiError> {
+    let session = handlers::create_session(&app, body).await?;
+    Ok((StatusCode::CREATED, Json(session)))
+}
+
+async fn rename_session(
+    State(app): AppState,
+    Path(id): Path<String>,
+    Json(body): Json<RenameSessionDto>,
+) -> Result<StatusCode, ApiError> {
+    handlers::rename_session(&app, &id, &body.name).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn set_session_archived(
+    State(app): AppState,
+    Path(id): Path<String>,
+    Json(body): Json<SetArchivedDto>,
+) -> Result<StatusCode, ApiError> {
+    handlers::set_session_archived(&app, &id, body.archived).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn delete_session(
+    State(app): AppState,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    handlers::delete_session(&app, &id).await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn job_detail(State(app): AppState, Path(id): Path<String>) -> Result<Response, ApiError> {

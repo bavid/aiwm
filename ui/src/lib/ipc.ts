@@ -152,6 +152,8 @@ export interface Job {
   output_path: string | null;
   /** Progressively-updated generated text for chat/completion jobs. */
   result: string | null;
+  /** The session this job belongs to, if any (`null` = ungrouped). */
+  session_id: string | null;
 }
 
 export interface RuntimeStatus {
@@ -216,7 +218,28 @@ export interface SubmitJobBody {
   model_id?: string;
   vram_needed_mb?: number;
   agent_session?: boolean;
+  /** Group this job under a session (Chat/Image/Video "project"). */
+  session_id?: string;
   params?: unknown;
+}
+
+// --- sessions -----------------------------------------------------------
+
+/** `"chat"` | `"image"` | `"video"`. */
+export type SessionCapability = "chat" | "image" | "video";
+
+export interface Session {
+  id: string;
+  capability: SessionCapability;
+  name: string;
+  created_at: string;
+  /** `null` = active (shown in the switcher); set = archived. */
+  archived_at: string | null;
+}
+
+export interface NewSessionBody {
+  capability: SessionCapability;
+  name: string;
 }
 
 export const about = () => invoke<AboutInfo>("about");
@@ -240,6 +263,16 @@ export const listJobs = (opts?: { states?: JobState[]; limit?: number }) =>
 export const cancelJob = (id: string) => invoke<boolean | null>("cancel_job", { id });
 export const submitJob = (body: SubmitJobBody) => invoke<Job>("submit_job", { body });
 export const jobDetail = (id: string) => invoke<JobDetail | null>("job_detail", { id });
+
+export const listSessions = (capability: SessionCapability) =>
+  invoke<Session[]>("list_sessions", { capability });
+export const createSession = (body: NewSessionBody) =>
+  invoke<Session>("create_session", { body });
+export const renameSession = (id: string, name: string) =>
+  invoke<void>("rename_session", { id, name });
+export const setSessionArchived = (id: string, archived: boolean) =>
+  invoke<void>("set_session_archived", { id, archived });
+export const deleteSession = (id: string) => invoke<void>("delete_session", { id });
 
 export const listModels = () => invoke<Model[]>("list_models");
 

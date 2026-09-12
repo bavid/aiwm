@@ -1,0 +1,67 @@
+.queue-list__rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--space-2);
+}
+
+.queue-list__rows li {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.queue-list__row {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color var(--dur) var(--ease);
+}
+
+.queue-list__row:hover {
+  border-color: var(--accent);
+}
+
+.queue-list__row[aria-pressed="true"] {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent) inset;
+}
+
+.queue-list__prompt {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.queue-list__meta {
+  flex-shrink: 0;
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+.queue-list__cancel {
+  flex-shrink: 0;
+  padding: 1px var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.queue-list__cancel:hover {
+  color: var(--load-crit);
+  border-color: color-mix(in oklab, var(--load-crit) 40%, var(--border));
+}

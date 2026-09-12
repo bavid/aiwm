@@ -7,13 +7,14 @@ use std::path::PathBuf;
 
 use super::dto::{
     AboutDto, AgentPermissionDto, AgentSessionDetailDto, ConfigUpdate, EnqueueDownloadDto,
-    FeaturedModelDto, JobDetailDto, KnownModelDto, ModelStackDto, NewAgentDto, OpenAgentSessionDto,
-    RegistryDetailsDto, RegistryFileDto, RegistrySearchDto, RuntimeStatusDto, SubmitJobDto,
+    FeaturedModelDto, JobDetailDto, KnownModelDto, ModelStackDto, NewAgentDto, NewSessionDto,
+    OpenAgentSessionDto, RegistryDetailsDto, RegistryFileDto, RegistrySearchDto, RuntimeStatusDto,
+    SubmitJobDto,
 };
 use crate::compat::FitVerdict;
 use crate::config::Config;
 use crate::db::{
-    Agent, AgentSession, Benchmark, Download, Job, JobFilter, Model, NewAgent, NewJob,
+    Agent, AgentSession, Benchmark, Download, Job, JobFilter, Model, NewAgent, NewJob, Session,
 };
 use crate::download::EnqueueRequest;
 use crate::model::{ImportOutcome, ImportRequest};
@@ -118,10 +119,15 @@ pub async fn job_detail(app: &App, id: &str) -> Result<Option<JobDetailDto>> {
 }
 
 pub async fn submit_job(app: &App, body: SubmitJobDto) -> Result<Job> {
+    app.jobs.submit(new_job_from(body)).await
+}
+
+fn new_job_from(body: SubmitJobDto) -> NewJob {
     let mut new = NewJob::new(body.job_type);
     new.capability = body.capability;
     new.runtime_id = body.runtime_id;
     new.model_id = body.model_id;
+    new.session_id = body.session_id;
     new.params = if body.params.is_null() {
         serde_json::json!({})
     } else {
@@ -133,7 +139,7 @@ pub async fn submit_job(app: &App, body: SubmitJobDto) -> Result<Job> {
     if body.agent_session {
         new.params["agent_session"] = true.into();
     }
-    app.jobs.submit(new).await
+    new
 }
 
 /// Ask a job to stop. `Ok(Some(true))` = a cancel was applied or signalled,
@@ -499,6 +505,45 @@ pub fn agent_runtimes(app: &App) -> Vec<crate::api::dto::AgentRuntimeDto> {
     ]
 }
 
+// --- sessions ---------------------------------------------------------------
+
+const SESSION_CAPABILITIES: [&str; 3] = ["chat", "image", "video"];
+
+pub async fn create_session(app: &App, body: NewSessionDto) -> Result<Session> {
+    if body.name.trim().is_empty() {
+        return Err(CoreError::Config("session name must not be empty".into()));
+    }
+    if !SESSION_CAPABILITIES.contains(&body.capability.as_str()) {
+        return Err(CoreError::Config(format!(
+            "unknown session capability {:?}",
+            body.capability
+        )));
+    }
+    app.db
+        .sessions()
+        .create(&body.capability, body.name.trim())
+        .await
+}
+
+pub async fn list_sessions(app: &App, capability: &str) -> Result<Vec<Session>> {
+    app.db.sessions().list_for(capability).await
+}
+
+pub async fn rename_session(app: &App, id: &str, name: &str) -> Result<()> {
+    if name.trim().is_empty() {
+        return Err(CoreError::Config("session name must not be empty".into()));
+    }
+    app.db.sessions().rename(id, name.trim()).await
+}
+
+pub async fn set_session_archived(app: &App, id: &str, archived: bool) -> Result<()> {
+    app.db.sessions().set_archived(id, archived).await
+}
+
+pub async fn delete_session(app: &App, id: &str) -> Result<()> {
+    app.db.sessions().delete(id).await
+}
+
 // --- agents (Phase 5.1c) ---------------------------------------------------
 
 pub async fn create_agent(app: &App, body: NewAgentDto) -> Result<Agent> {
@@ -837,6 +882,38 @@ mod tests {
             ..sample_model()
         };
         assert!(!is_weight_file(&other, "weights.gguf"));
+    }
+
+    #[test]
+    fn submit_job_dto_carries_the_session_id_through() {
+        let body = SubmitJobDto {
+            job_type: "chat".into(),
+            capability: None,
+            runtime_id: None,
+            model_id: None,
+            vram_needed_mb: 0,
+            agent_session: false,
+            session_id: Some("sess-123".into()),
+            params: serde_json::Value::Null,
+        };
+        let new = new_job_from(body);
+        assert_eq!(new.session_id.as_deref(), Some("sess-123"));
+    }
+
+    #[test]
+    fn submit_job_dto_defaults_to_no_session() {
+        let body = SubmitJobDto {
+            job_type: "chat".into(),
+            capability: None,
+            runtime_id: None,
+            model_id: None,
+            vram_needed_mb: 0,
+            agent_session: false,
+            session_id: None,
+            params: serde_json::Value::Null,
+        };
+        let new = new_job_from(body);
+        assert_eq!(new.session_id, None);
     }
 
     #[test]

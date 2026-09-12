@@ -91,8 +91,32 @@ pub struct SubmitJobDto {
     pub vram_needed_mb: u64,
     #[serde(default)]
     pub agent_session: bool,
+    /// Group this job under a session (Chat/Image/Video "project"). `None` =
+    /// ungrouped.
+    #[serde(default)]
+    pub session_id: Option<String>,
     #[serde(default)]
     pub params: serde_json::Value,
+}
+
+/// Body for `POST /sessions` / `create_session`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct NewSessionDto {
+    /// `"chat"` | `"image"` | `"video"`.
+    pub capability: String,
+    pub name: String,
+}
+
+/// Body for `PUT /sessions/{id}` / `rename_session`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct RenameSessionDto {
+    pub name: String,
+}
+
+/// Body for `PUT /sessions/{id}/archived` / `set_session_archived`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct SetArchivedDto {
+    pub archived: bool,
 }
 
 /// Body for `POST /agents` / `create_agent` — a new agent profile.

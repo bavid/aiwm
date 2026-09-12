@@ -7,6 +7,11 @@
   gap: var(--space-4);
 }
 
+.chat__head {
+  display: flex;
+  justify-content: flex-end;
+}
+
 .chat__log {
   flex: 1;
   min-height: 0;

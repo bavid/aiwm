@@ -14,6 +14,7 @@ import {
   listModelStacks,
   listDownloads,
   listModels,
+  listSessions,
   modelTags,
   registrySearch,
   registryStatus,
@@ -24,6 +25,7 @@ import {
   type Benchmark,
   type Download,
   type Job,
+  type JobState,
   type RegistryStatus,
   type StorageReport,
   type FeaturedModel,
@@ -33,6 +35,8 @@ import {
   type RegistrySearchParams,
   type RegistrySearchResult,
   type RuntimeStatus,
+  type Session,
+  type SessionCapability,
   type SystemTelemetry,
 } from "./ipc";
 
@@ -120,7 +124,12 @@ function usePolled<T>(key: string, fetcher: () => Promise<T>, intervalMs: number
   return { data, error, refetch };
 }
 
-export const useJobs = () => usePolled<Job[]>("jobs", () => listJobs({ limit: 50 }), 2000);
+export const useJobs = (opts?: { states?: JobState[]; limit?: number }) =>
+  usePolled<Job[]>(
+    `jobs:${JSON.stringify(opts ?? null)}`,
+    () => listJobs(opts ?? { limit: 50 }),
+    2000,
+  );
 export const useRuntimes = () => usePolled<RuntimeStatus[]>("runtimes", getRuntimes, 3000);
 export const useLogs = () => usePolled<string[]>("logs", () => getRecentLogs(300), 3000);
 export const useModels = () => usePolled<Model[]>("models", listModels, 3000);
@@ -137,6 +146,10 @@ export const useModelTags = () =>
   usePolled<Record<string, string[]>>("model-tags", modelTags, 4000);
 export const useRegistryStatus = () =>
   usePolled<RegistryStatus>("registry-status", registryStatus, 5000);
+
+/** Sessions for one capability (Chat/Image/Video "projects"), active first. */
+export const useSessions = (capability: SessionCapability) =>
+  usePolled<Session[]>(`sessions:${capability}`, () => listSessions(capability), 3000);
 
 /** Debounced Hugging Face search for the Discover panel. Runs when `params`
  *  change (400 ms after the last one) and `enabled`; not polled. */

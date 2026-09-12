@@ -8,12 +8,12 @@ use std::sync::{Arc, Mutex};
 
 use aiwm_core::api::dto::{
     AboutDto, AgentPermissionDto, AgentSessionDetailDto, ConfigUpdate, EnqueueDownloadDto,
-    FeaturedModelDto, JobDetailDto, KnownModelDto, ModelStackDto, NewAgentDto, OpenAgentSessionDto,
-    RegistryDetailsDto, RegistrySearchDto, RuntimeStatusDto, SubmitJobDto,
+    FeaturedModelDto, JobDetailDto, KnownModelDto, ModelStackDto, NewAgentDto, NewSessionDto,
+    OpenAgentSessionDto, RegistryDetailsDto, RegistrySearchDto, RuntimeStatusDto, SubmitJobDto,
 };
 use aiwm_core::api::handlers;
 use aiwm_core::config::Config;
-use aiwm_core::db::{Agent, AgentSession, Benchmark, Download, Job, JobFilter, Model};
+use aiwm_core::db::{Agent, AgentSession, Benchmark, Download, Job, JobFilter, Model, Session};
 use aiwm_core::model::{ImportOutcome, ImportRequest};
 use aiwm_core::orchestrator::JobState;
 use aiwm_core::registry::{Fetched, RemoteModel};
@@ -168,6 +168,45 @@ async fn cancel_job(app: tauri::State<'_, Arc<App>>, id: String) -> Result<Optio
 #[tauri::command]
 async fn submit_job(app: tauri::State<'_, Arc<App>>, body: SubmitJobDto) -> Result<Job, String> {
     to_ipc(handlers::submit_job(&app, body).await)
+}
+
+#[tauri::command]
+async fn list_sessions(
+    app: tauri::State<'_, Arc<App>>,
+    capability: String,
+) -> Result<Vec<Session>, String> {
+    to_ipc(handlers::list_sessions(&app, &capability).await)
+}
+
+#[tauri::command]
+async fn create_session(
+    app: tauri::State<'_, Arc<App>>,
+    body: NewSessionDto,
+) -> Result<Session, String> {
+    to_ipc(handlers::create_session(&app, body).await)
+}
+
+#[tauri::command]
+async fn rename_session(
+    app: tauri::State<'_, Arc<App>>,
+    id: String,
+    name: String,
+) -> Result<(), String> {
+    to_ipc(handlers::rename_session(&app, &id, &name).await)
+}
+
+#[tauri::command]
+async fn set_session_archived(
+    app: tauri::State<'_, Arc<App>>,
+    id: String,
+    archived: bool,
+) -> Result<(), String> {
+    to_ipc(handlers::set_session_archived(&app, &id, archived).await)
+}
+
+#[tauri::command]
+async fn delete_session(app: tauri::State<'_, Arc<App>>, id: String) -> Result<(), String> {
+    to_ipc(handlers::delete_session(&app, &id).await)
 }
 
 #[tauri::command]
@@ -421,6 +460,11 @@ fn try_run() -> anyhow::Result<()> {
             cancel_job,
             submit_job,
             job_detail,
+            list_sessions,
+            create_session,
+            rename_session,
+            set_session_archived,
+            delete_session,
             list_agents,
             create_agent,
             delete_agent,

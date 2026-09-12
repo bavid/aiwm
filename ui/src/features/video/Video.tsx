@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { NumField } from "../../components/NumField";
+import { QueueList } from "../../components/QueueList";
+import { SessionSwitcher } from "../../components/SessionSwitcher";
 import { useAbout, useJobs, useModels, useRuntimes } from "../../lib/hooks";
 import {
   cancelJob,
@@ -79,6 +81,7 @@ export function VideoStudio() {
     (j) => j.job_type === "image" && j.state === "completed" && j.output_path,
   );
 
+  const [sessionId, setSessionId] = useState<string | null>(null);
   const [prompt, setPrompt] = useState("");
   const [negative, setNegative] = useState("");
   const [width, setWidth] = useState(832);
@@ -120,7 +123,11 @@ export function VideoStudio() {
   }, [pendingId]);
 
   const gallery = (jobs ?? []).filter(
-    (j) => j.job_type === "video" && j.state === "completed" && j.output_path,
+    (j) =>
+      j.job_type === "video" &&
+      j.state === "completed" &&
+      j.output_path &&
+      j.session_id === sessionId,
   );
 
   const selected =
@@ -182,6 +189,7 @@ export function VideoStudio() {
       const job = await submitJob({
         job_type: "video",
         model_id: modelId === "auto" ? undefined : modelId,
+        session_id: sessionId ?? undefined,
         params,
       });
       setPendingId(job.id);
@@ -203,6 +211,8 @@ export function VideoStudio() {
             <span className="card__sub">Auto · {videoModels.length} model(s)</span>
           )}
         </header>
+        <SessionSwitcher capability="video" activeId={sessionId} onChange={setSessionId} />
+
 
         {!comfyReady && (
           <p className="muted">ComfyUI is not set up yet — open Diagnostics to install it.</p>
@@ -354,20 +364,34 @@ export function VideoStudio() {
         {sendError && <p className="image__err">{sendError}</p>}
       </section>
 
-      <section className="card image__result">
-        <header className="card__head">
-          <h2>Result</h2>
-          {selected && <span className="card__sub">{selected.state}</span>}
-        </header>
-        <Result
-          job={selected}
-          events={selectedEvents}
-          port={about?.core_api_port ?? null}
+      <div className="image__result">
+        <QueueList
+          jobType="video"
+          jobs={jobs ?? []}
           modelNames={modelNames}
-          onCancel={selected ? () => cancelJob(selected.id) : undefined}
-          onReuseSeed={setSeed}
+          selectedId={selectedId}
+          onSelect={(id) => {
+            setSelectedId(id);
+            setDetail(null);
+          }}
+          onCancel={cancelJob}
+          promptOf={promptOf}
         />
-      </section>
+        <section className="card">
+          <header className="card__head">
+            <h2>Result</h2>
+            {selected && <span className="card__sub">{selected.state}</span>}
+          </header>
+          <Result
+            job={selected}
+            events={selectedEvents}
+            port={about?.core_api_port ?? null}
+            modelNames={modelNames}
+            onCancel={selected ? () => cancelJob(selected.id) : undefined}
+            onReuseSeed={setSeed}
+          />
+        </section>
+      </div>
 
       <section className="card card--wide">
         <header className="card__head">

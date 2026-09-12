@@ -38,6 +38,25 @@
   margin-left: auto;
 }
 
+.dash__jobs-link {
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+
+.dash__jobs-link:hover {
+  color: var(--accent);
+}
+
+/* A session switcher placed as its own row right under a card's header
+   (Image/Video studios, where the header itself is too narrow to fit it). */
+.card > .session-switcher {
+  margin-bottom: var(--space-4);
+}
+
 .muted {
   color: var(--muted);
   font-size: var(--text-sm);

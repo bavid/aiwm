@@ -4,6 +4,7 @@ import { Chat } from "./features/chat/Chat";
 import { Dashboard } from "./features/dashboard/Dashboard";
 import { Diagnostics } from "./features/diagnostics/Diagnostics";
 import { ImageStudio } from "./features/image/Image";
+import { Jobs } from "./features/jobs/Jobs";
 import { Models } from "./features/models/Models";
 import { Settings } from "./features/settings/Settings";
 import { VideoStudio } from "./features/video/Video";
@@ -14,6 +15,7 @@ type Tab =
   | "chat"
   | "image"
   | "video"
+  | "jobs"
   | "agents"
   | "models"
   | "diagnostics"
@@ -24,6 +26,7 @@ const TABS: { id: Tab; label: string }[] = [
   { id: "chat", label: "Chat" },
   { id: "image", label: "Image" },
   { id: "video", label: "Video" },
+  { id: "jobs", label: "Jobs" },
   { id: "agents", label: "Agents" },
   { id: "models", label: "Models" },
   { id: "diagnostics", label: "Diagnostics" },
@@ -61,6 +64,7 @@ export default function App() {
         {tab === "chat" && <Chat />}
         {tab === "image" && <ImageStudio />}
         {tab === "video" && <VideoStudio />}
+        {tab === "jobs" && <Jobs />}
         {tab === "agents" && <AgentsWorkbench />}
         {tab === "models" && <Models />}
         {tab === "diagnostics" && <Diagnostics />}
