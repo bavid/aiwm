@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { SessionSwitcher } from "../../components/SessionSwitcher";
 import { useJobs, useModels, useRuntimes } from "../../lib/hooks";
 import {
   cancelJob,
@@ -43,12 +44,17 @@ function promptOf(job: Job): string {
 }
 
 export function Chat() {
+  const [sessionId, setSessionId] = useState<string | null>(null);
   const [turns, setTurns] = useState<Turn[]>([]);
   const [prompt, setPrompt] = useState("");
   const [pendingId, setPendingId] = useState<string | null>(null);
   const [sendError, setSendError] = useState<string | null>(null);
   const logRef = useRef<HTMLDivElement>(null);
-  const hydrated = useRef(false);
+  // Which session's history `turns` currently reflects -- `undefined` means
+  // "nothing loaded yet". Re-derive from the jobs table on mount and whenever
+  // the user switches sessions; otherwise leave `turns` alone so an optimistic
+  // send() (or a live jobDetail poll) isn't clobbered by a lagging jobs poll.
+  const hydratedFor = useRef<string | null | undefined>(undefined);
 
   const { data: models } = useModels();
   const { data: runtimes } = useRuntimes();
@@ -62,13 +68,14 @@ export function Chat() {
   );
 
   // Past turns live in the jobs table already (job_type "chat") -- pull them in
-  // once on mount so the conversation survives switching tabs or restarting the
-  // app, instead of vanishing with this component's local state.
+  // on mount and on every session switch so the conversation survives
+  // switching tabs, switching sessions, or restarting the app, instead of
+  // vanishing with this component's local state.
   useEffect(() => {
-    if (hydrated.current || !jobs) return;
-    hydrated.current = true;
+    if (!jobs || hydratedFor.current === sessionId) return;
+    hydratedFor.current = sessionId;
     const history = jobs
-      .filter((j) => j.job_type === "chat")
+      .filter((j) => j.job_type === "chat" && j.session_id === sessionId)
       .slice()
       .sort((a, b) => a.created_at.localeCompare(b.created_at))
       .map(
@@ -82,8 +89,8 @@ export function Chat() {
           error: j.error_text,
         }),
       );
-    if (history.length > 0) setTurns(history);
-  }, [jobs, modelNames]);
+    setTurns(history);
+  }, [jobs, modelNames, sessionId]);
 
   useEffect(() => {
     if (!pendingId) return;
@@ -136,12 +143,12 @@ export function Chat() {
     const text = prompt.trim();
     if (!text || (pendingId && !stuck)) return;
     setSendError(null);
-    // An optimistic turn is about to be appended -- never let the history
-    // hydration effect (which can still be waiting on its first `jobs` poll)
-    // overwrite it.
-    hydrated.current = true;
     try {
-      const job = await submitJob({ job_type: "chat", params: { prompt: text } });
+      const job = await submitJob({
+        job_type: "chat",
+        params: { prompt: text },
+        session_id: sessionId ?? undefined,
+      });
       setTurns((ts) => [
         ...ts,
         {
@@ -170,6 +177,9 @@ export function Chat() {
 
   return (
     <div className="chat">
+      <div className="chat__head">
+        <SessionSwitcher capability="chat" activeId={sessionId} onChange={setSessionId} />
+      </div>
       <div className="chat__log" ref={logRef}>
         {turns.length === 0 && (
           <div className="chat__empty">

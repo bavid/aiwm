@@ -91,6 +91,9 @@ export function Dashboard({ onNavigate }: { onNavigate: (tab: string) => void })
           <span className="card__sub numeric">
             {activeJob ? "1 running" : "idle"} · {queued} queued
           </span>
+          <button type="button" className="dash__jobs-link" onClick={() => onNavigate("jobs")}>
+            View all →
+          </button>
         </header>
         <JobTable jobs={jobs} onCancelled={refetchJobs} />
       </section>

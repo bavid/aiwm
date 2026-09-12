@@ -44,6 +44,8 @@ pub struct Job {
     pub output_path: Option<String>,
     /// Progressively-updated generated text for chat/completion jobs.
     pub result: Option<String>,
+    /// The session this job belongs to, if any (`NULL` = ungrouped).
+    pub session_id: Option<String>,
 }
 
 /// Fields a caller supplies when queueing a job.
@@ -54,6 +56,7 @@ pub struct NewJob {
     pub runtime_id: Option<String>,
     pub model_id: Option<String>,
     pub params: serde_json::Value,
+    pub session_id: Option<String>,
 }
 
 impl NewJob {
@@ -64,6 +67,7 @@ impl NewJob {
             runtime_id: None,
             model_id: None,
             params: serde_json::json!({}),
+            session_id: None,
         }
     }
 
@@ -147,13 +151,15 @@ struct JobRow {
     error_text: Option<String>,
     output_path: Option<String>,
     result: Option<String>,
+    session_id: Option<String>,
 }
 
 // The `SELECT` statements below interpolate only this compile-time constant,
 // `$N` bind placeholders, and integer limits — never caller data (always bound).
 // `AssertSqlSafe` documents that we have checked this.
 const SELECT_COLS: &str = "id, type AS job_type, capability, state, params_json, \
-     runtime_id, model_id, created_at, started_at, finished_at, error_text, output_path, result";
+     runtime_id, model_id, created_at, started_at, finished_at, error_text, output_path, result, \
+     session_id";
 
 impl TryFrom<JobRow> for Job {
     type Error = CoreError;
@@ -174,6 +180,7 @@ impl TryFrom<JobRow> for Job {
             error_text: r.error_text,
             output_path: r.output_path,
             result: r.result,
+            session_id: r.session_id,
         })
     }
 }
@@ -190,8 +197,8 @@ impl<'a> JobRepo<'a> {
             .map_err(|e| CoreError::Db(format!("serialize params: {e}")))?;
 
         sqlx::query(
-            "INSERT INTO jobs (id, type, capability, state, params_json, runtime_id, model_id, created_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+            "INSERT INTO jobs (id, type, capability, state, params_json, runtime_id, model_id, created_at, session_id)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
         )
         .bind(&id)
         .bind(&new.job_type)
@@ -201,6 +208,7 @@ impl<'a> JobRepo<'a> {
         .bind(&new.runtime_id)
         .bind(&new.model_id)
         .bind(&now)
+        .bind(&new.session_id)
         .execute(self.pool)
         .await?;
 

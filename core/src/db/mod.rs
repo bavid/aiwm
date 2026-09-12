@@ -10,6 +10,7 @@ mod downloads;
 mod jobs;
 mod models;
 mod runtimes;
+mod sessions;
 mod settings;
 
 pub use agents::{Agent, AgentRepo, AgentSession, AgentSessionEvent, AgentSessionState, NewAgent};
@@ -18,6 +19,7 @@ pub use downloads::{Download, DownloadRepo, DownloadState, NewDownload};
 pub use jobs::{EventLevel, Job, JobEvent, JobFilter, JobPatch, JobRepo, NewJob};
 pub use models::{Model, ModelLink, ModelRepo, NewModel};
 pub use runtimes::{state as runtime_state, RuntimeRecord, RuntimeRepo};
+pub use sessions::{Session, SessionRepo};
 pub use settings::SettingsRepo;
 
 use std::path::Path;
@@ -92,6 +94,10 @@ impl Database {
 
     pub fn agents(&self) -> AgentRepo<'_> {
         AgentRepo::new(&self.pool)
+    }
+
+    pub fn sessions(&self) -> SessionRepo<'_> {
+        SessionRepo::new(&self.pool)
     }
 
     pub fn downloads(&self) -> DownloadRepo<'_> {

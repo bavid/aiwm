@@ -46,9 +46,18 @@ function mkJob(id: string, jobType: string, state: string, over: AnyRecord): Any
   return {
     id, job_type: jobType, capability: null, state, params: {}, runtime_id: "comfyui",
     model_id: null, created_at: now(), started_at: now(), finished_at: now(),
-    error_text: null, output_path: null, result: null, ...over,
+    error_text: null, output_path: null, result: null, session_id: null, ...over,
   };
 }
+
+function mkSession(id: string, capability: string, name: string): AnyRecord {
+  return { id, capability, name, created_at: now(), archived_at: null };
+}
+
+const SESSIONS: AnyRecord[] = [
+  mkSession("sess-chat-1", "chat", "General"),
+  mkSession("sess-img-1", "image", "Anime pics"),
+];
 
 const RUNTIMES: AnyRecord[] = [
   { id: "llamacpp", kind: "llama_cpp", health: "unknown", vram_used_mb: 0, detail: "installed · idle" },
@@ -428,12 +437,42 @@ export function installDevMock(): void {
           params: body.params ?? {},
           model_id: (body.model_id as string) ?? "m-wan",
           output_path: null,
+          session_id: (body.session_id as string) ?? null,
         });
         JOBS.unshift(job);
         return job;
       }
       case "cancel_job":
         return true;
+      case "list_sessions": {
+        const capability = String(a.capability ?? "");
+        return SESSIONS.filter((s) => s.capability === capability).map((s) => ({ ...s }));
+      }
+      case "create_session": {
+        const body = (a.body ?? {}) as AnyRecord;
+        const session = mkSession(
+          `sess-dev-${seq++}`,
+          String(body.capability ?? "chat"),
+          String(body.name ?? "Untitled"),
+        );
+        SESSIONS.unshift(session);
+        return session;
+      }
+      case "rename_session": {
+        const s = SESSIONS.find((x) => x.id === a.id);
+        if (s) s.name = String(a.name ?? s.name);
+        return null;
+      }
+      case "set_session_archived": {
+        const s = SESSIONS.find((x) => x.id === a.id);
+        if (s) s.archived_at = a.archived ? now() : null;
+        return null;
+      }
+      case "delete_session": {
+        const i = SESSIONS.findIndex((x) => x.id === a.id);
+        if (i >= 0) SESSIONS.splice(i, 1);
+        return null;
+      }
       case "storage_report": {
         const kindOf = (m: AnyRecord): string => {
           const roles = (m.roles as string[]) ?? [];

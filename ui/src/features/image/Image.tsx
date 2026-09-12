@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { NumField } from "../../components/NumField";
+import { QueueList } from "../../components/QueueList";
+import { SessionSwitcher } from "../../components/SessionSwitcher";
 import { useAbout, useJobs, useModels, useRuntimes } from "../../lib/hooks";
 import {
   cancelJob,
@@ -32,6 +34,10 @@ function asImageParams(p: unknown): Partial<ImageParams> {
   return p && typeof p === "object" ? (p as Partial<ImageParams>) : {};
 }
 
+function promptOf(job: Job): string {
+  return asImageParams(job.params).prompt ?? "";
+}
+
 export function ImageStudio() {
   const about = useAbout();
   const { data: models } = useModels();
@@ -46,6 +52,7 @@ export function ImageStudio() {
   const comfy = (runtimes ?? []).find((r) => r.id === "comfyui");
   const comfyReady = !comfy || !(comfy.detail ?? "").includes("not installed");
 
+  const [sessionId, setSessionId] = useState<string | null>(null);
   const [prompt, setPrompt] = useState("");
   const [negative, setNegative] = useState("");
   const [width, setWidth] = useState(1024);
@@ -87,7 +94,11 @@ export function ImageStudio() {
   }, [pendingId]);
 
   const gallery = (jobs ?? []).filter(
-    (j) => j.job_type === "image" && j.state === "completed" && j.output_path,
+    (j) =>
+      j.job_type === "image" &&
+      j.state === "completed" &&
+      j.output_path &&
+      j.session_id === sessionId,
   );
 
   const selected =
@@ -121,6 +132,7 @@ export function ImageStudio() {
       const job = await submitJob({
         job_type: "image",
         model_id: modelId === "auto" ? undefined : modelId,
+        session_id: sessionId ?? undefined,
         params,
       });
       setPendingId(job.id);
@@ -142,6 +154,8 @@ export function ImageStudio() {
             <span className="card__sub">Auto · {checkpoints.length} checkpoint(s)</span>
           )}
         </header>
+        <SessionSwitcher capability="image" activeId={sessionId} onChange={setSessionId} />
+
 
         {!comfyReady && (
           <p className="muted">
@@ -260,19 +274,33 @@ export function ImageStudio() {
         {sendError && <p className="image__err">{sendError}</p>}
       </section>
 
-      <section className="card image__result">
-        <header className="card__head">
-          <h2>Result</h2>
-          {selected && <span className="card__sub">{selected.state}</span>}
-        </header>
-        <Result
-          job={selected}
-          port={about?.core_api_port ?? null}
+      <div className="image__result">
+        <QueueList
+          jobType="image"
+          jobs={jobs ?? []}
           modelNames={modelNames}
-          onCancel={selected ? () => cancelJob(selected.id) : undefined}
-          onReuseSeed={setSeed}
+          selectedId={selectedId}
+          onSelect={(id) => {
+            setSelectedId(id);
+            setDetail(null);
+          }}
+          onCancel={cancelJob}
+          promptOf={promptOf}
         />
-      </section>
+        <section className="card">
+          <header className="card__head">
+            <h2>Result</h2>
+            {selected && <span className="card__sub">{selected.state}</span>}
+          </header>
+          <Result
+            job={selected}
+            port={about?.core_api_port ?? null}
+            modelNames={modelNames}
+            onCancel={selected ? () => cancelJob(selected.id) : undefined}
+            onReuseSeed={setSeed}
+          />
+        </section>
+      </div>
 
       <section className="card card--wide">
         <header className="card__head">
