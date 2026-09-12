@@ -19,13 +19,15 @@ use tokio::sync::watch;
 
 use super::JobState;
 use crate::bench::{self, BenchOutcome};
+use crate::capability;
 use crate::capability::chat::{self, ChatOutcome};
+use crate::capability::colibri::ColibriOutcome;
 use crate::capability::image::{self, ImageOutcome, ImageRequest};
 use crate::capability::video::{self, VideoOutcome, VideoRequest};
 use crate::compat::{self, VramEstimate};
 use crate::db::{EventLevel, Job, JobPatch, Model, NewJob};
 use crate::registry::Registry;
-use crate::runtime::{ComfyUiAdapter, LlamaCppAdapter, RuntimeRegistry};
+use crate::runtime::{ColibriAdapter, ComfyUiAdapter, LlamaCppAdapter, RuntimeRegistry};
 use crate::scheduler::{Decision, PlanRequest, Scheduler};
 use crate::telemetry::{GpuStatus, SystemTelemetry};
 use crate::{upgrade, CoreError, Database, Result};
@@ -34,6 +36,7 @@ const CANCEL_REASON: &str = "cancelled by user";
 /// Runtime ids the engine wires capability bodies to.
 const LLAMACPP: &str = "llamacpp";
 const COMFYUI: &str = "comfyui";
+const COLIBRI: &str = "colibri";
 /// Fallback VRAM reservation for a ComfyUI model whose import estimate is
 /// missing — enough for SDXL on a 16 GB card.
 const IMAGE_VRAM_FALLBACK_MB: u64 = 8192;
@@ -82,6 +85,11 @@ pub struct JobEngine {
     scheduler: Arc<dyn Scheduler>,
     llama: Arc<LlamaCppAdapter>,
     comfyui: Arc<ComfyUiAdapter>,
+    /// Set only when Colibri is wired up (`with_colibri`) — unlike llama.cpp
+    /// and ComfyUI, it's not a required part of every app (CPU-only,
+    /// optional, RAM-hungry). A `job_type=colibri` job without one is a clear
+    /// config error, not a panic.
+    colibri: Option<Arc<ColibriAdapter>>,
     /// Where image jobs write their output (`<job_id>.png`).
     outputs_dir: PathBuf,
     /// Latest system reading — a `bench` job samples the VRAM / RAM peak from it.
@@ -109,6 +117,7 @@ impl JobEngine {
             scheduler,
             llama,
             comfyui,
+            colibri: None,
             outputs_dir,
             telemetry: frozen_telemetry(),
             auto_preference: crate::select::AutoPreference::default(),
@@ -136,6 +145,15 @@ impl JobEngine {
     #[must_use]
     pub fn with_registry(mut self, registry: Arc<Registry>) -> Self {
         self.model_index = Some(registry);
+        self
+    }
+
+    /// Wire up Colibri so `job_type=colibri` jobs can run. Optional — an app
+    /// without it just can't run that job type (a clear config error, not a
+    /// panic, if one is ever submitted).
+    #[must_use]
+    pub fn with_colibri(mut self, colibri: Arc<ColibriAdapter>) -> Self {
+        self.colibri = Some(colibri);
         self
     }
 
@@ -256,6 +274,21 @@ impl JobEngine {
             return self.resolve_comfyui_target(job).await;
         }
         if let (Some(runtime_id), Some(model_id)) = (&job.runtime_id, &job.model_id) {
+            // Colibri never charges against the VRAM budget (its constraint is
+            // system RAM, checked separately by `capability::colibri`'s own
+            // preflight) — the GGUF-shaped weights+KV-cache estimate below
+            // would otherwise treat a multi-GB model directory's on-disk size
+            // as VRAM weight bytes and wrongly block every Colibri job.
+            if runtime_id == COLIBRI {
+                let name = self.model_label(model_id).await;
+                return Ok(Target {
+                    runtime_id: runtime_id.clone(),
+                    model_id: model_id.clone(),
+                    model_name: name,
+                    vram_mb: 0,
+                    estimate: None,
+                });
+            }
             let (name, estimate) = self.vram_estimate(model_id).await;
             let need = estimate.as_ref().map_or(0, |e| e.total_mb);
             return Ok(Target {
@@ -873,6 +906,54 @@ impl JobEngine {
                     &format!("{} candidate(s) that fit", report.candidates.len()),
                 )
                 .await?;
+        } else if job.job_type == "colibri" {
+            if runtime_id != COLIBRI {
+                return Err(CoreError::Runtime {
+                    runtime: runtime_id.clone(),
+                    message: "colibri jobs run on colibri".into(),
+                });
+            }
+            let colibri = self
+                .colibri
+                .clone()
+                .ok_or_else(|| CoreError::Config("colibri is not configured on this app".into()))?;
+            let model = self.require_model(&model_id).await?;
+            let req = capability::colibri::ColibriChatRequest::from_params(&job.params)?;
+            match capability::colibri::run(&self.db, &colibri, &job.id, &model, req, cancel).await?
+            {
+                ColibriOutcome::Done(done) => {
+                    let _ = self.db.models().mark_used(&model_id).await;
+                    self.db
+                        .jobs()
+                        .append_event(
+                            &job.id,
+                            EventLevel::Info,
+                            &format!("answered — {} tokens", done.tokens),
+                        )
+                        .await?;
+                }
+                ColibriOutcome::Cancelled { partial } => {
+                    self.db
+                        .jobs()
+                        .append_event(
+                            &job.id,
+                            EventLevel::Warn,
+                            &format!("cancelled after {} chars", partial.chars().count()),
+                        )
+                        .await?;
+                    self.to(
+                        &mut job,
+                        JobState::Cancelled,
+                        JobPatch {
+                            error_text: Some(CANCEL_REASON.into()),
+                            set_finished_at: true,
+                            ..Default::default()
+                        },
+                    )
+                    .await?;
+                    return Ok(JobOutcome::Cancelled { job_id: job.id });
+                }
+            }
         }
 
         self.to(&mut job, JobState::Post, JobPatch::default())

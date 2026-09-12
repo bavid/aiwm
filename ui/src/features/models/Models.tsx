@@ -26,6 +26,7 @@ import {
   type ModelType,
   type RegistryDetails,
 } from "../../lib/ipc";
+import { ColibriPanel } from "./ColibriPanel";
 import { Discover, FileRow } from "./Discover";
 import { Downloads } from "./Downloads";
 import { DeleteButton, StoragePanel } from "./StoragePanel";
@@ -111,6 +112,8 @@ export function Models() {
       <UpgradeChecks />
 
       <StoragePanel />
+
+      <ColibriPanel />
 
       <Discover onUseType={useType} />
     </div>

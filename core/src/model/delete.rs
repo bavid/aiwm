@@ -34,7 +34,8 @@ pub async fn delete_model(db: &Database, model: &Model) -> Result<DeleteOutcome>
         }
     }
 
-    // 2. Remove the canonical file, then a now-empty per-model directory.
+    // 2. Remove the canonical file (or, for a Colibri model, the whole model
+    //    directory `file_path` points at), then a now-empty per-model parent.
     let file = Path::new(&model.file_path);
     let (file_removed, freed_bytes) = match std::fs::metadata(file) {
         Ok(meta) if meta.is_file() => {
@@ -42,6 +43,14 @@ pub async fn delete_model(db: &Database, model: &Model) -> Result<DeleteOutcome>
                 .map_err(|e| CoreError::Config(format!("delete {}: {e}", file.display())))?;
             remove_empty_parent(file);
             (true, meta.len())
+        }
+        Ok(meta) if meta.is_dir() => {
+            std::fs::remove_dir_all(file)
+                .map_err(|e| CoreError::Config(format!("delete {}: {e}", file.display())))?;
+            // The recorded size, not a fresh directory walk right before
+            // deleting it — `size_bytes` is already the library's source of
+            // truth for how much this model weighs (storage report, etc.).
+            (true, model.size_bytes.max(0) as u64)
         }
         _ => (false, 0),
     };
@@ -108,6 +117,36 @@ mod tests {
         assert!(!model_dir.exists(), "empty per-model folder is removed");
         assert!(db.models().get(&model.id).await.unwrap().is_none());
         assert!(db.models().links(&model.id).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn delete_removes_a_directory_based_model_and_frees_its_recorded_size() {
+        let db = Database::connect_in_memory().await.unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let model_dir = dir.path().join("qwen36-colibri");
+        std::fs::create_dir_all(&model_dir).unwrap();
+        std::fs::write(model_dir.join("config.json"), b"{}").unwrap();
+        std::fs::write(model_dir.join("shard-0.safetensors"), vec![0u8; 4096]).unwrap();
+
+        let model = db
+            .models()
+            .insert(NewModel {
+                name: "Qwen3.6".into(),
+                format: "colibri".into(),
+                file_path: model_dir.to_string_lossy().into_owned(),
+                size_bytes: 20_000_000_000,
+                source: "manual".into(),
+                roles: vec!["chat".into()],
+                ..NewModel::default()
+            })
+            .await
+            .unwrap();
+
+        let out = delete_model(&db, &model).await.unwrap();
+        assert!(out.file_removed);
+        assert_eq!(out.freed_bytes, 20_000_000_000);
+        assert!(!model_dir.exists(), "the whole model directory is removed");
+        assert!(db.models().get(&model.id).await.unwrap().is_none());
     }
 
     #[tokio::test]

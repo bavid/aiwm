@@ -62,6 +62,16 @@ const SESSIONS: AnyRecord[] = [
 const RUNTIMES: AnyRecord[] = [
   { id: "llamacpp", kind: "llama_cpp", health: "unknown", vram_used_mb: 0, detail: "installed · idle" },
   { id: "comfyui", kind: "comfy_ui", health: "healthy", vram_used_mb: 0, detail: "running on :48096 · ComfyUI 0.34.0 · model reserved" },
+  { id: "colibri", kind: "colibri", health: "unknown", vram_used_mb: 0, detail: "not installed" },
+];
+
+const COLIBRI_MODELS: AnyRecord[] = [
+  {
+    id: "qwen3.6-35b-a3b-colibri", label: "Qwen3.6-35B-A3B (Colibri)",
+    repo: "Kreuzzelg/qwen36-35b-a3b-colibri-i4-gs64", ram_estimate_mb: 24_576,
+    disk_estimate_bytes: 20 * 1024 * 1024 * 1024, license: "Apache-2.0",
+    note: "A 35B-parameter MoE (3B active) too large for GGUF/llama.cpp on a 16 GB card — runs CPU-only via Colibri instead. Needs ~24 GB RAM resident; tight on a 32 GB machine.",
+  },
 ];
 
 const AGENTS: AnyRecord[] = [
@@ -411,6 +421,25 @@ export function installDevMock(): void {
         return STACKS_MOCK;
       case "list_featured_models":
         return FEATURED_MOCK;
+      case "list_colibri_models":
+        return COLIBRI_MODELS;
+      case "register_colibri_model": {
+        const body = (a.body ?? {}) as AnyRecord;
+        const catalog = COLIBRI_MODELS.find((m) => m.id === body.catalog_id);
+        const model = mkModel(`m-colibri-${seq++}`, String(catalog?.label ?? "Colibri model"), {
+          format: "colibri", file_path: String(body.dir ?? ""),
+          size_bytes: Number(catalog?.disk_estimate_bytes ?? 0),
+          ram_estimate_mb: Number(catalog?.ram_estimate_mb ?? 0),
+          roles: ["chat"],
+        });
+        MODELS.push(model);
+        return model;
+      }
+      case "install_colibri": {
+        const rt = RUNTIMES.find((r) => r.id === "colibri");
+        if (rt) rt.detail = "installed · idle";
+        return "started";
+      }
       case "list_jobs":
         progressBenchJobs();
         progressUpgradeJobs();

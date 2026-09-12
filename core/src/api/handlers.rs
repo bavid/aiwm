@@ -6,10 +6,10 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use super::dto::{
-    AboutDto, AgentPermissionDto, AgentSessionDetailDto, ConfigUpdate, EnqueueDownloadDto,
-    FeaturedModelDto, JobDetailDto, KnownModelDto, ModelStackDto, NewAgentDto, NewSessionDto,
-    OpenAgentSessionDto, RegistryDetailsDto, RegistryFileDto, RegistrySearchDto, RuntimeStatusDto,
-    SubmitJobDto,
+    AboutDto, AgentPermissionDto, AgentSessionDetailDto, ColibriModelDto, ConfigUpdate,
+    EnqueueDownloadDto, FeaturedModelDto, JobDetailDto, KnownModelDto, ModelStackDto, NewAgentDto,
+    NewSessionDto, OpenAgentSessionDto, RegisterColibriModelDto, RegistryDetailsDto,
+    RegistryFileDto, RegistrySearchDto, RuntimeStatusDto, SubmitJobDto,
 };
 use crate::compat::FitVerdict;
 use crate::config::Config;
@@ -385,6 +385,42 @@ pub async fn import_model(app: &App, req: ImportRequest) -> Result<ImportOutcome
     crate::model::import_model(&app.db, &app.config.store_path, req).await
 }
 
+/// The curated Colibri model(s) (`GET /models/colibri`) — no network call and
+/// no fit verdict computed server-side: the constraint is system RAM, and the
+/// UI already has `SystemTelemetry.host` to compare against directly.
+pub fn colibri_models(_app: &App) -> Vec<ColibriModelDto> {
+    crate::model::COLIBRI_MODELS
+        .iter()
+        .map(|m| ColibriModelDto {
+            id: m.id.to_string(),
+            label: m.label.to_string(),
+            repo: m.repo.to_string(),
+            ram_estimate_mb: m.ram_estimate_mb,
+            disk_estimate_bytes: m.disk_estimate_bytes,
+            license: m.license.to_string(),
+            note: m.note.to_string(),
+        })
+        .collect()
+}
+
+/// Register a Colibri model directory the user already downloaded themselves
+/// (`hf download <repo> --local-dir <dir>`) as a Model Library entry.
+pub async fn register_colibri_model(app: &App, req: RegisterColibriModelDto) -> Result<Model> {
+    let catalog = crate::model::COLIBRI_MODELS
+        .iter()
+        .find(|m| m.id == req.catalog_id)
+        .ok_or_else(|| CoreError::Config(format!("unknown colibri model {:?}", req.catalog_id)))?;
+    crate::model::register_directory_model(
+        &app.db,
+        std::path::Path::new(&req.dir),
+        catalog.label,
+        "colibri",
+        vec!["chat".into()],
+        Some(i64::from(catalog.ram_estimate_mb)),
+    )
+    .await
+}
+
 pub async fn runtimes(app: &App) -> Vec<RuntimeStatusDto> {
     let mut out = Vec::new();
     for adapter in app.runtimes.all() {
@@ -454,6 +490,34 @@ pub fn install_comfyui(app: &App) -> Result<&'static str> {
     tokio::spawn(async move {
         if let Err(e) = comfyui.install(offline).await {
             tracing::error!(error = %e, "ComfyUI install failed");
+        }
+    });
+    Ok("started")
+}
+
+/// Kick off the pinned Colibri release download+extract (CPU-only — see
+/// `runtime::colibri`'s module doc for why the GPU tier isn't automated) in
+/// the background. Same contract as [`install_comfyui`].
+pub fn install_colibri(app: &App) -> Result<&'static str> {
+    if app.offline() {
+        return Err(CoreError::Config(
+            "offline mode is on — cannot download Colibri".into(),
+        ));
+    }
+    if app.colibri.is_installed() {
+        return Ok("already_installed");
+    }
+    if app.colibri.is_installing() {
+        return Err(CoreError::Config(
+            "a Colibri install is already running".into(),
+        ));
+    }
+
+    let colibri = app.colibri.clone();
+    let offline = app.offline();
+    tokio::spawn(async move {
+        if let Err(e) = colibri.install(offline).await {
+            tracing::error!(error = %e, "Colibri install failed");
         }
     });
     Ok("started")

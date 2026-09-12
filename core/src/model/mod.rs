@@ -2,13 +2,17 @@
 
 pub mod catalog;
 mod delete;
+mod directory;
 mod gguf;
 mod import;
 mod kind;
 mod safetensors;
 
+pub use directory::register_directory_model;
+
 pub use catalog::{
-    FeaturedModel, KnownModel, ModelStack, FEATURED_MODELS, KNOWN_MODELS, MODEL_STACKS,
+    ColibriModel, FeaturedModel, KnownModel, ModelStack, COLIBRI_MODELS, FEATURED_MODELS,
+    KNOWN_MODELS, MODEL_STACKS,
 };
 pub use delete::{delete_model, DeleteOutcome};
 pub use gguf::{read_gguf_info, GgufInfo};

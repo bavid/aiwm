@@ -420,6 +420,36 @@ export interface FeaturedModel {
 
 export const listFeaturedModels = () => invoke<FeaturedModel[]>("list_featured_models");
 
+/** A curated Colibri model (`GET /models/colibri`) — AIWM does not download
+ *  these itself (a few dozen safetensors shards; Hugging Face's own `hf` CLI
+ *  fetches a directory like this far faster than this app's single-stream
+ *  downloader would). The UI shows the exact command to run, then
+ *  `registerColibriModel` registers wherever it lands. */
+export interface ColibriModel {
+  id: string;
+  label: string;
+  /** Hugging Face `owner/repo` to `hf download`. */
+  repo: string;
+  ram_estimate_mb: number;
+  disk_estimate_bytes: number;
+  license: string;
+  note: string;
+}
+
+export const listColibriModels = () => invoke<ColibriModel[]>("list_colibri_models");
+
+export interface RegisterColibriModelBody {
+  /** A `ColibriModel.id`. */
+  catalog_id: string;
+  /** Local path to the already-downloaded model directory. */
+  dir: string;
+}
+
+export const registerColibriModel = (body: RegisterColibriModelBody) =>
+  invoke<Model>("register_colibri_model", { body });
+
+export const installColibri = () => invoke<string>("install_colibri");
+
 export const listKnownModels = () => invoke<KnownModel[]>("list_known_models");
 
 /** The parameters of a `job_type=image` job. After the engine runs, `params`

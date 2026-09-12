@@ -14,7 +14,7 @@ use crate::download::DownloadManager;
 use crate::orchestrator::JobEngine;
 use crate::paths::AppPaths;
 use crate::registry::{HuggingFaceSource, Registry};
-use crate::runtime::{ComfyDirs, ComfyUiAdapter, LlamaCppAdapter, RuntimeRegistry};
+use crate::runtime::{ColibriAdapter, ComfyDirs, ComfyUiAdapter, LlamaCppAdapter, RuntimeRegistry};
 use crate::scheduler::HybridScheduler;
 use crate::telemetry::{GpuStatus, Sampler};
 use crate::Result;
@@ -40,6 +40,11 @@ pub struct App {
     /// installers.
     pub llama: Arc<LlamaCppAdapter>,
     pub comfyui: Arc<ComfyUiAdapter>,
+    /// CPU-only Colibri runtime — optional in spirit (RAM-hungry, only one
+    /// curated model fits this project's hardware ceiling), but always
+    /// constructed and registered like every other runtime so it shows up in
+    /// `GET /runtimes` and the Settings install card the same way.
+    pub colibri: Arc<ColibriAdapter>,
     pub scheduler: Arc<HybridScheduler>,
     pub jobs: Arc<JobEngine>,
     /// Long-running agent sessions (Phase 5.1c) — its own subsystem, not a job.
@@ -99,6 +104,8 @@ impl App {
             .with_options(config.comfyui.to_options()),
         );
         runtimes.register(comfyui.clone());
+        let colibri = Arc::new(ColibriAdapter::discover(db.clone(), &paths.runtimes_dir()));
+        runtimes.register(colibri.clone());
         let budget = resolve_vram_budget(&config, &telemetry);
         let scheduler = Arc::new(HybridScheduler::new(runtimes.clone(), budget));
         let auto_pref = config.models.auto_preference;
@@ -123,7 +130,8 @@ impl App {
             )
             .with_telemetry(telemetry.subscribe())
             .with_auto_preference(auto_pref)
-            .with_registry(registry.clone()),
+            .with_registry(registry.clone())
+            .with_colibri(colibri.clone()),
         );
         let coding = Arc::new(LlamaCodingRuntime::new(
             runtimes.clone(),
@@ -153,6 +161,7 @@ impl App {
             runtimes,
             llama,
             comfyui,
+            colibri,
             scheduler,
             jobs,
             agents,

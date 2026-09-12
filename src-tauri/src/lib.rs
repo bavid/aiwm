@@ -7,9 +7,10 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 use aiwm_core::api::dto::{
-    AboutDto, AgentPermissionDto, AgentSessionDetailDto, ConfigUpdate, EnqueueDownloadDto,
-    FeaturedModelDto, JobDetailDto, KnownModelDto, ModelStackDto, NewAgentDto, NewSessionDto,
-    OpenAgentSessionDto, RegistryDetailsDto, RegistrySearchDto, RuntimeStatusDto, SubmitJobDto,
+    AboutDto, AgentPermissionDto, AgentSessionDetailDto, ColibriModelDto, ConfigUpdate,
+    EnqueueDownloadDto, FeaturedModelDto, JobDetailDto, KnownModelDto, ModelStackDto, NewAgentDto,
+    NewSessionDto, OpenAgentSessionDto, RegisterColibriModelDto, RegistryDetailsDto,
+    RegistrySearchDto, RuntimeStatusDto, SubmitJobDto,
 };
 use aiwm_core::api::handlers;
 use aiwm_core::config::Config;
@@ -238,6 +239,24 @@ fn list_featured_models(app: tauri::State<'_, Arc<App>>) -> Vec<FeaturedModelDto
 }
 
 #[tauri::command]
+fn list_colibri_models(app: tauri::State<'_, Arc<App>>) -> Vec<ColibriModelDto> {
+    handlers::colibri_models(&app)
+}
+
+#[tauri::command]
+async fn register_colibri_model(
+    app: tauri::State<'_, Arc<App>>,
+    body: RegisterColibriModelDto,
+) -> Result<Model, String> {
+    to_ipc(handlers::register_colibri_model(&app, body).await)
+}
+
+#[tauri::command]
+async fn install_colibri(app: tauri::State<'_, Arc<App>>) -> Result<String, String> {
+    to_ipc(handlers::install_colibri(&app).map(str::to_string))
+}
+
+#[tauri::command]
 async fn list_benchmarks(app: tauri::State<'_, Arc<App>>) -> Result<Vec<Benchmark>, String> {
     to_ipc(handlers::latest_benchmarks(&app).await)
 }
@@ -432,6 +451,8 @@ fn try_run() -> anyhow::Result<()> {
             list_known_models,
             list_model_stacks,
             list_featured_models,
+            list_colibri_models,
+            register_colibri_model,
             import_model,
             list_benchmarks,
             model_benchmarks,
@@ -447,6 +468,7 @@ fn try_run() -> anyhow::Result<()> {
             install_llamacpp,
             install_comfyui,
             install_hermes,
+            install_colibri,
             list_agent_runtimes,
             registry_search,
             registry_model,

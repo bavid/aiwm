@@ -159,7 +159,12 @@ pub fn report(models: &[Model], store_root: &Path, stale_days: i64) -> StorageRe
             last_used_at: m.last_used_at.clone(),
             use_count: m.use_count,
             roles: m.roles.clone(),
-            file_present: Path::new(&m.file_path).is_file(),
+            // A Colibri model's `file_path` is a whole downloaded directory,
+            // not a single file.
+            file_present: {
+                let p = Path::new(&m.file_path);
+                p.is_file() || p.is_dir()
+            },
         });
     }
     disks.sort_by_key(|d| Reverse(d.size_bytes));
@@ -321,5 +326,25 @@ mod tests {
         assert_eq!(llm.bytes, 9_000);
         assert_eq!(llm.count, 2);
         assert_eq!(r.unused.len(), 3); // none ever used
+    }
+
+    #[test]
+    fn report_treats_a_directory_based_model_as_present() {
+        let tmp = tempfile::tempdir().unwrap();
+        let model_dir = tmp.path().join("qwen36");
+        std::fs::create_dir_all(&model_dir).unwrap();
+
+        let m = model(NewModel {
+            name: "Qwen3.6".into(),
+            format: "colibri".into(),
+            file_path: model_dir.to_string_lossy().into_owned(),
+            size_bytes: 20_000,
+            ..NewModel::default()
+        });
+        let r = report(&[m], tmp.path(), 30);
+        assert!(
+            r.models[0].file_present,
+            "a directory-based model's own directory must count as present"
+        );
     }
 }

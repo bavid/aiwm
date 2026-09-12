@@ -388,6 +388,51 @@ pub const FEATURED_MODELS: &[FeaturedModel] = &[
     },
 ];
 
+/// A Colibri model (github.com/JustVugg/colibri) worth curating for this
+/// project's hardware ceiling — see that adapter's own module doc for why
+/// only the CPU-only, RAM-reachable end of Colibri's roster qualifies.
+/// Unlike [`KnownModel`]/[`FeaturedModel`], AIWM does **not** download these:
+/// the repo is a few dozen safetensors shards, and Hugging Face's own `hf`
+/// CLI (with `hf_transfer` acceleration) fetches a directory like this far
+/// faster than this project's single-stream downloader ever would — the UI
+/// shows the exact command to run, then [`crate::model::register_directory_model`]
+/// registers wherever it lands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub struct ColibriModel {
+    pub id: &'static str,
+    pub label: &'static str,
+    /// Hugging Face `owner/repo` to `hf download`.
+    pub repo: &'static str,
+    /// Colibri's own documented "you need this much RAM resident" figure —
+    /// the number `capability::colibri`'s RAM preflight checks against.
+    pub ram_estimate_mb: u32,
+    /// Approximate total download size — shown before committing to it.
+    pub disk_estimate_bytes: u64,
+    pub license: &'static str,
+    /// One line for the UI — what it is / the honest caveat.
+    pub note: &'static str,
+}
+
+/// Only one entry: Qwen3.6-35B-A3B is the sole model in Colibri's roster that
+/// is both real GGUF/llama.cpp couldn't already reach (a 35B MoE, 3B active)
+/// *and* within reach of a 32 GB RAM machine (24 GB resident, tight but
+/// possible) — every other family needs 167 GB-1.6 TB of disk and 16-32 GB+
+/// RAM well beyond a single consumer box. OLMoE (7B) fits easily but needs a
+/// local conversion script run against the original checkpoint (no
+/// ready-made HF container), so it doesn't get a one-click catalog entry —
+/// `docs/` covers it as a manual path instead.
+pub const COLIBRI_MODELS: &[ColibriModel] = &[ColibriModel {
+    id: "qwen3.6-35b-a3b-colibri",
+    label: "Qwen3.6-35B-A3B (Colibri)",
+    repo: "Kreuzzelg/qwen36-35b-a3b-colibri-i4-gs64",
+    ram_estimate_mb: 24_576,
+    disk_estimate_bytes: 20 * 1024 * 1024 * 1024,
+    license: "Apache-2.0",
+    note: "A 35B-parameter MoE (3B active) too large for GGUF/llama.cpp on a 16 GB card — \
+           runs CPU-only via Colibri instead. Needs ~24 GB RAM resident; tight on a 32 GB \
+           machine.",
+}];
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -529,6 +574,27 @@ mod tests {
                 .filter(|m| m.role == role && m.is_default)
                 .count();
             assert_eq!(count, 1, "role {role} should have exactly one default");
+        }
+    }
+
+    #[test]
+    fn colibri_ids_are_unique_and_every_entry_is_consistent() {
+        let mut ids: Vec<_> = COLIBRI_MODELS.iter().map(|m| m.id).collect();
+        ids.sort_unstable();
+        ids.dedup();
+        assert_eq!(ids.len(), COLIBRI_MODELS.len());
+
+        for m in COLIBRI_MODELS {
+            assert_eq!(
+                m.repo.matches('/').count(),
+                1,
+                "{}: repo must be owner/repo",
+                m.id
+            );
+            assert!(m.ram_estimate_mb > 0, "{}", m.id);
+            assert!(m.disk_estimate_bytes > 0, "{}", m.id);
+            assert!(!m.license.is_empty(), "{}", m.id);
+            assert!(!m.note.is_empty(), "{}", m.id);
         }
     }
 }

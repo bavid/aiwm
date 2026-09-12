@@ -322,6 +322,31 @@ pub struct FeaturedModelDto {
     pub fit: crate::compat::FitVerdict,
 }
 
+/// A curated Colibri model (`GET /models/colibri`) — see
+/// `crate::model::catalog::ColibriModel` for why AIWM doesn't download these
+/// itself.
+#[derive(Debug, Clone, Serialize)]
+pub struct ColibriModelDto {
+    pub id: String,
+    pub label: String,
+    /// Hugging Face `owner/repo` — the UI shows `hf download <repo> --local-dir …`.
+    pub repo: String,
+    pub ram_estimate_mb: u32,
+    pub disk_estimate_bytes: u64,
+    pub license: String,
+    pub note: String,
+}
+
+/// Body for `POST /models/colibri` / `register_colibri_model` — the user has
+/// already run `hf download` themselves; this just registers where it landed.
+#[derive(Debug, Clone, Deserialize)]
+pub struct RegisterColibriModelDto {
+    /// A `ColibriModelDto.id` — supplies the label / RAM estimate / roles.
+    pub catalog_id: String,
+    /// Local path to the downloaded model directory.
+    pub dir: String,
+}
+
 /// Body for `POST /downloads` — queue a model download (a Discover card's
 /// "Download & import").
 #[derive(Debug, Clone, Deserialize)]

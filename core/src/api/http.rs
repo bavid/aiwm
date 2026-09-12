@@ -40,6 +40,10 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/models/known", get(known_models))
         .route("/models/stacks", get(model_stacks))
         .route("/models/featured", get(featured_models))
+        .route(
+            "/models/colibri",
+            get(colibri_models).post(register_colibri_model),
+        )
         .route("/models/{id}", axum::routing::delete(delete_model))
         .route("/models/tags", get(model_tags))
         .route("/models/{id}/tags", put(set_model_tags))
@@ -55,6 +59,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/runtimes/llamacpp/install", post(install_llamacpp))
         .route("/runtimes/comfyui/install", post(install_comfyui))
         .route("/runtimes/hermes/install", post(install_hermes))
+        .route("/runtimes/colibri/install", post(install_colibri))
         .route("/agent-runtimes", get(agent_runtimes))
         .route("/registry/search", get(registry_search))
         .route("/registry/models/{*id}", get(registry_details))
@@ -394,6 +399,26 @@ async fn install_hermes(
     State(app): AppState,
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
     install_status(handlers::install_hermes(&app)?)
+}
+
+async fn install_colibri(
+    State(app): AppState,
+) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    install_status(handlers::install_colibri(&app)?)
+}
+
+async fn colibri_models(State(app): AppState) -> Json<Vec<super::dto::ColibriModelDto>> {
+    Json(handlers::colibri_models(&app))
+}
+
+async fn register_colibri_model(
+    State(app): AppState,
+    Json(body): Json<super::dto::RegisterColibriModelDto>,
+) -> Result<(StatusCode, Json<crate::db::Model>), ApiError> {
+    Ok((
+        StatusCode::CREATED,
+        Json(handlers::register_colibri_model(&app, body).await?),
+    ))
 }
 
 async fn agent_runtimes(State(app): AppState) -> Json<Vec<super::dto::AgentRuntimeDto>> {

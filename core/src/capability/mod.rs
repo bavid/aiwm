@@ -9,6 +9,7 @@
 
 pub mod agent;
 pub mod chat;
+pub mod colibri;
 pub mod image;
 mod media;
 pub mod video;

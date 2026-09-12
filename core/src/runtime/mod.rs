@@ -9,6 +9,7 @@
 //! WP-4 ships the trait, the supervisor and a [`FakeRuntimeAdapter`]. Real
 //! adapters (llama.cpp in Phase 2) implement the same trait.
 
+mod colibri;
 mod comfyui;
 pub(crate) mod download;
 mod fake;
@@ -17,6 +18,10 @@ mod llamacpp;
 mod registry;
 mod supervisor;
 
+pub use colibri::install as colibri_install;
+pub use colibri::{
+    ColibriAdapter, GenerationEvent as ColibriGenerationEvent, InstallState as ColibriInstallState,
+};
 pub use comfyui::{
     ComfyDirs, ComfyLaunch, ComfyOptions, ComfyUiAdapter, GeneratedMedia, SystemStats, VramMode,
 };
@@ -55,6 +60,7 @@ pub(crate) fn free_loopback_port() -> Result<u16> {
 pub enum RuntimeKind {
     LlamaCpp,
     ComfyUi,
+    Colibri,
     Fake,
 }
 
