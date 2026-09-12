@@ -160,6 +160,13 @@ impl HermesAgentAdapter {
         }
     }
 
+    /// The resolved `hermes` binary, if installed — for callers (the
+    /// external launcher) that need to spawn it themselves rather than
+    /// through this adapter's own `gateway`-mode session management.
+    pub fn binary(&self) -> Option<PathBuf> {
+        self.resolve_bin()
+    }
+
     pub fn is_installed(&self) -> bool {
         self.resolve_bin().is_some()
     }
@@ -625,6 +632,22 @@ mod tests {
         assert_eq!(a.health().await, Health::Unknown);
         let e = a.open_session(&spec()).await.unwrap_err();
         assert!(e.to_string().contains("not installed"), "{e}");
+    }
+
+    #[test]
+    fn binary_reflects_the_fixed_path_when_present() {
+        let tmp = tempfile::tempdir().unwrap();
+        let exe = tmp.path().join("hermes.exe");
+        std::fs::write(&exe, b"x").unwrap();
+
+        assert_eq!(
+            HermesAgentAdapter::with_binary(Some(exe.clone()), tmp.path().join("homes")).binary(),
+            Some(exe)
+        );
+        assert_eq!(
+            HermesAgentAdapter::with_binary(None, tmp.path().join("homes")).binary(),
+            None
+        );
     }
 
     #[tokio::test]

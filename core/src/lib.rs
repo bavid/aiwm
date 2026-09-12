@@ -39,6 +39,7 @@ pub mod config;
 pub mod db;
 pub mod download;
 pub mod error;
+pub mod launcher;
 pub mod link;
 pub mod logging;
 pub mod model;
@@ -67,6 +68,7 @@ pub use config::Config;
 pub use db::{Database, Model, ModelRepo, NewModel};
 pub use download::{DownloadManager, EnqueueRequest};
 pub use error::{CoreError, Result};
+pub use launcher::{LaunchInfo, LaunchRequest, LaunchTool, Launcher, ToolBinaries};
 pub use link::LinkStrategy;
 pub use model::{
     delete_model, import_model, DeleteOutcome, GgufInfo, ImportOutcome, ImportRequest,

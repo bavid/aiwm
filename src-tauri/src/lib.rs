@@ -8,9 +8,9 @@ use std::sync::{Arc, Mutex};
 
 use aiwm_core::api::dto::{
     AboutDto, AgentPermissionDto, AgentSessionDetailDto, ColibriModelDto, ConfigUpdate,
-    EnqueueDownloadDto, FeaturedModelDto, JobDetailDto, KnownModelDto, ModelStackDto, NewAgentDto,
-    NewSessionDto, OpenAgentSessionDto, RegisterColibriModelDto, RegistryDetailsDto,
-    RegistrySearchDto, RuntimeStatusDto, SubmitJobDto,
+    EnqueueDownloadDto, FeaturedModelDto, JobDetailDto, KnownModelDto, LaunchExternalDto,
+    ModelStackDto, NewAgentDto, NewSessionDto, OpenAgentSessionDto, RegisterColibriModelDto,
+    RegistryDetailsDto, RegistrySearchDto, RuntimeStatusDto, SubmitJobDto,
 };
 use aiwm_core::api::handlers;
 use aiwm_core::config::Config;
@@ -19,7 +19,7 @@ use aiwm_core::model::{ImportOutcome, ImportRequest};
 use aiwm_core::orchestrator::JobState;
 use aiwm_core::registry::{Fetched, RemoteModel};
 use aiwm_core::telemetry::SystemTelemetry;
-use aiwm_core::{api, app, App};
+use aiwm_core::{api, app, App, LaunchInfo};
 use tauri::{Emitter, Manager};
 use tracing_appender::non_blocking::WorkerGuard;
 
@@ -401,6 +401,26 @@ async fn stop_agent_session(app: tauri::State<'_, Arc<App>>, id: String) -> Resu
     to_ipc(handlers::stop_agent_session(&app, &id).await)
 }
 
+// --- external launcher ---
+
+#[tauri::command]
+fn launcher_status(app: tauri::State<'_, Arc<App>>) -> Option<LaunchInfo> {
+    handlers::launcher_status(&app)
+}
+
+#[tauri::command]
+async fn launch_external(
+    app: tauri::State<'_, Arc<App>>,
+    body: LaunchExternalDto,
+) -> Result<LaunchInfo, String> {
+    to_ipc(handlers::launch_external(&app, body).await)
+}
+
+#[tauri::command]
+async fn stop_external_launch(app: tauri::State<'_, Arc<App>>) -> Result<(), String> {
+    to_ipc(handlers::stop_external_launch(&app).await)
+}
+
 pub fn run() {
     if let Err(err) = try_run() {
         eprintln!("aiwm-tauri: fatal: {err}");
@@ -494,7 +514,10 @@ fn try_run() -> anyhow::Result<()> {
             agent_session_detail,
             agent_session_message,
             agent_session_permission,
-            stop_agent_session
+            stop_agent_session,
+            launcher_status,
+            launch_external,
+            stop_external_launch
         ])
         .build(tauri::generate_context!())?
         .run(|handle, event| {

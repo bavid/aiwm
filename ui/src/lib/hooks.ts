@@ -5,6 +5,7 @@ import {
   getRecentLogs,
   getRuntimes,
   getTelemetry,
+  launcherStatus,
   listAgentRuntimes,
   listAgents,
   listBenchmarks,
@@ -26,6 +27,7 @@ import {
   type Download,
   type Job,
   type JobState,
+  type LaunchInfo,
   type RegistryStatus,
   type StorageReport,
   type FeaturedModel,
@@ -141,6 +143,8 @@ export const useModels = () => usePolled<Model[]>("models", listModels, 3000);
 export const useAgents = () => usePolled<Agent[]>("agents", listAgents, 4000);
 export const useAgentRuntimes = () =>
   usePolled<AgentRuntime[]>("agent-runtimes", listAgentRuntimes, 3000);
+export const useLauncherStatus = () =>
+  usePolled<LaunchInfo | null>("launcher-status", launcherStatus, 3000);
 export const useDownloads = () =>
   usePolled<Download[]>("downloads", listDownloads, 1500);
 export const useBenchmarks = () =>

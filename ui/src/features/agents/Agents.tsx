@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useAgents, useModels } from "../../lib/hooks";
 import { deleteAgent, openAgentSession, type Agent } from "../../lib/ipc";
+import { LauncherPanel } from "./LauncherPanel";
 import { NewProfileForm } from "./NewProfileForm";
 import { SessionPanel } from "./SessionPanel";
 import "./agents.css";
@@ -65,6 +66,8 @@ export function AgentsWorkbench() {
         profileName={activeProfile?.name ?? null}
         onClosed={() => setSessionId(null)}
       />
+
+      <LauncherPanel codingModels={codingModels} />
     </div>
   );
 }

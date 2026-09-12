@@ -180,6 +180,16 @@ pub struct AgentRuntimeDto {
     pub install: Option<HermesInstallStatus>,
 }
 
+/// Body for `POST /launcher` / `launcher_launch` — open an external terminal.
+#[derive(Debug, Clone, Deserialize)]
+pub struct LaunchExternalDto {
+    pub tool: crate::LaunchTool,
+    /// Explicit coding model, or omitted for `Auto` over the `coding` role.
+    #[serde(default)]
+    pub model_id: Option<String>,
+    pub workspace: String,
+}
+
 // --- model discovery (Phase 6.2) -----------------------------------------
 
 /// Query for `GET /registry/search` — the "Discover" panel on the Models tab.

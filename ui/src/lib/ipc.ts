@@ -653,6 +653,37 @@ export const listAgentRuntimes = () =>
 /** Start the Hermes install (background). "started" | "already_installed". */
 export const installHermes = () => invoke<string>("install_hermes");
 
+// --- external launcher ---
+
+export type LaunchTool = "opencode" | "hermes";
+
+/** What's pinned for an external launch right now. */
+export interface LaunchInfo {
+  tool: LaunchTool;
+  model_id: string;
+  model_name: string;
+  base_url: string;
+  workspace: string;
+  /** Set when the picked model doesn't meet a tool's own requirements
+   *  (currently: Hermes' 64K context floor). Not fatal -- the launch still
+   *  went through -- just surfaced so a refusal to start isn't a mystery. */
+  warning: string | null;
+}
+
+export interface LaunchExternalBody {
+  tool: LaunchTool;
+  /** Explicit coding model, or omitted for `Auto` over the "coding" role. */
+  model_id?: string | null;
+  workspace: string;
+}
+
+export const launcherStatus = () => invoke<LaunchInfo | null>("launcher_status");
+export const launchExternal = (body: LaunchExternalBody) =>
+  invoke<LaunchInfo>("launch_external", { body });
+/** Releases the pinned model. Cannot close the terminal window itself -- the
+ *  whole point is that it keeps running independent of AIWM. */
+export const stopExternalLaunch = () => invoke<void>("stop_external_launch");
+
 // --- backup & restore (Phase 5.5) ---
 
 /** What an import staged, to relay before the restart. */

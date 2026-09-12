@@ -12,8 +12,9 @@ use axum::{Json, Router};
 use serde::Deserialize;
 
 use super::dto::{
-    AgentMessageDto, AgentPermissionDto, NewAgentDto, NewSessionDto, OpenAgentSessionDto,
-    RenameSessionDto, SetArchivedDto, SetRolesDto, SetTagsDto, SetTokenDto, SubmitJobDto,
+    AgentMessageDto, AgentPermissionDto, LaunchExternalDto, NewAgentDto, NewSessionDto,
+    OpenAgentSessionDto, RenameSessionDto, SetArchivedDto, SetRolesDto, SetTagsDto, SetTokenDto,
+    SubmitJobDto,
 };
 use super::handlers;
 use crate::db::JobFilter;
@@ -77,6 +78,12 @@ pub fn router(app: Arc<App>) -> Router {
             post(agent_session_permission),
         )
         .route("/agent-sessions/{id}/stop", post(stop_agent_session))
+        .route(
+            "/launcher",
+            get(launcher_status)
+                .post(launch_external)
+                .delete(stop_external_launch),
+        )
         .route("/export", get(export_backup))
         .route("/import", post(import_backup))
         .route("/logs", get(logs))
@@ -570,6 +577,27 @@ async fn stop_agent_session(
     Path(id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
     handlers::stop_agent_session(&app, &id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+// --- external launcher -------------------------------------------------
+
+async fn launcher_status(State(app): AppState) -> Json<Option<crate::LaunchInfo>> {
+    Json(handlers::launcher_status(&app))
+}
+
+async fn launch_external(
+    State(app): AppState,
+    Json(body): Json<LaunchExternalDto>,
+) -> Result<(StatusCode, Json<crate::LaunchInfo>), ApiError> {
+    Ok((
+        StatusCode::CREATED,
+        Json(handlers::launch_external(&app, body).await?),
+    ))
+}
+
+async fn stop_external_launch(State(app): AppState) -> Result<StatusCode, ApiError> {
+    handlers::stop_external_launch(&app).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 

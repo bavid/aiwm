@@ -91,6 +91,7 @@ type DevSession = {
 };
 let DEV_SESSION: DevSession | null = null;
 let HERMES_INSTALLED = false;
+let DEV_LAUNCH: AnyRecord | null = null;
 
 const DOWNLOADS: AnyRecord[] = [];
 const BENCHMARKS: AnyRecord[] = [];
@@ -763,6 +764,28 @@ export function installDevMock(): void {
           DEV_SESSION.stopped = true;
           DEV_SESSION.state = "stopped";
         }
+        return null;
+      case "launcher_status":
+        return DEV_LAUNCH;
+      case "launch_external": {
+        const body = (a.body ?? {}) as AnyRecord;
+        const modelId = (body.model_id as string) || "m-qwen";
+        const model = MODELS.find((m) => m.id === modelId);
+        DEV_LAUNCH = {
+          tool: String(body.tool ?? "opencode"),
+          model_id: modelId,
+          model_name: model?.name ?? modelId,
+          base_url: "http://127.0.0.1:41234/v1",
+          workspace: String(body.workspace ?? "E:\\AI"),
+          warning:
+            body.tool === "hermes" && Number(model?.ctx_max ?? 0) < 64_000
+              ? `${model?.name ?? modelId} declares a ${Number(model?.ctx_max ?? 0)}-token context; Hermes Agent refuses to start below 64000 and will likely error immediately.`
+              : null,
+        };
+        return DEV_LAUNCH;
+      }
+      case "stop_external_launch":
+        DEV_LAUNCH = null;
         return null;
       default:
         if (cmd.startsWith("plugin:")) return null; // opener plugin etc. — no-op

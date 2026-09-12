@@ -140,6 +140,13 @@ impl OpenCodeAdapter {
         self.resolve_bin().is_some()
     }
 
+    /// The resolved `opencode` binary, if installed — for callers (the
+    /// external launcher) that need to spawn it themselves rather than
+    /// through this adapter's own `serve`-mode session management.
+    pub fn binary(&self) -> Option<PathBuf> {
+        self.resolve_bin()
+    }
+
     fn session_base(&self, session: &str) -> Result<String> {
         lock(&self.sessions)
             .get(session)
@@ -524,6 +531,19 @@ mod tests {
         assert_eq!(a.health().await, Health::Unknown);
         let e = a.open_session(&spec()).await.unwrap_err();
         assert!(e.to_string().contains("not installed"), "{e}");
+    }
+
+    #[test]
+    fn binary_reflects_the_fixed_path_when_present() {
+        let tmp = tempfile::tempdir().unwrap();
+        let exe = tmp.path().join("opencode.exe");
+        std::fs::write(&exe, b"x").unwrap();
+
+        assert_eq!(
+            OpenCodeAdapter::with_binary(Some(exe.clone())).binary(),
+            Some(exe)
+        );
+        assert_eq!(OpenCodeAdapter::with_binary(None).binary(), None);
     }
 
     #[test]

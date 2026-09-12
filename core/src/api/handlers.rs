@@ -7,9 +7,9 @@ use std::path::PathBuf;
 
 use super::dto::{
     AboutDto, AgentPermissionDto, AgentSessionDetailDto, ColibriModelDto, ConfigUpdate,
-    EnqueueDownloadDto, FeaturedModelDto, JobDetailDto, KnownModelDto, ModelStackDto, NewAgentDto,
-    NewSessionDto, OpenAgentSessionDto, RegisterColibriModelDto, RegistryDetailsDto,
-    RegistryFileDto, RegistrySearchDto, RuntimeStatusDto, SubmitJobDto,
+    EnqueueDownloadDto, FeaturedModelDto, JobDetailDto, KnownModelDto, LaunchExternalDto,
+    ModelStackDto, NewAgentDto, NewSessionDto, OpenAgentSessionDto, RegisterColibriModelDto,
+    RegistryDetailsDto, RegistryFileDto, RegistrySearchDto, RuntimeStatusDto, SubmitJobDto,
 };
 use crate::compat::FitVerdict;
 use crate::config::Config;
@@ -17,11 +17,12 @@ use crate::db::{
     Agent, AgentSession, Benchmark, Download, Job, JobFilter, Model, NewAgent, NewJob, Session,
 };
 use crate::download::EnqueueRequest;
+use crate::launcher::LaunchRequest;
 use crate::model::{ImportOutcome, ImportRequest};
 use crate::orchestrator::JobOutcome;
 use crate::registry::{Fetched, RemoteFile, RemoteFormat, RemoteModel};
 use crate::telemetry::SystemTelemetry;
-use crate::{App, CoreError, Result};
+use crate::{App, CoreError, LaunchInfo, Result};
 
 pub fn about(app: &App) -> AboutDto {
     let outputs_dir = app.paths.outputs_dir();
@@ -678,6 +679,36 @@ pub async fn agent_session_permission(app: &App, id: &str, body: AgentPermission
 
 pub async fn stop_agent_session(app: &App, id: &str) -> Result<()> {
     app.agents.stop(id).await
+}
+
+// --- external launcher ------------------------------------------------------
+
+/// Open a real, independent terminal running the requested tool against a
+/// pinned local model. See the `launcher` module docs for why this
+/// deliberately does not go through the same Job-Object supervision as
+/// everything else `App` spawns.
+pub async fn launch_external(app: &App, body: LaunchExternalDto) -> Result<LaunchInfo> {
+    if body.workspace.trim().is_empty() {
+        return Err(CoreError::Config("workspace path must not be empty".into()));
+    }
+    app.launcher
+        .launch(LaunchRequest {
+            tool: body.tool,
+            model_id: body.model_id.filter(|s| !s.trim().is_empty()),
+            workspace: PathBuf::from(body.workspace.trim()),
+        })
+        .await
+}
+
+/// What's pinned for an external launch right now, if anything.
+pub fn launcher_status(app: &App) -> Option<LaunchInfo> {
+    app.launcher.status()
+}
+
+/// Release the pinned model. Cannot close the terminal window itself — see
+/// the `launcher` module docs.
+pub async fn stop_external_launch(app: &App) -> Result<()> {
+    app.launcher.stop().await
 }
 
 // --- backup / restore (Phase 5.5) ----------------------------------------

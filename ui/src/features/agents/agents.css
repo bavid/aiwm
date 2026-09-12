@@ -509,3 +509,44 @@
 .agents__newbtn:hover {
   color: var(--text);
 }
+
+/* --- external launcher --- */
+
+.launcher {
+  gap: var(--space-3);
+}
+
+.launcher__form {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.launcher__form button,
+.launcher__active button {
+  justify-self: flex-start;
+  padding: var(--space-2) var(--space-4);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: var(--accent);
+  color: var(--accent-fg);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.launcher__form button:disabled,
+.launcher__active button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.launcher__active {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.launcher__row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}

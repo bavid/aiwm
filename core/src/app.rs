@@ -11,6 +11,7 @@ use crate::capability::agent::{AgentSessions, LlamaCodingRuntime};
 use crate::config::{Config, FALLBACK_VRAM_BUDGET_MB};
 use crate::db::{now_rfc3339, Database};
 use crate::download::DownloadManager;
+use crate::launcher::{AdapterBinaries, Launcher};
 use crate::orchestrator::JobEngine;
 use crate::paths::AppPaths;
 use crate::registry::{HuggingFaceSource, Registry};
@@ -53,6 +54,10 @@ pub struct App {
     /// typed so handlers can report install state and drive Hermes' installer.
     pub opencode: Arc<OpenCodeAdapter>,
     pub hermes: Arc<HermesAgentAdapter>,
+    /// Opens a real, independent terminal running OpenCode/Hermes against a
+    /// pinned local model — deliberately NOT Job-Object-supervised, unlike
+    /// everything else in this list (see `launcher` module docs).
+    pub launcher: Arc<Launcher>,
     /// Online model discovery (Phase 6.1). Wraps the Hugging Face source with a
     /// disposable cache and the same `offline` switch. `Arc` so the job engine
     /// (upgrade check, 6.7) shares it.
@@ -146,6 +151,27 @@ impl App {
                 .with_adapter(hermes.clone())
                 .with_auto_preference(auto_pref),
         );
+        // A second, independent `LlamaCodingRuntime` handle for the external
+        // launcher -- cheap (just more `Arc` clones of the same registry /
+        // scheduler / llama adapter `agents` already uses), and the actual
+        // pin/unpin state lives in the shared scheduler either way, so two
+        // wrapper instances stay consistent with each other.
+        let launcher_coding = Arc::new(LlamaCodingRuntime::new(
+            runtimes.clone(),
+            scheduler.clone(),
+            llama.clone(),
+        ));
+        let launcher = Arc::new(
+            Launcher::new(
+                db.clone(),
+                launcher_coding,
+                Arc::new(AdapterBinaries {
+                    opencode: opencode.clone(),
+                    hermes: hermes.clone(),
+                }),
+            )
+            .with_auto_preference(auto_pref),
+        );
         let downloads = Arc::new(DownloadManager::new(
             db.clone(),
             config.store_path.clone(),
@@ -167,6 +193,7 @@ impl App {
             agents,
             opencode,
             hermes,
+            launcher,
             registry,
             downloads,
             offline,
