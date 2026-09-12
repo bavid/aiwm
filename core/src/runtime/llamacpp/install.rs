@@ -50,6 +50,40 @@ pub fn install_root(runtimes_dir: &Path) -> PathBuf {
     runtimes_dir.join(RUNTIME_ID).join(PINNED_BUILD)
 }
 
+/// Remove sibling build directories left behind by an earlier `PINNED_BUILD`
+/// version bump. Best-effort: a directory that can't be listed or removed
+/// (e.g. a file still open in it) is logged and skipped rather than failing
+/// the install — this is opportunistic disk cleanup, not a correctness
+/// requirement.
+async fn cleanup_old_builds(runtimes_dir: &Path) {
+    let parent = runtimes_dir.join(RUNTIME_ID);
+    let mut entries = match tokio::fs::read_dir(&parent).await {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+    loop {
+        let entry = match entries.next_entry().await {
+            Ok(Some(e)) => e,
+            Ok(None) => break,
+            Err(_) => break,
+        };
+        if entry.file_name() == PINNED_BUILD {
+            continue;
+        }
+        let is_dir = matches!(entry.file_type().await, Ok(ft) if ft.is_dir());
+        if !is_dir {
+            continue;
+        }
+        let path = entry.path();
+        match tokio::fs::remove_dir_all(&path).await {
+            Ok(()) => tracing::info!(path = %path.display(), "removed stale llama.cpp build"),
+            Err(e) => {
+                tracing::warn!(path = %path.display(), error = %e, "failed to remove stale llama.cpp build")
+            }
+        }
+    }
+}
+
 /// Install the pinned build. Returns the resolved `llama-server` path.
 /// Idempotent — a complete existing install is returned untouched. `on_progress`
 /// is called with `(phase, done_bytes, total_bytes)` as the download proceeds.
@@ -76,6 +110,7 @@ where
     let target = install_root(runtimes_dir);
     let server = target.join(SERVER_EXE);
     if server.is_file() {
+        cleanup_old_builds(runtimes_dir).await;
         return Ok(server);
     }
     if offline {
@@ -116,6 +151,7 @@ where
         )));
     }
     tracing::info!(build = PINNED_BUILD, path = %server.display(), "llama.cpp installed");
+    cleanup_old_builds(runtimes_dir).await;
     Ok(server)
 }
 
@@ -146,6 +182,31 @@ mod tests {
         // offline + no server would normally fail; the early-return wins.
         let got = install(tmp.path(), true, |_, _, _| {}).await.unwrap();
         assert_eq!(got, root.join(SERVER_EXE));
+    }
+
+    #[tokio::test]
+    async fn install_removes_stale_build_dirs_once_pinned_build_is_present() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = install_root(tmp.path());
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join(SERVER_EXE), b"present").unwrap();
+
+        // A leftover directory from a previous PINNED_BUILD version bump.
+        let stale = tmp.path().join(RUNTIME_ID).join("b10000-old");
+        std::fs::create_dir_all(&stale).unwrap();
+        std::fs::write(stale.join(SERVER_EXE), b"stale").unwrap();
+
+        let got = install(tmp.path(), true, |_, _, _| {}).await.unwrap();
+
+        assert_eq!(got, root.join(SERVER_EXE));
+        assert!(
+            !stale.exists(),
+            "stale llama.cpp build directory should have been removed"
+        );
+        assert!(
+            root.join(SERVER_EXE).is_file(),
+            "the current pinned build must be left untouched"
+        );
     }
 
     #[tokio::test]

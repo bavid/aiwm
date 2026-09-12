@@ -7,9 +7,10 @@ hierher, damit nichts verloren geht.
 - Visuelle Designrichtung für die UI festlegen (Typo, Palette, Layout-Charakter) —
   bewusst *nicht* Dark-Mode-by-default; siehe web/design-quality-Regeln
 - ~~llama.cpp: gepinnte Version + Bezugsquelle des Windows-CUDA-Builds~~ →
-  ✅ 2.2b (ADR-014). Offen: freien Speicherplatz vor dem Download prüfen
-  (Brief 10.16 → Phase-6-Download-Manager); alte `runtimes/llamacpp/<build>/`
-  beim Versions-Bump aufräumen
+  ✅ 2.2b (ADR-014). ~~Alte `runtimes/llamacpp/<build>/` beim Versions-Bump
+  aufräumen~~ → ✅ `install::cleanup_old_builds` (best-effort, läuft nach jedem
+  erfolgreichen `install()`). Offen: freien Speicherplatz vor dem Download
+  prüfen (Brief 10.16 → Phase-6-Download-Manager)
 - ~~Windows: Junction vs. Hardlink für Modell-Dateien testen~~ → ✅ 2.3
   (`core::link`, ADR-007). **Offen bleibt** die Verprobung von `Junction` gegen
   einen realen Konsumenten: ComfyUI war es nicht — der Store liegt auf `E:`, die
@@ -53,8 +54,15 @@ hierher, damit nichts verloren geht.
 - Cancel während des Modell-Loads: aktuell nur an Schritt-Grenzen (2.4b). Echtes
   Abbrechen mitten im `load_model` bräuchte ein Signal in `RuntimeSupervisor` /
   `await_healthy`
-- UI-Lint: `eslint-plugin-react-hooks` (+ `-react-refresh`) in `ui/eslint.config.js`
-  aufnehmen (aktuell nur js + typescript-eslint recommended)
+- ~~UI-Lint: `eslint-plugin-react-hooks` (+ `-react-refresh`) in
+  `ui/eslint.config.js` aufnehmen~~ → ✅ (5.2.0 `recommended` — bewusst nicht
+  die 6.x/7.x-Linie, die zusätzlich ~15 experimentelle "React Compiler"-Regeln
+  mitbringt; `react-refresh/only-export-components` als `warn`, Standard-Vite-
+  Template-Setup). Deckte 2 reale `exhaustive-deps`-Fälle in `lib/hooks.ts`
+  (bewusstes `key`-statt-`fetcher`/`params`-Pattern — beide mit begründetem
+  `eslint-disable-next-line` versehen, sonst hätte es den Poll-/Debounce-
+  Intervall bei jedem Render neu gestartet) und einen echten Fix in
+  `Models.tsx` (`tags` jetzt selbst `useMemo`-gewrappt) auf.
 
 ## Vor Phase 3/4
 - ~~Modell-Research (Bild-Modelle, Quant, VRAM)~~ → ✅ in [PHASE_3_PLAN.md](PHASE_3_PLAN.md)

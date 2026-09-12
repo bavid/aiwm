@@ -117,7 +117,12 @@ function usePolled<T>(key: string, fetcher: () => Promise<T>, intervalMs: number
       alive = false;
       clearInterval(id);
     };
-    // `key` identifies the endpoint; `fetcher` is a stable closure per hook.
+    // `key` identifies the endpoint and encodes everything `fetcher` closes
+    // over (see call sites below); `fetcher` itself is a fresh closure on
+    // every render for several callers (e.g. `useJobs`), so depending on it
+    // directly would restart the poll interval every render instead of only
+    // when the endpoint/params actually change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key, intervalMs, nonce]);
 
   const refetch = () => setNonce((n) => n + 1);
@@ -182,8 +187,11 @@ export function useRegistrySearch(params: RegistrySearchParams, enabled: boolean
       alive = false;
       clearTimeout(id);
     };
-    // `key` is the serialized params — the real dependency; `params` itself is
-    // a fresh object each render.
+    // `key` is the serialized params and the real dependency; `params` may be
+    // a fresh object identity on every render for callers that don't memoize
+    // it, but its JSON content — the only thing that reaches `registrySearch`
+    // — is unchanged whenever `key` is unchanged.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key, enabled]);
 
   return { result, error, loading };
