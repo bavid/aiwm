@@ -465,6 +465,7 @@ export function installDevMock(): void {
         const job = mkJob(`j-dev-${seq++}`, String(body.job_type ?? "video"), "running", {
           params: body.params ?? {},
           model_id: (body.model_id as string) ?? "m-wan",
+          runtime_id: (body.runtime_id as string) ?? "comfyui",
           output_path: null,
           session_id: (body.session_id as string) ?? null,
         });

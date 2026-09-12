@@ -22,6 +22,10 @@ type Turn = {
 };
 
 const DONE: JobState[] = ["completed", "failed", "cancelled"];
+/** Every job type this tab's history can include — "colibri" chats run on a
+ *  different runtime than "chat" (llama.cpp), but they're the same
+ *  conversational capability from the user's point of view. */
+const CHAT_JOB_TYPES = ["chat", "colibri"];
 const POLL_MS = 350;
 
 function modelFromEvents(events: JobEvent[]): string | null {
@@ -45,6 +49,7 @@ function promptOf(job: Job): string {
 
 export function Chat() {
   const [sessionId, setSessionId] = useState<string | null>(null);
+  const [modelId, setModelId] = useState("auto");
   const [turns, setTurns] = useState<Turn[]>([]);
   const [prompt, setPrompt] = useState("");
   const [pendingId, setPendingId] = useState<string | null>(null);
@@ -59,11 +64,19 @@ export function Chat() {
   const { data: models } = useModels();
   const { data: runtimes } = useRuntimes();
   const { data: jobs } = useJobs();
-  const hasChatModel = (models ?? []).some((m) => m.roles.includes("chat"));
+  const chatModels = useMemo(
+    () => (models ?? []).filter((m) => m.roles.includes("chat")),
+    [models],
+  );
+  const hasChatModel = chatModels.length > 0;
   const llama = (runtimes ?? []).find((r) => r.id === "llamacpp");
   const llamaReady = !llama || !(llama.detail ?? "").includes("not installed");
   const modelNames = useMemo(
     () => new Map((models ?? []).map((m) => [m.id, m.name])),
+    [models],
+  );
+  const modelById = useMemo(
+    () => new Map((models ?? []).map((m) => [m.id, m])),
     [models],
   );
 
@@ -75,7 +88,7 @@ export function Chat() {
     if (!jobs || hydratedFor.current === sessionId) return;
     hydratedFor.current = sessionId;
     const history = jobs
-      .filter((j) => j.job_type === "chat" && j.session_id === sessionId)
+      .filter((j) => CHAT_JOB_TYPES.includes(j.job_type) && j.session_id === sessionId)
       .slice()
       .sort((a, b) => a.created_at.localeCompare(b.created_at))
       .map(
@@ -143,9 +156,18 @@ export function Chat() {
     const text = prompt.trim();
     if (!text || (pendingId && !stuck)) return;
     setSendError(null);
+
+    const picked = modelId === "auto" ? null : modelById.get(modelId);
+    // "Auto" always resolves onto llama.cpp; an explicit pick routes to
+    // whichever runtime actually serves that model's format (Colibri models
+    // are never part of the Auto pool — see `for_role_with_benchmark`).
+    const isColibri = picked?.format === "colibri";
+
     try {
       const job = await submitJob({
-        job_type: "chat",
+        job_type: isColibri ? "colibri" : "chat",
+        model_id: picked ? picked.id : undefined,
+        runtime_id: picked ? (isColibri ? "colibri" : "llamacpp") : undefined,
         params: { prompt: text },
         session_id: sessionId ?? undefined,
       });
@@ -156,7 +178,7 @@ export function Chat() {
           prompt: text,
           answer: "",
           state: job.state,
-          model: null,
+          model: picked?.name ?? null,
           stats: null,
           error: null,
         },
@@ -178,6 +200,19 @@ export function Chat() {
   return (
     <div className="chat">
       <div className="chat__head">
+        <select
+          className="chat__model"
+          value={modelId}
+          onChange={(e) => setModelId(e.target.value)}
+          title="Which model answers"
+        >
+          <option value="auto">Auto (most-recently-used)</option>
+          {chatModels.map((m) => (
+            <option key={m.id} value={m.id}>
+              {m.name}
+            </option>
+          ))}
+        </select>
         <SessionSwitcher capability="chat" activeId={sessionId} onChange={setSessionId} />
       </div>
       <div className="chat__log" ref={logRef}>

@@ -331,13 +331,24 @@ impl<'a> ModelRepo<'a> {
         Ok(out)
     }
 
-    /// Every model carrying `role`, each paired with its most recent benchmark
-    /// (`None` if never tested). Feeds [`crate::select::pick_for_role`].
+    /// Every model carrying `role` that some runtime can actually serve on
+    /// its own (i.e. not a Colibri model, whose `file_path` is a whole
+    /// directory rather than a single file any of `select::pick_for_role`'s
+    /// callers — chat/coding onto llama.cpp, base_diffusion/base_video onto
+    /// ComfyUI — know how to load), each paired with its most recent
+    /// benchmark (`None` if never tested). This is a blocklist, not a
+    /// `format == "gguf"` allowlist: this same function also serves image/
+    /// video's Auto pick, whose models are legitimately `.safetensors`.
     pub async fn for_role_with_benchmark(
         &self,
         role: &str,
     ) -> Result<Vec<(Model, Option<super::Benchmark>)>> {
-        let models = self.for_role(role).await?;
+        let models: Vec<_> = self
+            .for_role(role)
+            .await?
+            .into_iter()
+            .filter(|m| m.format != "colibri")
+            .collect();
         let bench = super::BenchRepo::new(self.pool);
         let mut out = Vec::with_capacity(models.len());
         for m in models {
@@ -701,6 +712,70 @@ mod tests {
             .map(|m| m.name)
             .collect();
         assert_eq!(names, ["clip_l", "t5xxl_fp8"]);
+    }
+
+    #[tokio::test]
+    async fn for_role_with_benchmark_excludes_non_gguf_models() {
+        // "chat"/"coding" candidates feed `select::pick_for_role`, which
+        // always resolves the winner onto llama.cpp -- a Colibri (or any
+        // other non-GGUF) model carrying the same role must never be a
+        // candidate, or Auto can non-deterministically pick a model
+        // llama.cpp can't load ("model file is missing", since its
+        // `file_path` is a directory).
+        let db = Database::connect_in_memory().await.unwrap();
+        let mut gguf = gguf_model("qwen-7b", "hg");
+        gguf.roles = vec!["chat".into()];
+        db.models().insert(gguf).await.unwrap();
+
+        let colibri = NewModel {
+            name: "Qwen3.6-35B-A3B".into(),
+            format: "colibri".into(),
+            file_path: "D:\\models\\qwen36".into(),
+            size_bytes: 20_000_000_000,
+            ram_estimate_mb: Some(24_576),
+            source: "manual".into(),
+            roles: vec!["chat".into()],
+            ..NewModel::default()
+        };
+        db.models().insert(colibri).await.unwrap();
+
+        let names: Vec<_> = db
+            .models()
+            .for_role_with_benchmark("chat")
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|(m, _)| m.name)
+            .collect();
+        assert_eq!(
+            names,
+            ["qwen-7b"],
+            "the colibri model must not be a candidate"
+        );
+    }
+
+    #[tokio::test]
+    async fn for_role_with_benchmark_still_returns_safetensors_models() {
+        // This function also feeds image/video's Auto pick (base_diffusion /
+        // base_video), whose models are legitimately .safetensors -- the
+        // colibri exclusion must not turn into a "gguf only" allowlist that
+        // breaks that path too (a real regression this test is here to
+        // catch: it did, the first time this function was changed).
+        let db = Database::connect_in_memory().await.unwrap();
+        let mut sdxl = gguf_model("sdxl-base", "hs");
+        sdxl.format = "safetensors".into();
+        sdxl.roles = vec!["base_diffusion".into()];
+        db.models().insert(sdxl).await.unwrap();
+
+        let names: Vec<_> = db
+            .models()
+            .for_role_with_benchmark("base_diffusion")
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|(m, _)| m.name)
+            .collect();
+        assert_eq!(names, ["sdxl-base"]);
     }
 
     #[tokio::test]
