@@ -126,7 +126,7 @@ function ModelLibrary({ models, error }: { models: Model[] | null; error: string
   const { data: tagMap } = useModelTags();
   const [tagFilter, setTagFilter] = useState<string | null>(null);
 
-  const tags = tagMap ?? {};
+  const tags = useMemo(() => tagMap ?? {}, [tagMap]);
   const allTags = useMemo(
     () => [...new Set(Object.values(tags).flat())].sort(),
     [tags],
