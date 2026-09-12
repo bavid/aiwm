@@ -64,16 +64,40 @@ hierher, damit nichts verloren geht.
 - ~~`uv`-verwaltete venv-Strategie + „Repair"~~ → ✅ 3.2a (`comfyui::install`,
   ADR-018). Offen: Cleanup von `runtimes/comfyui/{<alter-tag>,uv-cache,python}`
   beim Versions-Bump; freien Speicherplatz vor dem torch-Download prüfen
-- ComfyUI cu130-torch: GPU-**Treiber**-Kompatibilität auf der echten 4080 Super
-  verifizieren — **weiterhin offen**: alle Bild-Smokes (3.4–3.6) fahren gegen
-  die Fake-ComfyUI, nicht die echte CUDA-Laufzeit. Sobald die echte ComfyUI ein
-  Bild rendert prüfen; fällt es aus → cu128/cu126-Pin.
-- **Flux-Graph gegen die echte ComfyUI verproben** (mit dem cu130-Check
-  zusammen): (a) dass `DualCLIPLoaderGGUF`s `get_full_path("clip", …)` unsere
-  `text_encoders`-Ordner-Konfig aus `extra_model_paths.yaml` findet
+- ~~ComfyUI cu130-torch: GPU-**Treiber**-Kompatibilität auf der echten 4080
+  Super verifizieren~~ → ✅ **verifiziert (2026-09-12)**: cu130/PyTorch 2.14
+  bootet sauber gegen den echten Treiber, `Device: cuda:0 NVIDIA GeForce RTX
+  4080 SUPER`. Dabei **einen echten Startup-Crash gefunden + behoben**:
+  `--base-directory` (für die ADR-019-Datenablage-Trennung) leitet auch
+  ComfyUIs `custom_nodes`-Suche dorthin um — die lagen dort nie, ComfyUI
+  crashte beim Start (`os.listdir` auf einen nicht existenten Pfad), und selbst
+  ohne Crash hätte `ComfyUI-GGUF` nie geladen. Fix: Junction von
+  `<comfyui-data>/custom_nodes` auf die echte Install (`core::runtime::comfyui::
+  launch::ComfyDirs::ensure`). Nach dem Fix: **erster echter End-to-End-Render
+  dieses Projekts** — ein reales 256×256/9-Frame-Wan-Clip, echte MP4-Datei.
+  Details: [MODELS.md](MODELS.md) / Commit `280018d`.
+- **Flux selbst noch nicht real getestet** (unabhängig vom obigen Fix): Flux
+  Q8_0 allein braucht laut Katalog-Daten ~13,7 GB, der komplette Stack (+T5+
+  CLIP-L+VAE) ~17 GB — passt auf einer 16-GB-Karte nicht, mit oder ohne
+  ComfyUIs eigenes `lowvram`/`novram`-Offloading ungetestet (AIWMs eigener
+  Preflight-Check blockt den Job schon vor dem ersten ComfyUI-Request, bekommt
+  also nie die Chance, das rauszufinden — siehe „Preflight-Gate ignoriert
+  ComfyUIs vram_mode" unten). **Flux-Graph gegen die echte ComfyUI verproben**
+  bleibt offen: (a) dass `DualCLIPLoaderGGUF`s `get_full_path("clip", …)`
+  unsere `text_encoders`-Ordner-Konfig aus `extra_model_paths.yaml` findet
   (ComfyUIs `map_legacy` sollte `clip`→`text_encoders` mappen — geprüft im Code,
   nicht live); (b) dass `UnetLoaderGGUF` das GGUF in `diffusion_models/` sieht;
   (c) Steps/Scheduler/Guidance-Defaults an einem echten Flux-Render kalibrieren.
+  Voraussetzung: entweder ein kleinerer Flux-Quant (Q4/Q5) im Katalog, oder das
+  Preflight-Gate lässt ComfyUIs eigenes VRAM-Management ranprobieren.
+- **Preflight-Gate ignoriert ComfyUIs `vram_mode`**: Settings dokumentiert
+  „Low VRAM — offload aggressively (helps Flux on 16 GB)" als Feature, aber der
+  Scheduler blockt einen zu großen Job schon VOR dem ersten ComfyUI-Request,
+  unabhängig vom konfigurierten `vram_mode` — ComfyUIs eigenes Offloading
+  bekommt nie eine Chance zu beweisen, dass es einen knapp-zu-großen Job doch
+  schafft (langsamer, aber lauffähig). Ob das lohnt, hängt daran, wie gut
+  ComfyUI-GGUFs `lowvram`-Pfad für GGUF-Diffusionsmodelle wirklich ist — nicht
+  live geprüft.
 - Flux-Companion-Auflösung (3.6) nutzt eine Namens-Heuristik (`t5` / `clip`).
   Robuster wäre ein `.safetensors`-Header-Check (Tensor-Namen verraten T5 vs
   CLIP-L eindeutig) — hängt an der ohnehin vertagten Header-Inspektion. Bis
@@ -297,6 +321,60 @@ ADRs 022–025. 371 Lib / 57 integ / 5 pytest.
   `ModelStack` optionale/nicht-Pflicht-Mitglieder (LoRAs sind nie
   Pflichtbestandteil eines Setups, anders als VAE/Text-Encoder) — aktuell
   behandelt `member_ids` jedes Mitglied als Pflicht.
+
+### Post-6.9c (2026-09-12): E2E-Review gegen echte Hardware — Scheduler, VRAM-Schätzung, ComfyUI, Agents
+User-Anfrage: „no more quick fixes. validate everything e2e and generate
+actual files videos images test code" — der reale `aiwm-cored` lief gegen die
+echten installierten Modelle/Runtimes (ComfyUI, llama.cpp, Hermes, OpenCode)
+statt nur gegen die Fixture-Test-Suite; jeder dabei gefundene Bug wurde
+root-caused behoben (Commit `280018d`, 411 lib + 58 integ + 5 pytest).
+- ✅ **Queue-Starvation behoben**: `db::jobs::next_runnable()` wählte den
+  global ältesten `queued`/`blocked`-Datensatz unabhängig vom State — ein
+  einziger dauerhaft blockierter Job verhungerte jeden anderen Job für immer.
+  Queued-Jobs gehen jetzt immer vor blocked; ein blockierter Job wird erst
+  erneut versucht, wenn nichts anderes läuft.
+- ✅ **VRAM-Schätzung**: `media_headroom_mb` (Sampler-Aktivierungen fürs
+  *Basis*-Modell) wurde für JEDEN Medien-Kind angewandt — ein 235-MB-CLIP-L
+  landete bei ~2,8 GB geschätztem Bedarf. Jetzt nur für Checkpoint/Diffusion/
+  Video-Kinds; die 5 schon importierten Begleitdateien in der DB korrigiert.
+  Zusätzlich: der Scheduler-Bedarf für einen Bild/Video-Job war ein fixer
+  Wert pro Modell — ein winziger 256×256/9-Frame-Testclip brauchte laut
+  Schätzung genauso viel wie das größtmögliche Rendering und wurde entsprechend
+  ebenso oft blockiert. Skaliert jetzt den Headroom-Anteil mit den echten
+  Pixel-/Frame-Zahlen des Jobs.
+- ✅ **Stack-Fit berücksichtigt jetzt die Summe**: `GET /models/stacks` gab
+  pro Mitglied einen Fit zurück, die UI nahm den schlechtesten einzelnen Wert
+  — jedes Flux-Mitglied für sich sieht grün/gelb aus, aber ein Render braucht
+  alle vier gleichzeitig im VRAM (~17 GB auf einer 16-GB-Karte). Neues
+  `ModelStackDto.fit` = Verdict über die **Summe** aller Mitgliedsgrößen.
+- ✅ **ComfyUI-Absturz beim ersten echten Start behoben** — siehe „Vor Phase
+  3/4" oben (cu130-Eintrag): `custom_nodes` fehlte unter `--base-directory`,
+  gefixt per Junction. **Erster erfolgreicher echter Render** (Wan-Clip, MP4)
+  dieses Projekts.
+- ✅ **Hermes/OpenCode — erste echte Läufe, mehrere reale Bugs gefunden**:
+  fehlendes `aiohttp` verhinderte Hermes' API-Server-Start (Timeout beim
+  Session-Öffnen); die echte Hermes-API verschachtelt `session.id` anders als
+  angenommen; Agent-Sessions liefen mit dem Chat-Kontext-Limit (8192 Token)
+  statt dem vollen Modell-Kontext (ein Tool-Calling-System-Prompt allein
+  braucht 20–25k+); und der eigentliche Grund hinter dem mitten im Lauf
+  abgebrochenen Chess-Test: beide Adapter nutzten denselben HTTP-Client mit
+  30-Sekunden-Timeout für ihren langlebigen SSE-Stream — jeder Turn über 30 s
+  killte den Stream, was die Drain-Loop als „Runtime tot" las und das Modell
+  mitten in der Generierung freigab. Jeder Adapter nutzt jetzt einen
+  separaten, ungebremsten Client fürs Streaming.
+- **Weiterhin offen (nicht code-fixbar ohne größere Arbeit):** Hermes' eigene
+  Mindestanforderung von 64.000 Token Kontext — sowohl fürs Hauptmodell als
+  auch für sein „Auxiliary Compression Model" — ist unabhängig vom obigen Fix;
+  unsere aktuellen Modelle (Qwen2.5-*-14B, nativ 32K) erreichen das nicht.
+  Bräuchte entweder ein Modell mit echtem ≥64K-Kontext oder eine echte
+  YaRN/RoPE-Scaling-Unterstützung in `LlamaServerOptions` (existiert noch
+  nicht). OpenCode hat diese Anforderung nicht und funktioniert nach dem
+  Kontext-Fix.
+- **Models-Tab-Politur**: „Import a model" stand vor dem Katalog — ein
+  Erstnutzer sah ein Pfad-Feld, bevor ihm gesagt wurde, was er installieren
+  soll. Katalog steht jetzt zuerst. „Set import type" (aus Katalog/Discover)
+  änderte ein Dropdown weiter unten ohne jedes sichtbare Feedback — scrollt
+  jetzt dorthin und blinkt kurz auf.
 
 ### Post-6.9b: VRAM scheduling was blind to other GPU applications, plus UI polish
 User report: "all picture and video generation fails due to block or fail" — traced to

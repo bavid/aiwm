@@ -31,7 +31,7 @@ noch keine echte AI-Capability (die kommt ab Phase 2).
 | WP-9 | CI-Workflow, Git-Hooks (pre-commit fmt, pre-push voller Gate) |
 | WP-10 | ADRs finalisiert, Stub-Docs (MODELS/RUNTIMES/SECURITY/BENCHMARKS) |
 
-**399 Rust-Unit + 58 Integrationstests + 5 pytest** grün · `scripts/check.ps1` grün ·
+**411 Rust-Unit + 58 Integrationstests + 5 pytest** grün · `scripts/check.ps1` grün ·
 **null `unsafe`** im Produktivcode.
 
 **Phase 2 (MVP) ✅ abgeschlossen** — Scheiben 2.1–2.7 + durchgehender
