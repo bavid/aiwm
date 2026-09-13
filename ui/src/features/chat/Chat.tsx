@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { CompareModels } from "../../components/CompareModels";
 import { SessionSwitcher } from "../../components/SessionSwitcher";
 import { useAbout, useJobs, useModels, useRuntimes } from "../../lib/hooks";
 import {
@@ -79,6 +80,7 @@ export function Chat() {
   const [prompt, setPrompt] = useState("");
   const [pendingId, setPendingId] = useState<string | null>(null);
   const [sendError, setSendError] = useState<string | null>(null);
+  const [compareOpen, setCompareOpen] = useState(false);
   const logRef = useRef<HTMLDivElement>(null);
   // Which session's history `turns` currently reflects -- `undefined` means
   // "nothing loaded yet". Re-derive from the jobs table on mount and whenever
@@ -272,7 +274,18 @@ export function Chat() {
           ))}
         </select>
         <SessionSwitcher capability="chat" activeId={sessionId} onChange={setSessionId} />
+        {chatModels.length >= 2 && (
+          <button
+            type="button"
+            className="chat__compare"
+            onClick={() => setCompareOpen(true)}
+            title="Send one prompt to two models at once"
+          >
+            Compare models
+          </button>
+        )}
       </div>
+      <CompareModels open={compareOpen} onClose={() => setCompareOpen(false)} chatModels={chatModels} />
       <div className="chat__log" ref={logRef}>
         {turns.length === 0 && (
           <div className="chat__empty">

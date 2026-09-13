@@ -25,6 +25,22 @@
   max-width: 14rem;
 }
 
+.chat__compare {
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+
+.chat__compare:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
 .chat__log {
   flex: 1;
   min-height: 0;
