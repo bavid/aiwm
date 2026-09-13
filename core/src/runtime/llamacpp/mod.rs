@@ -376,22 +376,42 @@ impl LlamaCppAdapter {
                 "no healthy llama-server found on 127.0.0.1:{port}"
             )));
         }
-        // Best-effort: warn if the server is serving a different file than the
-        // model the caller named.
+        self.finish_attach(port, model_id, vram_mb).await
+    }
+
+    /// Like [`attach`](Self::attach), but for a server that doesn't speak
+    /// llama.cpp's own `/health` — "bring your own engine" (7.x): Ollama, LM
+    /// Studio, or any other already-running OpenAI-compatible server AIWM
+    /// didn't install itself. Liveness is confirmed via `GET /v1/models`
+    /// instead, the one shape all of these share.
+    pub async fn attach_external(&self, port: u16, model_id: &str, vram_mb: u64) -> Result<()> {
+        let _op = self.op_lock.lock().await;
+        if !self.client.openai_models_alive(port).await {
+            return Err(llama_err(format!(
+                "no OpenAI-compatible server answered GET /v1/models on 127.0.0.1:{port}"
+            )));
+        }
+        self.finish_attach(port, model_id, vram_mb).await
+    }
+
+    /// Shared tail of `attach`/`attach_external` once liveness is confirmed:
+    /// warn (best-effort) if the server serves a different file than the
+    /// model the caller named, then mark it resident.
+    async fn finish_attach(&self, port: u16, model_id: &str, vram_mb: u64) -> Result<()> {
         let model = self.db.models().get(model_id).await.ok().flatten();
         if let Some(m) = &model {
             if let Some(served) = self.client.model_path(port).await {
                 if !same_file_path(&m.file_path, &served) {
                     tracing::warn!(
                         expected = %m.file_path, served = %served,
-                        "attached llama-server reports a different model file"
+                        "attached server reports a different model file"
                     );
                 }
             }
         }
         let label = model.map_or_else(|| model_id.to_string(), |m| m.name);
 
-        tracing::info!(port, model_id, "attached to a user-managed llama-server");
+        tracing::info!(port, model_id, "attached to an external server");
         *self.slot() = Slot::Loaded {
             model_id: model_id.to_string(),
             label,
@@ -750,5 +770,61 @@ mod tests {
         let port = mock_llama(false).await;
         let err = adapter().await.attach(port, "m", 1).await.unwrap_err();
         assert!(err.to_string().contains("no healthy llama-server"));
+    }
+
+    /// A stand-in for Ollama/LM Studio: it has no `/health` at all, only the
+    /// OpenAI-compatible `/v1/models` and `/v1/chat/completions` shapes.
+    async fn mock_openai_compatible() -> u16 {
+        let router = Router::new()
+            .route(
+                "/v1/models",
+                get(|| async { Json(serde_json::json!({ "data": [{ "id": "llama3.1:8b" }] })) }),
+            )
+            .route(
+                "/completion",
+                post(|| async { Json(serde_json::json!({ "content": "hi from mock" })) }),
+            );
+        let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+            .await
+            .unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            axum::serve(listener, router).await.unwrap();
+        });
+        port
+    }
+
+    #[tokio::test]
+    async fn attach_external_adopts_a_server_with_no_llama_cpp_health_route() {
+        let port = mock_openai_compatible().await;
+        let a = adapter().await;
+
+        a.attach_external(port, "llama3.1:8b", 5000).await.unwrap();
+
+        assert_eq!(a.loaded_models().len(), 1);
+        assert_eq!(a.vram_used_mb(), 5000);
+        assert_eq!(
+            a.detail(),
+            Some(format!("attached to llama3.1:8b on :{port}"))
+        );
+        assert_eq!(
+            a.base_url().as_deref(),
+            Some(&*format!("http://127.0.0.1:{port}"))
+        );
+
+        // Unloading leaves the external process untouched.
+        a.unload_model("llama3.1:8b").await.unwrap();
+        assert!(a.loaded_models().is_empty());
+    }
+
+    #[tokio::test]
+    async fn attach_external_fails_without_an_openai_compatible_server() {
+        let port = mock_llama(false).await; // /health only, no /v1/models
+        let err = adapter()
+            .await
+            .attach_external(port, "m", 1)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("no OpenAI-compatible server"));
     }
 }

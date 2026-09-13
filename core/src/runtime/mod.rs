@@ -12,6 +12,7 @@
 mod colibri;
 mod comfyui;
 pub(crate) mod download;
+mod external;
 mod fake;
 mod job;
 mod llamacpp;
@@ -25,6 +26,7 @@ pub use colibri::{
 pub use comfyui::{
     ComfyDirs, ComfyLaunch, ComfyOptions, ComfyUiAdapter, GeneratedMedia, SystemStats, VramMode,
 };
+pub use external::{detect as detect_external_engines, DetectedEngine};
 pub use fake::{FakeConfig, FakeRuntimeAdapter};
 pub use job::JobObject;
 pub use llamacpp::{GenerationEvent, InstallState, LlamaCppAdapter, LlamaServerOptions};

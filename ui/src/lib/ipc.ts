@@ -376,6 +376,24 @@ export const localApiStatus = () => invoke<LocalApiStatus>("local_api_status");
  *  never in a backup. Takes effect immediately, no restart needed. */
 export const setLocalApiToken = (token: string) => invoke<void>("set_local_api_token", { token });
 
+/** An already-running local LLM server found on a well-known port (Ollama,
+ *  LM Studio, …) — bring-your-own-engine (`GET /external-engines`). */
+export interface ExternalEngine {
+  label: string;
+  port: number;
+  models: string[];
+}
+export const externalEngines = () => invoke<ExternalEngine[]>("external_engines");
+/** Point the llama.cpp runtime slot at an already-running external server
+ *  instead of installing AIWM's own. `vramMb` is your own estimate — AIWM
+ *  can't introspect a process it doesn't manage. */
+export const attachExternalEngine = (port: number, modelId: string, vramMb: number) =>
+  invoke<void>("attach_external_engine", {
+    body: { port, model_id: modelId, vram_mb: vramMb },
+  });
+/** Release the runtime slot without touching the external process. */
+export const detachEngine = (modelId: string) => invoke<void>("detach_engine", { id: modelId });
+
 /** One entry of the curated image/video catalogue (`GET /models/known`),
  *  enriched with a fit verdict against the current VRAM budget. */
 export interface KnownModel {

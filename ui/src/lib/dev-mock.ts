@@ -625,6 +625,27 @@ export function installDevMock(): void {
       case "set_local_api_token":
         LOCAL_API_TOKEN = String(a.token ?? "").trim();
         return null;
+      case "external_engines":
+        return [{ label: "Ollama", port: 11434, models: ["llama3.1:8b", "qwen2.5:7b"] }];
+      case "attach_external_engine": {
+        const body = (a.body ?? {}) as AnyRecord;
+        const rt = RUNTIMES.find((r) => r.id === "llamacpp");
+        if (rt) {
+          rt.detail = `attached to ${body.model_id} on :${body.port}`;
+          rt.vram_used_mb = body.vram_mb;
+          rt.loaded_models = [{ model_id: body.model_id, vram_mb: body.vram_mb }];
+        }
+        return null;
+      }
+      case "detach_engine": {
+        const rt = RUNTIMES.find((r) => r.id === "llamacpp");
+        if (rt) {
+          rt.detail = "installed · idle";
+          rt.vram_used_mb = 0;
+          rt.loaded_models = [];
+        }
+        return null;
+      }
       case "list_benchmarks":
         progressBenchJobs();
         return [...new Map(BENCHMARKS.map((b) => [b.model_id, b])).values()];

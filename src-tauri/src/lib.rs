@@ -7,10 +7,11 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 use aiwm_core::api::dto::{
-    AboutDto, AgentPermissionDto, AgentSessionDetailDto, ColibriModelDto, ConfigUpdate,
-    EnqueueDownloadDto, FeaturedModelDto, JobDetailDto, KnownModelDto, LaunchExternalDto,
-    LocalApiStatusDto, ModelStackDto, NewAgentDto, NewSessionDto, OpenAgentSessionDto,
-    RegisterColibriModelDto, RegistryDetailsDto, RegistrySearchDto, RuntimeStatusDto, SubmitJobDto,
+    AboutDto, AgentPermissionDto, AgentSessionDetailDto, AttachExternalDto, ColibriModelDto,
+    ConfigUpdate, EnqueueDownloadDto, FeaturedModelDto, JobDetailDto, KnownModelDto,
+    LaunchExternalDto, LocalApiStatusDto, ModelStackDto, NewAgentDto, NewSessionDto,
+    OpenAgentSessionDto, RegisterColibriModelDto, RegistryDetailsDto, RegistrySearchDto,
+    RuntimeStatusDto, SubmitJobDto,
 };
 use aiwm_core::api::handlers;
 use aiwm_core::config::Config;
@@ -18,6 +19,7 @@ use aiwm_core::db::{Agent, AgentSession, Benchmark, Download, Job, JobFilter, Mo
 use aiwm_core::model::{ImportOutcome, ImportRequest};
 use aiwm_core::orchestrator::JobState;
 use aiwm_core::registry::{Fetched, RemoteModel};
+use aiwm_core::runtime::DetectedEngine;
 use aiwm_core::telemetry::SystemTelemetry;
 use aiwm_core::{api, app, App, LaunchInfo};
 use tauri::{Emitter, Manager};
@@ -332,6 +334,26 @@ fn set_local_api_token(app: tauri::State<'_, Arc<App>>, token: String) -> Result
 }
 
 #[tauri::command]
+async fn external_engines(app: tauri::State<'_, Arc<App>>) -> Result<Vec<DetectedEngine>, String> {
+    Ok(handlers::external_engines(&app).await)
+}
+
+#[tauri::command]
+async fn attach_external_engine(
+    app: tauri::State<'_, Arc<App>>,
+    body: AttachExternalDto,
+) -> Result<(), String> {
+    to_ipc(handlers::attach_external_engine(&app, body).await)
+}
+
+#[tauri::command]
+async fn detach_engine(app: tauri::State<'_, Arc<App>>, id: String) -> Result<(), String> {
+    to_ipc(
+        handlers::detach_engine(&app, aiwm_core::api::dto::DetachEngineDto { model_id: id }).await,
+    )
+}
+
+#[tauri::command]
 async fn delete_model(
     app: tauri::State<'_, Arc<App>>,
     id: String,
@@ -497,6 +519,9 @@ fn try_run() -> anyhow::Result<()> {
             set_hf_token,
             local_api_status,
             set_local_api_token,
+            external_engines,
+            attach_external_engine,
+            detach_engine,
             install_llamacpp,
             install_comfyui,
             install_hermes,

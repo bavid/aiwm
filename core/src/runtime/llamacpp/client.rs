@@ -92,6 +92,19 @@ impl LlamaClient {
         }
     }
 
+    /// `GET /v1/models` succeeding means an OpenAI-compatible server is alive
+    /// on `port` — the one endpoint shape Ollama, LM Studio and llama.cpp
+    /// itself all implement, unlike llama.cpp's own `/health` which only
+    /// llama.cpp has. Used by `attach_external` (bring-your-own-engine, 7.x).
+    pub(super) async fn openai_models_alive(&self, port: u16) -> bool {
+        self.http
+            .get(format!("{}/v1/models", self.base(port)))
+            .timeout(PROBE_TIMEOUT)
+            .send()
+            .await
+            .is_ok_and(|r| r.status().is_success())
+    }
+
     /// Non-streaming `POST /completion`; returns the generated text.
     pub(super) async fn complete(&self, port: u16, prompt: &str, n_predict: i32) -> Result<String> {
         let resp = self

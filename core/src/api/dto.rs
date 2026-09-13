@@ -402,6 +402,24 @@ pub struct SetTokenDto {
     pub token: String,
 }
 
+/// Body for `POST /external-engines/attach` — bring-your-own-engine (7.x):
+/// point the llama.cpp runtime slot at an already-running external server
+/// (Ollama, LM Studio, …) instead of a self-managed one.
+#[derive(Debug, Clone, Deserialize)]
+pub struct AttachExternalDto {
+    pub port: u16,
+    pub model_id: String,
+    /// The caller's own estimate — AIWM has no way to introspect VRAM usage
+    /// of a process it doesn't manage.
+    pub vram_mb: u64,
+}
+
+/// Body for `POST /external-engines/detach`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct DetachEngineDto {
+    pub model_id: String,
+}
+
 /// `GET /local-api/status` — the unified local API endpoint (7.x): one
 /// OpenAI-compatible address that always forwards to whichever model is
 /// currently resident on llama.cpp. The token itself is never echoed back,

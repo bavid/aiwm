@@ -6,11 +6,11 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use super::dto::{
-    AboutDto, AgentPermissionDto, AgentSessionDetailDto, ColibriModelDto, ConfigUpdate,
-    EnqueueDownloadDto, FeaturedModelDto, JobDetailDto, KnownModelDto, LaunchExternalDto,
-    LocalApiStatusDto, ModelStackDto, NewAgentDto, NewSessionDto, OpenAgentSessionDto,
-    RegisterColibriModelDto, RegistryDetailsDto, RegistryFileDto, RegistrySearchDto,
-    RuntimeStatusDto, SubmitJobDto,
+    AboutDto, AgentPermissionDto, AgentSessionDetailDto, AttachExternalDto, ColibriModelDto,
+    ConfigUpdate, DetachEngineDto, EnqueueDownloadDto, FeaturedModelDto, JobDetailDto,
+    KnownModelDto, LaunchExternalDto, LocalApiStatusDto, ModelStackDto, NewAgentDto, NewSessionDto,
+    OpenAgentSessionDto, RegisterColibriModelDto, RegistryDetailsDto, RegistryFileDto,
+    RegistrySearchDto, RuntimeStatusDto, SubmitJobDto,
 };
 use crate::compat::FitVerdict;
 use crate::config::Config;
@@ -269,6 +269,31 @@ pub fn local_api_status(app: &App) -> LocalApiStatusDto {
         endpoint: format!("http://127.0.0.1:{}/v1", app.config.core_api_port),
         token_set: local_api_token(app).is_some(),
     }
+}
+
+/// `GET /external-engines` — bring-your-own-engine (7.x): already-running
+/// local LLM servers found on well-known ports (Ollama, LM Studio), so the
+/// user can attach to one instead of installing AIWM's own llama-server.
+pub async fn external_engines(_app: &App) -> Vec<crate::runtime::DetectedEngine> {
+    crate::runtime::detect_external_engines().await
+}
+
+/// `POST /external-engines/attach` — point the llama.cpp runtime slot at an
+/// already-running external server instead of a self-managed one.
+pub async fn attach_external_engine(app: &App, body: AttachExternalDto) -> Result<()> {
+    app.llama
+        .attach_external(body.port, &body.model_id, body.vram_mb)
+        .await
+}
+
+/// `POST /external-engines/detach` — release the runtime slot without
+/// touching a process AIWM doesn't own (a no-op if `model_id` isn't the
+/// currently resident one). The same mechanism as any other unload; scoped
+/// under `/external-engines` because that's the only place the UI currently
+/// exposes a manual load/unload action.
+pub async fn detach_engine(app: &App, body: DetachEngineDto) -> Result<()> {
+    use crate::runtime::RuntimeAdapter;
+    app.llama.unload_model(&body.model_id).await
 }
 
 /// Storage overview + the "safe to delete" reports (Phase 6.8).

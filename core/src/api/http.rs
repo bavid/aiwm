@@ -12,9 +12,9 @@ use axum::{Json, Router};
 use serde::Deserialize;
 
 use super::dto::{
-    AgentMessageDto, AgentPermissionDto, LaunchExternalDto, NewAgentDto, NewSessionDto,
-    OpenAgentSessionDto, RenameSessionDto, SetArchivedDto, SetRolesDto, SetTagsDto, SetTokenDto,
-    SubmitJobDto,
+    AgentMessageDto, AgentPermissionDto, AttachExternalDto, DetachEngineDto, LaunchExternalDto,
+    NewAgentDto, NewSessionDto, OpenAgentSessionDto, RenameSessionDto, SetArchivedDto, SetRolesDto,
+    SetTagsDto, SetTokenDto, SubmitJobDto,
 };
 use super::handlers;
 use crate::db::JobFilter;
@@ -54,6 +54,9 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/local-api/status", get(local_api_status))
         .route("/local-api/token", put(set_local_api_token))
         .route("/v1/{*path}", any(local_api_proxy))
+        .route("/external-engines", get(external_engines))
+        .route("/external-engines/attach", post(attach_external_engine))
+        .route("/external-engines/detach", post(detach_engine))
         .route("/storage", get(storage_report))
         .route("/models/{id}/benchmark", post(benchmark_model))
         .route("/models/{id}/benchmarks", get(model_benchmarks))
@@ -357,6 +360,26 @@ async fn set_local_api_token(
     Json(body): Json<SetTokenDto>,
 ) -> Result<StatusCode, ApiError> {
     handlers::set_local_api_token(&app, &body.token)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn external_engines(State(app): AppState) -> Json<Vec<crate::runtime::DetectedEngine>> {
+    Json(handlers::external_engines(&app).await)
+}
+
+async fn attach_external_engine(
+    State(app): AppState,
+    Json(body): Json<AttachExternalDto>,
+) -> Result<StatusCode, ApiError> {
+    handlers::attach_external_engine(&app, body).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn detach_engine(
+    State(app): AppState,
+    Json(body): Json<DetachEngineDto>,
+) -> Result<StatusCode, ApiError> {
+    handlers::detach_engine(&app, body).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 

@@ -13,6 +13,7 @@ import {
   listJobs,
   listKnownModels,
   listModelStacks,
+  externalEngines,
   listDownloads,
   listModels,
   listSessions,
@@ -26,6 +27,7 @@ import {
   type AgentRuntime,
   type Benchmark,
   type Download,
+  type ExternalEngine,
   type Job,
   type JobState,
   type LaunchInfo,
@@ -159,6 +161,8 @@ export const useRegistryStatus = () =>
   usePolled<RegistryStatus>("registry-status", registryStatus, 5000);
 export const useLocalApiStatus = () =>
   usePolled<LocalApiStatus>("local-api-status", localApiStatus, 5000);
+export const useExternalEngines = () =>
+  usePolled<ExternalEngine[]>("external-engines", externalEngines, 5000);
 
 const PINNED_MODELS_KEY = "aiwm:pinned-models";
 

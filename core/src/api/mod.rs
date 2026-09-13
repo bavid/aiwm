@@ -1183,6 +1183,102 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn external_engines_over_http_returns_an_array() {
+        let (app, _tmp) = test_app().await;
+        let server = ApiServer::bind(app, SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
+            .await
+            .unwrap();
+
+        let found: serde_json::Value =
+            reqwest::get(format!("http://{}/external-engines", server.addr))
+                .await
+                .unwrap()
+                .json()
+                .await
+                .unwrap();
+        assert!(found.is_array());
+    }
+
+    #[tokio::test]
+    async fn attach_and_detach_an_external_engine_over_http() {
+        use axum::{Json, Router};
+
+        let (app, _tmp) = test_app().await;
+
+        // A stand-in for Ollama/LM Studio: only `/v1/models`, no llama.cpp
+        // `/health`.
+        let router = Router::new().route(
+            "/v1/models",
+            axum::routing::get(|| async {
+                Json(serde_json::json!({ "data": [{ "id": "llama3.1:8b" }] }))
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
+            .await
+            .unwrap();
+        let fake_port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            axum::serve(listener, router).await.unwrap();
+        });
+
+        let server = ApiServer::bind(app, SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
+            .await
+            .unwrap();
+        let base = format!("http://{}", server.addr);
+        let http = reqwest::Client::new();
+
+        let resp = http
+            .post(format!("{base}/external-engines/attach"))
+            .json(&serde_json::json!({
+                "port": fake_port, "model_id": "llama3.1:8b", "vram_mb": 5000
+            }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 204);
+
+        let runtimes: serde_json::Value = reqwest::get(format!("{base}/runtimes"))
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let llama = runtimes
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["id"] == "llamacpp")
+            .unwrap();
+        assert_eq!(
+            llama["detail"],
+            format!("attached to llama3.1:8b on :{fake_port}")
+        );
+        assert_eq!(llama["loaded_models"][0]["model_id"], "llama3.1:8b");
+
+        let resp = http
+            .post(format!("{base}/external-engines/detach"))
+            .json(&serde_json::json!({ "model_id": "llama3.1:8b" }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 204);
+
+        let runtimes: serde_json::Value = reqwest::get(format!("{base}/runtimes"))
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let llama = runtimes
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["id"] == "llamacpp")
+            .unwrap();
+        assert_eq!(llama["loaded_models"].as_array().unwrap().len(), 0);
+    }
+
+    #[tokio::test]
     async fn local_api_proxy_reports_503_with_no_model_loaded() {
         let (app, _tmp) = test_app().await;
         handlers::set_local_api_token(&app, "correct-token").unwrap();

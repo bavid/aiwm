@@ -1,12 +1,19 @@
 import { useEffect, useRef, useState } from "react";
 import {
   useAbout,
+  useExternalEngines,
   useLogs,
   useRegistryStatus,
   useRuntimes,
   useTelemetry,
 } from "../../lib/hooks";
-import { installComfyui, installLlamacpp } from "../../lib/ipc";
+import {
+  attachExternalEngine,
+  detachEngine,
+  installComfyui,
+  installLlamacpp,
+  type RuntimeStatus,
+} from "../../lib/ipc";
 import { getTheme } from "../../lib/theme";
 import "./diagnostics.css";
 
@@ -111,6 +118,8 @@ export function Diagnostics() {
         />
       </section>
 
+      <ExternalEngineCard llama={runtimes?.find((r) => r.id === "llamacpp")} />
+
       <section className="card card--wide">
         <header className="card__head">
           <h2>GPU processes</h2>
@@ -169,6 +178,143 @@ export function Diagnostics() {
         </pre>
       </section>
     </div>
+  );
+}
+
+/** Bring-your-own-engine (7.x): attach an already-running local LLM server
+ *  (Ollama, LM Studio, a standalone llama-server, …) instead of installing
+ *  AIWM's own — Chat and Agents use it exactly the same way afterward, since
+ *  it lands in the same llama.cpp runtime slot a self-managed server would. */
+function ExternalEngineCard({ llama }: { llama: RuntimeStatus | undefined }) {
+  const { data: engines } = useExternalEngines();
+  const [vramMb, setVramMb] = useState("4096");
+  const [customPort, setCustomPort] = useState("");
+  const [customModel, setCustomModel] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+
+  const attachedModelId = llama?.loaded_models[0]?.model_id ?? null;
+  const isExternal = llama?.detail?.startsWith("attached to") ?? false;
+
+  const attach = async (port: number, modelId: string) => {
+    const vram = Number(vramMb);
+    if (!Number.isFinite(vram) || vram <= 0) {
+      setMsg("Enter a VRAM estimate in MB first.");
+      return;
+    }
+    if (!Number.isFinite(port) || port <= 0) {
+      setMsg("Enter a valid port.");
+      return;
+    }
+    setBusy(true);
+    setMsg(null);
+    try {
+      await attachExternalEngine(port, modelId, Math.round(vram));
+      setMsg(`Attached to ${modelId} on :${port}.`);
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const detach = async () => {
+    if (!attachedModelId) return;
+    setBusy(true);
+    setMsg(null);
+    try {
+      await detachEngine(attachedModelId);
+      setMsg("Detached.");
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <section className="card">
+      <header className="card__head">
+        <h2>Bring your own engine</h2>
+        <span className="card__sub">attaches, doesn't install</span>
+      </header>
+      <p className="muted">
+        Already running Ollama or LM Studio? Attach it instead of a self-managed
+        llama-server — its process is never touched by AIWM.
+      </p>
+
+      {isExternal && (
+        <div className="rt-setup">
+          <span className="muted">{llama?.detail}</span>
+          <button type="button" disabled={busy} onClick={detach}>
+            Detach
+          </button>
+        </div>
+      )}
+
+      {engines && engines.length > 0 ? (
+        <table className="rt">
+          <tbody>
+            {engines.flatMap((e) =>
+              e.models.map((m) => (
+                <tr key={`${e.port}-${m}`}>
+                  <td>{e.label}</td>
+                  <td className="muted">{m}</td>
+                  <td className="muted numeric">:{e.port}</td>
+                  <td>
+                    <button type="button" disabled={busy} onClick={() => attach(e.port, m)}>
+                      Attach
+                    </button>
+                  </td>
+                </tr>
+              )),
+            )}
+          </tbody>
+        </table>
+      ) : (
+        <p className="muted">Nothing found on the usual ports (Ollama :11434, LM Studio :1234).</p>
+      )}
+
+      <label className="set-field">
+        <span>
+          VRAM estimate (MB) — used for the scheduler's budget math, since AIWM can't
+          inspect a process it doesn't manage
+        </span>
+        <input
+          type="text"
+          inputMode="numeric"
+          value={vramMb}
+          onChange={(e) => setVramMb(e.target.value)}
+        />
+      </label>
+
+      <details>
+        <summary className="muted">Attach a custom address (127.0.0.1 only)</summary>
+        <div className="rt-setup">
+          <input
+            type="text"
+            placeholder="port, e.g. 11434"
+            value={customPort}
+            onChange={(e) => setCustomPort(e.target.value)}
+          />
+          <input
+            type="text"
+            placeholder="model id"
+            value={customModel}
+            onChange={(e) => setCustomModel(e.target.value)}
+          />
+          <button
+            type="button"
+            disabled={busy || !customPort.trim() || !customModel.trim()}
+            onClick={() => attach(Number(customPort), customModel.trim())}
+          >
+            Attach
+          </button>
+        </div>
+      </details>
+
+      {msg && <span className="muted">{msg}</span>}
+    </section>
   );
 }
 
