@@ -672,6 +672,60 @@ pub async fn delete_session(app: &App, id: &str) -> Result<()> {
     app.db.sessions().delete(id).await
 }
 
+// --- documents / local RAG (7.x) -------------------------------------------
+
+/// `POST /sessions/{id}/documents` — read, chunk, and store a document for
+/// local RAG grounding in this chat session. `path` is a path on this
+/// machine; the file picker resolves it before calling here.
+pub async fn attach_document(
+    app: &App,
+    session_id: &str,
+    path: &str,
+) -> Result<crate::db::Document> {
+    if app.db.sessions().get(session_id).await?.is_none() {
+        return Err(CoreError::Config(format!(
+            "session {session_id} does not exist"
+        )));
+    }
+    let file_path = std::path::Path::new(path);
+    let name = file_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or(path)
+        .to_string();
+    let format = file_path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    let text = crate::rag::read_document(file_path)?;
+    let chunks = crate::rag::chunk_text(
+        &text,
+        crate::rag::DEFAULT_CHUNK_WORDS,
+        crate::rag::DEFAULT_OVERLAP_WORDS,
+    );
+    app.db
+        .documents()
+        .insert(
+            crate::db::NewDocument {
+                session_id: session_id.to_string(),
+                name,
+                source_path: path.to_string(),
+                format,
+            },
+            &chunks,
+        )
+        .await
+}
+
+pub async fn list_documents(app: &App, session_id: &str) -> Result<Vec<crate::db::Document>> {
+    app.db.documents().list_for_session(session_id).await
+}
+
+pub async fn delete_document(app: &App, id: &str) -> Result<()> {
+    app.db.documents().delete(id).await
+}
+
 // --- agents (Phase 5.1c) ---------------------------------------------------
 
 pub async fn create_agent(app: &App, body: NewAgentDto) -> Result<Agent> {

@@ -6,6 +6,7 @@
 
 mod agents;
 mod bench;
+mod documents;
 mod downloads;
 mod jobs;
 mod models;
@@ -15,6 +16,7 @@ mod settings;
 
 pub use agents::{Agent, AgentRepo, AgentSession, AgentSessionEvent, AgentSessionState, NewAgent};
 pub use bench::{BenchRepo, Benchmark, NewBenchmark};
+pub use documents::{Document, DocumentChunk, DocumentRepo, NewDocument};
 pub use downloads::{Download, DownloadRepo, DownloadState, NewDownload};
 pub use jobs::{EventLevel, Job, JobEvent, JobFilter, JobPatch, JobRepo, NewJob};
 pub use models::{Model, ModelLink, ModelRepo, NewModel};
@@ -98,6 +100,10 @@ impl Database {
 
     pub fn sessions(&self) -> SessionRepo<'_> {
         SessionRepo::new(&self.pool)
+    }
+
+    pub fn documents(&self) -> DocumentRepo<'_> {
+        DocumentRepo::new(&self.pool)
     }
 
     pub fn downloads(&self) -> DownloadRepo<'_> {

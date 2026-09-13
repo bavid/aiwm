@@ -122,6 +122,14 @@ pub struct SetArchivedDto {
     pub archived: bool,
 }
 
+/// Body for `POST /sessions/{id}/documents` — attach a document to a chat
+/// session for local RAG (7.x). `path` is resolved by the caller (a native
+/// file picker in the UI); the core reads, chunks, and stores it.
+#[derive(Debug, Clone, Deserialize)]
+pub struct AttachDocumentDto {
+    pub path: String,
+}
+
 /// Body for `POST /agents` / `create_agent` — a new agent profile.
 #[derive(Debug, Clone, Deserialize)]
 pub struct NewAgentDto {

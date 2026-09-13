@@ -9,6 +9,7 @@ import {
   listAgentRuntimes,
   listAgents,
   listBenchmarks,
+  listDocuments,
   listFeaturedModels,
   listJobs,
   listKnownModels,
@@ -26,6 +27,7 @@ import {
   type Agent,
   type AgentRuntime,
   type Benchmark,
+  type Document,
   type Download,
   type ExternalEngine,
   type Job,
@@ -155,6 +157,12 @@ export const useBenchmarks = () =>
   usePolled<Benchmark[]>("benchmarks", listBenchmarks, 3000);
 export const useStorage = () =>
   usePolled<StorageReport>("storage", storageReport, 5000);
+export const useDocuments = (sessionId: string | null) =>
+  usePolled<Document[]>(
+    `documents:${sessionId ?? ""}`,
+    () => (sessionId ? listDocuments(sessionId) : Promise.resolve([])),
+    4000,
+  );
 export const useModelTags = () =>
   usePolled<Record<string, string[]>>("model-tags", modelTags, 4000);
 export const useRegistryStatus = () =>

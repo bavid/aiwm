@@ -1183,6 +1183,72 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn attach_list_and_delete_a_document_over_http() {
+        let (app, tmp) = test_app().await;
+        let session = app.db.sessions().create("chat", "Research").await.unwrap();
+        let doc_path = tmp.path().join("policy.md");
+        std::fs::write(&doc_path, "The refund window is thirty days from purchase.").unwrap();
+
+        let server = ApiServer::bind(app, SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
+            .await
+            .unwrap();
+        let base = format!("http://{}", server.addr);
+        let http = reqwest::Client::new();
+
+        let created: serde_json::Value = http
+            .post(format!("{base}/sessions/{}/documents", session.id))
+            .json(&serde_json::json!({ "path": doc_path.to_string_lossy() }))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(created["name"], "policy.md");
+        assert_eq!(created["session_id"], session.id);
+        let doc_id = created["id"].as_str().unwrap().to_string();
+
+        let listed: serde_json::Value =
+            reqwest::get(format!("{base}/sessions/{}/documents", session.id))
+                .await
+                .unwrap()
+                .json()
+                .await
+                .unwrap();
+        assert_eq!(listed.as_array().unwrap().len(), 1);
+
+        // An unsupported extension is a clean error, not a panic — matches
+        // this codebase's existing convention of mapping capability-layer
+        // validation errors (chat/image/video's "missing prompt" etc.)
+        // through CoreError::Runtime, which the API layer maps to 500.
+        let bad_path = tmp.path().join("report.pdf");
+        std::fs::write(&bad_path, "not really a pdf").unwrap();
+        let bad = http
+            .post(format!("{base}/sessions/{}/documents", session.id))
+            .json(&serde_json::json!({ "path": bad_path.to_string_lossy() }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(bad.status(), 500);
+
+        let resp = http
+            .delete(format!("{base}/documents/{doc_id}"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 204);
+
+        let listed: serde_json::Value =
+            reqwest::get(format!("{base}/sessions/{}/documents", session.id))
+                .await
+                .unwrap()
+                .json()
+                .await
+                .unwrap();
+        assert!(listed.as_array().unwrap().is_empty());
+    }
+
+    #[tokio::test]
     async fn external_engines_over_http_returns_an_array() {
         let (app, _tmp) = test_app().await;
         let server = ApiServer::bind(app, SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))

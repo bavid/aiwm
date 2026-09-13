@@ -41,6 +41,64 @@
   border-color: var(--accent);
 }
 
+.chat__docs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.chat__doc-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: var(--text-xs);
+}
+
+.chat__doc-remove {
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: var(--text-sm);
+  line-height: 1;
+  padding: 0;
+}
+
+.chat__doc-remove:hover {
+  color: var(--load-crit);
+}
+
+.chat__doc-attach {
+  padding: var(--space-1) var(--space-2);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+
+.chat__doc-attach:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.chat__doc-attach:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.chat__doc-err {
+  color: var(--load-crit);
+  font-size: var(--text-xs);
+}
+
 .chat__log {
   flex: 1;
   min-height: 0;

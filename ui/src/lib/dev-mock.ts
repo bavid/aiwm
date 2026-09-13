@@ -62,6 +62,8 @@ const SESSIONS: AnyRecord[] = [
   mkSession("sess-img-1", "image", "Anime pics"),
 ];
 
+const DOCUMENTS: AnyRecord[] = [];
+
 const RUNTIMES: AnyRecord[] = [
   {
     id: "llamacpp", kind: "llama_cpp", health: "healthy", vram_used_mb: 6400,
@@ -535,6 +537,31 @@ export function installDevMock(): void {
       case "delete_session": {
         const i = SESSIONS.findIndex((x) => x.id === a.id);
         if (i >= 0) SESSIONS.splice(i, 1);
+        return null;
+      }
+      case "list_documents":
+        return DOCUMENTS.filter((d) => d.session_id === a.sessionId).map((d) => ({ ...d }));
+      case "attach_document": {
+        const path = String(a.path ?? "");
+        const name = path.split(/[\\/]/).pop() ?? path;
+        const ext = name.includes(".") ? (name.split(".").pop() ?? "").toLowerCase() : "";
+        if (!["txt", "md"].includes(ext)) {
+          throw new Error(`only .txt and .md documents are supported right now — got ${path}`);
+        }
+        const doc = {
+          id: `doc-dev-${seq++}`,
+          session_id: String(a.sessionId ?? ""),
+          name,
+          source_path: path,
+          format: ext,
+          created_at: now(),
+        };
+        DOCUMENTS.push(doc);
+        return doc;
+      }
+      case "delete_document": {
+        const i = DOCUMENTS.findIndex((d) => d.id === a.id);
+        if (i >= 0) DOCUMENTS.splice(i, 1);
         return null;
       }
       case "storage_report": {

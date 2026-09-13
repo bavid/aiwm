@@ -1,9 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { open } from "@tauri-apps/plugin-dialog";
 import { CompareModels } from "../../components/CompareModels";
 import { SessionSwitcher } from "../../components/SessionSwitcher";
-import { useAbout, useJobs, useModels, useRuntimes } from "../../lib/hooks";
+import { useAbout, useDocuments, useJobs, useModels, useRuntimes } from "../../lib/hooks";
 import {
+  attachDocument,
   cancelJob,
+  deleteDocument,
   jobDetail,
   jobOutputUrl,
   submitJob,
@@ -286,6 +289,7 @@ export function Chat() {
         )}
       </div>
       <CompareModels open={compareOpen} onClose={() => setCompareOpen(false)} chatModels={chatModels} />
+      <DocumentsBar sessionId={sessionId} />
       <div className="chat__log" ref={logRef}>
         {turns.length === 0 && (
           <div className="chat__empty">
@@ -338,6 +342,75 @@ export function Chat() {
         </button>
       </form>
       {sendError && <p className="chat__err">{sendError}</p>}
+    </div>
+  );
+}
+
+/** Documents attached to the active session ground the model's answers via
+ *  lexical (keyword) search — no embedding model, see the scoping notes.
+ *  Attaching is session-scoped: switch sessions and this bar switches with
+ *  it, same as the rest of the conversation. */
+function DocumentsBar({ sessionId }: { sessionId: string | null }) {
+  const { data: documents } = useDocuments(sessionId);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  if (!sessionId) return null;
+
+  const attach = async () => {
+    setError(null);
+    let picked: string | null;
+    try {
+      const result = await open({
+        multiple: false,
+        filters: [{ name: "Text documents", extensions: ["txt", "md"] }],
+      });
+      picked = typeof result === "string" ? result : null;
+    } catch {
+      return; // Not running inside Tauri (e.g. the browser dev preview) -- no-op.
+    }
+    if (!picked) return;
+
+    setBusy(true);
+    try {
+      await attachDocument(sessionId, picked);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const remove = async (id: string) => {
+    setError(null);
+    try {
+      await deleteDocument(id);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const docs = documents ?? [];
+
+  return (
+    <div className="chat__docs">
+      {docs.map((d) => (
+        <span key={d.id} className="chat__doc-chip">
+          {d.name}
+          <button
+            type="button"
+            className="chat__doc-remove"
+            onClick={() => remove(d.id)}
+            aria-label={`Remove ${d.name}`}
+          >
+            ×
+          </button>
+        </span>
+      ))}
+      <button type="button" className="chat__doc-attach" onClick={attach} disabled={busy}>
+        {busy ? "Adding…" : "+ Attach document"}
+      </button>
+      {error && <span className="chat__doc-err">{error}</span>}
     </div>
   );
 }

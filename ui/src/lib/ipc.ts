@@ -282,6 +282,25 @@ export const setSessionArchived = (id: string, archived: boolean) =>
   invoke<void>("set_session_archived", { id, archived });
 export const deleteSession = (id: string) => invoke<void>("delete_session", { id });
 
+/** A document attached to a chat session for local RAG (7.x) — grounds chat
+ *  answers via lexical (keyword) search over its chunks, no embedding model. */
+export interface Document {
+  id: string;
+  session_id: string;
+  name: string;
+  source_path: string;
+  /** `"txt"` | `"md"`. */
+  format: string;
+  created_at: string;
+}
+export const listDocuments = (sessionId: string) =>
+  invoke<Document[]>("list_documents", { sessionId });
+/** Read, chunk, and store a document already on this machine (`path`) for
+ *  the given chat session. Only `.txt` / `.md` are supported. */
+export const attachDocument = (sessionId: string, path: string) =>
+  invoke<Document>("attach_document", { sessionId, path });
+export const deleteDocument = (id: string) => invoke<void>("delete_document", { id });
+
 export const listModels = () => invoke<Model[]>("list_models");
 
 // --- storage & cleanup (Phase 6.8) -------------------------------------

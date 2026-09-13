@@ -651,7 +651,16 @@ impl JobEngine {
                 });
             }
             let req = chat::ChatRequest::from_params(&job.params)?;
-            match chat::run(&self.db, &self.llama, &job.id, req, cancel).await? {
+            match chat::run(
+                &self.db,
+                &self.llama,
+                &job.id,
+                job.session_id.as_deref(),
+                req,
+                cancel,
+            )
+            .await?
+            {
                 ChatOutcome::Done(done) => {
                     let _ = self.db.models().mark_used(&model_id).await;
                     self.db

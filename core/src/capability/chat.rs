@@ -72,11 +72,14 @@ pub enum ChatOutcome {
 
 /// Stream the answer into `jobs.result`. Returns when generation finishes, the
 /// stream errors, or `cancel` flips to `true` (the in-flight HTTP request is
-/// dropped, which stops the server too).
+/// dropped, which stops the server too). `session_id` — when the session has
+/// documents attached — grounds the prompt in the most relevant chunks
+/// (lexical search, [`crate::rag`]) before it reaches the model.
 pub async fn run(
     db: &Database,
     llama: &Arc<LlamaCppAdapter>,
     job_id: &str,
+    session_id: Option<&str>,
     req: ChatRequest,
     mut cancel: watch::Receiver<bool>,
 ) -> Result<ChatOutcome> {
@@ -92,10 +95,11 @@ pub async fn run(
         )
         .await?;
 
+    let prompt = ground_prompt(db, job_id, session_id, &req.prompt).await?;
+
     let (tx, mut rx) = mpsc::channel::<GenerationEvent>(64);
     let stream = tokio::spawn({
         let llama = Arc::clone(llama);
-        let prompt = req.prompt.clone();
         let max_tokens = req.max_tokens;
         async move { llama.stream_completion(&prompt, max_tokens, tx).await }
     });
@@ -143,6 +147,41 @@ pub async fn run(
     }))
 }
 
+/// When `session_id` has documents attached, retrieve the most relevant
+/// chunks (lexical search over every chunk in the session) and wrap the
+/// prompt with them; otherwise the prompt passes through unchanged. A session
+/// with no attached documents costs one empty query, not a full scan.
+async fn ground_prompt(
+    db: &Database,
+    job_id: &str,
+    session_id: Option<&str>,
+    prompt: &str,
+) -> Result<String> {
+    let Some(session_id) = session_id else {
+        return Ok(prompt.to_string());
+    };
+    let chunks = db.documents().chunks_for_session(session_id).await?;
+    if chunks.is_empty() {
+        return Ok(prompt.to_string());
+    }
+
+    let texts: Vec<String> = chunks.into_iter().map(|c| c.text).collect();
+    let top = crate::rag::top_k_by_relevance(&texts, prompt, crate::rag::DEFAULT_TOP_K);
+    if top.is_empty() {
+        return Ok(prompt.to_string());
+    }
+
+    let retrieved: Vec<&str> = top.iter().map(|&i| texts[i].as_str()).collect();
+    db.jobs()
+        .append_event(
+            job_id,
+            EventLevel::Info,
+            &format!("grounded in {} attached-document chunk(s)", retrieved.len()),
+        )
+        .await?;
+    Ok(crate::rag::build_grounded_prompt(prompt, &retrieved))
+}
+
 /// Resolve once `rx` holds `true`. If the sender is dropped without setting it
 /// (should not happen — the engine keeps it alive), never resolve, so `select!`
 /// falls through to the stream instead of a false cancel.
@@ -179,5 +218,70 @@ mod tests {
     fn chat_request_rejects_a_missing_or_blank_prompt() {
         assert!(ChatRequest::from_params(&serde_json::json!({})).is_err());
         assert!(ChatRequest::from_params(&serde_json::json!({ "prompt": "   " })).is_err());
+    }
+
+    #[tokio::test]
+    async fn ground_prompt_passes_through_without_a_session() {
+        let db = Database::connect_in_memory().await.unwrap();
+        let job = db
+            .jobs()
+            .insert(crate::db::NewJob::new("chat"))
+            .await
+            .unwrap();
+        let out = ground_prompt(&db, &job.id, None, "hello").await.unwrap();
+        assert_eq!(out, "hello");
+    }
+
+    #[tokio::test]
+    async fn ground_prompt_passes_through_when_the_session_has_no_documents() {
+        let db = Database::connect_in_memory().await.unwrap();
+        let job = db
+            .jobs()
+            .insert(crate::db::NewJob::new("chat"))
+            .await
+            .unwrap();
+        let session = db.sessions().create("chat", "Empty").await.unwrap();
+        let out = ground_prompt(&db, &job.id, Some(&session.id), "hello")
+            .await
+            .unwrap();
+        assert_eq!(out, "hello");
+    }
+
+    #[tokio::test]
+    async fn ground_prompt_wraps_the_prompt_with_the_matching_chunk() {
+        use crate::db::NewDocument;
+
+        let db = Database::connect_in_memory().await.unwrap();
+        let job = db
+            .jobs()
+            .insert(crate::db::NewJob::new("chat"))
+            .await
+            .unwrap();
+        let session = db.sessions().create("chat", "Docs").await.unwrap();
+        db.documents()
+            .insert(
+                NewDocument {
+                    session_id: session.id.clone(),
+                    name: "policy.md".into(),
+                    source_path: "policy.md".into(),
+                    format: "md".into(),
+                },
+                &[
+                    "The refund window is thirty days from purchase.".to_string(),
+                    "Shipping normally takes three to five business days.".to_string(),
+                ],
+            )
+            .await
+            .unwrap();
+
+        let out = ground_prompt(&db, &job.id, Some(&session.id), "what is the refund window")
+            .await
+            .unwrap();
+        assert!(out.contains("thirty days"));
+        assert!(out.contains("what is the refund window"));
+        assert!(!out.contains("Shipping normally"));
+
+        let events = db.jobs().events(&job.id).await.unwrap();
+        assert!(events.iter().any(|e| e.message.contains("grounded in")));
     }
 }

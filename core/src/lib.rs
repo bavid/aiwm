@@ -46,6 +46,7 @@ pub mod model;
 pub mod orchestrator;
 pub mod paths;
 pub mod pipeline;
+pub mod rag;
 pub mod registry;
 pub mod runtime;
 pub mod scheduler;

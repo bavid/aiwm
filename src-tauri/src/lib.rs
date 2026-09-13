@@ -15,6 +15,7 @@ use aiwm_core::api::dto::{
 };
 use aiwm_core::api::handlers;
 use aiwm_core::config::Config;
+use aiwm_core::db::Document;
 use aiwm_core::db::{Agent, AgentSession, Benchmark, Download, Job, JobFilter, Model, Session};
 use aiwm_core::model::{ImportOutcome, ImportRequest};
 use aiwm_core::orchestrator::JobState;
@@ -210,6 +211,28 @@ async fn set_session_archived(
 #[tauri::command]
 async fn delete_session(app: tauri::State<'_, Arc<App>>, id: String) -> Result<(), String> {
     to_ipc(handlers::delete_session(&app, &id).await)
+}
+
+#[tauri::command]
+async fn list_documents(
+    app: tauri::State<'_, Arc<App>>,
+    session_id: String,
+) -> Result<Vec<Document>, String> {
+    to_ipc(handlers::list_documents(&app, &session_id).await)
+}
+
+#[tauri::command]
+async fn attach_document(
+    app: tauri::State<'_, Arc<App>>,
+    session_id: String,
+    path: String,
+) -> Result<Document, String> {
+    to_ipc(handlers::attach_document(&app, &session_id, &path).await)
+}
+
+#[tauri::command]
+async fn delete_document(app: tauri::State<'_, Arc<App>>, id: String) -> Result<(), String> {
+    to_ipc(handlers::delete_document(&app, &id).await)
 }
 
 #[tauri::command]
@@ -544,6 +567,9 @@ fn try_run() -> anyhow::Result<()> {
             rename_session,
             set_session_archived,
             delete_session,
+            list_documents,
+            attach_document,
+            delete_document,
             list_agents,
             create_agent,
             delete_agent,

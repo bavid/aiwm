@@ -12,9 +12,9 @@ use axum::{Json, Router};
 use serde::Deserialize;
 
 use super::dto::{
-    AgentMessageDto, AgentPermissionDto, AttachExternalDto, DetachEngineDto, LaunchExternalDto,
-    NewAgentDto, NewSessionDto, OpenAgentSessionDto, RenameSessionDto, SetArchivedDto, SetRolesDto,
-    SetTagsDto, SetTokenDto, SubmitJobDto,
+    AgentMessageDto, AgentPermissionDto, AttachDocumentDto, AttachExternalDto, DetachEngineDto,
+    LaunchExternalDto, NewAgentDto, NewSessionDto, OpenAgentSessionDto, RenameSessionDto,
+    SetArchivedDto, SetRolesDto, SetTagsDto, SetTokenDto, SubmitJobDto,
 };
 use super::handlers;
 use crate::db::JobFilter;
@@ -34,6 +34,11 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/sessions", get(list_sessions).post(create_session))
         .route("/sessions/{id}", put(rename_session).delete(delete_session))
         .route("/sessions/{id}/archived", put(set_session_archived))
+        .route(
+            "/sessions/{id}/documents",
+            get(list_documents).post(attach_document),
+        )
+        .route("/documents/{id}", axum::routing::delete(delete_document))
         .route("/jobs/{id}", get(job_detail))
         .route("/jobs/{id}/cancel", post(cancel_job))
         .route("/jobs/{id}/output", get(job_output))
@@ -239,6 +244,30 @@ async fn delete_session(
     Path(id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
     handlers::delete_session(&app, &id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn list_documents(
+    State(app): AppState,
+    Path(id): Path<String>,
+) -> Result<Json<Vec<crate::db::Document>>, ApiError> {
+    Ok(Json(handlers::list_documents(&app, &id).await?))
+}
+
+async fn attach_document(
+    State(app): AppState,
+    Path(id): Path<String>,
+    Json(body): Json<AttachDocumentDto>,
+) -> Result<(StatusCode, Json<crate::db::Document>), ApiError> {
+    let doc = handlers::attach_document(&app, &id, &body.path).await?;
+    Ok((StatusCode::CREATED, Json(doc)))
+}
+
+async fn delete_document(
+    State(app): AppState,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    handlers::delete_document(&app, &id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
