@@ -161,6 +161,14 @@ impl AppPaths {
         self.local_root.join("hf_token.txt")
     }
 
+    /// Bearer token for the unified local API endpoint (7.x) — same
+    /// machine-local-file treatment as [`hf_token_file`](Self::hf_token_file)
+    /// and for the same reason: a secret has no business in a `config.toml`
+    /// that gets bundled verbatim into every backup export.
+    pub fn local_api_token_file(&self) -> PathBuf {
+        self.local_root.join("local_api_token.txt")
+    }
+
     /// Where `POST /export` writes backup archives.
     pub fn exports_dir(&self) -> PathBuf {
         self.root.join("exports")
@@ -230,6 +238,8 @@ mod tests {
         assert!(p.runtimes_dir().ends_with("runtimes"));
         assert!(p.comfyui_data_dir().ends_with("comfyui-data"));
         assert!(p.outputs_dir().ends_with("outputs"));
+        assert!(p.local_api_token_file().ends_with("local_api_token.txt"));
+        assert!(p.local_api_token_file().starts_with(p.root()));
         assert!(p.config_file().starts_with(p.root()));
         // `rooted` collapses both roots, so runtimes still land under it.
         assert!(p.runtimes_dir().starts_with(p.root()));

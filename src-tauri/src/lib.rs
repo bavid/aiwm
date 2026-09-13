@@ -9,8 +9,8 @@ use std::sync::{Arc, Mutex};
 use aiwm_core::api::dto::{
     AboutDto, AgentPermissionDto, AgentSessionDetailDto, ColibriModelDto, ConfigUpdate,
     EnqueueDownloadDto, FeaturedModelDto, JobDetailDto, KnownModelDto, LaunchExternalDto,
-    ModelStackDto, NewAgentDto, NewSessionDto, OpenAgentSessionDto, RegisterColibriModelDto,
-    RegistryDetailsDto, RegistrySearchDto, RuntimeStatusDto, SubmitJobDto,
+    LocalApiStatusDto, ModelStackDto, NewAgentDto, NewSessionDto, OpenAgentSessionDto,
+    RegisterColibriModelDto, RegistryDetailsDto, RegistrySearchDto, RuntimeStatusDto, SubmitJobDto,
 };
 use aiwm_core::api::handlers;
 use aiwm_core::config::Config;
@@ -322,6 +322,16 @@ fn set_hf_token(app: tauri::State<'_, Arc<App>>, token: String) -> Result<(), St
 }
 
 #[tauri::command]
+fn local_api_status(app: tauri::State<'_, Arc<App>>) -> LocalApiStatusDto {
+    handlers::local_api_status(&app)
+}
+
+#[tauri::command]
+fn set_local_api_token(app: tauri::State<'_, Arc<App>>, token: String) -> Result<(), String> {
+    to_ipc(handlers::set_local_api_token(&app, &token))
+}
+
+#[tauri::command]
 async fn delete_model(
     app: tauri::State<'_, Arc<App>>,
     id: String,
@@ -485,6 +495,8 @@ fn try_run() -> anyhow::Result<()> {
             set_model_roles,
             registry_status,
             set_hf_token,
+            local_api_status,
+            set_local_api_token,
             install_llamacpp,
             install_comfyui,
             install_hermes,

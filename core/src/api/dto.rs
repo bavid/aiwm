@@ -401,3 +401,14 @@ pub struct SetRolesDto {
 pub struct SetTokenDto {
     pub token: String,
 }
+
+/// `GET /local-api/status` — the unified local API endpoint (7.x): one
+/// OpenAI-compatible address that always forwards to whichever model is
+/// currently resident on llama.cpp. The token itself is never echoed back,
+/// only whether one is configured (mirrors [`crate::registry::RegistryStatus`]).
+#[derive(Debug, Clone, Serialize)]
+pub struct LocalApiStatusDto {
+    /// `http://127.0.0.1:<core_api_port>/v1` — what an external tool points at.
+    pub endpoint: String,
+    pub token_set: bool,
+}

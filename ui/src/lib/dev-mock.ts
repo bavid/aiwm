@@ -110,6 +110,7 @@ const DOWNLOADS: AnyRecord[] = [];
 const BENCHMARKS: AnyRecord[] = [];
 const TAGS: Record<string, string[]> = { "m-qwen": ["coding", "favourite"] };
 let HF_TOKEN = "";
+let LOCAL_API_TOKEN = "";
 
 /** Flip a running `bench` job to `completed` a few seconds in and drop a
  *  benchmark row — the dev-mock stand-in for `core::bench`. */
@@ -618,6 +619,11 @@ export function installDevMock(): void {
         };
       case "set_hf_token":
         HF_TOKEN = String(a.token ?? "").trim();
+        return null;
+      case "local_api_status":
+        return { endpoint: "http://127.0.0.1:48096/v1", token_set: LOCAL_API_TOKEN.length > 0 };
+      case "set_local_api_token":
+        LOCAL_API_TOKEN = String(a.token ?? "").trim();
         return null;
       case "list_benchmarks":
         progressBenchJobs();

@@ -5,9 +5,9 @@ use std::sync::Arc;
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path, Query, State};
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post, put};
+use axum::routing::{any, get, post, put};
 use axum::{Json, Router};
 use serde::Deserialize;
 
@@ -51,6 +51,9 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/models/{id}/roles", put(set_model_roles))
         .route("/registry/status", get(registry_status))
         .route("/registry/token", put(set_hf_token))
+        .route("/local-api/status", get(local_api_status))
+        .route("/local-api/token", put(set_local_api_token))
+        .route("/v1/{*path}", any(local_api_proxy))
         .route("/storage", get(storage_report))
         .route("/models/{id}/benchmark", post(benchmark_model))
         .route("/models/{id}/benchmarks", get(model_benchmarks))
@@ -343,6 +346,109 @@ async fn set_hf_token(
 ) -> Result<StatusCode, ApiError> {
     handlers::set_hf_token(&app, &body.token)?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+async fn local_api_status(State(app): AppState) -> Json<super::dto::LocalApiStatusDto> {
+    Json(handlers::local_api_status(&app))
+}
+
+async fn set_local_api_token(
+    State(app): AppState,
+    Json(body): Json<SetTokenDto>,
+) -> Result<StatusCode, ApiError> {
+    handlers::set_local_api_token(&app, &body.token)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// A minimal JSON error body, shaped like [`ApiError`]'s, for the hand-rolled
+/// responses below that need a status `ApiError`'s `CoreError` mapping
+/// doesn't have (401 unauthenticated, 503 no model loaded).
+fn error_response(status: StatusCode, message: impl Into<String>) -> Response {
+    (status, Json(serde_json::json!({ "error": message.into() }))).into_response()
+}
+
+/// Constant-time equality — the bearer token is a secret compared on every
+/// proxied request, so this avoids leaking its value through response-time
+/// timing differences.
+fn token_matches(provided: &str, expected: &str) -> bool {
+    let (p, e) = (provided.as_bytes(), expected.as_bytes());
+    p.len() == e.len() && p.iter().zip(e).fold(0u8, |acc, (a, b)| acc | (a ^ b)) == 0
+}
+
+/// Only `content-type` is worth carrying from the caller to llama-server: the
+/// proxy has already consumed `Authorization` for its own auth, and nothing
+/// else an OpenAI-compatible client sends (`Host`, `content-length`, …) should
+/// reach the upstream request unchanged.
+fn forward_request_headers(incoming: &HeaderMap) -> HeaderMap {
+    let mut out = HeaderMap::new();
+    if let Some(ct) = incoming.get(axum::http::header::CONTENT_TYPE) {
+        out.insert(axum::http::header::CONTENT_TYPE, ct.clone());
+    }
+    out
+}
+
+/// Stream `resp`'s body straight through as the axum response, carrying over
+/// its status and content-type (llama.cpp's chat streaming is SSE — buffering
+/// the whole body first would defeat the point).
+fn stream_upstream_response(resp: reqwest::Response) -> Response {
+    let status = resp.status();
+    let content_type = resp.headers().get(reqwest::header::CONTENT_TYPE).cloned();
+    let mut builder = Response::builder().status(status);
+    if let Some(ct) = content_type {
+        builder = builder.header(axum::http::header::CONTENT_TYPE, ct);
+    }
+    let body = axum::body::Body::from_stream(resp.bytes_stream());
+    builder
+        .body(body)
+        .unwrap_or_else(|_| StatusCode::BAD_GATEWAY.into_response())
+}
+
+/// `ANY /v1/*` — the unified local API endpoint (7.x). Forwards to whichever
+/// model is currently resident on llama.cpp, so external OpenAI-compatible
+/// tools (continue.dev, aider, …) can point at one stable address instead of
+/// tracking per-runtime ports. Gated by a bearer token set via
+/// `PUT /local-api/token`; the proxy refuses everything until one is
+/// configured, since this is the one route on the loopback server meant to be
+/// reachable by processes other than the AIWM UI itself.
+async fn local_api_proxy(
+    State(app): AppState,
+    method: Method,
+    Path(path): Path<String>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    let Some(expected_token) = handlers::local_api_token(&app) else {
+        return error_response(
+            StatusCode::UNAUTHORIZED,
+            "the local API token has not been set — configure one in Settings first",
+        );
+    };
+    let provided = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "));
+    if !provided.is_some_and(|p| token_matches(p, &expected_token)) {
+        return error_response(StatusCode::UNAUTHORIZED, "missing or invalid bearer token");
+    }
+    if app.llama.base_url().is_none() {
+        return error_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "no model is currently loaded — load one from the Chat or Models tab first",
+        );
+    }
+    match app
+        .llama
+        .proxy_v1(
+            method,
+            &path,
+            forward_request_headers(&headers),
+            body.to_vec(),
+        )
+        .await
+    {
+        Ok(resp) => stream_upstream_response(resp),
+        Err(e) => ApiError::from(e).into_response(),
+    }
 }
 
 async fn delete_model(

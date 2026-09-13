@@ -1,10 +1,11 @@
 import { useEffect, useState } from "react";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
-import { useAbout, useRegistryStatus } from "../../lib/hooks";
+import { useAbout, useLocalApiStatus, useRegistryStatus } from "../../lib/hooks";
 import {
   getConfig,
   saveConfig,
   setHfToken,
+  setLocalApiToken,
   type AppConfig,
   type AutoPreference,
   type ComfyConfig,
@@ -294,6 +295,8 @@ export function Settings() {
 
       <HuggingFaceCard />
 
+      <LocalApiCard />
+
       <section className="card set-group">
         <header className="card__head">
           <h2>Network</h2>
@@ -552,6 +555,79 @@ function HuggingFaceCard() {
             disabled={busy}
             onClick={() => save("")}
           >
+            Clear
+          </button>
+        )}
+        {msg && <span className="muted">{msg}</span>}
+      </div>
+    </section>
+  );
+}
+
+/** The unified local API endpoint — one OpenAI-compatible address (`/v1/...`)
+ *  that always forwards to whichever model is currently resident on
+ *  llama.cpp, so an external tool (continue.dev, aider, …) can point at one
+ *  stable address instead of tracking per-runtime ports. Gated by a bearer
+ *  token; unlike the Hugging Face token this applies immediately, no restart
+ *  needed, since the proxy re-reads the token file on every request. */
+function LocalApiCard() {
+  const { data: status } = useLocalApiStatus();
+  const [value, setValue] = useState("");
+  const [msg, setMsg] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const save = async (token: string) => {
+    setBusy(true);
+    setMsg(null);
+    try {
+      await setLocalApiToken(token);
+      setValue("");
+      setMsg(token.trim() ? "Token saved." : "Token cleared — the endpoint now refuses requests.");
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <section className="card set-group">
+      <header className="card__head">
+        <h2>Local API</h2>
+        <span className="card__sub">applies immediately</span>
+      </header>
+      <label className="set-field">
+        <span>
+          Endpoint — point an OpenAI-compatible tool here with{" "}
+          <code>Authorization: Bearer &lt;token&gt;</code>. It forwards to whichever
+          model is currently loaded on llama.cpp; nothing loaded means a 503.
+        </span>
+        <input type="text" value={status?.endpoint ?? ""} readOnly spellCheck={false} />
+      </label>
+      <label className="set-field">
+        <span>
+          Bearer token — required; the endpoint refuses every request until one is
+          set. Stored on this machine only (never in a backup). Currently:{" "}
+          <strong>{status?.token_set ? "set" : "not set"}</strong>.
+        </span>
+        <input
+          type="password"
+          value={value}
+          placeholder={status?.token_set ? "•••••••• (leave blank to keep)" : "sk-…"}
+          spellCheck={false}
+          autoComplete="off"
+          onChange={(e) => {
+            setValue(e.target.value);
+            setMsg(null);
+          }}
+        />
+      </label>
+      <div className="rt-setup">
+        <button type="button" disabled={busy || !value.trim()} onClick={() => save(value)}>
+          {busy ? "Saving…" : "Save token"}
+        </button>
+        {status?.token_set && (
+          <button type="button" disabled={busy} onClick={() => save("")}>
             Clear
           </button>
         )}

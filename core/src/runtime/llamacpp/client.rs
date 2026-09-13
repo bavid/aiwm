@@ -170,6 +170,28 @@ impl LlamaClient {
         Ok(())
     }
 
+    /// Forward one request to `http://<host>:<port>/v1/<path>` — the unified
+    /// local API endpoint ([`super::LlamaCppAdapter::proxy_v1`]). Headers and
+    /// body pass through unmodified; the caller has already stripped anything
+    /// that shouldn't reach llama-server (the client's own bearer token,
+    /// hop-by-hop headers).
+    pub(super) async fn proxy(
+        &self,
+        port: u16,
+        method: reqwest::Method,
+        path: &str,
+        headers: reqwest::header::HeaderMap,
+        body: Vec<u8>,
+    ) -> Result<reqwest::Response> {
+        self.http
+            .request(method, format!("{}/v1/{path}", self.base(port)))
+            .headers(headers)
+            .body(body)
+            .send()
+            .await
+            .map_err(|e| llama_err(format!("local API proxy request failed: {e}")))
+    }
+
     /// `GET /props` → the resident model's file path, when the server reports it.
     /// Best-effort: any failure yields `None`.
     pub(super) async fn model_path(&self, port: u16) -> Option<String> {

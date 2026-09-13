@@ -1098,6 +1098,109 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn local_api_status_and_token_over_http() {
+        let (app, tmp) = test_app().await;
+        let server = ApiServer::bind(app.clone(), SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
+            .await
+            .unwrap();
+        let base = format!("http://{}", server.addr);
+        let http = reqwest::Client::new();
+
+        // No token yet.
+        let status: serde_json::Value = reqwest::get(format!("{base}/local-api/status"))
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(status["token_set"], false);
+        assert_eq!(
+            status["endpoint"],
+            format!("http://127.0.0.1:{}/v1", app.config.core_api_port)
+        );
+
+        // Set a token → machine-local file, not the backup.
+        let resp = http
+            .put(format!("{base}/local-api/token"))
+            .json(&serde_json::json!({ "token": "sk-local-secret" }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 204);
+        assert_eq!(
+            std::fs::read_to_string(tmp.path().join("local_api_token.txt")).unwrap(),
+            "sk-local-secret"
+        );
+        let status: serde_json::Value = reqwest::get(format!("{base}/local-api/status"))
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(status["token_set"], true);
+
+        // Clearing removes it.
+        http.put(format!("{base}/local-api/token"))
+            .json(&serde_json::json!({ "token": " " }))
+            .send()
+            .await
+            .unwrap();
+        assert!(!tmp.path().join("local_api_token.txt").exists());
+    }
+
+    #[tokio::test]
+    async fn local_api_proxy_rejects_without_a_configured_token() {
+        let (app, _tmp) = test_app().await;
+        let server = ApiServer::bind(app, SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
+            .await
+            .unwrap();
+
+        let resp = reqwest::Client::new()
+            .post(format!("http://{}/v1/chat/completions", server.addr))
+            .json(&serde_json::json!({ "messages": [] }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 401);
+    }
+
+    #[tokio::test]
+    async fn local_api_proxy_rejects_a_wrong_bearer_token() {
+        let (app, _tmp) = test_app().await;
+        handlers::set_local_api_token(&app, "correct-token").unwrap();
+        let server = ApiServer::bind(app, SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
+            .await
+            .unwrap();
+
+        let resp = reqwest::Client::new()
+            .post(format!("http://{}/v1/chat/completions", server.addr))
+            .bearer_auth("wrong-token")
+            .json(&serde_json::json!({ "messages": [] }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 401);
+    }
+
+    #[tokio::test]
+    async fn local_api_proxy_reports_503_with_no_model_loaded() {
+        let (app, _tmp) = test_app().await;
+        handlers::set_local_api_token(&app, "correct-token").unwrap();
+        let server = ApiServer::bind(app, SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
+            .await
+            .unwrap();
+
+        let resp = reqwest::Client::new()
+            .post(format!("http://{}/v1/chat/completions", server.addr))
+            .bearer_auth("correct-token")
+            .json(&serde_json::json!({ "messages": [] }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 503);
+    }
+
+    #[tokio::test]
     async fn set_model_roles_over_http_replaces_the_set_and_rejects_a_ghost() {
         use crate::db::NewModel;
 

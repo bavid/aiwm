@@ -349,6 +349,23 @@ impl LlamaCppAdapter {
             .await
     }
 
+    /// Forward one request to the resident model's OpenAI-compatible API —
+    /// backs the unified local API endpoint (`ANY /v1/*`, 7.x), which always
+    /// targets whatever is currently loaded rather than a fixed address, the
+    /// same way [`base_url`](Self::base_url) does for agent sessions.
+    pub async fn proxy_v1(
+        &self,
+        method: reqwest::Method,
+        path: &str,
+        headers: reqwest::header::HeaderMap,
+        body: Vec<u8>,
+    ) -> Result<reqwest::Response> {
+        let port = self
+            .loaded_port()
+            .ok_or_else(|| llama_err("no model is loaded"))?;
+        self.client.proxy(port, method, path, headers, body).await
+    }
+
     /// Adopt a `llama-server` the user already started on `port`. Probes
     /// `/health`; on success the model becomes resident but its process is left
     /// alone by [`unload_model`](Self::unload_model).

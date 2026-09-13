@@ -8,8 +8,9 @@ use std::path::PathBuf;
 use super::dto::{
     AboutDto, AgentPermissionDto, AgentSessionDetailDto, ColibriModelDto, ConfigUpdate,
     EnqueueDownloadDto, FeaturedModelDto, JobDetailDto, KnownModelDto, LaunchExternalDto,
-    ModelStackDto, NewAgentDto, NewSessionDto, OpenAgentSessionDto, RegisterColibriModelDto,
-    RegistryDetailsDto, RegistryFileDto, RegistrySearchDto, RuntimeStatusDto, SubmitJobDto,
+    LocalApiStatusDto, ModelStackDto, NewAgentDto, NewSessionDto, OpenAgentSessionDto,
+    RegisterColibriModelDto, RegistryDetailsDto, RegistryFileDto, RegistrySearchDto,
+    RuntimeStatusDto, SubmitJobDto,
 };
 use crate::compat::FitVerdict;
 use crate::config::Config;
@@ -232,6 +233,42 @@ pub fn set_hf_token(app: &App, token: &str) -> Result<()> {
             .map_err(|e| CoreError::Config(format!("create {}: {e}", parent.display())))?;
     }
     std::fs::write(&path, token).map_err(|e| CoreError::Config(format!("write hf token: {e}")))
+}
+
+/// The unified local API endpoint's bearer token, if one has been configured.
+/// Same machine-local-file treatment as [`set_hf_token`] — never in
+/// `config.toml`, never in a backup.
+pub fn local_api_token(app: &App) -> Option<String> {
+    std::fs::read_to_string(app.paths.local_api_token_file())
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+/// Write (or clear, when blank) the local API bearer token. Takes effect
+/// immediately — the proxy reads the file on every request, no restart needed.
+pub fn set_local_api_token(app: &App, token: &str) -> Result<()> {
+    let path = app.paths.local_api_token_file();
+    let token = token.trim();
+    if token.is_empty() {
+        let _ = std::fs::remove_file(&path);
+        return Ok(());
+    }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| CoreError::Config(format!("create {}: {e}", parent.display())))?;
+    }
+    std::fs::write(&path, token)
+        .map_err(|e| CoreError::Config(format!("write local API token: {e}")))
+}
+
+/// `GET /local-api/status` — the endpoint address plus whether a token is
+/// configured (the Settings UI shows this; the token value is never returned).
+pub fn local_api_status(app: &App) -> LocalApiStatusDto {
+    LocalApiStatusDto {
+        endpoint: format!("http://127.0.0.1:{}/v1", app.config.core_api_port),
+        token_set: local_api_token(app).is_some(),
+    }
 }
 
 /// Storage overview + the "safe to delete" reports (Phase 6.8).

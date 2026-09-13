@@ -363,6 +363,19 @@ export const registryStatus = () => invoke<RegistryStatus>("registry_status");
  *  a backup. Takes effect on the next restart. */
 export const setHfToken = (token: string) => invoke<void>("set_hf_token", { token });
 
+/** The unified local API endpoint (`GET /local-api/status`) — one
+ *  OpenAI-compatible address that always forwards to whichever model is
+ *  currently resident on llama.cpp. */
+export interface LocalApiStatus {
+  /** `http://127.0.0.1:<core_api_port>/v1` — what an external tool points at. */
+  endpoint: string;
+  token_set: boolean;
+}
+export const localApiStatus = () => invoke<LocalApiStatus>("local_api_status");
+/** Set (blank clears) the local API bearer token — a machine-local file,
+ *  never in a backup. Takes effect immediately, no restart needed. */
+export const setLocalApiToken = (token: string) => invoke<void>("set_local_api_token", { token });
+
 /** One entry of the curated image/video catalogue (`GET /models/known`),
  *  enriched with a fit verdict against the current VRAM budget. */
 export interface KnownModel {

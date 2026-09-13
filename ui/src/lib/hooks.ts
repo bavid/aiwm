@@ -16,6 +16,7 @@ import {
   listDownloads,
   listModels,
   listSessions,
+  localApiStatus,
   modelTags,
   registrySearch,
   registryStatus,
@@ -28,6 +29,7 @@ import {
   type Job,
   type JobState,
   type LaunchInfo,
+  type LocalApiStatus,
   type RegistryStatus,
   type StorageReport,
   type FeaturedModel,
@@ -155,6 +157,8 @@ export const useModelTags = () =>
   usePolled<Record<string, string[]>>("model-tags", modelTags, 4000);
 export const useRegistryStatus = () =>
   usePolled<RegistryStatus>("registry-status", registryStatus, 5000);
+export const useLocalApiStatus = () =>
+  usePolled<LocalApiStatus>("local-api-status", localApiStatus, 5000);
 
 const PINNED_MODELS_KEY = "aiwm:pinned-models";
 
