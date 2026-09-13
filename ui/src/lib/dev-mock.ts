@@ -60,9 +60,21 @@ const SESSIONS: AnyRecord[] = [
 ];
 
 const RUNTIMES: AnyRecord[] = [
-  { id: "llamacpp", kind: "llama_cpp", health: "unknown", vram_used_mb: 0, detail: "installed · idle" },
-  { id: "comfyui", kind: "comfy_ui", health: "healthy", vram_used_mb: 0, detail: "running on :48096 · ComfyUI 0.34.0 · model reserved" },
-  { id: "colibri", kind: "colibri", health: "unknown", vram_used_mb: 0, detail: "not installed" },
+  {
+    id: "llamacpp", kind: "llama_cpp", health: "healthy", vram_used_mb: 6400,
+    detail: "serving Qwen2.5 7B Instruct on :8080",
+    loaded_models: [{ model_id: "m-qwen", vram_mb: 6400 }],
+  },
+  {
+    id: "comfyui", kind: "comfy_ui", health: "healthy", vram_used_mb: 0,
+    detail: "running on :48096 · ComfyUI 0.34.0 · idle",
+    loaded_models: [],
+  },
+  {
+    id: "colibri", kind: "colibri", health: "unknown", vram_used_mb: 0,
+    detail: "not installed",
+    loaded_models: [],
+  },
 ];
 
 const COLIBRI_MODELS: AnyRecord[] = [
@@ -473,8 +485,16 @@ export function installDevMock(): void {
         JOBS.unshift(job);
         return job;
       }
-      case "cancel_job":
+      case "cancel_job": {
+        const job = JOBS.find((j) => j.id === a.id);
+        if (!job) return null;
+        if (!["queued", "scheduled", "blocked", "preparing", "running"].includes(String(job.state))) {
+          return false;
+        }
+        job.state = "cancelled";
+        job.finished_at = now();
         return true;
+      }
       case "list_sessions": {
         const capability = String(a.capability ?? "");
         return SESSIONS.filter((s) => s.capability === capability).map((s) => ({ ...s }));

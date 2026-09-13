@@ -384,6 +384,24 @@
   border-color: var(--accent);
 }
 
+.pin-star {
+  border: none;
+  background: transparent;
+  color: var(--border);
+  font-size: var(--text-lg);
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+}
+
+.pin-star:hover {
+  color: var(--muted);
+}
+
+.pin-star[data-on="true"] {
+  color: var(--load-warn);
+}
+
 .tagcell {
   display: inline-flex;
   flex-wrap: wrap;

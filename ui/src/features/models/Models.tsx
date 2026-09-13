@@ -7,6 +7,7 @@ import {
   useModels,
   useModelStacks,
   useModelTags,
+  usePinnedModels,
 } from "../../lib/hooks";
 import {
   benchmarkModel,
@@ -124,6 +125,7 @@ function ModelLibrary({ models, error }: { models: Model[] | null; error: string
   const { data: benchmarks } = useBenchmarks();
   const { data: jobs } = useJobs();
   const { data: tagMap } = useModelTags();
+  const { isPinned, toggle: togglePin } = usePinnedModels();
   const [tagFilter, setTagFilter] = useState<string | null>(null);
 
   const tags = useMemo(() => tagMap ?? {}, [tagMap]);
@@ -146,9 +148,10 @@ function ModelLibrary({ models, error }: { models: Model[] | null; error: string
   const testing = activeOf("bench");
   const checking = activeOf("upgrade_check");
 
-  const shown = (models ?? []).filter(
-    (m) => !tagFilter || (tags[m.id] ?? []).includes(tagFilter),
-  );
+  const shown = (models ?? [])
+    .filter((m) => !tagFilter || (tags[m.id] ?? []).includes(tagFilter))
+    .slice()
+    .sort((a, b) => Number(isPinned(b.id)) - Number(isPinned(a.id)));
 
   return (
     <section className="card card--wide">
@@ -186,6 +189,7 @@ function ModelLibrary({ models, error }: { models: Model[] | null; error: string
           <table className="model-table">
             <thead>
               <tr>
+                <th />
                 <th>Name</th>
                 <th>Family</th>
                 <th>Quant</th>
@@ -203,6 +207,18 @@ function ModelLibrary({ models, error }: { models: Model[] | null; error: string
             <tbody>
               {shown.map((m: Model) => (
                 <tr key={m.id}>
+                  <td>
+                    <button
+                      type="button"
+                      className="pin-star"
+                      data-on={isPinned(m.id)}
+                      onClick={() => togglePin(m.id)}
+                      title={isPinned(m.id) ? "Unpin" : "Pin for quick access"}
+                      aria-label={isPinned(m.id) ? `Unpin ${m.name}` : `Pin ${m.name}`}
+                    >
+                      {isPinned(m.id) ? "★" : "☆"}
+                    </button>
+                  </td>
                   <td title={m.file_path}>{m.name}</td>
                   <td className="muted">{m.family ?? m.arch ?? "—"}</td>
                   <td>{m.quant ?? "—"}</td>

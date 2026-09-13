@@ -156,6 +156,12 @@ export interface Job {
   session_id: string | null;
 }
 
+/** A model currently resident on a runtime. */
+export interface LoadedModel {
+  model_id: string;
+  vram_mb: number;
+}
+
 export interface RuntimeStatus {
   id: string;
   kind: string;
@@ -163,6 +169,8 @@ export interface RuntimeStatus {
   vram_used_mb: number;
   /** Short human-readable status, e.g. "not installed" or "serving qwen on :48213". */
   detail: string | null;
+  /** Structured, not parsed out of `detail` -- empty when nothing is loaded. */
+  loaded_models: LoadedModel[];
 }
 
 export interface Model {

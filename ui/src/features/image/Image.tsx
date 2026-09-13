@@ -2,7 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import { NumField } from "../../components/NumField";
 import { QueueList } from "../../components/QueueList";
 import { SessionSwitcher } from "../../components/SessionSwitcher";
-import { useAbout, useJobs, useModels, useRuntimes } from "../../lib/hooks";
+import { VramEstimateHint } from "../../components/VramEstimateHint";
+import { useAbout, useJobs, useModels, useRuntimes, useTelemetry } from "../../lib/hooks";
 import {
   cancelJob,
   imageOutputUrl,
@@ -43,6 +44,7 @@ export function ImageStudio() {
   const { data: models } = useModels();
   const { data: runtimes } = useRuntimes();
   const { data: jobs } = useJobs();
+  const { telemetry } = useTelemetry();
 
   const checkpoints = (models ?? []).filter((m) => m.roles.includes("base_diffusion"));
   const modelNames = useMemo(
@@ -63,8 +65,8 @@ export function ImageStudio() {
   const [modelId, setModelId] = useState("auto");
   const [sendError, setSendError] = useState<string | null>(null);
 
-  const isFlux =
-    modelId !== "auto" && checkpoints.find((m) => m.id === modelId)?.family === "flux";
+  const selectedCheckpoint = checkpoints.find((m) => m.id === modelId);
+  const isFlux = modelId !== "auto" && selectedCheckpoint?.family === "flux";
 
   const [pendingId, setPendingId] = useState<string | null>(null);
   const [detail, setDetail] = useState<JobDetail | null>(null);
@@ -266,6 +268,7 @@ export function ImageStudio() {
               </select>
             </label>
           </div>
+          <VramEstimateHint vramEstimateMb={selectedCheckpoint?.vram_estimate_mb} gpu={telemetry?.gpu} />
 
           <button type="submit" className="imgform__go" disabled={!canGenerate}>
             {pendingId && !stuck ? "Generating…" : "Generate"}

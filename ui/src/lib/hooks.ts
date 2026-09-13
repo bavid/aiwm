@@ -156,6 +156,40 @@ export const useModelTags = () =>
 export const useRegistryStatus = () =>
   usePolled<RegistryStatus>("registry-status", registryStatus, 5000);
 
+const PINNED_MODELS_KEY = "aiwm:pinned-models";
+
+function readPinned(): Set<string> {
+  try {
+    const raw = window.localStorage.getItem(PINNED_MODELS_KEY);
+    return new Set(raw ? (JSON.parse(raw) as string[]) : []);
+  } catch {
+    return new Set();
+  }
+}
+
+/** Favorite/pin a model for quick access -- per-browser only (`localStorage`),
+ *  no backend round-trip. `toggle` is optimistic and never throws: a blocked
+ *  or cleared store just means pins don't persist, not a broken UI. */
+export function usePinnedModels() {
+  const [pinned, setPinned] = useState<Set<string>>(() => readPinned());
+
+  const toggle = (modelId: string) => {
+    setPinned((prev) => {
+      const next = new Set(prev);
+      if (next.has(modelId)) next.delete(modelId);
+      else next.add(modelId);
+      try {
+        window.localStorage.setItem(PINNED_MODELS_KEY, JSON.stringify([...next]));
+      } catch {
+        /* localStorage unavailable -- pin still applies for this session */
+      }
+      return next;
+    });
+  };
+
+  return { pinned, isPinned: (id: string) => pinned.has(id), toggle };
+}
+
 /** Sessions for one capability (Chat/Image/Video "projects"), active first. */
 export const useSessions = (capability: SessionCapability) =>
   usePolled<Session[]>(`sessions:${capability}`, () => listSessions(capability), 3000);

@@ -8,6 +8,9 @@ import { Jobs } from "./features/jobs/Jobs";
 import { Models } from "./features/models/Models";
 import { Settings } from "./features/settings/Settings";
 import { VideoStudio } from "./features/video/Video";
+import { CommandPalette } from "./components/CommandPalette";
+import { JobNotifications } from "./components/JobNotifications";
+import { ShortcutsHelp } from "./components/ShortcutsHelp";
 import { useAbout } from "./lib/hooks";
 
 type Tab =
@@ -36,9 +39,13 @@ const TABS: { id: Tab; label: string }[] = [
 export default function App() {
   const [tab, setTab] = useState<Tab>("dashboard");
   const about = useAbout();
+  const navigate = (t: string) => setTab(t as Tab);
 
   return (
     <div className="app">
+      <CommandPalette onNavigate={navigate} />
+      <JobNotifications onNavigate={navigate} />
+      <ShortcutsHelp />
       <header className="topbar">
         <div className="topbar__brand">
           AI Workstation <span>Manager</span>
@@ -60,7 +67,7 @@ export default function App() {
       </header>
 
       <main className="main">
-        {tab === "dashboard" && <Dashboard onNavigate={(t) => setTab(t as Tab)} />}
+        {tab === "dashboard" && <Dashboard onNavigate={navigate} />}
         {tab === "chat" && <Chat />}
         {tab === "image" && <ImageStudio />}
         {tab === "video" && <VideoStudio />}

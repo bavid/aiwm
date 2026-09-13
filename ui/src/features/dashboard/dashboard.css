@@ -147,6 +147,220 @@
   border-color: color-mix(in oklab, var(--load-crit) 40%, var(--border));
 }
 
+/* setup checklist */
+
+.card--setup {
+  border-color: color-mix(in oklab, var(--accent) 30%, var(--border));
+}
+
+.setup-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.setup-step {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+
+.setup-step[data-done="true"] {
+  opacity: 0.55;
+}
+
+.setup-step__mark {
+  width: 18px;
+  height: 18px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  font-size: var(--text-xs);
+  color: var(--load-ok);
+}
+
+.setup-step[data-done="true"] .setup-step__mark {
+  border-color: var(--load-ok);
+}
+
+.setup-step__body {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  flex: 1;
+  min-width: 0;
+}
+
+.setup-step__label {
+  font-weight: 600;
+  font-size: var(--text-sm);
+}
+
+.setup-step__hint {
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+/* usage sparkline */
+
+.usage-bars {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-3);
+  height: 100px;
+  padding-top: var(--space-2);
+}
+
+.usage-bar {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  height: 100%;
+}
+
+.usage-bar__track {
+  flex: 1;
+  width: 100%;
+  max-width: 28px;
+  display: flex;
+  align-items: flex-end;
+  background: var(--surface-2);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.usage-bar__fill {
+  width: 100%;
+  min-height: 2px;
+  background: var(--accent);
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  transition: height var(--dur) var(--ease);
+}
+
+.usage-bar__count {
+  font-size: var(--text-xs);
+  color: var(--text);
+}
+
+.usage-bar__label {
+  font-size: var(--text-xs);
+  color: var(--muted);
+}
+
+/* resident models */
+
+.resident-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.resident-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) 0;
+  border-top: 1px solid var(--surface-2);
+  font-size: var(--text-sm);
+}
+
+.resident-row:first-child {
+  border-top: none;
+}
+
+.resident-row[data-idle="true"] {
+  opacity: 0.6;
+}
+
+.resident-row__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex: none;
+  background: var(--muted);
+}
+
+.resident-row[data-idle="false"] .resident-row__dot[data-health="healthy"] {
+  background: var(--load-ok);
+}
+
+.resident-row__dot[data-health="unhealthy"] {
+  background: var(--load-crit);
+}
+
+.resident-row__rt {
+  font-family: var(--font-mono, monospace);
+  font-size: var(--text-xs);
+  color: var(--muted);
+  width: 70px;
+  flex: none;
+}
+
+.resident-row__main {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.resident-row__size {
+  flex: none;
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+/* activity feed */
+
+.activity-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.activity-row {
+  display: flex;
+  gap: var(--space-3);
+  padding: var(--space-2) 0;
+  border-top: 1px solid var(--surface-2);
+  font-size: var(--text-sm);
+}
+
+.activity-row:first-child {
+  border-top: none;
+}
+
+.activity-row__time {
+  flex: none;
+  width: 64px;
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+.activity-row__text {
+  color: var(--muted);
+}
+
+.activity-row__text b {
+  color: var(--text);
+  font-weight: 600;
+}
+
 /* capabilities */
 
 .capabilities {

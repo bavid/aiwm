@@ -431,6 +431,7 @@ pub async fn runtimes(app: &App) -> Vec<RuntimeStatusDto> {
             health: adapter.health().await,
             vram_used_mb: adapter.vram_used_mb(),
             detail: adapter.detail(),
+            loaded_models: adapter.loaded_models(),
         });
     }
     out
@@ -977,6 +978,31 @@ mod tests {
             ..sample_model()
         };
         assert!(!is_weight_file(&other, "weights.gguf"));
+    }
+
+    #[tokio::test]
+    async fn runtimes_reports_which_models_are_loaded_where() {
+        let tmp = tempfile::tempdir().unwrap();
+        let app = crate::App::load(crate::AppPaths::rooted(tmp.path()))
+            .await
+            .unwrap();
+
+        let statuses = runtimes(&app).await;
+        assert!(!statuses.is_empty(), "expected at least one runtime");
+        for s in &statuses {
+            // Nothing is loaded in a fresh app -- the field must exist and
+            // default to empty, not be silently missing from the DTO.
+            assert!(
+                s.loaded_models.is_empty(),
+                "{} should report no loaded models yet",
+                s.id
+            );
+        }
+
+        // Round-trips through JSON with the field present (not skipped),
+        // which is what the UI's "resident models" panel depends on.
+        let json = serde_json::to_value(&statuses[0]).unwrap();
+        assert!(json.get("loaded_models").is_some());
     }
 
     #[test]

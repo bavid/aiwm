@@ -1,7 +1,7 @@
-import { useState } from "react";
-import { useAbout, useJobs, useTelemetry } from "../../lib/hooks";
+import { useMemo, useState } from "react";
+import { useAbout, useJobs, useModels, useRuntimes, useStorage, useTelemetry } from "../../lib/hooks";
 import { Meter } from "../../components/Meter";
-import { cancelJob, type Job, type JobState } from "../../lib/ipc";
+import { cancelJob, type Job, type JobState, type RuntimeStatus } from "../../lib/ipc";
 import "./dashboard.css";
 
 const GB = 1024;
@@ -14,10 +14,36 @@ const CAPABILITIES: { key: string; label: string; hint: string; tab?: string }[]
 ];
 
 const gb = (mb: number) => (mb / GB).toFixed(1);
+const gbFromBytes = (bytes: number) => (bytes / (GB * GB * 1024)).toFixed(1);
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+const DAY_LABEL = new Intl.DateTimeFormat(undefined, { weekday: "short" });
+
+/** How many of `jobs` were created on each of the last `n` calendar days
+ *  (local time), oldest first -- a client-side approximation since the
+ *  backend keeps no time-series data, only the latest telemetry snapshot. */
+function daysBack(n: number, jobs: Job[]): { label: string; date: string; count: number }[] {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const buckets = Array.from({ length: n }, (_, i) => {
+    const d = new Date(today.getTime() - (n - 1 - i) * DAY_MS);
+    return { label: DAY_LABEL.format(d), date: d.toDateString(), count: 0 };
+  });
+  const byDate = new Map(buckets.map((b) => [b.date, b]));
+  for (const j of jobs) {
+    const bucket = byDate.get(new Date(j.created_at).toDateString());
+    if (bucket) bucket.count += 1;
+  }
+  return buckets;
+}
 
 export function Dashboard({ onNavigate }: { onNavigate: (tab: string) => void }) {
   const { telemetry, error } = useTelemetry();
   const { data: jobs, refetch: refetchJobs } = useJobs();
+  const { data: history } = useJobs({ limit: 300 });
+  const { data: runtimes } = useRuntimes();
+  const { data: models } = useModels();
+  const { data: storage } = useStorage();
   const about = useAbout();
 
   const gpu = telemetry?.gpu;
@@ -27,8 +53,25 @@ export function Dashboard({ onNavigate }: { onNavigate: (tab: string) => void })
   );
   const queued = jobs?.filter((j) => j.state === "queued").length ?? 0;
 
+  const modelName = useMemo(() => {
+    const byId = new Map((models ?? []).map((m) => [m.id, m.name]));
+    return (id: string) => byId.get(id) ?? id;
+  }, [models]);
+
+  const dailyCounts = useMemo(() => daysBack(7, history ?? []), [history]);
+
+  const recentActivity = useMemo(() => {
+    return (jobs ?? [])
+      .filter((j) => j.finished_at)
+      .slice()
+      .sort((a, b) => (b.finished_at ?? "").localeCompare(a.finished_at ?? ""))
+      .slice(0, 6);
+  }, [jobs]);
+
   return (
     <div className="dash">
+      <SetupChecklist runtimes={runtimes} models={models} jobs={jobs} onNavigate={onNavigate} />
+
       <section className="card card--gpu" aria-labelledby="gpu-h">
         <header className="card__head">
           <h2 id="gpu-h">GPU</h2>
@@ -79,10 +122,40 @@ export function Dashboard({ onNavigate }: { onNavigate: (tab: string) => void })
             />
             <div style={{ height: "var(--space-4)" }} />
             <Meter label="CPU" value={host.cpu_total_pct} max={100} format={(v) => `${v}%`} />
+            {storage && storage.volume_total_bytes && (
+              <>
+                <div style={{ height: "var(--space-4)" }} />
+                <Meter
+                  label="Model store"
+                  value={storage.volume_total_bytes - (storage.volume_free_bytes ?? 0)}
+                  max={storage.volume_total_bytes}
+                  unit="GB"
+                  format={gbFromBytes}
+                />
+              </>
+            )}
           </>
         ) : (
           <p className="muted">Reading host…</p>
         )}
+      </section>
+
+      <section className="card card--wide" aria-labelledby="resident-h">
+        <header className="card__head">
+          <h2 id="resident-h">Resident right now</h2>
+          <span className="card__sub numeric">{runtimes?.length ?? 0} runtimes</span>
+        </header>
+        <ResidentList runtimes={runtimes} modelName={modelName} />
+      </section>
+
+      <section className="card card--wide" aria-labelledby="usage-h">
+        <header className="card__head">
+          <h2 id="usage-h">Usage, last 7 days</h2>
+          <span className="card__sub numeric">
+            {dailyCounts.reduce((sum, d) => sum + d.count, 0)} jobs
+          </span>
+        </header>
+        <UsageSparkline days={dailyCounts} />
       </section>
 
       <section className="card card--wide" aria-labelledby="jobs-h">
@@ -117,7 +190,163 @@ export function Dashboard({ onNavigate }: { onNavigate: (tab: string) => void })
           ))}
         </div>
       </section>
+
+      <section className="card card--wide" aria-labelledby="activity-h">
+        <header className="card__head">
+          <h2 id="activity-h">Recent activity</h2>
+        </header>
+        <ActivityFeed jobs={recentActivity} modelName={modelName} />
+      </section>
     </div>
+  );
+}
+
+const SETUP_DISMISSED_KEY = "aiwm:setup-dismissed";
+
+/** A dismissible first-run checklist: install a runtime, import a model,
+ *  generate something. Hides itself once every step is done, or once the
+ *  user dismisses it by hand -- never nags twice. */
+function SetupChecklist({
+  runtimes,
+  models,
+  jobs,
+  onNavigate,
+}: {
+  runtimes: RuntimeStatus[] | null;
+  models: { id: string }[] | null;
+  jobs: Job[] | null;
+  onNavigate: (tab: string) => void;
+}) {
+  const [dismissed, setDismissed] = useState(
+    () => window.localStorage.getItem(SETUP_DISMISSED_KEY) === "true",
+  );
+
+  if (dismissed || !runtimes || !models || !jobs) return null;
+
+  const hasRuntime = runtimes.some((r) => r.detail !== "not installed");
+  const hasModel = models.length > 0;
+  const hasRun = jobs.length > 0;
+  if (hasRuntime && hasModel && hasRun) return null;
+
+  const dismiss = () => {
+    setDismissed(true);
+    try {
+      window.localStorage.setItem(SETUP_DISMISSED_KEY, "true");
+    } catch {
+      /* localStorage unavailable -- dismissal just won't stick across reloads */
+    }
+  };
+
+  const steps: { done: boolean; label: string; hint: string; tab: string }[] = [
+    { done: hasRuntime, label: "Install a runtime", hint: "llama.cpp, ComfyUI, or Colibri", tab: "diagnostics" },
+    { done: hasModel, label: "Import a model", hint: "a .gguf or .safetensors file", tab: "models" },
+    { done: hasRun, label: "Generate something", hint: "Chat, Image, Video, or an agent", tab: "chat" },
+  ];
+
+  return (
+    <section className="card card--wide card--setup" aria-labelledby="setup-h">
+      <header className="card__head">
+        <h2 id="setup-h">Get set up</h2>
+        <button type="button" className="dash__jobs-link" onClick={dismiss}>
+          Dismiss
+        </button>
+      </header>
+      <ol className="setup-steps">
+        {steps.map((s) => (
+          <li key={s.label} className="setup-step" data-done={s.done}>
+            <span className="setup-step__mark">{s.done ? "✓" : ""}</span>
+            <span className="setup-step__body">
+              <span className="setup-step__label">{s.label}</span>
+              <span className="setup-step__hint">{s.hint}</span>
+            </span>
+            {!s.done && (
+              <button type="button" className="job-cancel" onClick={() => onNavigate(s.tab)}>
+                Open
+              </button>
+            )}
+          </li>
+        ))}
+      </ol>
+    </section>
+  );
+}
+
+function UsageSparkline({ days }: { days: { label: string; date: string; count: number }[] }) {
+  const max = Math.max(1, ...days.map((d) => d.count));
+  return (
+    <div className="usage-bars">
+      {days.map((d) => (
+        <div key={d.date} className="usage-bar" title={`${d.label}: ${d.count} job${d.count === 1 ? "" : "s"}`}>
+          <div className="usage-bar__track">
+            <div className="usage-bar__fill" style={{ height: `${(d.count / max) * 100}%` }} />
+          </div>
+          <span className="usage-bar__count numeric">{d.count}</span>
+          <span className="usage-bar__label">{d.label}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ResidentList({
+  runtimes,
+  modelName,
+}: {
+  runtimes: RuntimeStatus[] | null;
+  modelName: (id: string) => string;
+}) {
+  if (!runtimes) return <p className="muted">Loading…</p>;
+
+  return (
+    <ul className="resident-list">
+      {runtimes.map((rt) => (
+        <li key={rt.id} className="resident-row" data-idle={rt.loaded_models.length === 0}>
+          <span className="resident-row__dot" data-health={rt.health} />
+          <span className="resident-row__rt">{rt.id}</span>
+          {rt.loaded_models.length > 0 ? (
+            <span className="resident-row__main">
+              {rt.loaded_models.map((m) => modelName(m.model_id)).join(", ")}
+            </span>
+          ) : (
+            <span className="resident-row__main muted">{rt.detail ?? "idle"}</span>
+          )}
+          <span className="resident-row__size numeric">
+            {rt.vram_used_mb > 0 ? `${gb(rt.vram_used_mb)} GB` : "—"}
+          </span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function ActivityFeed({
+  jobs,
+  modelName,
+}: {
+  jobs: Job[];
+  modelName: (id: string) => string;
+}) {
+  if (jobs.length === 0) return <p className="muted">Nothing finished yet this session.</p>;
+
+  return (
+    <ul className="activity-list">
+      {jobs.map((j) => (
+        <li key={j.id} className="activity-row">
+          <span className="activity-row__time numeric">
+            {new Date(j.finished_at ?? j.created_at).toLocaleTimeString()}
+          </span>
+          <span className="activity-row__text">
+            <b>{j.job_type}</b>
+            {j.model_id ? ` · ${modelName(j.model_id)}` : ""}
+            {" · "}
+            <span className="job-state" data-state={j.state}>
+              {j.state}
+            </span>
+            {j.error_text ? ` — ${j.error_text}` : ""}
+          </span>
+        </li>
+      ))}
+    </ul>
   );
 }
 

@@ -68,6 +68,9 @@ pub struct RuntimeStatusDto {
     /// One short status line for the UI (e.g. `"not installed"`,
     /// `"serving qwen on :48213"`). `null` when there is nothing to add.
     pub detail: Option<String>,
+    /// Models currently resident on this runtime, structured (not parsed out
+    /// of `detail`) -- backs the "what's resident right now" dashboard panel.
+    pub loaded_models: Vec<crate::runtime::LoadedModel>,
 }
 
 /// A job plus its event trail — `GET /jobs/{id}` / `job_detail`.

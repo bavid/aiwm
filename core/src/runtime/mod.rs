@@ -103,7 +103,7 @@ impl SpawnSpec {
 }
 
 /// A model currently resident in a runtime.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LoadedModel {
     pub model_id: String,
     pub vram_mb: u64,

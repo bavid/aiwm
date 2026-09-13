@@ -1,0 +1,17 @@
+.vram-hint {
+  margin: 0;
+  font-size: var(--text-xs);
+  padding: var(--space-1) 0;
+}
+
+.vram-hint[data-level="ok"] {
+  color: var(--load-ok);
+}
+
+.vram-hint[data-level="warn"] {
+  color: var(--load-warn);
+}
+
+.vram-hint[data-level="crit"] {
+  color: var(--load-crit);
+}

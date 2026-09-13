@@ -3,7 +3,8 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { NumField } from "../../components/NumField";
 import { QueueList } from "../../components/QueueList";
 import { SessionSwitcher } from "../../components/SessionSwitcher";
-import { useAbout, useJobs, useModels, useRuntimes } from "../../lib/hooks";
+import { VramEstimateHint } from "../../components/VramEstimateHint";
+import { useAbout, useJobs, useModels, useRuntimes, useTelemetry } from "../../lib/hooks";
 import {
   cancelJob,
   jobDetail,
@@ -62,6 +63,7 @@ export function VideoStudio() {
   const { data: models } = useModels();
   const { data: runtimes } = useRuntimes();
   const { data: jobs } = useJobs();
+  const { telemetry } = useTelemetry();
 
   const videoModels = (models ?? []).filter((m) => m.roles.includes("base_video"));
   const hasEncoder = (models ?? []).some(
@@ -311,6 +313,10 @@ export function VideoStudio() {
               </select>
             </label>
           </div>
+          <VramEstimateHint
+            vramEstimateMb={videoModels.find((m) => m.id === modelId)?.vram_estimate_mb}
+            gpu={telemetry?.gpu}
+          />
 
           <fieldset className="startframe">
             <legend>Start from an image (optional)</legend>
