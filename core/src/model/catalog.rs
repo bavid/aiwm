@@ -157,6 +157,95 @@ pub const KNOWN_MODELS: &[KnownModel] = &[
         is_default: false,
         media: "image",
     },
+    // --- FLUX.2 [klein] 9B (7.x) ---
+    KnownModel {
+        id: "flux2-klein-9b-q4",
+        name: "FLUX.2 [klein] 9B — Q4_K_M (GGUF)",
+        kind: "diffusion_model",
+        family: Some("flux2"),
+        publisher: "Black Forest Labs / unsloth",
+        repo: "unsloth/FLUX.2-klein-9B-GGUF",
+        file: "flux-2-klein-9b-Q4_K_M.gguf",
+        url: "https://huggingface.co/unsloth/FLUX.2-klein-9B-GGUF/resolve/main/flux-2-klein-9b-Q4_K_M.gguf",
+        sha256: "5489463ed96056b0bb5472abb5d1bba7055e48d574e37877acb43b407465e26f",
+        size_bytes: 5_909_829_920,
+        license: "FLUX.2 [dev] Non-Commercial License",
+        note: "Fast (BFL's distilled tier — good at ~4-8 steps, low CFG). Picked over \
+               Q8 by default: its Qwen3-8B text encoder alone is ~8.7 GB, so Q4 keeps the \
+               combined footprint comfortably inside 16 GB. Needs the encoder + VAE below.",
+        is_default: false,
+        media: "image",
+    },
+    KnownModel {
+        id: "flux2-klein-9b-q8",
+        name: "FLUX.2 [klein] 9B — Q8_0 (GGUF)",
+        kind: "diffusion_model",
+        family: Some("flux2"),
+        publisher: "Black Forest Labs / unsloth",
+        repo: "unsloth/FLUX.2-klein-9B-GGUF",
+        file: "flux-2-klein-9b-Q8_0.gguf",
+        url: "https://huggingface.co/unsloth/FLUX.2-klein-9B-GGUF/resolve/main/flux-2-klein-9b-Q8_0.gguf",
+        sha256: "dfa8908dd58c5af6479b944f80558e226ee40a8fe0903729309e8d1b98fe5297",
+        size_bytes: 9_978_304_800,
+        license: "FLUX.2 [dev] Non-Commercial License",
+        note: "Best quality, but combined with the ~8.7 GB text encoder this is tight on \
+               a 16 GB card (~19.6 GB together) — only pick this if nothing else is resident.",
+        is_default: false,
+        media: "image",
+    },
+    KnownModel {
+        id: "qwen3-8b-flux2-encoder",
+        name: "Qwen3-8B — fp8 mixed (FLUX.2 text encoder)",
+        kind: "text_encoder",
+        family: None,
+        publisher: "Comfy-Org",
+        repo: "Comfy-Org/vae-text-encorder-for-flux-klein-9b",
+        file: "qwen_3_8b_fp8mixed.safetensors",
+        url: "https://huggingface.co/Comfy-Org/vae-text-encorder-for-flux-klein-9b/resolve/main/split_files/text_encoders/qwen_3_8b_fp8mixed.safetensors",
+        sha256: "abad16806e0cbabc54e0325d6565847443fe396d5f0be38bb3cd3fe75a1201d6",
+        size_bytes: 8_664_848_742,
+        license: "Apache-2.0",
+        note: "FLUX.2's prompt encoder — a full Qwen3-8B, much bigger than FLUX.1's T5. \
+               ComfyUI offloads it after encoding, so it is not resident during sampling.",
+        is_default: false,
+        media: "image",
+    },
+    KnownModel {
+        id: "flux2-vae",
+        name: "FLUX.2 VAE",
+        kind: "vae",
+        family: Some("flux2"),
+        publisher: "Black Forest Labs / Comfy-Org",
+        repo: "Comfy-Org/vae-text-encorder-for-flux-klein-9b",
+        file: "flux2-vae.safetensors",
+        url: "https://huggingface.co/Comfy-Org/vae-text-encorder-for-flux-klein-9b/resolve/main/split_files/vae/flux2-vae.safetensors",
+        sha256: "868fe7b343cc8f3a19dbcfcafbc3d5f888802be3f89bd81b65b3621a066ce8f3",
+        size_bytes: 336_211_292,
+        license: "FLUX.2 [dev] Non-Commercial License",
+        note: "FLUX.2's autoencoder — not compatible with FLUX.1's VAE.",
+        is_default: false,
+        media: "image",
+    },
+    KnownModel {
+        id: "flux2-klein-realistic-detail-lora",
+        name: "Realistic Detail LoRA (FLUX.2 Klein 9B)",
+        kind: "lora",
+        family: Some("flux2"),
+        publisher: "SOLRICKS",
+        repo: "SOLRICKS/Flux2-Klein-9B-Realistic-Detail",
+        // The real file name has spaces; url-encoded here so `url` ends with
+        // `file` verbatim (the invariant `every_entry_is_internally_consistent`
+        // checks) -- the friendly `name` above is what the UI actually shows.
+        file: "Flux2%20Klein%209B%20Realistic%20Detail%20LoRA.safetensors",
+        url: "https://huggingface.co/SOLRICKS/Flux2-Klein-9B-Realistic-Detail/resolve/main/Flux2%20Klein%209B%20Realistic%20Detail%20LoRA.safetensors",
+        sha256: "3f04d5531ce7d11c9250a0db60a222a542a36acf51638f7b9b1cd444424f8bcd",
+        size_bytes: 165_704_488,
+        license: "Custom (\u{201c}other\u{201d} on Hugging Face — check the repo before commercial use)",
+        note: "Pushes toward photographic realism — fine skin/organic texture, less \u{201c}AI-clean.\u{201d} \
+               Trigger word srx_detail; start around strength 0.8 (1.0 can oversaturate skin texture).",
+        is_default: false,
+        media: "image",
+    },
     // --- video (Phase 4) ---
     KnownModel {
         id: "wan22-ti2v-5b",
@@ -268,6 +357,16 @@ pub const MODEL_STACKS: &[ModelStack] = &[
         member_ids: &["flux1-dev-q8", "t5xxl-fp8", "clip-l", "flux-vae"],
         note: "Best prompt fidelity + in-image text. Four files: the diffusion \
                model plus its T5 and CLIP-L text encoders and its VAE.",
+        is_default: false,
+    },
+    ModelStack {
+        id: "flux2-klein",
+        label: "FLUX.2 [klein] 9B",
+        media: "image",
+        member_ids: &["flux2-klein-9b-q4", "qwen3-8b-flux2-encoder", "flux2-vae"],
+        note: "Fast (sub-second at 4 steps), fits a 16 GB card. Three files: the \
+               diffusion model, its Qwen3 text encoder, and its VAE. The realistic-detail \
+               LoRA is a separate, optional download from the Discover tab.",
         is_default: false,
     },
     ModelStack {

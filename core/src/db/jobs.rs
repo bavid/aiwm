@@ -229,6 +229,17 @@ impl<'a> JobRepo<'a> {
         row.map(Job::try_from).transpose()
     }
 
+    /// Removes the job and its events (`job_events.job_id` cascades). Does
+    /// **not** touch the on-disk output file — the caller (`handlers::delete_job`)
+    /// does that first, since only it knows the outputs directory.
+    pub async fn delete(&self, id: &str) -> Result<()> {
+        sqlx::query("DELETE FROM jobs WHERE id = $1")
+            .bind(id)
+            .execute(self.pool)
+            .await?;
+        Ok(())
+    }
+
     pub async fn list(&self, filter: &JobFilter) -> Result<Vec<Job>> {
         let mut sql = format!("SELECT {SELECT_COLS} FROM jobs");
         if !filter.states.is_empty() {
@@ -429,6 +440,17 @@ mod tests {
         let events = db.jobs().events(&job.id).await.unwrap();
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].message, "job queued");
+    }
+
+    #[tokio::test]
+    async fn delete_removes_the_job_and_its_events() {
+        let db = db().await;
+        let job = db.jobs().insert(NewJob::new("chat")).await.unwrap();
+
+        db.jobs().delete(&job.id).await.unwrap();
+
+        assert!(db.jobs().get(&job.id).await.unwrap().is_none());
+        assert!(db.jobs().events(&job.id).await.unwrap().is_empty());
     }
 
     #[tokio::test]

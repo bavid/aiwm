@@ -17,6 +17,8 @@ const MODELS: AnyRecord[] = [
   mkModel("m-sdxl", "SDXL Base 1.0", { family: "sdxl", roles: ["base_diffusion"], runtimes: ["comfyui"], vram_estimate_mb: 8200 }),
   mkModel("m-lora-detail", "Add Detail XL", { family: "sdxl", roles: ["lora"], runtimes: ["comfyui"], size_bytes: 220_000_000 }),
   mkModel("m-lora-flux-style", "Ink Wash Style (Flux)", { family: "flux", roles: ["lora"], runtimes: ["comfyui"], size_bytes: 340_000_000 }),
+  mkModel("m-flux2-klein", "FLUX.2 [klein] 9B — Q4_K_M (GGUF)", { family: "flux2", format: "gguf", roles: ["base_diffusion"], runtimes: ["comfyui"], vram_estimate_mb: 5900 }),
+  mkModel("m-lora-flux2-detail", "Realistic Detail LoRA (FLUX.2 Klein 9B)", { family: "flux2", roles: ["lora"], runtimes: ["comfyui"], size_bytes: 165_704_488 }),
   mkModel("m-qwen", "Qwen2.5 7B Instruct", { family: "qwen2", format: "gguf", quant: "Q5_K_M", param_count: 7_615_616_512, ctx_max: 32_768, roles: ["chat"], runtimes: ["llamacpp"], vram_estimate_mb: 6400 }),
   mkModel("m-hermes", "Hermes-3-Llama-3.1-8B", { family: "llama3", format: "gguf", quant: "Q5_K_M", param_count: 8_030_000_000, ctx_max: 131_072, roles: ["chat", "coding"], runtimes: ["llamacpp"], vram_estimate_mb: 5700 }),
 ];
@@ -509,6 +511,16 @@ export function installDevMock(): void {
         job.state = "cancelled";
         job.finished_at = now();
         return true;
+      }
+      case "delete_job": {
+        const i = JOBS.findIndex((j) => j.id === a.id);
+        if (i < 0) throw new Error(`no such job ${a.id}`);
+        const terminal = ["completed", "failed", "cancelled"];
+        if (!terminal.includes(String(JOBS[i].state))) {
+          throw new Error("this job is still running — cancel it first");
+        }
+        JOBS.splice(i, 1);
+        return null;
       }
       case "list_sessions": {
         const capability = String(a.capability ?? "");

@@ -49,6 +49,17 @@ pub struct FluxModels<'a> {
     pub vae: &'a str,
 }
 
+/// FLUX.2 [klein]'s three files: the GGUF diffusion model, its Qwen3 text
+/// encoder (bare names as ComfyUI sees them in `diffusion_models` /
+/// `text_encoders`), and its VAE (`vae`). Unlike FLUX.1, Klein uses a single
+/// text encoder, not a T5 + CLIP-L pair.
+#[derive(Debug, Clone, Copy)]
+pub struct Flux2KleinModels<'a> {
+    pub unet: &'a str,
+    pub clip: &'a str,
+    pub vae: &'a str,
+}
+
 /// One LoRA to splice into a graph before sampling, as a `LoraLoader` node.
 /// Multiple entries chain in order. A single `strength` drives both the model
 /// and CLIP patch — ComfyUI's default UI splits these into two knobs, but one
@@ -102,16 +113,22 @@ fn apply_loras(
 pub enum Recipe {
     /// One `.safetensors` file carries model + CLIP + VAE.
     Checkpoint,
-    /// FLUX: a GGUF diffusion model plus separate encoders + VAE.
+    /// FLUX.1: a GGUF diffusion model plus separate T5 + CLIP-L encoders + VAE.
     FluxGguf,
+    /// FLUX.2 \[klein\]: a GGUF diffusion model plus a single Qwen3 text
+    /// encoder and VAE, sampled via `CFGGuider`/`SamplerCustomAdvanced`
+    /// rather than a plain `KSampler`. A different enough graph shape from
+    /// FLUX.1 to need its own recipe (see [`flux2_klein_txt2img`]).
+    Flux2KleinGguf,
 }
 
 impl Recipe {
-    /// FLUX models (`family == "flux"`) use [`Recipe::FluxGguf`]; everything
-    /// else is a single-file checkpoint.
+    /// `family == "flux"` → [`Recipe::FluxGguf`]; `"flux2"` →
+    /// [`Recipe::Flux2KleinGguf`]; everything else is a single-file checkpoint.
     pub fn for_family(family: Option<&str>) -> Self {
         match family {
             Some(f) if f.eq_ignore_ascii_case("flux") => Self::FluxGguf,
+            Some(f) if f.eq_ignore_ascii_case("flux2") => Self::Flux2KleinGguf,
             _ => Self::Checkpoint,
         }
     }
@@ -226,6 +243,84 @@ pub fn flux_txt2img(i: &Txt2ImgInputs, m: &FluxModels, loras: &[LoraSpec]) -> Va
         }
     });
     apply_loras(&mut g, loras, ("12", 0), ("11", 0), "3", &["6", "7"]);
+    g
+}
+
+/// FLUX.2 [klein] via `ComfyUI-GGUF`: `UnetLoaderGGUF` + a single `CLIPLoader`
+/// (`type: "flux2"`, one Qwen3 encoder — not a T5 + CLIP-L pair) + `VAELoader`.
+/// No real negative prompt: FLUX.2's own template zeroes it out
+/// (`ConditioningZeroOut`) rather than encoding one. Sampling goes through
+/// `CFGGuider` + `SamplerCustomAdvanced` (driven by `Flux2Scheduler`'s sigmas
+/// and `RandomNoise`) instead of a plain `KSampler` — genuinely FLUX.2's own
+/// graph shape, verified against Comfy-Org's own `image_flux2_klein_text_to_image`
+/// workflow template rather than assumed from FLUX.1's.
+pub fn flux2_klein_txt2img(i: &Txt2ImgInputs, m: &Flux2KleinModels, loras: &[LoraSpec]) -> Value {
+    let mut g = json!({
+        "12": {
+            "class_type": "UnetLoaderGGUF",
+            "inputs": { "unet_name": m.unet }
+        },
+        "11": {
+            "class_type": "CLIPLoader",
+            "inputs": { "clip_name": m.clip, "type": "flux2" }
+        },
+        "10": {
+            "class_type": "VAELoader",
+            "inputs": { "vae_name": m.vae }
+        },
+        "6": {
+            "class_type": "CLIPTextEncode",
+            "inputs": { "text": i.positive, "clip": ["11", 0] }
+        },
+        "27": {
+            "class_type": "ConditioningZeroOut",
+            "inputs": { "conditioning": ["6", 0] }
+        },
+        "28": {
+            "class_type": "KSamplerSelect",
+            "inputs": { "sampler_name": i.sampler }
+        },
+        "29": {
+            "class_type": "Flux2Scheduler",
+            "inputs": { "steps": i.steps, "width": i.width, "height": i.height }
+        },
+        "30": {
+            "class_type": "RandomNoise",
+            "inputs": { "noise_seed": i.seed }
+        },
+        "31": {
+            "class_type": "CFGGuider",
+            "inputs": {
+                "model": ["12", 0],
+                "positive": ["6", 0],
+                "negative": ["27", 0],
+                "cfg": i.cfg
+            }
+        },
+        "32": {
+            "class_type": "EmptyFlux2LatentImage",
+            "inputs": { "width": i.width, "height": i.height, "batch_size": 1 }
+        },
+        "3": {
+            "class_type": "SamplerCustomAdvanced",
+            "inputs": {
+                "noise": ["30", 0],
+                "guider": ["31", 0],
+                "sampler": ["28", 0],
+                "sigmas": ["29", 0],
+                "latent_image": ["32", 0]
+            }
+        },
+        "8": {
+            "class_type": "VAEDecode",
+            "inputs": { "samples": ["3", 0], "vae": ["10", 0] }
+        },
+        "9": {
+            "class_type": "SaveImage",
+            "inputs": { "filename_prefix": i.filename_prefix, "images": ["8", 0] }
+        }
+    });
+    apply_loras(&mut g, loras, ("12", 0), ("11", 0), "31", &["6"]);
     g
 }
 
@@ -518,6 +613,8 @@ mod tests {
     fn recipe_selects_flux_for_the_family() {
         assert_eq!(Recipe::for_family(Some("flux")), Recipe::FluxGguf);
         assert_eq!(Recipe::for_family(Some("FLUX")), Recipe::FluxGguf);
+        assert_eq!(Recipe::for_family(Some("flux2")), Recipe::Flux2KleinGguf);
+        assert_eq!(Recipe::for_family(Some("FLUX2")), Recipe::Flux2KleinGguf);
         assert_eq!(Recipe::for_family(Some("sdxl")), Recipe::Checkpoint);
         assert_eq!(Recipe::for_family(None), Recipe::Checkpoint);
     }
@@ -607,6 +704,78 @@ mod tests {
             &[],
         );
         assert_eq!(g["26"]["inputs"]["guidance"], 10.0);
+    }
+
+    #[test]
+    fn flux2_klein_graph_wires_the_single_encoder_and_zeroed_negative() {
+        let g = flux2_klein_txt2img(
+            &inputs(),
+            &Flux2KleinModels {
+                unet: "flux-2-klein-9b-Q4_K_M.gguf",
+                clip: "qwen_3_8b_fp8mixed.safetensors",
+                vae: "flux2-vae.safetensors",
+            },
+            &[],
+        );
+        assert_eq!(g["12"]["class_type"], "UnetLoaderGGUF");
+        assert_eq!(
+            g["12"]["inputs"]["unet_name"],
+            "flux-2-klein-9b-Q4_K_M.gguf"
+        );
+        assert_eq!(g["11"]["class_type"], "CLIPLoader");
+        assert_eq!(
+            g["11"]["inputs"]["clip_name"],
+            "qwen_3_8b_fp8mixed.safetensors"
+        );
+        assert_eq!(g["11"]["inputs"]["type"], "flux2");
+        assert_eq!(g["10"]["inputs"]["vae_name"], "flux2-vae.safetensors");
+        assert_eq!(g["6"]["inputs"]["text"], "a red fox in the snow");
+        assert_eq!(g["6"]["inputs"]["clip"], json!(["11", 0]));
+        // No real negative prompt -- FLUX.2's own template zeroes it out.
+        assert_eq!(g["27"]["class_type"], "ConditioningZeroOut");
+        assert_eq!(g["27"]["inputs"]["conditioning"], json!(["6", 0]));
+        assert_eq!(g["31"]["class_type"], "CFGGuider");
+        assert_eq!(g["31"]["inputs"]["model"], json!(["12", 0]));
+        assert_eq!(g["31"]["inputs"]["positive"], json!(["6", 0]));
+        assert_eq!(g["31"]["inputs"]["negative"], json!(["27", 0]));
+        assert_eq!(g["31"]["inputs"]["cfg"], 7.0);
+        assert_eq!(g["3"]["class_type"], "SamplerCustomAdvanced");
+        assert_eq!(g["3"]["inputs"]["guider"], json!(["31", 0]));
+        assert_eq!(g["3"]["inputs"]["sigmas"], json!(["29", 0]));
+        assert_eq!(g["29"]["class_type"], "Flux2Scheduler");
+        assert_eq!(g["29"]["inputs"]["steps"], 25);
+        assert_eq!(g["32"]["class_type"], "EmptyFlux2LatentImage");
+        assert_eq!(g["32"]["inputs"]["width"], 1024);
+        assert_eq!(g["8"]["inputs"]["vae"], json!(["10", 0]));
+        assert_eq!(g["9"]["inputs"]["filename_prefix"], "job-abc");
+    }
+
+    #[test]
+    fn flux2_klein_graph_splices_a_lora_before_the_guider_and_encode() {
+        let g = flux2_klein_txt2img(
+            &inputs(),
+            &Flux2KleinModels {
+                unet: "u",
+                clip: "c",
+                vae: "v",
+            },
+            &[LoraSpec {
+                file: "flux2-realistic-detail.safetensors",
+                strength: 0.8,
+            }],
+        );
+        assert_eq!(g["90"]["inputs"]["model"], json!(["12", 0]));
+        assert_eq!(g["90"]["inputs"]["clip"], json!(["11", 0]));
+        assert_eq!(
+            g["31"]["inputs"]["model"],
+            json!(["90", 0]),
+            "CFGGuider reads the lora'd model"
+        );
+        assert_eq!(
+            g["6"]["inputs"]["clip"],
+            json!(["90", 1]),
+            "CLIPTextEncode reads the lora'd clip"
+        );
     }
 
     fn video_inputs() -> VideoInputs<'static> {

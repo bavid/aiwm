@@ -7,6 +7,7 @@ import {
   attachDocument,
   cancelJob,
   deleteDocument,
+  deleteJob,
   jobDetail,
   jobOutputUrl,
   submitJob,
@@ -119,7 +120,17 @@ export function Chat() {
     if (!jobs || hydratedFor.current === sessionId) return;
     hydratedFor.current = sessionId;
     const history = jobs
-      .filter((j) => CHAT_JOB_TYPES.includes(j.job_type) && j.session_id === sessionId)
+      .filter((j) => {
+        if (j.session_id !== sessionId) return false;
+        // "Ungrouped" (no session) is a single shared bucket across every tab
+        // -- an image generated on the Image tab with no session picked has
+        // the exact same `session_id: null` as an ungrouped chat. Only a real
+        // session id is unique enough to prove an image/video job actually
+        // came from this chat's own /image · /video command; ungrouped, only
+        // count real chat turns.
+        if (sessionId === null) return j.job_type === "chat" || j.job_type === "colibri";
+        return CHAT_JOB_TYPES.includes(j.job_type);
+      })
       .slice()
       .sort((a, b) => a.created_at.localeCompare(b.created_at))
       .map(
@@ -186,6 +197,18 @@ export function Chat() {
   // Don't lock the composer forever: let the user try again instead of being
   // stuck until they cancel or switch tabs.
   const stuck = turns.find((t) => t.jobId === pendingId)?.state === "blocked";
+
+  // `turns` is only re-derived from the jobs poll on mount/session-switch (see
+  // the hydration effect above), so a delete must splice local state directly
+  // rather than waiting for the next poll tick to notice the job is gone.
+  const handleDeleteTurn = async (jobId: string) => {
+    try {
+      await deleteJob(jobId);
+      setTurns((ts) => ts.filter((t) => t.jobId !== jobId));
+    } catch (err) {
+      setSendError(err instanceof Error ? err.message : String(err));
+    }
+  };
 
   const send = async () => {
     const text = prompt.trim();
@@ -314,6 +337,7 @@ export function Chat() {
             turn={t}
             port={about?.core_api_port ?? null}
             onCancel={() => cancelJob(t.jobId)}
+            onDelete={() => handleDeleteTurn(t.jobId)}
           />
         ))}
       </div>
@@ -419,10 +443,12 @@ function ChatTurn({
   turn,
   port,
   onCancel,
+  onDelete,
 }: {
   turn: Turn;
   port: number | null;
   onCancel: () => void;
+  onDelete: () => void;
 }) {
   const running = !DONE.includes(turn.state);
   const waiting = running && !turn.answer && turn.state !== "blocked";
@@ -466,6 +492,11 @@ function ChatTurn({
         {running && (
           <button type="button" className="turn__cancel" onClick={onCancel}>
             Stop
+          </button>
+        )}
+        {!running && (
+          <button type="button" className="turn__cancel" onClick={onDelete} title="Delete this message">
+            Delete
           </button>
         )}
       </div>

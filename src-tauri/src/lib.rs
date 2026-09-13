@@ -170,6 +170,11 @@ async fn cancel_job(app: tauri::State<'_, Arc<App>>, id: String) -> Result<Optio
 }
 
 #[tauri::command]
+async fn delete_job(app: tauri::State<'_, Arc<App>>, id: String) -> Result<(), String> {
+    to_ipc(handlers::delete_job(&app, &id).await)
+}
+
+#[tauri::command]
 async fn submit_job(app: tauri::State<'_, Arc<App>>, body: SubmitJobDto) -> Result<Job, String> {
     to_ipc(handlers::submit_job(&app, body).await)
 }
@@ -560,6 +565,7 @@ fn try_run() -> anyhow::Result<()> {
             export_backup,
             import_backup,
             cancel_job,
+            delete_job,
             submit_job,
             job_detail,
             list_sessions,

@@ -251,6 +251,88 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn delete_job_requires_a_terminal_state_and_then_removes_it() {
+        use crate::db::JobPatch;
+        use crate::orchestrator::JobState;
+
+        let (app, tmp) = test_app().await;
+        app.runtimes
+            .register(Arc::new(FakeRuntimeAdapter::healthy("llamacpp")));
+        let job = app
+            .db
+            .jobs()
+            .insert(crate::db::NewJob::new("image"))
+            .await
+            .unwrap();
+
+        let server = ApiServer::bind(app.clone(), SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
+            .await
+            .unwrap();
+        let base = format!("http://{}", server.addr);
+        let http = reqwest::Client::new();
+
+        // Still queued (non-terminal) -- refuse rather than delete out from
+        // under the engine.
+        let refused = http
+            .delete(format!("{base}/jobs/{}", job.id))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(refused.status(), 400);
+
+        // Finish it, including a real output file, and confirm delete removes
+        // both the DB row and the file.
+        let output_path = tmp.path().join(format!("{}.png", job.id));
+        std::fs::write(&output_path, b"fake png bytes").unwrap();
+        for state in [
+            JobState::Scheduled,
+            JobState::Preparing,
+            JobState::Running,
+            JobState::Post,
+        ] {
+            app.db
+                .jobs()
+                .set_state(&job.id, state, JobPatch::default())
+                .await
+                .unwrap();
+        }
+        app.db
+            .jobs()
+            .set_state(
+                &job.id,
+                JobState::Completed,
+                JobPatch {
+                    output_path: Some(output_path.to_string_lossy().into_owned()),
+                    set_finished_at: true,
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        let resp = http
+            .delete(format!("{base}/jobs/{}", job.id))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 204);
+        assert!(!output_path.exists(), "output file must be removed too");
+
+        let gone = reqwest::get(format!("{base}/jobs/{}", job.id))
+            .await
+            .unwrap();
+        assert_eq!(gone.status(), 404);
+
+        // Deleting an id that never existed is the same clean 400, not a panic.
+        let missing = http
+            .delete(format!("{base}/jobs/nope"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(missing.status(), 400);
+    }
+
+    #[tokio::test]
     async fn ws_streams_telemetry_frames() {
         use futures_util::StreamExt;
 

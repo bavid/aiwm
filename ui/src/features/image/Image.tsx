@@ -7,6 +7,7 @@ import { VramEstimateHint } from "../../components/VramEstimateHint";
 import { useAbout, useJobs, useModels, useRuntimes, useTelemetry } from "../../lib/hooks";
 import {
   cancelJob,
+  deleteJob,
   imageOutputUrl,
   jobDetail,
   submitJob,
@@ -70,6 +71,7 @@ export function ImageStudio() {
 
   const selectedCheckpoint = checkpoints.find((m) => m.id === modelId);
   const isFlux = modelId !== "auto" && selectedCheckpoint?.family === "flux";
+  const isFlux2 = modelId !== "auto" && selectedCheckpoint?.family === "flux2";
 
   const [pendingId, setPendingId] = useState<string | null>(null);
   const [detail, setDetail] = useState<JobDetail | null>(null);
@@ -144,6 +146,44 @@ export function ImageStudio() {
       setPendingId(job.id);
       setSelectedId(job.id);
       setDetail({ job, events: [] });
+    } catch (err) {
+      setSendError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  /** One-click recipe: FLUX.2 [klein] 9B + its realistic-detail LoRA, low CFG,
+   *  a lighting prompt suffix — a saved "config" for the realistic
+   *  smartphone-photo look, rather than hand-tuning every field each time. */
+  const applySmartphonePreset = () => {
+    const flux2Model = (models ?? []).find(
+      (m) => m.roles.includes("base_diffusion") && m.family === "flux2",
+    );
+    if (!flux2Model) {
+      setSendError(
+        "Import the FLUX.2 [klein] 9B stack first — Models tab → Discover.",
+      );
+      return;
+    }
+    const flux2Lora = (models ?? []).find(
+      (m) => m.roles.includes("lora") && m.family === "flux2",
+    );
+    setModelId(flux2Model.id);
+    setCfg(1.5);
+    setSteps(8);
+    setLoras(flux2Lora ? [{ model_id: flux2Lora.id, strength: 0.8 }] : []);
+    setPrompt((p) => {
+      const suffix = "natural window light, soft shadows, candid framing, shot on iphone, high detail skin";
+      return p.trim() ? `${p.trim()}, ${suffix}` : `a candid photo, ${suffix}`;
+    });
+  };
+
+  const handleDelete = async (id: string) => {
+    try {
+      await deleteJob(id);
+      if (selectedId === id) {
+        setSelectedId(null);
+        setDetail(null);
+      }
     } catch (err) {
       setSendError(err instanceof Error ? err.message : String(err));
     }
@@ -240,12 +280,17 @@ export function ImageStudio() {
               value={cfg}
               step={0.5}
               min={1}
-              max={isFlux ? 10 : 15}
+              max={isFlux || isFlux2 ? 10 : 15}
               onChange={setCfg}
             />
           </div>
           {isFlux && (
             <p className="muted">Flux runs at CFG 1 — this sets FluxGuidance (≈ 3–4 is typical).</p>
+          )}
+          {isFlux2 && (
+            <p className="muted">
+              FLUX.2 Klein is fast/distilled — low CFG (≈1.5–2) and few steps (≈8) is typical.
+            </p>
           )}
 
           <div className="imgform__grid">
@@ -271,6 +316,16 @@ export function ImageStudio() {
                 ))}
               </select>
             </label>
+          </div>
+          <div className="imgform__presets">
+            <button
+              type="button"
+              className="chip"
+              title="FLUX.2 [klein] 9B + realistic-detail LoRA, low CFG, a lighting prompt suffix"
+              onClick={applySmartphonePreset}
+            >
+              Smartphone photo preset
+            </button>
           </div>
           <LoraPicker
             models={models ?? []}
@@ -310,6 +365,7 @@ export function ImageStudio() {
             port={about?.core_api_port ?? null}
             modelNames={modelNames}
             onCancel={selected ? () => cancelJob(selected.id) : undefined}
+            onDelete={selected ? () => handleDelete(selected.id) : undefined}
             onReuseSeed={setSeed}
           />
         </section>
@@ -325,22 +381,40 @@ export function ImageStudio() {
         ) : (
           <div className="gallery">
             {gallery.map((j) => (
-              <button
+              <div
                 key={j.id}
-                className="gallery__item"
-                aria-pressed={j.id === selectedId}
-                onClick={() => {
-                  setSelectedId(j.id);
-                  setDetail(null);
-                }}
+                className={
+                  j.id === selectedId ? "gallery__item gallery__item--selected" : "gallery__item"
+                }
               >
-                {about && (
-                  <img src={imageOutputUrl(about.core_api_port, j.id)} alt="" loading="lazy" />
-                )}
-                <span className="gallery__cap">
-                  {asImageParams(j.params).prompt ?? "image"}
-                </span>
-              </button>
+                <button
+                  type="button"
+                  className="gallery__item-select"
+                  onClick={() => {
+                    setSelectedId(j.id);
+                    setDetail(null);
+                  }}
+                >
+                  {about && (
+                    <img src={imageOutputUrl(about.core_api_port, j.id)} alt="" loading="lazy" />
+                  )}
+                  <span className="gallery__cap">
+                    {asImageParams(j.params).prompt ?? "image"}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  className="gallery__delete"
+                  title="Delete"
+                  aria-label="Delete this image"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleDelete(j.id);
+                  }}
+                >
+                  ×
+                </button>
+              </div>
             ))}
           </div>
         )}
@@ -354,12 +428,14 @@ function Result({
   port,
   modelNames,
   onCancel,
+  onDelete,
   onReuseSeed,
 }: {
   job: Job | null;
   port: number | null;
   modelNames: Map<string, string>;
   onCancel?: () => void;
+  onDelete?: () => void;
   onReuseSeed: (seed: string) => void;
 }) {
   if (!job) return <p className="muted">Fill in a prompt and hit Generate.</p>;
@@ -427,6 +503,11 @@ function Result({
       {running && onCancel && (
         <button type="button" className="result__cancel" onClick={onCancel}>
           Stop
+        </button>
+      )}
+      {!running && onDelete && (
+        <button type="button" className="result__cancel" onClick={onDelete}>
+          Delete
         </button>
       )}
     </div>

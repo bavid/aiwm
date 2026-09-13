@@ -8,6 +8,7 @@ import { VramEstimateHint } from "../../components/VramEstimateHint";
 import { useAbout, useJobs, useModels, useRuntimes, useTelemetry } from "../../lib/hooks";
 import {
   cancelJob,
+  deleteJob,
   jobDetail,
   jobOutputUrl,
   submitJob,
@@ -201,6 +202,18 @@ export function VideoStudio() {
       setPendingId(job.id);
       setSelectedId(job.id);
       setDetail({ job, events: [] });
+    } catch (err) {
+      setSendError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const handleDelete = async (id: string) => {
+    try {
+      await deleteJob(id);
+      if (selectedId === id) {
+        setSelectedId(null);
+        setDetail(null);
+      }
     } catch (err) {
       setSendError(err instanceof Error ? err.message : String(err));
     }
@@ -404,6 +417,7 @@ export function VideoStudio() {
             port={about?.core_api_port ?? null}
             modelNames={modelNames}
             onCancel={selected ? () => cancelJob(selected.id) : undefined}
+            onDelete={selected ? () => handleDelete(selected.id) : undefined}
             onReuseSeed={setSeed}
           />
         </section>
@@ -419,30 +433,50 @@ export function VideoStudio() {
         ) : (
           <div className="gallery">
             {gallery.map((j) => (
-              <button
+              <div
                 key={j.id}
-                className="gallery__item video-item"
-                aria-pressed={j.id === selectedId}
-                onClick={() => {
-                  setSelectedId(j.id);
-                  setDetail(null);
-                }}
+                className={
+                  j.id === selectedId
+                    ? "gallery__item video-item gallery__item--selected"
+                    : "gallery__item video-item"
+                }
               >
-                {about && (
-                  <span className="video-item__frame">
-                    <video
-                      src={jobOutputUrl(about.core_api_port, j.id)}
-                      muted
-                      preload="metadata"
-                      playsInline
-                    />
-                    <span className="video-item__play" aria-hidden="true">
-                      ▶
+                <button
+                  type="button"
+                  className="gallery__item-select"
+                  onClick={() => {
+                    setSelectedId(j.id);
+                    setDetail(null);
+                  }}
+                >
+                  {about && (
+                    <span className="video-item__frame">
+                      <video
+                        src={jobOutputUrl(about.core_api_port, j.id)}
+                        muted
+                        preload="metadata"
+                        playsInline
+                      />
+                      <span className="video-item__play" aria-hidden="true">
+                        ▶
+                      </span>
                     </span>
-                  </span>
-                )}
-                <span className="gallery__cap">{asVideoParams(j.params).prompt ?? "video"}</span>
-              </button>
+                  )}
+                  <span className="gallery__cap">{asVideoParams(j.params).prompt ?? "video"}</span>
+                </button>
+                <button
+                  type="button"
+                  className="gallery__delete"
+                  title="Delete"
+                  aria-label="Delete this video"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleDelete(j.id);
+                  }}
+                >
+                  ×
+                </button>
+              </div>
             ))}
           </div>
         )}
@@ -467,6 +501,7 @@ function Result({
   port,
   modelNames,
   onCancel,
+  onDelete,
   onReuseSeed,
 }: {
   job: Job | null;
@@ -474,6 +509,7 @@ function Result({
   port: number | null;
   modelNames: Map<string, string>;
   onCancel?: () => void;
+  onDelete?: () => void;
   onReuseSeed: (seed: string) => void;
 }) {
   if (!job) return <p className="muted">Fill in a prompt and hit Generate.</p>;
@@ -554,6 +590,11 @@ function Result({
       {running && onCancel && (
         <button type="button" className="result__cancel" onClick={onCancel}>
           Stop
+        </button>
+      )}
+      {!running && onDelete && (
+        <button type="button" className="result__cancel" onClick={onDelete}>
+          Delete
         </button>
       )}
     </div>

@@ -18,7 +18,7 @@ use super::media::{
     str_param, write_output, LoraRef,
 };
 use crate::db::{Database, EventLevel, Model};
-use crate::pipeline::{self, FluxModels, LoraSpec, Recipe, Txt2ImgInputs};
+use crate::pipeline::{self, Flux2KleinModels, FluxModels, LoraSpec, Recipe, Txt2ImgInputs};
 use crate::runtime::ComfyUiAdapter;
 use crate::Result;
 
@@ -240,6 +240,25 @@ pub async fn run(
                 &lora_specs,
             )
         }
+        Recipe::Flux2KleinGguf => {
+            let c = resolve_flux2_klein_companions(db).await?;
+            db.jobs()
+                .append_event(
+                    job_id,
+                    EventLevel::Info,
+                    &format!("FLUX.2 — text encoder “{}”, VAE “{}”", c.clip, c.vae),
+                )
+                .await?;
+            pipeline::flux2_klein_txt2img(
+                &inputs,
+                &Flux2KleinModels {
+                    unet: model_file,
+                    clip: &c.clip,
+                    vae: &c.vae,
+                },
+                &lora_specs,
+            )
+        }
     };
 
     let Some(image) = comfyui
@@ -302,9 +321,18 @@ async fn resolve_flux_companions(db: &Database) -> Result<FluxCompanionFiles> {
                  \u{201c}Text encoder / CLIP\u{201d}",
             )
         })?;
-    let vae = db.models().pick_for_role("vae").await?.ok_or_else(|| {
-        image_err("Flux needs a VAE — import ae.safetensors as \u{201c}VAE\u{201d}")
-    })?;
+    // Excludes FLUX.2's VAE by name -- now that a second `vae`-role file can
+    // exist in the library, picking blindly (`pick_for_role`, most-recently-
+    // used) risked handing a FLUX.1 job FLUX.2's incompatible VAE.
+    let vae = db
+        .models()
+        .for_role("vae")
+        .await?
+        .into_iter()
+        .find(|m| !name_is_flux2(&m.name) && !name_is_flux2(&m.file_path))
+        .ok_or_else(|| {
+            image_err("Flux needs a VAE — import ae.safetensors as \u{201c}VAE\u{201d}")
+        })?;
 
     Ok(FluxCompanionFiles {
         t5: file_name(&t5.file_path)?.to_string(),
@@ -320,6 +348,55 @@ fn name_is_t5(s: &str) -> bool {
 fn name_is_clip_l(s: &str) -> bool {
     let n = s.to_ascii_lowercase();
     n.contains("clip") && !n.contains("t5")
+}
+
+/// FLUX.2 [klein]'s two companion files, resolved from the library by role +
+/// name. Unlike FLUX.1, one text encoder does the whole job — but it still
+/// needs telling apart from FLUX.1's T5/CLIP-L (same `text_encoder` role) and
+/// from FLUX.1's own VAE (same `vae` role).
+#[derive(Debug)]
+struct Flux2KleinCompanionFiles {
+    clip: String,
+    vae: String,
+}
+
+async fn resolve_flux2_klein_companions(db: &Database) -> Result<Flux2KleinCompanionFiles> {
+    let clip = db
+        .models()
+        .for_role("text_encoder")
+        .await?
+        .into_iter()
+        .find(|m| name_is_qwen(&m.name) || name_is_qwen(&m.file_path))
+        .ok_or_else(|| {
+            image_err(
+                "FLUX.2 needs its Qwen3 text encoder — import qwen_3_8b_fp8mixed.safetensors \
+                 as \u{201c}Text encoder / CLIP\u{201d} on the Models tab",
+            )
+        })?;
+    let vae = db
+        .models()
+        .for_role("vae")
+        .await?
+        .into_iter()
+        .find(|m| name_is_flux2(&m.name) || name_is_flux2(&m.file_path))
+        .ok_or_else(|| {
+            image_err(
+                "FLUX.2 needs its own VAE — import flux2-vae.safetensors as \u{201c}VAE\u{201d}",
+            )
+        })?;
+
+    Ok(Flux2KleinCompanionFiles {
+        clip: file_name(&clip.file_path)?.to_string(),
+        vae: file_name(&vae.file_path)?.to_string(),
+    })
+}
+
+fn name_is_qwen(s: &str) -> bool {
+    s.to_ascii_lowercase().contains("qwen")
+}
+
+fn name_is_flux2(s: &str) -> bool {
+    s.to_ascii_lowercase().contains("flux2")
 }
 
 #[cfg(test)]
@@ -438,5 +515,52 @@ mod tests {
         assert_eq!(c.t5, "t5xxl_fp8.safetensors");
         assert_eq!(c.clip_l, "clip_l.safetensors");
         assert_eq!(c.vae, "ae.safetensors");
+
+        // FLUX.2's VAE shares the same `vae` role -- must not be mistaken for
+        // FLUX.1's own, regardless of which was imported more recently.
+        add("flux2-vae.safetensors", "vae").await;
+        let c = resolve_flux_companions(&db).await.unwrap();
+        assert_eq!(c.vae, "ae.safetensors");
+    }
+
+    #[tokio::test]
+    async fn resolve_flux2_klein_companions_needs_both_and_ignores_flux1s() {
+        use crate::db::{Database, NewModel};
+
+        let db = Database::connect_in_memory().await.unwrap();
+        let add = |name: &str, role: &str| {
+            let (name, role) = (name.to_string(), role.to_string());
+            let db = db.clone();
+            async move {
+                db.models()
+                    .insert(NewModel {
+                        name: name.clone(),
+                        format: "safetensors".into(),
+                        file_path: format!("E:\\AI\\models\\image\\x\\{name}"),
+                        size_bytes: 1_000,
+                        source: "manual".into(),
+                        roles: vec![role],
+                        ..NewModel::default()
+                    })
+                    .await
+                    .unwrap();
+            }
+        };
+
+        // FLUX.1's own encoder/VAE are in the library too -- must be skipped.
+        add("t5xxl_fp8.safetensors", "text_encoder").await;
+        add("ae.safetensors", "vae").await;
+
+        let err = resolve_flux2_klein_companions(&db).await.unwrap_err();
+        assert!(err.to_string().contains("Qwen3"), "{err}");
+
+        add("qwen_3_8b_fp8mixed.safetensors", "text_encoder").await;
+        let err = resolve_flux2_klein_companions(&db).await.unwrap_err();
+        assert!(err.to_string().contains("VAE"), "{err}");
+
+        add("flux2-vae.safetensors", "vae").await;
+        let c = resolve_flux2_klein_companions(&db).await.unwrap();
+        assert_eq!(c.clip, "qwen_3_8b_fp8mixed.safetensors");
+        assert_eq!(c.vae, "flux2-vae.safetensors");
     }
 }

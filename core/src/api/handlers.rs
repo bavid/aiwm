@@ -159,6 +159,26 @@ pub async fn run_next_job(app: &App) -> Result<Option<JobOutcome>> {
     app.jobs.run_next().await
 }
 
+/// Permanently remove a finished job — its history entry, events, and any
+/// output file on disk (best-effort; a missing/already-gone file is fine). A
+/// still-running job must be cancelled first, since deleting out from under
+/// the engine could leave the scheduler pointed at a job that no longer
+/// exists.
+pub async fn delete_job(app: &App, id: &str) -> Result<()> {
+    let Some(job) = app.db.jobs().get(id).await? else {
+        return Err(CoreError::Config(format!("no such job {id}")));
+    };
+    if !job.state.is_terminal() {
+        return Err(CoreError::Config(
+            "this job is still running — cancel it first".into(),
+        ));
+    }
+    if let Some(path) = &job.output_path {
+        let _ = std::fs::remove_file(path);
+    }
+    app.db.jobs().delete(id).await
+}
+
 /// The on-disk file a finished image job produced (`GET /jobs/{id}/output`
 /// serves it). `None` when the job has no output, or its recorded path is
 /// missing or — defensively — escaped the outputs directory.

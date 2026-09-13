@@ -269,6 +269,9 @@ export const listJobs = (opts?: { states?: JobState[]; limit?: number }) =>
   invoke<Job[]>("list_jobs", { states: opts?.states ?? null, limit: opts?.limit ?? null });
 /** Ask a job to stop. `true` = applied/signalled, `false` = too late, `null` = no such job. */
 export const cancelJob = (id: string) => invoke<boolean | null>("cancel_job", { id });
+/** Permanently remove a finished job — history entry, events, and output
+ *  file. Rejects if the job is still running (cancel it first). */
+export const deleteJob = (id: string) => invoke<void>("delete_job", { id });
 export const submitJob = (body: SubmitJobBody) => invoke<Job>("submit_job", { body });
 export const jobDetail = (id: string) => invoke<JobDetail | null>("job_detail", { id });
 

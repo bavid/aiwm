@@ -39,7 +39,7 @@ pub fn router(app: Arc<App>) -> Router {
             get(list_documents).post(attach_document),
         )
         .route("/documents/{id}", axum::routing::delete(delete_document))
-        .route("/jobs/{id}", get(job_detail))
+        .route("/jobs/{id}", get(job_detail).delete(delete_job))
         .route("/jobs/{id}/cancel", post(cancel_job))
         .route("/jobs/{id}/output", get(job_output))
         .route("/models", get(list_models).post(import_model))
@@ -291,6 +291,11 @@ async fn cancel_job(State(app): AppState, Path(id): Path<String>) -> Result<Resp
         )
             .into_response()),
     }
+}
+
+async fn delete_job(State(app): AppState, Path(id): Path<String>) -> Result<StatusCode, ApiError> {
+    handlers::delete_job(&app, &id).await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// Serve the image a finished `job_type=image` job produced. Loopback only
