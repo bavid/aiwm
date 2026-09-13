@@ -43,10 +43,23 @@ hierher, damit nichts verloren geht.
   (`160 MB / 1K ctx`) gegen echte `nvidia-smi`-Messungen kalibrieren (Phase 6,
   [BENCHMARKS.md](BENCHMARKS.md)). Auch: KV-Cache-Quantisierung (`-ctk`/`-ctv`
   q8/q4) senkt den Bedarf — als Option erwägen
-- Blockierte Jobs automatisch neu einreihen, wenn VRAM frei wird ohne dass ein
-  anderer Job evictet: Runtime-Stop, `unload_model` über die API, Agent-Session-
-  Ende. Aktuell ruht ein `blocked`-Job bis Cancel / anderer Job evictet; ein
-  `JobEngine::wake_blocked()` + Aufrufer an diesen Stellen wäre der saubere Weg
+- ~~Blockierte Jobs automatisch neu einreihen, wenn VRAM frei wird ohne dass
+  ein anderer Job evictet~~ → **geprüft (2026-09-13), kein echter Bug**:
+  `run_job_loop` pollt ohnehin ungebremst (`JOB_LOOP_IDLE` 250ms,
+  `JOB_LOOP_BLOCKED_BACKOFF` nur 3s nach einem `Blocked`-Ergebnis, `api/mod.rs`),
+  `next_runnable` + `HybridScheduler::plan()` sind zustandslos und werten einen
+  `blocked`-Job bei jedem Tick frisch neu aus (kein "stecken bleiben" auf
+  Engine-/Scheduler-Ebene, s. `blocked_job_stays_blocked_and_is_picked_up_again`
+  in `orchestrator/engine.rs`) — im schlimmsten Fall also ≤3s Verzögerung, kein
+  permanenter Stillstand. Zwei der drei genannten Auslöser existieren zudem noch
+  gar nicht als erreichbarer Pfad: weder "Runtime manuell stoppen" noch
+  `unload_model` sind über HTTP/Tauri/UI aufrufbar (nur intern bei
+  Neustart/Install). Nur "Agent-Session-Ende" ist real erreichbar
+  (`AgentSessions::stop`/`drain_events`) und funktioniert bereits über das
+  Polling. Ein `wake_blocked()` würde also zwei nicht existierende Call-Sites
+  bedienen und die dritte nur von ≤3s auf ~sofort verkürzen — aufgehoben bis
+  eins der beiden fehlenden API-Surfaces (Runtime-Stop, `unload_model`) real
+  gebaut wird.
 - Chat: WebSocket/SSE-Token-Stream an die UI statt `jobs.result`-Polling
   (ADR-015 — MVP pollt); Multi-Turn-Verlauf, System-Prompt + Sampling-Parameter
 - Ein langer Chat-Job blockiert die Job-Schleife (Single-Slot-Prämisse ADR-003) —
