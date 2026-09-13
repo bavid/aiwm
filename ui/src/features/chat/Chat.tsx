@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { SessionSwitcher } from "../../components/SessionSwitcher";
-import { useJobs, useModels, useRuntimes } from "../../lib/hooks";
+import { useAbout, useJobs, useModels, useRuntimes } from "../../lib/hooks";
 import {
   cancelJob,
   jobDetail,
+  jobOutputUrl,
   submitJob,
   type Job,
   type JobEvent,
@@ -11,8 +12,11 @@ import {
 } from "../../lib/ipc";
 import "./chat.css";
 
+type TurnKind = "text" | "image" | "video";
+
 type Turn = {
   jobId: string;
+  kind: TurnKind;
   prompt: string;
   answer: string;
   state: JobState;
@@ -23,10 +27,31 @@ type Turn = {
 
 const DONE: JobState[] = ["completed", "failed", "cancelled"];
 /** Every job type this tab's history can include — "colibri" chats run on a
- *  different runtime than "chat" (llama.cpp), but they're the same
- *  conversational capability from the user's point of view. */
-const CHAT_JOB_TYPES = ["chat", "colibri"];
+ *  different runtime than "chat" (llama.cpp), and "image"/"video" are here
+ *  because `/image`/`/video` let you generate media without leaving the
+ *  conversation — but all four are the same thread from the user's point
+ *  of view. */
+const CHAT_JOB_TYPES = ["chat", "colibri", "image", "video"];
 const POLL_MS = 350;
+
+/** `/image <prompt>` or `/video <prompt>` at the start of a message routes
+ *  to that capability instead of the chat model -- reliable and explicit,
+ *  rather than guessing intent from natural language. */
+const MEDIA_COMMAND = /^\/(image|video)\s+(.+)$/is;
+
+function kindOf(jobType: string): TurnKind {
+  return jobType === "image" || jobType === "video" ? jobType : "text";
+}
+
+/** Sensible defaults matching the Image/Video studios' own initial state --
+ *  a `/image`/`/video` command from Chat skips the full form, so it needs
+ *  something reasonable to submit. */
+function defaultMediaParams(kind: "image" | "video", prompt: string): Record<string, unknown> {
+  if (kind === "image") {
+    return { prompt, negative: "", width: 1024, height: 1024, steps: 25, cfg: 7 };
+  }
+  return { prompt, negative: "", width: 832, height: 480, length: 81, fps: 24, steps: 30, cfg: 5 };
+}
 
 function modelFromEvents(events: JobEvent[]): string | null {
   const e = events.find((x) => x.message.startsWith("auto-selected model"));
@@ -64,6 +89,7 @@ export function Chat() {
   const { data: models } = useModels();
   const { data: runtimes } = useRuntimes();
   const { data: jobs } = useJobs();
+  const about = useAbout();
   const chatModels = useMemo(
     () => (models ?? []).filter((m) => m.roles.includes("chat")),
     [models],
@@ -94,6 +120,7 @@ export function Chat() {
       .map(
         (j): Turn => ({
           jobId: j.id,
+          kind: kindOf(j.job_type),
           prompt: promptOf(j),
           answer: j.result ?? "",
           state: j.state,
@@ -124,7 +151,10 @@ export function Chat() {
                 ...t,
                 answer: job.result ?? t.answer,
                 state: job.state,
-                model: modelFromEvents(events) ?? t.model,
+                model:
+                  modelFromEvents(events) ??
+                  (job.model_id ? modelNames.get(job.model_id) : undefined) ??
+                  t.model,
                 stats: statsFromEvents(events) ?? t.stats,
                 error: job.error_text,
               }
@@ -139,7 +169,7 @@ export function Chat() {
       alive = false;
       clearInterval(id);
     };
-  }, [pendingId]);
+  }, [pendingId, modelNames]);
 
   useEffect(() => {
     const el = logRef.current;
@@ -157,32 +187,60 @@ export function Chat() {
     if (!text || (pendingId && !stuck)) return;
     setSendError(null);
 
-    const picked = modelId === "auto" ? null : modelById.get(modelId);
-    // "Auto" always resolves onto llama.cpp; an explicit pick routes to
-    // whichever runtime actually serves that model's format (Colibri models
-    // are never part of the Auto pool — see `for_role_with_benchmark`).
-    const isColibri = picked?.format === "colibri";
+    const media = text.match(MEDIA_COMMAND);
 
     try {
-      const job = await submitJob({
-        job_type: isColibri ? "colibri" : "chat",
-        model_id: picked ? picked.id : undefined,
-        runtime_id: picked ? (isColibri ? "colibri" : "llamacpp") : undefined,
-        params: { prompt: text },
-        session_id: sessionId ?? undefined,
-      });
-      setTurns((ts) => [
-        ...ts,
-        {
-          jobId: job.id,
-          prompt: text,
-          answer: "",
-          state: job.state,
-          model: picked?.name ?? null,
-          stats: null,
-          error: null,
-        },
-      ]);
+      let job: Job;
+      let turnModel: string | null;
+      if (media) {
+        const kind = media[1] as "image" | "video";
+        const mediaPrompt = media[2].trim();
+        job = await submitJob({
+          job_type: kind,
+          params: defaultMediaParams(kind, mediaPrompt),
+          session_id: sessionId ?? undefined,
+        });
+        turnModel = null; // Auto-picked; the poll below fills in the real name once it lands.
+        setTurns((ts) => [
+          ...ts,
+          {
+            jobId: job.id,
+            kind,
+            prompt: mediaPrompt,
+            answer: "",
+            state: job.state,
+            model: turnModel,
+            stats: null,
+            error: null,
+          },
+        ]);
+      } else {
+        const picked = modelId === "auto" ? null : modelById.get(modelId);
+        // "Auto" always resolves onto llama.cpp; an explicit pick routes to
+        // whichever runtime actually serves that model's format (Colibri
+        // models are never part of the Auto pool — see `for_role_with_benchmark`).
+        const isColibri = picked?.format === "colibri";
+        job = await submitJob({
+          job_type: isColibri ? "colibri" : "chat",
+          model_id: picked ? picked.id : undefined,
+          runtime_id: picked ? (isColibri ? "colibri" : "llamacpp") : undefined,
+          params: { prompt: text },
+          session_id: sessionId ?? undefined,
+        });
+        setTurns((ts) => [
+          ...ts,
+          {
+            jobId: job.id,
+            kind: "text",
+            prompt: text,
+            answer: "",
+            state: job.state,
+            model: picked?.name ?? null,
+            stats: null,
+            error: null,
+          },
+        ]);
+      }
       setPrompt("");
       setPendingId(job.id);
     } catch (err) {
@@ -219,6 +277,10 @@ export function Chat() {
         {turns.length === 0 && (
           <div className="chat__empty">
             <p>Ask anything. A chat model is picked automatically.</p>
+            <p className="muted">
+              Try <code>/image a bay at dawn</code> or <code>/video a paper boat in the rain</code>{" "}
+              to generate media without leaving the conversation.
+            </p>
             {!llamaReady && (
               <p className="muted">llama.cpp is not set up yet — open Diagnostics to install it.</p>
             )}
@@ -230,7 +292,12 @@ export function Chat() {
           </div>
         )}
         {turns.map((t) => (
-          <ChatTurn key={t.jobId} turn={t} onCancel={() => cancelJob(t.jobId)} />
+          <ChatTurn
+            key={t.jobId}
+            turn={t}
+            port={about?.core_api_port ?? null}
+            onCancel={() => cancelJob(t.jobId)}
+          />
         ))}
       </div>
 
@@ -250,7 +317,7 @@ export function Chat() {
           placeholder={
             pendingId && !stuck
               ? "Waiting for the answer…"
-              : "Message — Enter to send, Shift+Enter for a newline"
+              : "Message, or /image · /video a prompt — Enter to send, Shift+Enter for a newline"
           }
         />
         <button type="submit" disabled={!prompt.trim() || (!!pendingId && !stuck)}>
@@ -262,22 +329,39 @@ export function Chat() {
   );
 }
 
-function ChatTurn({ turn, onCancel }: { turn: Turn; onCancel: () => void }) {
+function ChatTurn({
+  turn,
+  port,
+  onCancel,
+}: {
+  turn: Turn;
+  port: number | null;
+  onCancel: () => void;
+}) {
   const running = !DONE.includes(turn.state);
   const waiting = running && !turn.answer && turn.state !== "blocked";
+  const isMedia = turn.kind !== "text";
 
   return (
     <div className="turn">
-      <div className="turn__you">{turn.prompt}</div>
+      <div className="turn__you">
+        {isMedia && <span className="turn__cmd">/{turn.kind}</span>} {turn.prompt}
+      </div>
       <div className="turn__answer" data-state={turn.state}>
-        {waiting && <span className="turn__wait">{turn.state}…</span>}
-        {turn.answer && (
+        {isMedia ? (
+          <MediaAnswer turn={turn} port={port} />
+        ) : (
           <>
-            {turn.answer}
-            {running && (
-              <span className="turn__caret" aria-hidden="true">
-                ▍
-              </span>
+            {waiting && <span className="turn__wait">{turn.state}…</span>}
+            {turn.answer && (
+              <>
+                {turn.answer}
+                {running && (
+                  <span className="turn__caret" aria-hidden="true">
+                    ▍
+                  </span>
+                )}
+              </>
             )}
           </>
         )}
@@ -301,4 +385,20 @@ function ChatTurn({ turn, onCancel }: { turn: Turn; onCancel: () => void }) {
       </div>
     </div>
   );
+}
+
+function MediaAnswer({ turn, port }: { turn: Turn; port: number | null }) {
+  const running = !DONE.includes(turn.state);
+
+  if (turn.state === "completed" && port != null) {
+    return turn.kind === "video" ? (
+      <video className="turn__media" src={jobOutputUrl(port, turn.jobId)} controls preload="metadata" />
+    ) : (
+      <img className="turn__media" src={jobOutputUrl(port, turn.jobId)} alt={turn.prompt} />
+    );
+  }
+  if (running) {
+    return <span className="turn__wait">{turn.state === "blocked" ? "" : `${turn.state}…`}</span>;
+  }
+  return null;
 }

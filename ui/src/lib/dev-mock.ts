@@ -475,9 +475,18 @@ export function installDevMock(): void {
       }
       case "submit_job": {
         const body = (a.body ?? {}) as AnyRecord;
-        const job = mkJob(`j-dev-${seq++}`, String(body.job_type ?? "video"), "running", {
+        const jobType = String(body.job_type ?? "video");
+        // Auto's real per-role pick isn't mocked -- just default sanely per
+        // job type instead of always falling back to a video model.
+        const autoModel: Record<string, string> = {
+          video: "m-wan",
+          image: "m-sdxl",
+          chat: "m-qwen",
+          colibri: "m-qwen",
+        };
+        const job = mkJob(`j-dev-${seq++}`, jobType, "running", {
           params: body.params ?? {},
-          model_id: (body.model_id as string) ?? "m-wan",
+          model_id: (body.model_id as string) ?? autoModel[jobType] ?? "m-wan",
           runtime_id: (body.runtime_id as string) ?? "comfyui",
           output_path: null,
           session_id: (body.session_id as string) ?? null,
