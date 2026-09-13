@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { LoraPicker } from "../../components/LoraPicker";
 import { NumField } from "../../components/NumField";
+import { PromptAssistant } from "../../components/PromptAssistant";
+import { PromptPresetPicker } from "../../components/PromptPresetPicker";
 import { QueueList } from "../../components/QueueList";
 import { SessionSwitcher } from "../../components/SessionSwitcher";
 import { VramEstimateHint } from "../../components/VramEstimateHint";
@@ -232,6 +234,13 @@ export function VideoStudio() {
         </header>
         <SessionSwitcher capability="video" activeId={sessionId} onChange={setSessionId} />
 
+        <PromptAssistant
+          kind="video"
+          sessionId={sessionId}
+          onApplyPrompt={(text) => setPrompt((p) => (p.trim() ? `${p.trim()}, ${text}` : text))}
+          onApplyNegative={(text) => setNegative((n) => (n.trim() ? `${n.trim()}, ${text}` : text))}
+        />
+
 
         {!comfyReady && (
           <p className="muted">ComfyUI is not set up yet — open Diagnostics to install it.</p>
@@ -268,6 +277,10 @@ export function VideoStudio() {
               placeholder="a paper boat drifting down a rain-soaked street, slow dolly shot"
             />
           </label>
+          <PromptPresetPicker
+            kind="positive"
+            onApply={(text) => setPrompt((p) => (p.trim() ? `${p.trim()}, ${text}` : text))}
+          />
 
           <label className="imgform__field">
             <span>Negative prompt</span>
@@ -279,6 +292,10 @@ export function VideoStudio() {
               placeholder="blurry, jitter, warped faces, low quality"
             />
           </label>
+          <PromptPresetPicker
+            kind="negative"
+            onApply={(text) => setNegative((n) => (n.trim() ? `${n.trim()}, ${text}` : text))}
+          />
 
           <div className="imgform__presets">
             {PRESETS.map((p) => (

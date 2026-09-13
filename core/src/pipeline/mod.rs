@@ -120,15 +120,30 @@ pub enum Recipe {
     /// rather than a plain `KSampler`. A different enough graph shape from
     /// FLUX.1 to need its own recipe (see [`flux2_klein_txt2img`]).
     Flux2KleinGguf,
+    /// FLUX.2 \[klein\] from a plain `.safetensors` checkpoint (no
+    /// `ComfyUI-GGUF` custom node needed): the same single Qwen3 encoder and
+    /// VAE, but sampled with a plain `KSampler` at CFG 1 plus a `FluxGuidance`
+    /// node -- FLUX.1's graph shape, not the GGUF recipe's `CFGGuider` chain.
+    /// Verified against a real exported ComfyUI workflow for this checkpoint
+    /// (see [`flux2_klein_txt2img_safetensors`]).
+    Flux2KleinSafetensors,
 }
 
 impl Recipe {
-    /// `family == "flux"` → [`Recipe::FluxGguf`]; `"flux2"` →
-    /// [`Recipe::Flux2KleinGguf`]; everything else is a single-file checkpoint.
-    pub fn for_family(family: Option<&str>) -> Self {
+    /// `family == "flux"` → [`Recipe::FluxGguf`]; `"flux2"` → the GGUF or
+    /// safetensors Klein recipe depending on `file_name`'s extension (both
+    /// share the same companion files, they just load the diffusion model
+    /// differently); everything else is a single-file checkpoint.
+    pub fn for_family(family: Option<&str>, file_name: &str) -> Self {
         match family {
             Some(f) if f.eq_ignore_ascii_case("flux") => Self::FluxGguf,
-            Some(f) if f.eq_ignore_ascii_case("flux2") => Self::Flux2KleinGguf,
+            Some(f) if f.eq_ignore_ascii_case("flux2") => {
+                if file_name.to_ascii_lowercase().ends_with(".gguf") {
+                    Self::Flux2KleinGguf
+                } else {
+                    Self::Flux2KleinSafetensors
+                }
+            }
             _ => Self::Checkpoint,
         }
     }
@@ -321,6 +336,78 @@ pub fn flux2_klein_txt2img(i: &Txt2ImgInputs, m: &Flux2KleinModels, loras: &[Lor
         }
     });
     apply_loras(&mut g, loras, ("12", 0), ("11", 0), "31", &["6"]);
+    g
+}
+
+/// FLUX.2 [klein] from a plain `.safetensors` checkpoint: `UNETLoader` (no
+/// custom node) + the same single-encoder `CLIPLoader` (`type: "flux2"`) +
+/// `VAELoader`. Same "no real negative prompt" behavior as the GGUF recipe
+/// (`ConditioningZeroOut`), but sampled FLUX.1-style: a `FluxGuidance` on the
+/// positive conditioning and a plain `KSampler` pinned to CFG 1, rather than
+/// `CFGGuider`/`SamplerCustomAdvanced`. Verified against a real exported
+/// ComfyUI workflow for `flux-2-klein-9b-fp8.safetensors`.
+pub fn flux2_klein_txt2img_safetensors(
+    i: &Txt2ImgInputs,
+    m: &Flux2KleinModels,
+    loras: &[LoraSpec],
+) -> Value {
+    // Same distillation as FLUX.1: the sampler runs at CFG 1 and the knob the
+    // user reaches for lives in FluxGuidance instead.
+    let guidance = i.cfg.clamp(1.0, 10.0);
+    let mut g = json!({
+        "12": {
+            "class_type": "UNETLoader",
+            "inputs": { "unet_name": m.unet, "weight_dtype": "default" }
+        },
+        "11": {
+            "class_type": "CLIPLoader",
+            "inputs": { "clip_name": m.clip, "type": "flux2" }
+        },
+        "10": {
+            "class_type": "VAELoader",
+            "inputs": { "vae_name": m.vae }
+        },
+        "6": {
+            "class_type": "CLIPTextEncode",
+            "inputs": { "text": i.positive, "clip": ["11", 0] }
+        },
+        "27": {
+            "class_type": "ConditioningZeroOut",
+            "inputs": { "conditioning": ["6", 0] }
+        },
+        "26": {
+            "class_type": "FluxGuidance",
+            "inputs": { "conditioning": ["6", 0], "guidance": guidance }
+        },
+        "32": {
+            "class_type": "EmptyFlux2LatentImage",
+            "inputs": { "width": i.width, "height": i.height, "batch_size": 1 }
+        },
+        "3": {
+            "class_type": "KSampler",
+            "inputs": {
+                "seed": i.seed,
+                "steps": i.steps,
+                "cfg": 1.0,
+                "sampler_name": i.sampler,
+                "scheduler": i.scheduler,
+                "denoise": 1.0,
+                "model": ["12", 0],
+                "positive": ["26", 0],
+                "negative": ["27", 0],
+                "latent_image": ["32", 0]
+            }
+        },
+        "8": {
+            "class_type": "VAEDecode",
+            "inputs": { "samples": ["3", 0], "vae": ["10", 0] }
+        },
+        "9": {
+            "class_type": "SaveImage",
+            "inputs": { "filename_prefix": i.filename_prefix, "images": ["8", 0] }
+        }
+    });
+    apply_loras(&mut g, loras, ("12", 0), ("11", 0), "3", &["6"]);
     g
 }
 
@@ -611,12 +698,38 @@ mod tests {
 
     #[test]
     fn recipe_selects_flux_for_the_family() {
-        assert_eq!(Recipe::for_family(Some("flux")), Recipe::FluxGguf);
-        assert_eq!(Recipe::for_family(Some("FLUX")), Recipe::FluxGguf);
-        assert_eq!(Recipe::for_family(Some("flux2")), Recipe::Flux2KleinGguf);
-        assert_eq!(Recipe::for_family(Some("FLUX2")), Recipe::Flux2KleinGguf);
-        assert_eq!(Recipe::for_family(Some("sdxl")), Recipe::Checkpoint);
-        assert_eq!(Recipe::for_family(None), Recipe::Checkpoint);
+        assert_eq!(
+            Recipe::for_family(Some("flux"), "flux1-dev-Q8_0.gguf"),
+            Recipe::FluxGguf
+        );
+        assert_eq!(
+            Recipe::for_family(Some("FLUX"), "flux1-dev.safetensors"),
+            Recipe::FluxGguf
+        );
+        assert_eq!(
+            Recipe::for_family(Some("sdxl"), "sd_xl_base_1.0.safetensors"),
+            Recipe::Checkpoint
+        );
+        assert_eq!(
+            Recipe::for_family(None, "x.safetensors"),
+            Recipe::Checkpoint
+        );
+    }
+
+    #[test]
+    fn recipe_picks_the_flux2_klein_variant_by_file_extension() {
+        assert_eq!(
+            Recipe::for_family(Some("flux2"), "flux-2-klein-9b-Q4_K_M.gguf"),
+            Recipe::Flux2KleinGguf
+        );
+        assert_eq!(
+            Recipe::for_family(Some("FLUX2"), "flux-2-klein-9b-Q4_K_M.GGUF"),
+            Recipe::Flux2KleinGguf
+        );
+        assert_eq!(
+            Recipe::for_family(Some("flux2"), "flux-2-klein-9b-fp8mixed.safetensors"),
+            Recipe::Flux2KleinSafetensors
+        );
     }
 
     #[test]
@@ -770,6 +883,85 @@ mod tests {
             g["31"]["inputs"]["model"],
             json!(["90", 0]),
             "CFGGuider reads the lora'd model"
+        );
+        assert_eq!(
+            g["6"]["inputs"]["clip"],
+            json!(["90", 1]),
+            "CLIPTextEncode reads the lora'd clip"
+        );
+    }
+
+    #[test]
+    fn flux2_klein_safetensors_graph_uses_a_plain_ksampler_and_flux_guidance() {
+        let g = flux2_klein_txt2img_safetensors(
+            &inputs(),
+            &Flux2KleinModels {
+                unet: "flux-2-klein-9b-fp8mixed.safetensors",
+                clip: "qwen_3_8b_fp8mixed.safetensors",
+                vae: "flux2-vae.safetensors",
+            },
+            &[],
+        );
+        assert_eq!(g["12"]["class_type"], "UNETLoader");
+        assert_eq!(
+            g["12"]["inputs"]["unet_name"],
+            "flux-2-klein-9b-fp8mixed.safetensors"
+        );
+        assert_eq!(g["11"]["class_type"], "CLIPLoader");
+        assert_eq!(g["11"]["inputs"]["type"], "flux2");
+        assert_eq!(g["10"]["inputs"]["vae_name"], "flux2-vae.safetensors");
+        // No real negative prompt, same as the GGUF recipe.
+        assert_eq!(g["27"]["class_type"], "ConditioningZeroOut");
+        assert_eq!(g["27"]["inputs"]["conditioning"], json!(["6", 0]));
+        assert_eq!(g["26"]["class_type"], "FluxGuidance");
+        assert_eq!(g["26"]["inputs"]["guidance"], 7.0);
+        assert_eq!(g["3"]["class_type"], "KSampler");
+        assert_eq!(g["3"]["inputs"]["cfg"], 1.0, "runs at CFG 1, like FLUX.1");
+        assert_eq!(g["3"]["inputs"]["model"], json!(["12", 0]));
+        assert_eq!(g["3"]["inputs"]["positive"], json!(["26", 0]));
+        assert_eq!(g["3"]["inputs"]["negative"], json!(["27", 0]));
+        assert_eq!(g["3"]["inputs"]["latent_image"], json!(["32", 0]));
+        assert_eq!(g["32"]["class_type"], "EmptyFlux2LatentImage");
+        assert_eq!(g["8"]["inputs"]["vae"], json!(["10", 0]));
+        assert_eq!(g["9"]["inputs"]["filename_prefix"], "job-abc");
+    }
+
+    #[test]
+    fn flux2_klein_safetensors_guidance_is_clamped() {
+        let mut i = inputs();
+        i.cfg = 42.0;
+        let g = flux2_klein_txt2img_safetensors(
+            &i,
+            &Flux2KleinModels {
+                unet: "u",
+                clip: "c",
+                vae: "v",
+            },
+            &[],
+        );
+        assert_eq!(g["26"]["inputs"]["guidance"], 10.0);
+    }
+
+    #[test]
+    fn flux2_klein_safetensors_graph_splices_a_lora_before_the_sampler_and_encode() {
+        let g = flux2_klein_txt2img_safetensors(
+            &inputs(),
+            &Flux2KleinModels {
+                unet: "u",
+                clip: "c",
+                vae: "v",
+            },
+            &[LoraSpec {
+                file: "flux2-realistic-detail.safetensors",
+                strength: 0.8,
+            }],
+        );
+        assert_eq!(g["90"]["inputs"]["model"], json!(["12", 0]));
+        assert_eq!(g["90"]["inputs"]["clip"], json!(["11", 0]));
+        assert_eq!(
+            g["3"]["inputs"]["model"],
+            json!(["90", 0]),
+            "KSampler reads the lora'd model"
         );
         assert_eq!(
             g["6"]["inputs"]["clip"],

@@ -253,8 +253,10 @@ fn stalest(a: Freshness, b: Freshness) -> Freshness {
 }
 
 /// Rough VRAM estimate for a remote model from its param count + precision, run
-/// through [`compat::verdict`].
-fn fit_of(m: &RemoteModel, ctx: u32, budget_mb: u64, free_ram_mb: u64) -> FitVerdict {
+/// through [`compat::verdict`]. `pub(crate)` — also used by `crate::recommend`,
+/// which shares the same "does this fit?" question for a freshly-searched
+/// candidate.
+pub(crate) fn fit_of(m: &RemoteModel, ctx: u32, budget_mb: u64, free_ram_mb: u64) -> FitVerdict {
     let Some(params) = m.param_count.filter(|p| *p > 0) else {
         return FitVerdict::Unknown;
     };

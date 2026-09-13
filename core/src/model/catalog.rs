@@ -194,6 +194,26 @@ pub const KNOWN_MODELS: &[KnownModel] = &[
         media: "image",
     },
     KnownModel {
+        id: "flux2-klein-9b-fp8",
+        name: "FLUX.2 [klein] 9B — fp8 (safetensors)",
+        kind: "diffusion_model",
+        family: Some("flux2"),
+        publisher: "Black Forest Labs (community fp8 repack)",
+        repo: "silveroxides/FLUX.2-dev-fp8_scaled",
+        file: "flux-2-klein-9b-fp8mixed.safetensors",
+        url: "https://huggingface.co/silveroxides/FLUX.2-dev-fp8_scaled/resolve/main/flux-2-klein-9b-fp8mixed.safetensors",
+        sha256: "55c1ef1fc05e9e855f22b063cbb9d67a955e53c85715a2ec0c475addb0f41850",
+        size_bytes: 9_433_065_776,
+        license: "FLUX.2 [dev] Non-Commercial License",
+        note: "Same model as the Q8 GGUF above, but a plain .safetensors file — no \
+               ComfyUI-GGUF custom node needed, just ComfyUI's built-in loader. The \
+               official Black Forest Labs repo hosting this file is access-gated (needs \
+               an HF login + license click-through); this community repack isn't. Needs \
+               the same encoder + VAE below.",
+        is_default: false,
+        media: "image",
+    },
+    KnownModel {
         id: "qwen3-8b-flux2-encoder",
         name: "Qwen3-8B — fp8 mixed (FLUX.2 text encoder)",
         kind: "text_encoder",
@@ -367,6 +387,16 @@ pub const MODEL_STACKS: &[ModelStack] = &[
         note: "Fast (sub-second at 4 steps), fits a 16 GB card. Three files: the \
                diffusion model, its Qwen3 text encoder, and its VAE. The realistic-detail \
                LoRA is a separate, optional download from the Discover tab.",
+        is_default: false,
+    },
+    ModelStack {
+        id: "flux2-klein-safetensors",
+        label: "FLUX.2 [klein] 9B (safetensors)",
+        media: "image",
+        member_ids: &["flux2-klein-9b-fp8", "qwen3-8b-flux2-encoder", "flux2-vae"],
+        note: "Same model as the GGUF stack above, as a plain .safetensors file instead \
+               — no ComfyUI-GGUF custom node required. Three files: the diffusion model, \
+               its Qwen3 text encoder, and its VAE.",
         is_default: false,
     },
     ModelStack {

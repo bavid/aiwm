@@ -639,6 +639,62 @@
   }
 }
 
+/* --- recommend (tag/vibe model search) --- */
+
+.recommend__form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin: var(--space-2) 0 var(--space-3);
+}
+
+.recommend__query {
+  flex: 1;
+  min-width: 16rem;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: var(--text-sm);
+}
+
+.recommend__form select {
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: var(--text-sm);
+}
+
+.recommend__query:focus-visible,
+.recommend__form select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.recommend__form button {
+  padding: var(--space-2) var(--space-4);
+  border: none;
+  border-radius: var(--radius-sm);
+  background: var(--accent);
+  color: var(--accent-fg);
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+
+.recommend__form button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.recommend__why {
+  margin: var(--space-1) 0;
+  font-size: var(--text-sm);
+}
+
 /* --- discover (6.2) --- */
 
 .discover__controls {
@@ -737,6 +793,19 @@
 .discover__meta {
   font-size: var(--text-xs);
   color: var(--muted);
+}
+
+.discover__tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  margin-top: var(--space-1);
+}
+
+.discover__tags .chip {
+  padding: 1px var(--space-2);
+  font-size: var(--text-xs);
+  cursor: default;
 }
 
 .badge--warn {

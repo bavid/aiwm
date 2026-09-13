@@ -30,7 +30,7 @@ use crate::registry::Registry;
 use crate::runtime::{ColibriAdapter, ComfyUiAdapter, LlamaCppAdapter, RuntimeRegistry};
 use crate::scheduler::{Decision, PlanRequest, Scheduler};
 use crate::telemetry::{GpuStatus, SystemTelemetry};
-use crate::{upgrade, CoreError, Database, Result};
+use crate::{recommend, upgrade, CoreError, Database, Result};
 
 const CANCEL_REASON: &str = "cancelled by user";
 /// Runtime ids the engine wires capability bodies to.
@@ -321,6 +321,27 @@ impl JobEngine {
                 })?;
             return self.llm_target(job, model, "reasoning with").await;
         }
+        if job.job_type == "recommend" {
+            // An explicit `reasoner_model_id` (the user picked which local model
+            // reasons about the search) wins; otherwise the same chat-or-coding
+            // fallback as the upgrade check.
+            let explicit = job
+                .params
+                .get("reasoner_model_id")
+                .and_then(serde_json::Value::as_str);
+            let model = match explicit {
+                Some(id) => self.require_model(id).await?,
+                None => self
+                    .pick_llm("chat", Some("coding"))
+                    .await?
+                    .ok_or_else(|| CoreError::Runtime {
+                        runtime: "llamacpp".into(),
+                        message: "no chat or coding model — import a .gguf to get recommendations"
+                            .into(),
+                    })?,
+            };
+            return self.llm_target(job, model, "reasoning with").await;
+        }
         Err(CoreError::Runtime {
             runtime: "?".into(),
             message: format!("job {} has no runtime or model to run on", job.id),
@@ -409,6 +430,12 @@ impl JobEngine {
             is_llm,
             installed_ids,
         })
+    }
+
+    /// Pull the free-text query + [`recommend::MediaKind`] out of a
+    /// `recommend` job's params.
+    fn recommend_target(&self, job: &Job) -> Result<(String, recommend::MediaKind)> {
+        parse_recommend_params(&job.params)
     }
 
     /// Resolve an `image` / `video` job onto ComfyUI: an explicit model, or
@@ -915,6 +942,52 @@ impl JobEngine {
                     &format!("{} candidate(s) that fit", report.candidates.len()),
                 )
                 .await?;
+        } else if job.job_type == "recommend" {
+            if runtime_id != LLAMACPP {
+                return Err(CoreError::Runtime {
+                    runtime: runtime_id.clone(),
+                    message: "model recommendations reason with llama.cpp".into(),
+                });
+            }
+            let registry = self.model_index.clone().ok_or_else(|| {
+                CoreError::Config("model recommendations need the model registry".into())
+            })?;
+            let (query, kind) = self.recommend_target(&job)?;
+            let free_ram_mb = {
+                let t = self.telemetry.borrow();
+                t.host
+                    .ram_total_mb
+                    .saturating_sub(t.host.ram_used_mb.min(t.host.ram_total_mb))
+            };
+            self.db
+                .jobs()
+                .append_event(
+                    &job.id,
+                    EventLevel::Info,
+                    &format!("asking Hugging Face for: \u{201c}{query}\u{201d}"),
+                )
+                .await?;
+            let report = recommend::run(
+                &registry,
+                &*self.llama,
+                &query,
+                kind,
+                self.scheduler.budget_mb(),
+                free_ram_mb,
+            )
+            .await?;
+            let json = serde_json::to_string(&report)
+                .map_err(|e| CoreError::Db(format!("serialize recommend report: {e}")))?;
+            self.db.jobs().set_result(&job.id, &json).await?;
+            let _ = self.db.models().mark_used(&model_id).await;
+            self.db
+                .jobs()
+                .append_event(
+                    &job.id,
+                    EventLevel::Info,
+                    &format!("{} candidate(s) that fit", report.candidates.len()),
+                )
+                .await?;
         } else if job.job_type == "colibri" {
             if runtime_id != COLIBRI {
                 return Err(CoreError::Runtime {
@@ -1080,6 +1153,32 @@ fn hf_repo_from_url(url: &str) -> Option<String> {
     let owner = parts.next().filter(|s| !s.is_empty())?;
     let repo = parts.next().filter(|s| !s.is_empty())?;
     (parts.next() == Some("resolve")).then(|| format!("{owner}/{repo}"))
+}
+
+/// Pull the free-text query + [`recommend::MediaKind`] out of a `recommend`
+/// job's params (`{"query": "...", "kind": "chat"|"coding"|"image"|"video"|"lora"}`,
+/// `kind` defaulting to `"chat"`).
+fn parse_recommend_params(params: &serde_json::Value) -> Result<(String, recommend::MediaKind)> {
+    let query = params
+        .get("query")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|q| !q.is_empty())
+        .ok_or_else(|| CoreError::Config("recommend job has no `query`".into()))?
+        .to_string();
+    let kind = match params.get("kind").and_then(serde_json::Value::as_str) {
+        Some("chat") | None => recommend::MediaKind::Chat,
+        Some("coding") => recommend::MediaKind::Coding,
+        Some("image") => recommend::MediaKind::Image,
+        Some("video") => recommend::MediaKind::Video,
+        Some("lora") => recommend::MediaKind::Lora,
+        Some(other) => {
+            return Err(CoreError::Config(format!(
+                "unknown recommend kind {other:?}"
+            )));
+        }
+    };
+    Ok((query, kind))
 }
 
 /// VRAM (MB) to reserve for this specific image/video job. Starts from the
@@ -1517,5 +1616,39 @@ mod tests {
         let weights = 8_000.0 - sdxl_headroom;
         let expected = (weights + sdxl_headroom * MIN_HEADROOM_RATIO).round() as u64;
         assert_eq!(tiny, expected);
+    }
+
+    #[test]
+    fn parse_recommend_params_reads_query_and_kind() {
+        let (query, kind) = parse_recommend_params(&serde_json::json!({
+            "query": "  realistic uncensored nsfw  ",
+            "kind": "image",
+        }))
+        .unwrap();
+        assert_eq!(query, "realistic uncensored nsfw");
+        assert_eq!(kind, recommend::MediaKind::Image);
+    }
+
+    #[test]
+    fn parse_recommend_params_defaults_kind_to_chat() {
+        let (_, kind) =
+            parse_recommend_params(&serde_json::json!({ "query": "best coder" })).unwrap();
+        assert_eq!(kind, recommend::MediaKind::Chat);
+    }
+
+    #[test]
+    fn parse_recommend_params_rejects_a_blank_or_missing_query() {
+        assert!(parse_recommend_params(&serde_json::json!({})).is_err());
+        assert!(parse_recommend_params(&serde_json::json!({ "query": "   " })).is_err());
+    }
+
+    #[test]
+    fn parse_recommend_params_rejects_an_unknown_kind() {
+        let err = parse_recommend_params(&serde_json::json!({
+            "query": "x",
+            "kind": "spreadsheet",
+        }))
+        .unwrap_err();
+        assert!(err.to_string().contains("spreadsheet"));
     }
 }

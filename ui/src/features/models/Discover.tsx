@@ -11,6 +11,7 @@ import {
   type RemoteModel,
 } from "../../lib/ipc";
 import { useRegistrySearch } from "../../lib/hooks";
+import { filterDisplayTags } from "../../lib/tags";
 
 const RECENT_KEY = "aiwm.discover.recent";
 
@@ -196,6 +197,7 @@ function ResultCard({ model, onUseType }: { model: RemoteModel; onUseType: (t: M
             quant of <code>{model.base_model}</code>
           </div>
         )}
+        <DiscoverTags tags={model.tags} />
 
         {open && (
           <div className="discover__files">
@@ -227,6 +229,24 @@ function ResultCard({ model, onUseType }: { model: RemoteModel; onUseType: (t: M
         </button>
       </div>
     </li>
+  );
+}
+
+/** Hugging Face's own tags for this repo (content descriptors like `nsfw`,
+ *  `uncensored`, `roleplay` -- infra noise like `pytorch` or `license:...`
+ *  already filtered out), not the local, user-editable tags on the Model
+ *  Library table -- those only exist once something is imported. */
+function DiscoverTags({ tags }: { tags: string[] }) {
+  const shown = filterDisplayTags(tags);
+  if (shown.length === 0) return null;
+  return (
+    <div className="discover__tags">
+      {shown.map((t) => (
+        <span key={t} className="chip">
+          {t}
+        </span>
+      ))}
+    </div>
   );
 }
 

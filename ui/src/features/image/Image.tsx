@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { LoraPicker } from "../../components/LoraPicker";
 import { NumField } from "../../components/NumField";
+import { PromptAssistant } from "../../components/PromptAssistant";
+import { PromptPresetPicker } from "../../components/PromptPresetPicker";
 import { QueueList } from "../../components/QueueList";
 import { SessionSwitcher } from "../../components/SessionSwitcher";
 import { VramEstimateHint } from "../../components/VramEstimateHint";
@@ -177,6 +179,11 @@ export function ImageStudio() {
     });
   };
 
+  const appendPrompt = (text: string) =>
+    setPrompt((p) => (p.trim() ? `${p.trim()}, ${text}` : text));
+  const appendNegative = (text: string) =>
+    setNegative((n) => (n.trim() ? `${n.trim()}, ${text}` : text));
+
   const handleDelete = async (id: string) => {
     try {
       await deleteJob(id);
@@ -201,6 +208,13 @@ export function ImageStudio() {
           )}
         </header>
         <SessionSwitcher capability="image" activeId={sessionId} onChange={setSessionId} />
+
+        <PromptAssistant
+          kind="image"
+          sessionId={sessionId}
+          onApplyPrompt={appendPrompt}
+          onApplyNegative={appendNegative}
+        />
 
 
         {!comfyReady && (
@@ -231,6 +245,7 @@ export function ImageStudio() {
               placeholder="a red fox in the snow, cinematic lighting, highly detailed"
             />
           </label>
+          <PromptPresetPicker kind="positive" onApply={appendPrompt} />
 
           <label className="imgform__field">
             <span>Negative prompt</span>
@@ -242,6 +257,7 @@ export function ImageStudio() {
               placeholder="blurry, low quality, watermark"
             />
           </label>
+          <PromptPresetPicker kind="negative" onApply={appendNegative} />
 
           <div className="imgform__presets">
             {PRESETS.map((p) => (

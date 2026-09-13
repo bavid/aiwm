@@ -30,6 +30,7 @@ import {
 import { ColibriPanel } from "./ColibriPanel";
 import { Discover, FileRow } from "./Discover";
 import { Downloads } from "./Downloads";
+import { Recommend } from "./Recommend";
 import { DeleteButton, StoragePanel } from "./StoragePanel";
 import { UpgradeChecks } from "./UpgradeChecks";
 import "./models.css";
@@ -115,6 +116,8 @@ export function Models() {
       <StoragePanel />
 
       <ColibriPanel />
+
+      <Recommend />
 
       <Discover onUseType={useType} />
     </div>

@@ -857,6 +857,35 @@ export const registrySearch = (params: RegistrySearchParams) =>
 export const registryModel = (id: string) =>
   invoke<RegistryDetails>("registry_model", { id });
 
+// --- tag/vibe model recommendations (core::recommend) ---
+// No dedicated IPC call: a recommendation is a `job_type: "recommend"` job,
+// submitted and polled through the same `submitJob`/`jobDetail` every other
+// job uses. `job.result` (once `completed`) is this `RecommendReport`,
+// JSON-encoded.
+
+export type RecommendKind = "chat" | "coding" | "image" | "video" | "lora";
+
+export interface RecommendCandidate {
+  id: string;
+  why: string;
+  downloads: number;
+  likes: number;
+  last_modified: string | null;
+  param_count: number | null;
+  format: "gguf" | "safetensors" | "other";
+  gated: boolean;
+  tags: string[];
+  fit: FitVerdict;
+  llm_ranked: boolean;
+}
+
+export interface RecommendReport {
+  query: string;
+  candidates: RecommendCandidate[];
+  note: string;
+  freshness: Freshness;
+}
+
 // --- download manager (Phase 6.4) ---
 
 export type DownloadState =

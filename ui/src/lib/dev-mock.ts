@@ -148,6 +148,75 @@ function progressBenchJobs(): void {
   }
 }
 
+/** Flip a running `chat`/`colibri` job to `completed` with a canned reply a
+ *  moment in -- the dev-mock stand-in for a real llama.cpp answer. Recognizes
+ *  the Prompt Assistant's own transcript format (see `buildTranscriptPrompt`)
+ *  and answers with a PROMPT:/NEGATIVE: suggestion so that flow can be
+ *  eyeballed here too, not just a real chat message. */
+function progressChatJobs(): void {
+  for (const j of JOBS) {
+    if (!["chat", "colibri"].includes(String(j.job_type)) || j.state !== "running") continue;
+    const started = Date.parse(String(j.started_at ?? j.created_at));
+    const elapsed = Date.now() - started;
+    const prompt = String((j.params as AnyRecord)?.prompt ?? "");
+    const isAssistant = /prompt-writing assistant/i.test(prompt);
+    if (elapsed < 1200) {
+      j.result = isAssistant ? "Thinking about a good prompt…" : "…";
+      continue;
+    }
+    j.state = "completed";
+    j.finished_at = now();
+    j.result = isAssistant
+      ? "Got it — that's enough to work with.\n\nPROMPT: a moody portrait of an old lighthouse keeper, dramatic side lighting, weathered skin, oil painting texture\nNEGATIVE: blurry, cartoon, low detail"
+      : "This is a mocked reply — dev-mock has no real model attached.";
+  }
+}
+
+/** Flip a running `recommend` job to `completed` with a canned report. */
+function progressRecommendJobs(): void {
+  for (const j of JOBS) {
+    if (j.job_type !== "recommend" || j.state !== "running") continue;
+    const started = Date.parse(String(j.started_at ?? j.created_at));
+    if (Date.now() - started < 1200) continue;
+    const query = String((j.params as AnyRecord)?.query ?? "");
+    j.state = "completed";
+    j.finished_at = now();
+    j.result = JSON.stringify({
+      query,
+      note: "Ranked by your local model against what you described. Quality and content claims (e.g. “uncensored”) are the publisher's own — not locally verified.",
+      freshness: { kind: "live" },
+      candidates: [
+        {
+          id: "ArliAI/GLM-4.6-Derestricted-v3",
+          why: "tagged uncensored and roleplay, matches the ask, active community",
+          downloads: 18_442,
+          likes: 214,
+          last_modified: "2026-05-02",
+          param_count: 106_000_000_000,
+          format: "gguf",
+          gated: false,
+          tags: ["uncensored", "roleplay", "not-for-all-audiences"],
+          fit: { level: "yellow", reason: "needs offloading to system RAM — tight on 16 GB" },
+          llm_ranked: true,
+        },
+        {
+          id: "SicariusSicariiStuff/Assistant_Pepe_32B",
+          why: "smaller, uncensored, fits comfortably",
+          downloads: 6_120,
+          likes: 91,
+          last_modified: "2026-03-11",
+          param_count: 32_000_000_000,
+          format: "gguf",
+          gated: false,
+          tags: ["uncensored", "chat"],
+          fit: { level: "green" },
+          llm_ranked: true,
+        },
+      ],
+    });
+  }
+}
+
 /** Flip a running `upgrade_check` job to `completed` with a canned report. */
 function progressUpgradeJobs(): void {
   for (const j of JOBS) {
@@ -199,7 +268,7 @@ const DISCOVER_MODELS: AnyRecord[] = [
     id: "Qwen/Qwen2.5-Coder-7B-Instruct-GGUF", author: "Qwen", downloads: 1_780_676, likes: 436,
     trending_score: 12, created_at: now(), last_modified: now(), pipeline_tag: "text-generation",
     library_name: "transformers", gated: "no", license: "apache-2.0",
-    base_model: "Qwen/Qwen2.5-Coder-7B-Instruct", tags: ["gguf", "code"],
+    base_model: "Qwen/Qwen2.5-Coder-7B-Instruct", tags: ["gguf", "code", "text-generation-inference"],
     param_count: 7_615_616_512, arch: "qwen2", ctx_max: 131_072, precision: null, format: "gguf",
   },
   {
@@ -208,6 +277,13 @@ const DISCOVER_MODELS: AnyRecord[] = [
     library_name: null, gated: "no", license: "apache-2.0",
     base_model: "Qwen/Qwen2.5-Coder-14B-Instruct", tags: ["gguf"],
     param_count: 14_770_000_000, arch: "qwen2", ctx_max: 131_072, precision: null, format: "gguf",
+  },
+  {
+    id: "ArliAI/GLM-4.6-Derestricted-v3", author: "ArliAI", downloads: 18_442, likes: 214,
+    trending_score: 9, created_at: now(), last_modified: now(), pipeline_tag: "text-generation",
+    library_name: null, gated: "no", license: "mit",
+    base_model: "zai-org/GLM-4.6", tags: ["gguf", "uncensored", "roleplay", "not-for-all-audiences"],
+    param_count: 106_000_000_000, arch: "glm4", ctx_max: 131_072, precision: null, format: "gguf",
   },
 ];
 
@@ -464,6 +540,8 @@ export function installDevMock(): void {
       case "list_jobs":
         progressBenchJobs();
         progressUpgradeJobs();
+        progressChatJobs();
+        progressRecommendJobs();
         // Fresh array — `usePolled` needs a changed reference to re-render.
         return JOBS.map((j) => ({ ...j }));
       case "get_config":
@@ -491,6 +569,7 @@ export function installDevMock(): void {
           image: "m-sdxl",
           chat: "m-qwen",
           colibri: "m-qwen",
+          recommend: "m-qwen",
         };
         const job = mkJob(`j-dev-${seq++}`, jobType, "running", {
           params: body.params ?? {},

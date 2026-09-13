@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
+import { ChatSessionSidebar } from "../../components/ChatSessionSidebar";
 import { CompareModels } from "../../components/CompareModels";
-import { SessionSwitcher } from "../../components/SessionSwitcher";
 import { useAbout, useDocuments, useJobs, useModels, useRuntimes } from "../../lib/hooks";
 import {
   attachDocument,
@@ -284,88 +284,90 @@ export function Chat() {
   };
 
   return (
-    <div className="chat">
-      <div className="chat__head">
-        <select
-          className="chat__model"
-          value={modelId}
-          onChange={(e) => setModelId(e.target.value)}
-          title="Which model answers"
-        >
-          <option value="auto">Auto (most-recently-used)</option>
-          {chatModels.map((m) => (
-            <option key={m.id} value={m.id}>
-              {m.name}
-            </option>
-          ))}
-        </select>
-        <SessionSwitcher capability="chat" activeId={sessionId} onChange={setSessionId} />
-        {chatModels.length >= 2 && (
-          <button
-            type="button"
-            className="chat__compare"
-            onClick={() => setCompareOpen(true)}
-            title="Send one prompt to two models at once"
+    <div className="chat-page">
+      <ChatSessionSidebar activeId={sessionId} onChange={setSessionId} />
+      <div className="chat">
+        <div className="chat__head">
+          <select
+            className="chat__model"
+            value={modelId}
+            onChange={(e) => setModelId(e.target.value)}
+            title="Which model answers"
           >
-            Compare models
-          </button>
-        )}
-      </div>
-      <CompareModels open={compareOpen} onClose={() => setCompareOpen(false)} chatModels={chatModels} />
-      <DocumentsBar sessionId={sessionId} />
-      <div className="chat__log" ref={logRef}>
-        {turns.length === 0 && (
-          <div className="chat__empty">
-            <p>Ask anything. A chat model is picked automatically.</p>
-            <p className="muted">
-              Try <code>/image a bay at dawn</code> or <code>/video a paper boat in the rain</code>{" "}
-              to generate media without leaving the conversation.
-            </p>
-            {!llamaReady && (
-              <p className="muted">llama.cpp is not set up yet — open Diagnostics to install it.</p>
-            )}
-            {llamaReady && models && !hasChatModel && (
+            <option value="auto">Auto (most-recently-used)</option>
+            {chatModels.map((m) => (
+              <option key={m.id} value={m.id}>
+                {m.name}
+              </option>
+            ))}
+          </select>
+          {chatModels.length >= 2 && (
+            <button
+              type="button"
+              className="chat__compare"
+              onClick={() => setCompareOpen(true)}
+              title="Send one prompt to two models at once"
+            >
+              Compare models
+            </button>
+          )}
+        </div>
+        <CompareModels open={compareOpen} onClose={() => setCompareOpen(false)} chatModels={chatModels} />
+        <DocumentsBar sessionId={sessionId} />
+        <div className="chat__log" ref={logRef}>
+          {turns.length === 0 && (
+            <div className="chat__empty">
+              <p>Ask anything. A chat model is picked automatically.</p>
               <p className="muted">
-                No model has the “chat” role — import a .gguf on the Models tab.
+                Try <code>/image a bay at dawn</code> or <code>/video a paper boat in the rain</code>{" "}
+                to generate media without leaving the conversation.
               </p>
-            )}
-          </div>
-        )}
-        {turns.map((t) => (
-          <ChatTurn
-            key={t.jobId}
-            turn={t}
-            port={about?.core_api_port ?? null}
-            onCancel={() => cancelJob(t.jobId)}
-            onDelete={() => handleDeleteTurn(t.jobId)}
-          />
-        ))}
-      </div>
+              {!llamaReady && (
+                <p className="muted">llama.cpp is not set up yet — open Diagnostics to install it.</p>
+              )}
+              {llamaReady && models && !hasChatModel && (
+                <p className="muted">
+                  No model has the “chat” role — import a .gguf on the Models tab.
+                </p>
+              )}
+            </div>
+          )}
+          {turns.map((t) => (
+            <ChatTurn
+              key={t.jobId}
+              turn={t}
+              port={about?.core_api_port ?? null}
+              onCancel={() => cancelJob(t.jobId)}
+              onDelete={() => handleDeleteTurn(t.jobId)}
+            />
+          ))}
+        </div>
 
-      <form
-        className="chat__composer"
-        onSubmit={(e) => {
-          e.preventDefault();
-          send();
-        }}
-      >
-        <textarea
-          value={prompt}
-          onChange={(e) => setPrompt(e.target.value)}
-          onKeyDown={onKeyDown}
-          rows={2}
-          spellCheck
-          placeholder={
-            pendingId && !stuck
-              ? "Waiting for the answer…"
-              : "Message, or /image · /video a prompt — Enter to send, Shift+Enter for a newline"
-          }
-        />
-        <button type="submit" disabled={!prompt.trim() || (!!pendingId && !stuck)}>
-          {pendingId && !stuck ? "…" : "Send"}
-        </button>
-      </form>
-      {sendError && <p className="chat__err">{sendError}</p>}
+        <form
+          className="chat__composer"
+          onSubmit={(e) => {
+            e.preventDefault();
+            send();
+          }}
+        >
+          <textarea
+            value={prompt}
+            onChange={(e) => setPrompt(e.target.value)}
+            onKeyDown={onKeyDown}
+            rows={2}
+            spellCheck
+            placeholder={
+              pendingId && !stuck
+                ? "Waiting for the answer…"
+                : "Message, or /image · /video a prompt — Enter to send, Shift+Enter for a newline"
+            }
+          />
+          <button type="submit" disabled={!prompt.trim() || (!!pendingId && !stuck)}>
+            {pendingId && !stuck ? "…" : "Send"}
+          </button>
+        </form>
+        {sendError && <p className="chat__err">{sendError}</p>}
+      </div>
     </div>
   );
 }

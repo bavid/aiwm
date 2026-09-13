@@ -1,7 +1,8 @@
 .settings {
-  display: grid;
+  display: flex;
+  flex-direction: column;
   gap: var(--space-4);
-  max-width: 680px;
+  max-width: 920px;
   margin: 0 auto;
   padding-bottom: calc(var(--space-6) * 2);
 }
@@ -9,6 +10,53 @@
 .settings__head h1 {
   font-size: var(--text-xl);
   margin-bottom: var(--space-1);
+}
+
+.settings-body {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-5);
+}
+
+.settings-nav {
+  flex: none;
+  width: 180px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  position: sticky;
+  top: 0;
+}
+
+.settings-nav__item {
+  padding: var(--space-2) var(--space-3);
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: var(--text-sm);
+  text-align: left;
+  cursor: pointer;
+}
+
+.settings-nav__item:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.settings-nav__item--active {
+  background: color-mix(in oklab, var(--accent) 12%, transparent);
+  color: var(--text);
+  font-weight: 600;
+}
+
+.settings-sections {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: var(--space-4);
+  max-width: 680px;
 }
 
 .settings__head code,

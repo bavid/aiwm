@@ -162,7 +162,7 @@ pub async fn run(
     cancel: watch::Receiver<bool>,
 ) -> Result<ImageOutcome> {
     let model_file = file_name(&model.file_path)?;
-    let recipe = Recipe::for_family(model.family.as_deref());
+    let recipe = Recipe::for_family(model.family.as_deref(), model_file);
     let resolved_loras = resolve_loras(db, &req.loras).await?;
     if !resolved_loras.is_empty() {
         let summary = resolved_loras
@@ -191,7 +191,7 @@ pub async fn run(
                 req.width,
                 req.height,
                 req.steps,
-                if recipe == Recipe::FluxGguf {
+                if matches!(recipe, Recipe::FluxGguf | Recipe::Flux2KleinSafetensors) {
                     "guidance"
                 } else {
                     "cfg"
@@ -250,6 +250,25 @@ pub async fn run(
                 )
                 .await?;
             pipeline::flux2_klein_txt2img(
+                &inputs,
+                &Flux2KleinModels {
+                    unet: model_file,
+                    clip: &c.clip,
+                    vae: &c.vae,
+                },
+                &lora_specs,
+            )
+        }
+        Recipe::Flux2KleinSafetensors => {
+            let c = resolve_flux2_klein_companions(db).await?;
+            db.jobs()
+                .append_event(
+                    job_id,
+                    EventLevel::Info,
+                    &format!("FLUX.2 — text encoder “{}”, VAE “{}”", c.clip, c.vae),
+                )
+                .await?;
+            pipeline::flux2_klein_txt2img_safetensors(
                 &inputs,
                 &Flux2KleinModels {
                     unet: model_file,

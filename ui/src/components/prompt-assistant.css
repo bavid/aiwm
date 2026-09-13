@@ -1,0 +1,129 @@
+.prompt-assistant {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+
+.prompt-assistant__toggle {
+  display: block;
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: var(--text-sm);
+  text-align: left;
+  cursor: pointer;
+}
+
+.prompt-assistant__toggle:hover {
+  color: var(--accent);
+}
+
+.prompt-assistant__panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: 0 var(--space-3) var(--space-3);
+}
+
+.prompt-assistant__head {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.prompt-assistant__head select {
+  flex: 1;
+  min-width: 0;
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  font-size: var(--text-sm);
+}
+
+.prompt-assistant__log {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  max-height: 260px;
+  overflow-y: auto;
+  padding: var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+
+.prompt-assistant__bubble {
+  max-width: 90%;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-sm);
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+}
+
+.prompt-assistant__bubble p {
+  margin: 0;
+}
+
+.prompt-assistant__bubble--user {
+  align-self: flex-end;
+  background: color-mix(in oklab, var(--accent) 16%, var(--surface-2));
+}
+
+.prompt-assistant__bubble--assistant {
+  align-self: flex-start;
+  background: var(--surface-2);
+}
+
+.prompt-assistant__suggestion {
+  display: flex;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+.prompt-assistant__err {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--load-crit);
+}
+
+.prompt-assistant__composer {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.prompt-assistant__composer input {
+  flex: 1;
+  min-width: 0;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--text-sm);
+}
+
+.prompt-assistant__composer input:focus-visible {
+  outline: 2px solid var(--accent);
+}
+
+.prompt-assistant__composer button {
+  flex: none;
+  padding: var(--space-2) var(--space-4);
+  border: none;
+  border-radius: var(--radius-sm);
+  background: var(--accent);
+  color: var(--accent-fg);
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+
+.prompt-assistant__composer button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}

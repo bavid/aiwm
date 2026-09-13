@@ -16,7 +16,17 @@ import {
 } from "../../lib/ipc";
 import { getTheme, setTheme, type Theme } from "../../lib/theme";
 import { BackupCard } from "./BackupCard";
+import { SettingsNav, type SettingsSection } from "./SettingsNav";
 import "./settings.css";
+
+const SECTIONS: SettingsSection[] = [
+  { id: "general", label: "General" },
+  { id: "storage", label: "Storage & data" },
+  { id: "performance", label: "Performance" },
+  { id: "runtimes", label: "Runtimes" },
+  { id: "network", label: "Network & API" },
+  { id: "backup", label: "Backup" },
+];
 
 const gb = (bytes: number) => `${(bytes / 1024 ** 3).toFixed(2)} GB`;
 
@@ -81,6 +91,7 @@ export function Settings() {
   const [loaded, setLoaded] = useState<Form | null>(null);
   const [form, setForm] = useState<Form | null>(null);
   const [theme, setThemeValue] = useState<Theme>(getTheme());
+  const [section, setSection] = useState<string>(SECTIONS[0].id);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [status, setStatus] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
@@ -158,322 +169,345 @@ export function Settings() {
         </p>
       </header>
 
-      <section className="card set-group">
-        <header className="card__head">
-          <h2>Appearance</h2>
-          <span className="card__sub">applies instantly</span>
-        </header>
-        <div className="segmented" role="radiogroup" aria-label="Theme">
-          {THEME_OPTIONS.map((o) => (
-            <button
-              key={o.value}
-              type="button"
-              role="radio"
-              aria-checked={theme === o.value}
-              className="segmented__opt"
-              onClick={() => chooseTheme(o.value)}
-            >
-              {o.label}
-            </button>
-          ))}
+      <div className="settings-body">
+        <SettingsNav sections={SECTIONS} activeId={section} onChange={setSection} />
+        <div className="settings-sections">
+          {section === "general" && (
+            <section className="card set-group">
+              <header className="card__head">
+                <h2>Appearance</h2>
+                <span className="card__sub">applies instantly</span>
+              </header>
+              <div className="segmented" role="radiogroup" aria-label="Theme">
+                {THEME_OPTIONS.map((o) => (
+                  <button
+                    key={o.value}
+                    type="button"
+                    role="radio"
+                    aria-checked={theme === o.value}
+                    className="segmented__opt"
+                    onClick={() => chooseTheme(o.value)}
+                  >
+                    {o.label}
+                  </button>
+                ))}
+              </div>
+            </section>
+          )}
+
+          {section === "storage" && (
+            <>
+              <section className="card set-group">
+                <header className="card__head">
+                  <h2>Model store</h2>
+                  <span className="card__sub">restart to apply</span>
+                </header>
+                <label className="set-field">
+                  <span>Canonical directory for imported models</span>
+                  <input
+                    type="text"
+                    value={form.store_path}
+                    spellCheck={false}
+                    onChange={(e) => patch({ store_path: e.target.value })}
+                  />
+                </label>
+              </section>
+
+              <section className="card set-group">
+                <header className="card__head">
+                  <h2>Data locations</h2>
+                  <span className="card__sub">restart to apply</span>
+                </header>
+                <p className="muted">
+                  By default AIWM is portable — everything lives next to the app, wherever
+                  that is (no <code>%APPDATA%</code>). Leave a field blank to use that
+                  default; set one to move just that folder elsewhere (e.g. a faster or
+                  roomier drive).
+                </p>
+                <label className="set-field">
+                  <span>
+                    Generated images / video — grows over time
+                    {about ? ` · currently ${about.outputs_dir}` : ""}
+                  </span>
+                  <input
+                    type="text"
+                    value={form.paths.outputs_path}
+                    placeholder="leave blank for the default"
+                    spellCheck={false}
+                    onChange={(e) => patchPaths({ outputs_path: e.target.value })}
+                  />
+                </label>
+                <label className="set-field">
+                  <span>
+                    Managed runtime installs (llama.cpp, ComfyUI) — several GB
+                    {about ? ` · currently ${about.runtimes_dir}` : ""}
+                  </span>
+                  <input
+                    type="text"
+                    value={form.paths.runtimes_path}
+                    placeholder="leave blank for the default"
+                    spellCheck={false}
+                    onChange={(e) => patchPaths({ runtimes_path: e.target.value })}
+                  />
+                </label>
+                <label className="set-field">
+                  <span>
+                    Registry cache — disposable, safe to delete
+                    {about ? ` · currently ${about.cache_dir}` : ""}
+                  </span>
+                  <input
+                    type="text"
+                    value={form.paths.cache_path}
+                    placeholder="leave blank for the default"
+                    spellCheck={false}
+                    onChange={(e) => patchPaths({ cache_path: e.target.value })}
+                  />
+                </label>
+              </section>
+
+              <section className="card set-group">
+                <header className="card__head">
+                  <h2>Generated media</h2>
+                  <span className="card__sub">read-only</span>
+                </header>
+                <dl className="set-kv">
+                  <dt>Folder</dt>
+                  <dd>{about?.outputs_dir ?? "…"}</dd>
+                  <dt>Size</dt>
+                  <dd className="numeric">
+                    {about ? gb(about.outputs_bytes) : "…"}
+                    {about?.outputs_dir && (
+                      <button
+                        type="button"
+                        className="set-reveal"
+                        onClick={() => revealItemInDir(about.outputs_dir).catch(() => {})}
+                      >
+                        reveal
+                      </button>
+                    )}
+                  </dd>
+                </dl>
+                <p className="muted">
+                  Images and video clips are kept until you delete them — video files are
+                  large and this folder grows fast. Automatic cleanup / retention limits
+                  come later; for now, open the folder and prune it yourself.
+                </p>
+              </section>
+            </>
+          )}
+
+          {section === "performance" && (
+            <>
+              <section className="card set-group">
+                <header className="card__head">
+                  <h2>Scheduler</h2>
+                  <span className="card__sub">restart to apply</span>
+                </header>
+                <label className="set-field set-field--inline">
+                  <span>
+                    VRAM budget (MB) — <code>0</code> auto-detects the GPU
+                    {about ? ` · now planning against ${about.vram_budget_mb} MB` : ""}
+                  </span>
+                  <input
+                    type="number"
+                    min={0}
+                    step={512}
+                    value={form.vram_budget_mb}
+                    onChange={(e) => patch({ vram_budget_mb: numeric(e.target.value) })}
+                  />
+                </label>
+              </section>
+
+              <section className="card set-group">
+                <header className="card__head">
+                  <h2>Model selection (Auto)</h2>
+                  <span className="card__sub">restart to apply</span>
+                </header>
+                <label className="set-field">
+                  <span>
+                    When a job asks for <code>Auto</code>, rank the role's models by their
+                    benchmark (run “Test” on the Models tab) — a model that fits your VRAM
+                    budget always wins first. No benchmark data → most-recently-used.
+                  </span>
+                  <select
+                    value={form.models.auto_preference}
+                    onChange={(e) =>
+                      patchModels({ auto_preference: e.target.value as AutoPreference })
+                    }
+                  >
+                    {AUTO_PREFS.map((p) => (
+                      <option key={p.value} value={p.value}>
+                        {p.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </section>
+            </>
+          )}
+
+          {section === "runtimes" && (
+            <>
+              <section className="card set-group">
+                <header className="card__head">
+                  <h2>llama.cpp</h2>
+                  <span className="card__sub">applies on the next model load</span>
+                </header>
+                <div className="set-grid">
+                  <label className="set-field set-field--inline">
+                    <span>
+                      GPU layers (<code>-ngl</code>) — 999 offloads everything
+                    </span>
+                    <input
+                      type="number"
+                      min={0}
+                      value={form.llama.gpu_layers}
+                      onChange={(e) => patchLlama({ gpu_layers: numeric(e.target.value) })}
+                    />
+                  </label>
+                  <label className="set-field set-field--inline">
+                    <span>
+                      Context size (<code>-c</code>) — <code>0</code> caps the model's
+                      trained context
+                    </span>
+                    <input
+                      type="number"
+                      min={0}
+                      step={1024}
+                      value={form.llama.ctx_size}
+                      onChange={(e) => patchLlama({ ctx_size: numeric(e.target.value) })}
+                    />
+                  </label>
+                  <label className="set-field set-field--inline">
+                    <span>Load timeout (seconds)</span>
+                    <input
+                      type="number"
+                      min={10}
+                      max={3600}
+                      value={form.llama.load_timeout_secs}
+                      onChange={(e) => patchLlama({ load_timeout_secs: numeric(e.target.value) })}
+                    />
+                  </label>
+                </div>
+                <label className="set-toggle">
+                  <input
+                    type="checkbox"
+                    checked={form.llama.flash_attention}
+                    onChange={(e) => patchLlama({ flash_attention: e.target.checked })}
+                  />
+                  <span>
+                    <strong>Flash attention</strong> — <code>--flash-attn on</code>
+                  </span>
+                </label>
+                <label className="set-toggle">
+                  <input
+                    type="checkbox"
+                    checked={form.llama.jinja}
+                    onChange={(e) => patchLlama({ jinja: e.target.checked })}
+                  />
+                  <span>
+                    <strong>Jinja chat template</strong> — <code>--jinja</code>. Needed for
+                    tool calls (agents); correct for chat. Turn off only if a model's
+                    embedded template misbehaves.
+                  </span>
+                </label>
+                <label className="set-field">
+                  <span>
+                    Chat template override — <code>--chat-template</code>, e.g.{" "}
+                    <code>qwen2.5-coder</code>. Empty = the GGUF's own.
+                  </span>
+                  <input
+                    type="text"
+                    value={form.llama.chat_template}
+                    spellCheck={false}
+                    onChange={(e) => patchLlama({ chat_template: e.target.value })}
+                  />
+                </label>
+              </section>
+
+              <section className="card set-group">
+                <header className="card__head">
+                  <h2>ComfyUI</h2>
+                  <span className="card__sub">restart to apply</span>
+                </header>
+                <label className="set-field">
+                  <span>
+                    VRAM mode — the <code>--*vram</code> flag ComfyUI starts with
+                  </span>
+                  <select
+                    value={form.comfyui.vram_mode}
+                    onChange={(e) => patchComfy({ vram_mode: e.target.value })}
+                  >
+                    {VRAM_MODES.map((m) => (
+                      <option key={m.value} value={m.value}>
+                        {m.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <div className="set-grid">
+                  <label className="set-field set-field--inline">
+                    <span>
+                      Reserve VRAM (GB) — <code>--reserve-vram</code>, kept free for the
+                      OS. <code>0</code> = off. Helps avoid OOM on long video clips.
+                    </span>
+                    <input
+                      type="number"
+                      min={0}
+                      max={8}
+                      step={0.5}
+                      value={form.comfyui.reserve_vram_mb / 1024}
+                      onChange={(e) =>
+                        patchComfy({ reserve_vram_mb: Math.round(numeric(e.target.value, true) * 1024) })
+                      }
+                    />
+                  </label>
+                </div>
+                <label className="set-field">
+                  <span>
+                    Extra args — appended verbatim (power users), e.g.{" "}
+                    <code>--fast --use-sage-attention</code>
+                  </span>
+                  <input
+                    type="text"
+                    value={form.comfyui.extra_args}
+                    spellCheck={false}
+                    onChange={(e) => patchComfy({ extra_args: e.target.value })}
+                  />
+                </label>
+              </section>
+            </>
+          )}
+
+          {section === "network" && (
+            <>
+              <HuggingFaceCard />
+
+              <LocalApiCard />
+
+              <section className="card set-group">
+                <header className="card__head">
+                  <h2>Network</h2>
+                  <span className="card__sub">applies instantly</span>
+                </header>
+                <label className="set-toggle">
+                  <input
+                    type="checkbox"
+                    checked={form.offline_mode}
+                    onChange={(e) => patch({ offline_mode: e.target.checked })}
+                  />
+                  <span>
+                    <strong>Offline mode</strong> — block every outbound network call
+                    (model downloads, runtime installs).
+                  </span>
+                </label>
+              </section>
+            </>
+          )}
+
+          {section === "backup" && <BackupCard />}
         </div>
-      </section>
-
-      <section className="card set-group">
-        <header className="card__head">
-          <h2>Model store</h2>
-          <span className="card__sub">restart to apply</span>
-        </header>
-        <label className="set-field">
-          <span>Canonical directory for imported models</span>
-          <input
-            type="text"
-            value={form.store_path}
-            spellCheck={false}
-            onChange={(e) => patch({ store_path: e.target.value })}
-          />
-        </label>
-      </section>
-
-      <section className="card set-group">
-        <header className="card__head">
-          <h2>Data locations</h2>
-          <span className="card__sub">restart to apply</span>
-        </header>
-        <p className="muted">
-          By default AIWM is portable — everything lives next to the app, wherever
-          that is (no <code>%APPDATA%</code>). Leave a field blank to use that
-          default; set one to move just that folder elsewhere (e.g. a faster or
-          roomier drive).
-        </p>
-        <label className="set-field">
-          <span>
-            Generated images / video — grows over time
-            {about ? ` · currently ${about.outputs_dir}` : ""}
-          </span>
-          <input
-            type="text"
-            value={form.paths.outputs_path}
-            placeholder="leave blank for the default"
-            spellCheck={false}
-            onChange={(e) => patchPaths({ outputs_path: e.target.value })}
-          />
-        </label>
-        <label className="set-field">
-          <span>
-            Managed runtime installs (llama.cpp, ComfyUI) — several GB
-            {about ? ` · currently ${about.runtimes_dir}` : ""}
-          </span>
-          <input
-            type="text"
-            value={form.paths.runtimes_path}
-            placeholder="leave blank for the default"
-            spellCheck={false}
-            onChange={(e) => patchPaths({ runtimes_path: e.target.value })}
-          />
-        </label>
-        <label className="set-field">
-          <span>
-            Registry cache — disposable, safe to delete
-            {about ? ` · currently ${about.cache_dir}` : ""}
-          </span>
-          <input
-            type="text"
-            value={form.paths.cache_path}
-            placeholder="leave blank for the default"
-            spellCheck={false}
-            onChange={(e) => patchPaths({ cache_path: e.target.value })}
-          />
-        </label>
-      </section>
-
-      <section className="card set-group">
-        <header className="card__head">
-          <h2>Scheduler</h2>
-          <span className="card__sub">restart to apply</span>
-        </header>
-        <label className="set-field set-field--inline">
-          <span>
-            VRAM budget (MB) — <code>0</code> auto-detects the GPU
-            {about ? ` · now planning against ${about.vram_budget_mb} MB` : ""}
-          </span>
-          <input
-            type="number"
-            min={0}
-            step={512}
-            value={form.vram_budget_mb}
-            onChange={(e) => patch({ vram_budget_mb: numeric(e.target.value) })}
-          />
-        </label>
-      </section>
-
-      <section className="card set-group">
-        <header className="card__head">
-          <h2>Model selection (Auto)</h2>
-          <span className="card__sub">restart to apply</span>
-        </header>
-        <label className="set-field">
-          <span>
-            When a job asks for <code>Auto</code>, rank the role's models by their
-            benchmark (run “Test” on the Models tab) — a model that fits your VRAM
-            budget always wins first. No benchmark data → most-recently-used.
-          </span>
-          <select
-            value={form.models.auto_preference}
-            onChange={(e) =>
-              patchModels({ auto_preference: e.target.value as AutoPreference })
-            }
-          >
-            {AUTO_PREFS.map((p) => (
-              <option key={p.value} value={p.value}>
-                {p.label}
-              </option>
-            ))}
-          </select>
-        </label>
-      </section>
-
-      <HuggingFaceCard />
-
-      <LocalApiCard />
-
-      <section className="card set-group">
-        <header className="card__head">
-          <h2>Network</h2>
-          <span className="card__sub">applies instantly</span>
-        </header>
-        <label className="set-toggle">
-          <input
-            type="checkbox"
-            checked={form.offline_mode}
-            onChange={(e) => patch({ offline_mode: e.target.checked })}
-          />
-          <span>
-            <strong>Offline mode</strong> — block every outbound network call
-            (model downloads, runtime installs).
-          </span>
-        </label>
-      </section>
-
-      <section className="card set-group">
-        <header className="card__head">
-          <h2>llama.cpp</h2>
-          <span className="card__sub">applies on the next model load</span>
-        </header>
-        <div className="set-grid">
-          <label className="set-field set-field--inline">
-            <span>
-              GPU layers (<code>-ngl</code>) — 999 offloads everything
-            </span>
-            <input
-              type="number"
-              min={0}
-              value={form.llama.gpu_layers}
-              onChange={(e) => patchLlama({ gpu_layers: numeric(e.target.value) })}
-            />
-          </label>
-          <label className="set-field set-field--inline">
-            <span>
-              Context size (<code>-c</code>) — <code>0</code> caps the model's
-              trained context
-            </span>
-            <input
-              type="number"
-              min={0}
-              step={1024}
-              value={form.llama.ctx_size}
-              onChange={(e) => patchLlama({ ctx_size: numeric(e.target.value) })}
-            />
-          </label>
-          <label className="set-field set-field--inline">
-            <span>Load timeout (seconds)</span>
-            <input
-              type="number"
-              min={10}
-              max={3600}
-              value={form.llama.load_timeout_secs}
-              onChange={(e) => patchLlama({ load_timeout_secs: numeric(e.target.value) })}
-            />
-          </label>
-        </div>
-        <label className="set-toggle">
-          <input
-            type="checkbox"
-            checked={form.llama.flash_attention}
-            onChange={(e) => patchLlama({ flash_attention: e.target.checked })}
-          />
-          <span>
-            <strong>Flash attention</strong> — <code>--flash-attn on</code>
-          </span>
-        </label>
-        <label className="set-toggle">
-          <input
-            type="checkbox"
-            checked={form.llama.jinja}
-            onChange={(e) => patchLlama({ jinja: e.target.checked })}
-          />
-          <span>
-            <strong>Jinja chat template</strong> — <code>--jinja</code>. Needed for
-            tool calls (agents); correct for chat. Turn off only if a model's
-            embedded template misbehaves.
-          </span>
-        </label>
-        <label className="set-field">
-          <span>
-            Chat template override — <code>--chat-template</code>, e.g.{" "}
-            <code>qwen2.5-coder</code>. Empty = the GGUF's own.
-          </span>
-          <input
-            type="text"
-            value={form.llama.chat_template}
-            spellCheck={false}
-            onChange={(e) => patchLlama({ chat_template: e.target.value })}
-          />
-        </label>
-      </section>
-
-      <section className="card set-group">
-        <header className="card__head">
-          <h2>ComfyUI</h2>
-          <span className="card__sub">restart to apply</span>
-        </header>
-        <label className="set-field">
-          <span>
-            VRAM mode — the <code>--*vram</code> flag ComfyUI starts with
-          </span>
-          <select
-            value={form.comfyui.vram_mode}
-            onChange={(e) => patchComfy({ vram_mode: e.target.value })}
-          >
-            {VRAM_MODES.map((m) => (
-              <option key={m.value} value={m.value}>
-                {m.label}
-              </option>
-            ))}
-          </select>
-        </label>
-        <div className="set-grid">
-          <label className="set-field set-field--inline">
-            <span>
-              Reserve VRAM (GB) — <code>--reserve-vram</code>, kept free for the
-              OS. <code>0</code> = off. Helps avoid OOM on long video clips.
-            </span>
-            <input
-              type="number"
-              min={0}
-              max={8}
-              step={0.5}
-              value={form.comfyui.reserve_vram_mb / 1024}
-              onChange={(e) =>
-                patchComfy({ reserve_vram_mb: Math.round(numeric(e.target.value, true) * 1024) })
-              }
-            />
-          </label>
-        </div>
-        <label className="set-field">
-          <span>
-            Extra args — appended verbatim (power users), e.g.{" "}
-            <code>--fast --use-sage-attention</code>
-          </span>
-          <input
-            type="text"
-            value={form.comfyui.extra_args}
-            spellCheck={false}
-            onChange={(e) => patchComfy({ extra_args: e.target.value })}
-          />
-        </label>
-      </section>
-
-      <section className="card set-group">
-        <header className="card__head">
-          <h2>Generated media</h2>
-          <span className="card__sub">read-only</span>
-        </header>
-        <dl className="set-kv">
-          <dt>Folder</dt>
-          <dd>{about?.outputs_dir ?? "…"}</dd>
-          <dt>Size</dt>
-          <dd className="numeric">
-            {about ? gb(about.outputs_bytes) : "…"}
-            {about?.outputs_dir && (
-              <button
-                type="button"
-                className="set-reveal"
-                onClick={() => revealItemInDir(about.outputs_dir).catch(() => {})}
-              >
-                reveal
-              </button>
-            )}
-          </dd>
-        </dl>
-        <p className="muted">
-          Images and video clips are kept until you delete them — video files are
-          large and this folder grows fast. Automatic cleanup / retention limits
-          come later; for now, open the folder and prune it yourself.
-        </p>
-      </section>
-
-      <BackupCard />
+      </div>
 
       <div className="settings__bar">
         {status && (
