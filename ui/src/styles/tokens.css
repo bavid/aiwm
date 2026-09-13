@@ -1,12 +1,15 @@
-/* Design tokens. Phase-1 shell: a restrained instrument-panel palette.
+/* Design tokens -- the "Control Room" direction (approved as a concept
+   mockup, applied here to the real app): a restrained instrument-panel
+   palette, graphite ground with a signal-cyan accent.
    Theme-aware: the light palette is the bare :root default; dark applies either
    from the OS ("system" theme — no data-theme attribute) or from an explicit
    data-theme="dark" the Settings tab writes onto <html>. The two dark blocks
    below are identical and must stay in sync. */
 
 :root {
-  --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  --font-mono: ui-monospace, "Cascadia Mono", "Cascadia Code", Consolas, monospace;
+  --font-sans: "Hanken Grotesk", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-display: "Archivo", var(--font-sans);
+  --font-mono: "JetBrains Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
 
   --text-xs: 0.75rem;
   --text-sm: 0.8125rem;
@@ -22,26 +25,29 @@
   --space-5: 1.5rem;
   --space-6: 2rem;
 
-  --radius: 10px;
-  --radius-sm: 6px;
+  --radius: 12px;
+  --radius-sm: 8px;
+  --radius-lg: 18px;
 
   --ease: cubic-bezier(0.16, 1, 0.3, 1);
   --dur: 200ms;
 
   /* light */
-  --bg: #f5f5f4;
+  --bg: #eef2f1;
   --surface: #ffffff;
-  --surface-2: #fafaf9;
-  --border: #e3e3e0;
-  --text: #1c1c1a;
-  --muted: #6b6b66;
-  --accent: #4f46e5;
+  --surface-2: #f6f8f7;
+  --border: #d7dedb;
+  --border-soft: #e3e9e6;
+  --text: #101615;
+  --muted: #5c6864;
+  --faint: #8a9591;
+  --accent: #0e8f86;
   --accent-fg: #ffffff;
 
-  --load-ok: #16a34a;
-  --load-warn: #d97706;
-  --load-crit: #dc2626;
-  --track: #ececeb;
+  --load-ok: #1f9d55;
+  --load-warn: #b5790f;
+  --load-crit: #c23c47;
+  --track: #e3e9e6;
 
   color-scheme: light;
 }
@@ -49,19 +55,21 @@
 /* "system" theme (no explicit override) follows the OS. */
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme]) {
-    --bg: #0f1115;
-    --surface: #171a21;
-    --surface-2: #1c2029;
-    --border: #262b35;
-    --text: #e8e9ec;
-    --muted: #8b909c;
-    --accent: #7c8cff;
-    --accent-fg: #10121a;
+    --bg: #0f1316;
+    --surface: #171c20;
+    --surface-2: #1e2429;
+    --border: #2a3138;
+    --border-soft: #232a30;
+    --text: #eef3f2;
+    --muted: #93a09c;
+    --faint: #5f6b68;
+    --accent: #3ddbd0;
+    --accent-fg: #08211f;
 
-    --load-ok: #34d399;
-    --load-warn: #fbbf24;
-    --load-crit: #f87171;
-    --track: #23272f;
+    --load-ok: #59d68a;
+    --load-warn: #e8a23a;
+    --load-crit: #f0616b;
+    --track: #232a30;
 
     color-scheme: dark;
   }
@@ -69,19 +77,21 @@
 
 /* Explicit dark, regardless of OS setting. Keep in sync with the block above. */
 :root[data-theme="dark"] {
-  --bg: #0f1115;
-  --surface: #171a21;
-  --surface-2: #1c2029;
-  --border: #262b35;
-  --text: #e8e9ec;
-  --muted: #8b909c;
-  --accent: #7c8cff;
-  --accent-fg: #10121a;
+  --bg: #0f1316;
+  --surface: #171c20;
+  --surface-2: #1e2429;
+  --border: #2a3138;
+  --border-soft: #232a30;
+  --text: #eef3f2;
+  --muted: #93a09c;
+  --faint: #5f6b68;
+  --accent: #3ddbd0;
+  --accent-fg: #08211f;
 
-  --load-ok: #34d399;
-  --load-warn: #fbbf24;
-  --load-crit: #f87171;
-  --track: #23272f;
+  --load-ok: #59d68a;
+  --load-warn: #e8a23a;
+  --load-crit: #f0616b;
+  --track: #232a30;
 
   color-scheme: dark;
 }

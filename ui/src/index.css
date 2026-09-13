@@ -1,3 +1,14 @@
+/* Self-hosted (no runtime network calls -- this app is offline-first): only
+   the weights actually used (headings 600-800, body 400-600, mono 400-600). */
+@import "@fontsource/archivo/600.css";
+@import "@fontsource/archivo/700.css";
+@import "@fontsource/archivo/800.css";
+@import "@fontsource/hanken-grotesk/400.css";
+@import "@fontsource/hanken-grotesk/500.css";
+@import "@fontsource/hanken-grotesk/600.css";
+@import "@fontsource/jetbrains-mono/400.css";
+@import "@fontsource/jetbrains-mono/500.css";
+
 @import "./styles/tokens.css";
 
 * {
@@ -24,7 +35,8 @@ h1,
 h2,
 h3 {
   margin: 0;
-  font-weight: 600;
+  font-family: var(--font-display);
+  font-weight: 700;
   letter-spacing: -0.01em;
 }
 
@@ -37,62 +49,183 @@ button {
   font-variant-numeric: tabular-nums;
 }
 
-/* --- app shell --- */
+/* --- app shell: a persistent, collapsible sidebar + independently
+   scrolling main content (not the page body -- the sidebar must stay put
+   on tabs taller than the viewport). --- */
 
 .app {
   display: grid;
-  grid-template-rows: auto 1fr;
+  grid-template-columns: auto minmax(0, 1fr);
   height: 100%;
+  background:
+    radial-gradient(1100px 480px at 82% -6%, color-mix(in oklab, var(--accent) 10%, transparent), transparent 60%),
+    radial-gradient(900px 420px at 8% 4%, color-mix(in oklab, #5a82be 8%, transparent), transparent 55%),
+    var(--bg);
 }
 
-.topbar {
+.sidebar {
+  width: 232px;
+  height: 100%;
+  overflow-y: auto;
+  padding: var(--space-5) var(--space-3) var(--space-4);
+  border-right: 1px solid var(--border-soft);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  transition: width var(--dur) var(--ease), padding var(--dur) var(--ease);
+}
+
+.app[data-sidebar-collapsed="true"] .sidebar {
+  width: 68px;
+  padding-inline: var(--space-2);
+}
+
+.app[data-sidebar-collapsed="true"] .sidebar .label,
+.app[data-sidebar-collapsed="true"] .brand__meta,
+.app[data-sidebar-collapsed="true"] .sidebar__status span {
+  display: none;
+}
+
+.brand {
   display: flex;
   align-items: center;
-  gap: var(--space-5);
-  padding: var(--space-3) var(--space-5);
-  border-bottom: 1px solid var(--border);
-  background: var(--surface);
+  gap: var(--space-3);
+  padding: 0 var(--space-2);
 }
 
-.topbar__brand {
+.brand__mark {
+  width: 32px;
+  height: 32px;
+  flex: none;
+  border-radius: 9px;
+  display: grid;
+  place-items: center;
+  background: linear-gradient(155deg, var(--accent), color-mix(in oklab, var(--accent) 55%, #3b6bd8));
+  color: var(--accent-fg);
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: var(--text-sm);
+}
+
+.brand__meta {
+  min-width: 0;
+}
+
+.brand__name {
+  font-family: var(--font-display);
+  font-weight: 800;
   font-size: var(--text-md);
-  font-weight: 600;
+  letter-spacing: -0.01em;
 }
 
-.topbar__brand span {
+.brand__rig {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
   color: var(--muted);
-  font-weight: 400;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.tabs {
+.navgroup {
   display: flex;
-  gap: var(--space-1);
-  margin-left: auto;
+  flex-direction: column;
+  gap: 2px;
 }
 
-.tab {
-  padding: var(--space-1) var(--space-3);
+.navitem {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  padding: 9px 10px;
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
-  background: transparent;
+  background: none;
   color: var(--muted);
+  font-weight: 600;
+  font-size: var(--text-sm);
+  text-align: left;
   cursor: pointer;
   transition: color var(--dur) var(--ease), background var(--dur) var(--ease);
 }
 
-.tab:hover {
+.navitem svg {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.7;
+}
+
+.navitem:hover {
+  background: var(--surface-2);
   color: var(--text);
 }
 
-.tab[aria-selected="true"] {
-  background: var(--surface-2);
-  border-color: var(--border);
+.navitem[aria-selected="true"] {
+  background: color-mix(in oklab, var(--accent) 12%, transparent);
+  border-color: color-mix(in oklab, var(--accent) 35%, transparent);
   color: var(--text);
+}
+
+.navitem[aria-selected="true"] svg {
+  stroke: var(--accent);
+}
+
+.sidebar__spacer {
+  flex: 1;
+}
+
+.sidebar__status {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius);
+  background: var(--surface);
+  font-size: var(--text-sm);
+  color: var(--muted);
+}
+
+.sidebar__status .status-dot {
+  flex: none;
+}
+
+.collapse-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  padding: 7px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--muted);
+  cursor: pointer;
+  font-size: var(--text-sm);
+}
+
+.collapse-btn svg {
+  width: 15px;
+  height: 15px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.8;
+  transition: transform var(--dur) var(--ease);
+}
+
+.app[data-sidebar-collapsed="true"] .collapse-btn svg {
+  transform: rotate(180deg);
 }
 
 .main {
+  min-width: 0;
+  height: 100%;
   overflow-y: auto;
-  padding: var(--space-5);
+  padding: var(--space-5) var(--space-6) var(--space-6);
 }
 
 .status-dot {
