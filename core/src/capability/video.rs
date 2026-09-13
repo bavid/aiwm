@@ -20,9 +20,12 @@ use std::time::Duration;
 use serde_json::Value;
 use tokio::sync::watch;
 
-use super::media::{comfy_err as video_err, file_name, resolve_seed, round_to, write_output};
+use super::media::{
+    comfy_err as video_err, file_name, parse_loras, resolve_loras, resolve_seed, round_to,
+    write_output, LoraRef,
+};
 use crate::db::{Database, EventLevel, Model};
-use crate::pipeline::{self, LtxModels, VideoInputs, VideoRecipe, WanModels};
+use crate::pipeline::{self, LoraSpec, LtxModels, VideoInputs, VideoRecipe, WanModels};
 use crate::runtime::ComfyUiAdapter;
 use crate::Result;
 
@@ -77,6 +80,9 @@ pub struct VideoRequest {
     /// A start frame for image→video: a completed job's id, or a path to an
     /// image file. `None` → text→video. Resolved + staged in [`run`].
     pub init_image: Option<String>,
+    /// Library references, not yet resolved to files — [`run`] does that once
+    /// it has a `Database` handle.
+    pub loras: Vec<LoraRef>,
 }
 
 impl VideoRequest {
@@ -136,6 +142,7 @@ impl VideoRequest {
             cfg,
             seed: resolve_seed(params),
             init_image,
+            loras: parse_loras(params),
         })
     }
 
@@ -157,6 +164,10 @@ impl VideoRequest {
         if let Some(src) = &self.init_image {
             obj.insert("init_image".into(), src.clone().into());
         }
+        obj.insert(
+            "loras".into(),
+            serde_json::to_value(&self.loras).unwrap_or(Value::Array(Vec::new())),
+        );
     }
 
     /// Clip length in seconds (for UI copy).
@@ -206,6 +217,24 @@ pub async fn run(
         Some(spec) => Some(stage_start_frame(db, comfyui, job_id, spec).await?),
         None => None,
     };
+    let resolved_loras = resolve_loras(db, &req.loras).await?;
+    if !resolved_loras.is_empty() {
+        let summary = resolved_loras
+            .iter()
+            .map(|l| format!("{} @ {:.2}", l.file, l.strength))
+            .collect::<Vec<_>>()
+            .join(", ");
+        db.jobs()
+            .append_event(job_id, EventLevel::Info, &format!("LoRA: {summary}"))
+            .await?;
+    }
+    let lora_specs: Vec<LoraSpec> = resolved_loras
+        .iter()
+        .map(|l| LoraSpec {
+            file: &l.file,
+            strength: l.strength,
+        })
+        .collect();
 
     let inputs = VideoInputs {
         positive: &req.prompt,
@@ -233,6 +262,7 @@ pub async fn run(
                     clip: &c.clip,
                     vae: &c.vae,
                 },
+                &lora_specs,
             );
             (
                 g,
@@ -250,6 +280,7 @@ pub async fn run(
                     checkpoint: base_model,
                     t5: &t5,
                 },
+                &lora_specs,
             );
             (
                 g,

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
+import { LoraPicker } from "../../components/LoraPicker";
 import { NumField } from "../../components/NumField";
 import { QueueList } from "../../components/QueueList";
 import { SessionSwitcher } from "../../components/SessionSwitcher";
@@ -14,6 +15,7 @@ import {
   type JobDetail,
   type JobEvent,
   type JobState,
+  type LoraParam,
   type VideoParams,
 } from "../../lib/ipc";
 import "./video.css";
@@ -94,6 +96,7 @@ export function VideoStudio() {
   const [cfg, setCfg] = useState(5);
   const [seed, setSeed] = useState("");
   const [modelId, setModelId] = useState("auto");
+  const [loras, setLoras] = useState<LoraParam[]>([]);
   const [startJob, setStartJob] = useState("none");
   const [startPath, setStartPath] = useState("");
   const [sendError, setSendError] = useState<string | null>(null);
@@ -186,6 +189,7 @@ export function VideoStudio() {
     const s = Number(seed);
     if (seed.trim() !== "" && Number.isFinite(s) && s >= 0) params.seed = Math.floor(s);
     if (startImage) params.init_image = startImage;
+    if (loras.length > 0) params.loras = loras;
 
     try {
       const job = await submitJob({
@@ -316,6 +320,12 @@ export function VideoStudio() {
           <VramEstimateHint
             vramEstimateMb={videoModels.find((m) => m.id === modelId)?.vram_estimate_mb}
             gpu={telemetry?.gpu}
+          />
+          <LoraPicker
+            models={models ?? []}
+            family={videoModels.find((m) => m.id === modelId)?.family}
+            selected={loras}
+            onChange={setLoras}
           />
 
           <fieldset className="startframe">

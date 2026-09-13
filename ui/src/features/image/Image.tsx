@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { LoraPicker } from "../../components/LoraPicker";
 import { NumField } from "../../components/NumField";
 import { QueueList } from "../../components/QueueList";
 import { SessionSwitcher } from "../../components/SessionSwitcher";
@@ -13,6 +14,7 @@ import {
   type Job,
   type JobDetail,
   type JobState,
+  type LoraParam,
 } from "../../lib/ipc";
 import "./image.css";
 
@@ -63,6 +65,7 @@ export function ImageStudio() {
   const [cfg, setCfg] = useState(7);
   const [seed, setSeed] = useState("");
   const [modelId, setModelId] = useState("auto");
+  const [loras, setLoras] = useState<LoraParam[]>([]);
   const [sendError, setSendError] = useState<string | null>(null);
 
   const selectedCheckpoint = checkpoints.find((m) => m.id === modelId);
@@ -129,6 +132,7 @@ export function ImageStudio() {
     };
     const s = Number(seed);
     if (seed.trim() !== "" && Number.isFinite(s) && s >= 0) params.seed = Math.floor(s);
+    if (loras.length > 0) params.loras = loras;
 
     try {
       const job = await submitJob({
@@ -268,6 +272,12 @@ export function ImageStudio() {
               </select>
             </label>
           </div>
+          <LoraPicker
+            models={models ?? []}
+            family={selectedCheckpoint?.family}
+            selected={loras}
+            onChange={setLoras}
+          />
           <VramEstimateHint vramEstimateMb={selectedCheckpoint?.vram_estimate_mb} gpu={telemetry?.gpu} />
 
           <button type="submit" className="imgform__go" disabled={!canGenerate}>

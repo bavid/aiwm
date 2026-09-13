@@ -49,6 +49,54 @@ pub struct FluxModels<'a> {
     pub vae: &'a str,
 }
 
+/// One LoRA to splice into a graph before sampling, as a `LoraLoader` node.
+/// Multiple entries chain in order. A single `strength` drives both the model
+/// and CLIP patch — ComfyUI's default UI splits these into two knobs, but one
+/// covers the overwhelming majority of real usage and keeps the picker simple.
+#[derive(Debug, Clone, Copy)]
+pub struct LoraSpec<'a> {
+    pub file: &'a str,
+    pub strength: f64,
+}
+
+/// Splice `loras` in as a chain of `LoraLoader` nodes between the current
+/// model/clip source and their consumers — a no-op when `loras` is empty, so
+/// every existing graph shape is unchanged. Node ids start at `90`, clear of
+/// every fixed id the four builders use (highest is `78`).
+fn apply_loras(
+    g: &mut Value,
+    loras: &[LoraSpec],
+    model_source: (&str, u32),
+    clip_source: (&str, u32),
+    model_consumer: &str,
+    clip_consumers: &[&str],
+) {
+    if loras.is_empty() {
+        return;
+    }
+    let mut model_link = json!([model_source.0, model_source.1]);
+    let mut clip_link = json!([clip_source.0, clip_source.1]);
+    for (idx, lora) in loras.iter().enumerate() {
+        let id = format!("{}", 90 + idx);
+        g[id.as_str()] = json!({
+            "class_type": "LoraLoader",
+            "inputs": {
+                "model": model_link,
+                "clip": clip_link,
+                "lora_name": lora.file,
+                "strength_model": lora.strength,
+                "strength_clip": lora.strength,
+            }
+        });
+        model_link = json!([id, 0]);
+        clip_link = json!([id, 1]);
+    }
+    g[model_consumer]["inputs"]["model"] = model_link;
+    for consumer in clip_consumers {
+        g[*consumer]["inputs"]["clip"] = clip_link.clone();
+    }
+}
+
 /// Which template a model needs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Recipe {
@@ -71,8 +119,8 @@ impl Recipe {
 
 /// The canonical ComfyUI default graph: load a single-file checkpoint, encode
 /// both prompts, sample, VAE-decode, save. No custom nodes.
-pub fn checkpoint_txt2img(i: &Txt2ImgInputs, checkpoint: &str) -> Value {
-    json!({
+pub fn checkpoint_txt2img(i: &Txt2ImgInputs, checkpoint: &str, loras: &[LoraSpec]) -> Value {
+    let mut g = json!({
         "4": {
             "class_type": "CheckpointLoaderSimple",
             "inputs": { "ckpt_name": checkpoint }
@@ -112,17 +160,19 @@ pub fn checkpoint_txt2img(i: &Txt2ImgInputs, checkpoint: &str) -> Value {
             "class_type": "SaveImage",
             "inputs": { "filename_prefix": i.filename_prefix, "images": ["8", 0] }
         }
-    })
+    });
+    apply_loras(&mut g, loras, ("4", 0), ("4", 1), "3", &["6", "7"]);
+    g
 }
 
 /// FLUX.1-dev via `ComfyUI-GGUF`: `UnetLoaderGGUF` + `DualCLIPLoaderGGUF`
 /// (type `flux`, T5 + CLIP-L) + `VAELoader`, a `FluxGuidance` on the positive
 /// conditioning, an SD3-format latent, then the sampler at CFG 1.
-pub fn flux_txt2img(i: &Txt2ImgInputs, m: &FluxModels) -> Value {
+pub fn flux_txt2img(i: &Txt2ImgInputs, m: &FluxModels, loras: &[LoraSpec]) -> Value {
     // FLUX is guidance-distilled: the sampler runs at CFG 1 and the effect the
     // user reaches for lives in FluxGuidance instead.
     let guidance = i.cfg.clamp(1.0, 10.0);
-    json!({
+    let mut g = json!({
         "12": {
             "class_type": "UnetLoaderGGUF",
             "inputs": { "unet_name": m.unet }
@@ -174,7 +224,9 @@ pub fn flux_txt2img(i: &Txt2ImgInputs, m: &FluxModels) -> Value {
             "class_type": "SaveImage",
             "inputs": { "filename_prefix": i.filename_prefix, "images": ["8", 0] }
         }
-    })
+    });
+    apply_loras(&mut g, loras, ("12", 0), ("11", 0), "3", &["6", "7"]);
+    g
 }
 
 // --- video --------------------------------------------------------------------
@@ -212,7 +264,7 @@ pub struct WanModels<'a> {
 /// `UNETLoader` + `CLIPLoader type=wan` + `VAELoader` → `ModelSamplingSD3`
 /// (shift) → `WanImageToVideo` (the latent factory; `start_image` optional) →
 /// `KSampler` → `VAEDecode` → `CreateVideo` → `SaveVideo` (mp4/h264).
-pub fn wan_ti2v(i: &VideoInputs, m: &WanModels) -> Value {
+pub fn wan_ti2v(i: &VideoInputs, m: &WanModels, loras: &[LoraSpec]) -> Value {
     // Wan 5B recommends a sampling shift around 8.
     const WAN_SHIFT: f64 = 8.0;
 
@@ -286,6 +338,7 @@ pub fn wan_ti2v(i: &VideoInputs, m: &WanModels) -> Value {
             }
         }
     });
+    apply_loras(&mut g, loras, ("37", 0), ("38", 0), "48", &["6", "7"]);
 
     if let Some(frame) = i.start_image {
         g["60"] = json!({
@@ -333,7 +386,7 @@ pub struct LtxModels<'a> {
 /// (or `LTXVImgToVideo` when a start frame is given) → `LTXVScheduler` sigmas →
 /// `SamplerCustom` (`KSamplerSelect euler`) → `VAEDecode` → `CreateVideo` →
 /// `SaveVideo`.
-pub fn ltx_video(i: &VideoInputs, m: &LtxModels) -> Value {
+pub fn ltx_video(i: &VideoInputs, m: &LtxModels, loras: &[LoraSpec]) -> Value {
     // LTXVScheduler defaults from ComfyUI's own LTXV template.
     const MAX_SHIFT: f64 = 2.05;
     const BASE_SHIFT: f64 = 0.95;
@@ -413,6 +466,7 @@ pub fn ltx_video(i: &VideoInputs, m: &LtxModels) -> Value {
             }
         }
     });
+    apply_loras(&mut g, loras, ("44", 0), ("38", 0), "72", &["6", "7"]);
 
     if let Some(frame) = i.start_image {
         // I2V: LTXVImgToVideo produces the conditioning + the start latent,
@@ -470,7 +524,7 @@ mod tests {
 
     #[test]
     fn checkpoint_graph_wires_every_node() {
-        let g = checkpoint_txt2img(&inputs(), "sd_xl_base_1.0.safetensors");
+        let g = checkpoint_txt2img(&inputs(), "sd_xl_base_1.0.safetensors", &[]);
         assert_eq!(g["4"]["inputs"]["ckpt_name"], "sd_xl_base_1.0.safetensors");
         assert_eq!(g["6"]["inputs"]["clip"], json!(["4", 1]));
         assert_eq!(g["3"]["inputs"]["model"], json!(["4", 0]));
@@ -482,7 +536,7 @@ mod tests {
 
     #[test]
     fn checkpoint_graph_substitutes_the_sampling_params() {
-        let g = checkpoint_txt2img(&inputs(), "x.safetensors");
+        let g = checkpoint_txt2img(&inputs(), "x.safetensors", &[]);
         assert_eq!(g["3"]["inputs"]["seed"], 42);
         assert_eq!(g["3"]["inputs"]["steps"], 25);
         assert_eq!(g["3"]["inputs"]["cfg"], 7.0);
@@ -501,6 +555,7 @@ mod tests {
                 clip_l: "clip_l.safetensors",
                 vae: "ae.safetensors",
             },
+            &[],
         );
         assert_eq!(g["12"]["class_type"], "UnetLoaderGGUF");
         assert_eq!(g["12"]["inputs"]["unet_name"], "flux1-dev-Q8_0.gguf");
@@ -527,6 +582,7 @@ mod tests {
                 clip_l: "c",
                 vae: "v",
             },
+            &[],
         );
         assert_eq!(g["3"]["inputs"]["cfg"], 1.0, "flux sampler runs at CFG 1");
         assert_eq!(g["3"]["inputs"]["scheduler"], "simple");
@@ -548,6 +604,7 @@ mod tests {
                 clip_l: "c",
                 vae: "v",
             },
+            &[],
         );
         assert_eq!(g["26"]["inputs"]["guidance"], 10.0);
     }
@@ -577,6 +634,7 @@ mod tests {
                 clip: "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
                 vae: "wan2.2_vae.safetensors",
             },
+            &[],
         );
         assert_eq!(g["37"]["class_type"], "UNETLoader");
         assert_eq!(
@@ -614,6 +672,7 @@ mod tests {
                 clip: "c",
                 vae: "v",
             },
+            &[],
         );
         assert_eq!(g["60"]["class_type"], "LoadImage");
         assert_eq!(g["60"]["inputs"]["image"], "job-src.png");
@@ -637,7 +696,7 @@ mod tests {
 
     #[test]
     fn ltx_graph_wires_the_scheduler_driven_sampler_for_text_to_video() {
-        let g = ltx_video(&video_inputs(), &ltx_models());
+        let g = ltx_video(&video_inputs(), &ltx_models(), &[]);
         assert_eq!(g["44"]["class_type"], "CheckpointLoaderSimple");
         assert_eq!(
             g["44"]["inputs"]["ckpt_name"],
@@ -667,7 +726,7 @@ mod tests {
     fn ltx_graph_swaps_in_img_to_video_for_a_start_frame() {
         let mut i = video_inputs();
         i.start_image = Some("job-src.png");
-        let g = ltx_video(&i, &ltx_models());
+        let g = ltx_video(&i, &ltx_models(), &[]);
         assert!(g.get("70").is_none(), "EmptyLTXVLatentVideo is replaced");
         assert_eq!(g["78"]["class_type"], "LoadImage");
         assert_eq!(g["78"]["inputs"]["image"], "job-src.png");
@@ -678,5 +737,121 @@ mod tests {
         assert_eq!(g["69"]["inputs"]["positive"], json!(["77", 0]));
         assert_eq!(g["71"]["inputs"]["latent"], json!(["77", 2]));
         assert_eq!(g["72"]["inputs"]["latent_image"], json!(["77", 2]));
+    }
+
+    // --- LoRA splicing --------------------------------------------------------
+
+    #[test]
+    fn checkpoint_graph_splices_a_lora_before_the_sampler_and_clip() {
+        let g = checkpoint_txt2img(
+            &inputs(),
+            "sd_xl_base_1.0.safetensors",
+            &[LoraSpec {
+                file: "add-detail-xl.safetensors",
+                strength: 0.8,
+            }],
+        );
+        assert_eq!(g["90"]["class_type"], "LoraLoader");
+        assert_eq!(g["90"]["inputs"]["lora_name"], "add-detail-xl.safetensors");
+        assert_eq!(g["90"]["inputs"]["strength_model"], 0.8);
+        assert_eq!(g["90"]["inputs"]["strength_clip"], 0.8);
+        assert_eq!(g["90"]["inputs"]["model"], json!(["4", 0]));
+        assert_eq!(g["90"]["inputs"]["clip"], json!(["4", 1]));
+        assert_eq!(g["3"]["inputs"]["model"], json!(["90", 0]));
+        assert_eq!(g["6"]["inputs"]["clip"], json!(["90", 1]));
+        assert_eq!(g["7"]["inputs"]["clip"], json!(["90", 1]));
+    }
+
+    #[test]
+    fn checkpoint_graph_chains_multiple_loras_in_order() {
+        let g = checkpoint_txt2img(
+            &inputs(),
+            "x.safetensors",
+            &[
+                LoraSpec {
+                    file: "a.safetensors",
+                    strength: 1.0,
+                },
+                LoraSpec {
+                    file: "b.safetensors",
+                    strength: 0.5,
+                },
+            ],
+        );
+        assert_eq!(g["90"]["inputs"]["model"], json!(["4", 0]));
+        assert_eq!(g["91"]["inputs"]["model"], json!(["90", 0]));
+        assert_eq!(g["91"]["inputs"]["clip"], json!(["90", 1]));
+        assert_eq!(g["3"]["inputs"]["model"], json!(["91", 0]));
+        assert_eq!(g["6"]["inputs"]["clip"], json!(["91", 1]));
+    }
+
+    #[test]
+    fn checkpoint_graph_with_no_loras_is_unchanged() {
+        let g = checkpoint_txt2img(&inputs(), "x.safetensors", &[]);
+        assert!(g.get("90").is_none());
+        assert_eq!(g["3"]["inputs"]["model"], json!(["4", 0]));
+        assert_eq!(g["6"]["inputs"]["clip"], json!(["4", 1]));
+    }
+
+    #[test]
+    fn flux_graph_splices_a_lora_between_the_gguf_loaders_and_the_sampler() {
+        let g = flux_txt2img(
+            &inputs(),
+            &FluxModels {
+                unet: "u",
+                t5: "t",
+                clip_l: "c",
+                vae: "v",
+            },
+            &[LoraSpec {
+                file: "flux-style.safetensors",
+                strength: 0.7,
+            }],
+        );
+        assert_eq!(g["90"]["inputs"]["model"], json!(["12", 0]));
+        assert_eq!(g["90"]["inputs"]["clip"], json!(["11", 0]));
+        assert_eq!(g["3"]["inputs"]["model"], json!(["90", 0]));
+        assert_eq!(g["6"]["inputs"]["clip"], json!(["90", 1]));
+        assert_eq!(g["7"]["inputs"]["clip"], json!(["90", 1]));
+    }
+
+    #[test]
+    fn wan_graph_splices_a_lora_before_model_sampling() {
+        let g = wan_ti2v(
+            &video_inputs(),
+            &WanModels {
+                unet: "u",
+                clip: "c",
+                vae: "v",
+            },
+            &[LoraSpec {
+                file: "wan-motion.safetensors",
+                strength: 1.0,
+            }],
+        );
+        assert_eq!(g["90"]["inputs"]["model"], json!(["37", 0]));
+        assert_eq!(g["90"]["inputs"]["clip"], json!(["38", 0]));
+        assert_eq!(
+            g["48"]["inputs"]["model"],
+            json!(["90", 0]),
+            "ModelSamplingSD3 reads the lora'd model"
+        );
+        assert_eq!(g["6"]["inputs"]["clip"], json!(["90", 1]));
+    }
+
+    #[test]
+    fn ltx_graph_splices_a_lora_before_the_sampler() {
+        let g = ltx_video(
+            &video_inputs(),
+            &ltx_models(),
+            &[LoraSpec {
+                file: "ltx-style.safetensors",
+                strength: 0.9,
+            }],
+        );
+        assert_eq!(g["90"]["inputs"]["model"], json!(["44", 0]));
+        assert_eq!(g["90"]["inputs"]["clip"], json!(["38", 0]));
+        assert_eq!(g["72"]["inputs"]["model"], json!(["90", 0]));
+        assert_eq!(g["6"]["inputs"]["clip"], json!(["90", 1]));
     }
 }

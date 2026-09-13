@@ -15,6 +15,8 @@ const MODELS: AnyRecord[] = [
   mkModel("m-umt5", "umt5_xxl_fp8_e4m3fn_scaled", { roles: ["text_encoder"], runtimes: ["comfyui"] }),
   mkModel("m-wanvae", "wan2.2_vae", { family: "wan", roles: ["vae"], runtimes: ["comfyui"] }),
   mkModel("m-sdxl", "SDXL Base 1.0", { family: "sdxl", roles: ["base_diffusion"], runtimes: ["comfyui"], vram_estimate_mb: 8200 }),
+  mkModel("m-lora-detail", "Add Detail XL", { family: "sdxl", roles: ["lora"], runtimes: ["comfyui"], size_bytes: 220_000_000 }),
+  mkModel("m-lora-flux-style", "Ink Wash Style (Flux)", { family: "flux", roles: ["lora"], runtimes: ["comfyui"], size_bytes: 340_000_000 }),
   mkModel("m-qwen", "Qwen2.5 7B Instruct", { family: "qwen2", format: "gguf", quant: "Q5_K_M", param_count: 7_615_616_512, ctx_max: 32_768, roles: ["chat"], runtimes: ["llamacpp"], vram_estimate_mb: 6400 }),
   mkModel("m-hermes", "Hermes-3-Llama-3.1-8B", { family: "llama3", format: "gguf", quant: "Q5_K_M", param_count: 8_030_000_000, ctx_max: 131_072, roles: ["chat", "coding"], runtimes: ["llamacpp"], vram_estimate_mb: 5700 }),
 ];

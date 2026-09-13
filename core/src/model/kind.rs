@@ -81,7 +81,11 @@ impl ModelKind {
             // Flux / Wan companions, resolved by role in the capability body.
             Self::Vae => Some("vae"),
             Self::TextEncoder => Some("text_encoder"),
-            Self::Chat | Self::Lora => None,
+            // A LoRA is never required to run a stack, but it still needs a
+            // role so the picker can list "every LoRA in the library" the
+            // same way Auto/companion resolution lists VAEs and encoders.
+            Self::Lora => Some("lora"),
+            Self::Chat => None,
         }
     }
 
@@ -195,7 +199,7 @@ mod tests {
         assert_eq!(ModelKind::VideoModel.default_role(), Some("base_video"));
         assert_eq!(ModelKind::Vae.default_role(), Some("vae"));
         assert_eq!(ModelKind::TextEncoder.default_role(), Some("text_encoder"));
-        assert_eq!(ModelKind::Lora.default_role(), None);
+        assert_eq!(ModelKind::Lora.default_role(), Some("lora"));
         assert_eq!(ModelKind::Chat.default_role(), None);
     }
 

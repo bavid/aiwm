@@ -491,6 +491,12 @@ export const installColibri = () => invoke<string>("install_colibri");
 
 export const listKnownModels = () => invoke<KnownModel[]>("list_known_models");
 
+/** A LoRA applied to a render — a library reference plus its strength. */
+export interface LoraParam {
+  model_id: string;
+  strength: number;
+}
+
 /** The parameters of a `job_type=image` job. After the engine runs, `params`
  *  holds these resolved values (a random seed is pinned back). */
 export interface ImageParams {
@@ -503,6 +509,7 @@ export interface ImageParams {
   sampler: string;
   scheduler: string;
   seed: number;
+  loras?: LoraParam[];
 }
 
 /** The parameters of a `job_type=video` job. After the engine runs, `params`
@@ -521,6 +528,7 @@ export interface VideoParams {
   cfg: number;
   seed: number;
   init_image?: string;
+  loras?: LoraParam[];
 }
 
 /** URL the loopback core serves a finished job's output file from — a PNG for

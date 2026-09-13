@@ -14,10 +14,11 @@ use serde_json::Value;
 use tokio::sync::watch;
 
 use super::media::{
-    comfy_err as image_err, file_name, resolve_seed, round_to, str_param, write_output,
+    comfy_err as image_err, file_name, parse_loras, resolve_loras, resolve_seed, round_to,
+    str_param, write_output, LoraRef,
 };
 use crate::db::{Database, EventLevel, Model};
-use crate::pipeline::{self, FluxModels, Recipe, Txt2ImgInputs};
+use crate::pipeline::{self, FluxModels, LoraSpec, Recipe, Txt2ImgInputs};
 use crate::runtime::ComfyUiAdapter;
 use crate::Result;
 
@@ -55,6 +56,9 @@ pub struct ImageRequest {
     /// Always concrete here — a missing or negative seed was resolved to a
     /// random one.
     pub seed: i64,
+    /// Library references, not yet resolved to files — [`run`] does that once
+    /// it has a `Database` handle.
+    pub loras: Vec<LoraRef>,
 }
 
 impl ImageRequest {
@@ -102,6 +106,7 @@ impl ImageRequest {
             sampler: str_param(params, "sampler", DEFAULT_SAMPLER),
             scheduler: str_param(params, "scheduler", DEFAULT_SCHEDULER),
             seed: resolve_seed(params),
+            loras: parse_loras(params),
         })
     }
 
@@ -120,6 +125,10 @@ impl ImageRequest {
         obj.insert("sampler".into(), self.sampler.clone().into());
         obj.insert("scheduler".into(), self.scheduler.clone().into());
         obj.insert("seed".into(), self.seed.into());
+        obj.insert(
+            "loras".into(),
+            serde_json::to_value(&self.loras).unwrap_or(Value::Array(Vec::new())),
+        );
     }
 }
 
@@ -154,6 +163,24 @@ pub async fn run(
 ) -> Result<ImageOutcome> {
     let model_file = file_name(&model.file_path)?;
     let recipe = Recipe::for_family(model.family.as_deref());
+    let resolved_loras = resolve_loras(db, &req.loras).await?;
+    if !resolved_loras.is_empty() {
+        let summary = resolved_loras
+            .iter()
+            .map(|l| format!("{} @ {:.2}", l.file, l.strength))
+            .collect::<Vec<_>>()
+            .join(", ");
+        db.jobs()
+            .append_event(job_id, EventLevel::Info, &format!("LoRA: {summary}"))
+            .await?;
+    }
+    let lora_specs: Vec<LoraSpec> = resolved_loras
+        .iter()
+        .map(|l| LoraSpec {
+            file: &l.file,
+            strength: l.strength,
+        })
+        .collect();
 
     db.jobs()
         .append_event(
@@ -189,7 +216,7 @@ pub async fn run(
         filename_prefix: job_id,
     };
     let workflow = match recipe {
-        Recipe::Checkpoint => pipeline::checkpoint_txt2img(&inputs, model_file),
+        Recipe::Checkpoint => pipeline::checkpoint_txt2img(&inputs, model_file, &lora_specs),
         Recipe::FluxGguf => {
             let c = resolve_flux_companions(db).await?;
             db.jobs()
@@ -210,6 +237,7 @@ pub async fn run(
                     clip_l: &c.clip_l,
                     vae: &c.vae,
                 },
+                &lora_specs,
             )
         }
     };
