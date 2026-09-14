@@ -15,7 +15,8 @@ use super::dto::{
 use crate::compat::FitVerdict;
 use crate::config::Config;
 use crate::db::{
-    Agent, AgentSession, Benchmark, Download, Job, JobFilter, Model, NewAgent, NewJob, Session,
+    Agent, AgentSession, Benchmark, Download, EventLevel, Job, JobFilter, Model, NewAgent, NewJob,
+    Session,
 };
 use crate::download::EnqueueRequest;
 use crate::launcher::LaunchRequest;
@@ -200,6 +201,34 @@ pub async fn job_output_path(app: &App, id: &str) -> Result<Option<PathBuf>> {
     } else {
         Ok(None)
     }
+}
+
+/// `POST /jobs/{id}/clean-audio` — run the sidecar's DSP cleanup pass
+/// (DC-offset removal, a gentle high-pass filter, spectral-gate noise
+/// reduction) on an already-rendered narration clip, overwriting it in
+/// place. Only makes sense for finished `tts` jobs with real output.
+pub async fn clean_audio(app: &App, id: &str) -> Result<f64> {
+    let job = app
+        .db
+        .jobs()
+        .get(id)
+        .await?
+        .ok_or_else(|| CoreError::Config(format!("no such job {id}")))?;
+    if job.job_type != "tts" {
+        return Err(CoreError::Config(
+            "only narration clips can be cleaned".into(),
+        ));
+    }
+    let path = job_output_path(app, id)
+        .await?
+        .ok_or_else(|| CoreError::Config("no output for this job".into()))?;
+
+    let duration_secs = crate::capability::audio_clean::clean_in_place(&app.tts, &path).await?;
+    app.db
+        .jobs()
+        .append_event(id, EventLevel::Info, "cleaned")
+        .await?;
+    Ok(duration_secs)
 }
 
 pub async fn list_models(app: &App) -> Result<Vec<Model>> {
@@ -1144,6 +1173,31 @@ mod tests {
             ..sample_model()
         };
         assert!(!is_weight_file(&other, "weights.gguf"));
+    }
+
+    #[tokio::test]
+    async fn clean_audio_reports_a_clear_error_for_a_nonexistent_job() {
+        let tmp = tempfile::tempdir().unwrap();
+        let app = crate::App::load(crate::AppPaths::rooted(tmp.path()))
+            .await
+            .unwrap();
+
+        let err = clean_audio(&app, "no-such-job").await.unwrap_err();
+        assert!(err.to_string().contains("no such job"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn clean_audio_refuses_a_job_that_is_not_narration() {
+        use crate::db::NewJob;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let app = crate::App::load(crate::AppPaths::rooted(tmp.path()))
+            .await
+            .unwrap();
+        let job = app.db.jobs().insert(NewJob::new("image")).await.unwrap();
+
+        let err = clean_audio(&app, &job.id).await.unwrap_err();
+        assert!(err.to_string().contains("only narration clips"), "{err}");
     }
 
     #[tokio::test]

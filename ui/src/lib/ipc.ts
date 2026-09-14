@@ -285,6 +285,12 @@ export const cancelJob = (id: string) => invoke<boolean | null>("cancel_job", { 
 /** Permanently remove a finished job — history entry, events, and output
  *  file. Rejects if the job is still running (cancel it first). */
 export const deleteJob = (id: string) => invoke<void>("delete_job", { id });
+/** Runs a DSP cleanup pass (DC-offset removal, a gentle high-pass filter,
+ *  spectral-gate noise reduction) on an already-rendered narration clip,
+ *  overwriting it in place. Only valid for finished `tts` jobs. Returns the
+ *  resulting duration (unchanged by the pass, but returned for parity with
+ *  the original render). */
+export const cleanAudio = (id: string) => invoke<number>("clean_audio", { id });
 export const submitJob = (body: SubmitJobBody) => invoke<Job>("submit_job", { body });
 export const jobDetail = (id: string) => invoke<JobDetail | null>("job_detail", { id });
 

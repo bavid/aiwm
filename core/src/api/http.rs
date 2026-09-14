@@ -42,6 +42,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/jobs/{id}", get(job_detail).delete(delete_job))
         .route("/jobs/{id}/cancel", post(cancel_job))
         .route("/jobs/{id}/output", get(job_output))
+        .route("/jobs/{id}/clean-audio", post(clean_audio))
         .route("/models", get(list_models).post(import_model))
         .route("/models/known", get(known_models))
         .route("/models/stacks", get(model_stacks))
@@ -333,6 +334,16 @@ async fn job_output(State(app): AppState, Path(id): Path<String>) -> Result<Resp
         bytes,
     )
         .into_response())
+}
+
+/// Run the sidecar's noise-reduction pass on an already-rendered narration
+/// clip, overwriting it in place.
+async fn clean_audio(
+    State(app): AppState,
+    Path(id): Path<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let duration_secs = handlers::clean_audio(&app, &id).await?;
+    Ok(Json(serde_json::json!({ "duration_secs": duration_secs })))
 }
 
 async fn list_models(State(app): AppState) -> Result<Json<Vec<crate::db::Model>>, ApiError> {

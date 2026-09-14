@@ -4,6 +4,7 @@ import { QueueList } from "../../components/QueueList";
 import { useAbout, useJobs, useModels } from "../../lib/hooks";
 import {
   cancelJob,
+  cleanAudio,
   deleteJob,
   jobDetail,
   jobOutputUrl,
@@ -92,6 +93,16 @@ export function Voice() {
   const [detail, setDetail] = useState<JobDetail | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
+  // A completed clip is cleaned in place (same file, same URL) -- bumping a
+  // per-job version and appending it as a query param forces the <audio>
+  // element to actually re-fetch instead of quietly keeping the old bytes.
+  const [cleanedVersions, setCleanedVersions] = useState<Record<string, number>>({});
+  const [cleaningId, setCleaningId] = useState<string | null>(null);
+  const [cleanError, setCleanError] = useState<string | null>(null);
+
+  const audioUrlFor = (port: number, id: string) =>
+    `${jobOutputUrl(port, id)}?v=${cleanedVersions[id] ?? 0}`;
+
   useEffect(() => {
     if (!pendingId) return;
     let alive = true;
@@ -158,6 +169,19 @@ export function Voice() {
       }
     } catch (err) {
       setSendError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const handleClean = async (id: string) => {
+    setCleaningId(id);
+    setCleanError(null);
+    try {
+      await cleanAudio(id);
+      setCleanedVersions((v) => ({ ...v, [id]: (v[id] ?? 0) + 1 }));
+    } catch (err) {
+      setCleanError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setCleaningId(null);
     }
   };
 
@@ -290,9 +314,13 @@ export function Voice() {
           <Result
             job={selected}
             port={about?.core_api_port ?? null}
+            audioUrlFor={audioUrlFor}
             onCancel={selected ? () => cancelJob(selected.id) : undefined}
             onDelete={selected ? () => handleDelete(selected.id) : undefined}
+            onClean={selected ? () => handleClean(selected.id) : undefined}
+            cleaning={!!selected && cleaningId === selected.id}
           />
+          {cleanError && <p className="voice__err">{cleanError}</p>}
         </section>
       </div>
 
@@ -311,8 +339,17 @@ export function Voice() {
                   {promptOf(j) || "untitled"}
                 </button>
                 {about && (
-                  <audio controls preload="none" src={jobOutputUrl(about.core_api_port, j.id)} />
+                  <audio controls preload="none" src={audioUrlFor(about.core_api_port, j.id)} />
                 )}
+                <button
+                  type="button"
+                  className="voice__hrow-clean"
+                  title="Reduce background noise on this clip"
+                  disabled={cleaningId === j.id}
+                  onClick={() => handleClean(j.id)}
+                >
+                  {cleaningId === j.id ? "Cleaning…" : "Clean"}
+                </button>
                 <button
                   type="button"
                   className="voice__hrow-delete"
@@ -334,23 +371,30 @@ export function Voice() {
 function Result({
   job,
   port,
+  audioUrlFor,
   onCancel,
   onDelete,
+  onClean,
+  cleaning,
 }: {
   job: Job | null;
   port: number | null;
+  audioUrlFor: (port: number, id: string) => string;
   onCancel?: () => void;
   onDelete?: () => void;
+  onClean?: () => void;
+  cleaning?: boolean;
 }) {
   if (!job) return <p className="muted">Write a line and hit Preview.</p>;
 
   const running = !DONE.includes(job.state);
+  const finished = job.state === "completed";
 
   return (
     <div className="voiceresult">
       <div className="voiceresult__canvas" data-state={job.state}>
-        {job.state === "completed" && port != null ? (
-          <audio controls autoPlay src={jobOutputUrl(port, job.id)} />
+        {finished && port != null ? (
+          <audio controls autoPlay src={audioUrlFor(port, job.id)} />
         ) : job.state === "failed" ? (
           <span className="voiceresult__err">{job.error_text ?? "narration failed"}</span>
         ) : job.state === "blocked" ? (
@@ -361,16 +405,29 @@ function Result({
           <span className="voiceresult__spin">{job.state}…</span>
         )}
       </div>
-      {running && onCancel && (
-        <button type="button" className="voiceresult__cancel" onClick={onCancel}>
-          Stop
-        </button>
-      )}
-      {!running && onDelete && (
-        <button type="button" className="voiceresult__cancel" onClick={onDelete}>
-          Delete
-        </button>
-      )}
+      <div className="voiceresult__actions">
+        {running && onCancel && (
+          <button type="button" className="voiceresult__cancel" onClick={onCancel}>
+            Stop
+          </button>
+        )}
+        {finished && onClean && (
+          <button
+            type="button"
+            className="voiceresult__cancel"
+            onClick={onClean}
+            disabled={cleaning}
+            title="Reduce background noise on this clip"
+          >
+            {cleaning ? "Cleaning…" : "Clean audio"}
+          </button>
+        )}
+        {!running && onDelete && (
+          <button type="button" className="voiceresult__cancel" onClick={onDelete}>
+            Delete
+          </button>
+        )}
+      </div>
     </div>
   );
 }

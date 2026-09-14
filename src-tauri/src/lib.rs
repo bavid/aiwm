@@ -185,6 +185,11 @@ async fn delete_job(app: tauri::State<'_, Arc<App>>, id: String) -> Result<(), S
 }
 
 #[tauri::command]
+async fn clean_audio(app: tauri::State<'_, Arc<App>>, id: String) -> Result<f64, String> {
+    to_ipc(handlers::clean_audio(&app, &id).await)
+}
+
+#[tauri::command]
 async fn submit_job(app: tauri::State<'_, Arc<App>>, body: SubmitJobDto) -> Result<Job, String> {
     to_ipc(handlers::submit_job(&app, body).await)
 }
@@ -594,6 +599,7 @@ fn try_run() -> anyhow::Result<()> {
             import_backup,
             cancel_job,
             delete_job,
+            clean_audio,
             submit_job,
             job_detail,
             list_sessions,

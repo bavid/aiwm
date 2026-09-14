@@ -8,6 +8,7 @@
 //! - [`agent`] — long-running agent sessions; its own subsystem, not a job (5.1c)
 
 pub mod agent;
+pub mod audio_clean;
 pub mod chat;
 pub mod colibri;
 pub mod image;

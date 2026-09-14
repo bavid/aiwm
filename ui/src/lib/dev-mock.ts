@@ -182,6 +182,21 @@ function progressChatJobs(): void {
   }
 }
 
+/** Flip a running `tts` job to `completed` a moment in -- images/video have
+ *  no equivalent here either (dev-mock never had a reason to finish those),
+ *  but Voice's "completed" UI (Result panel, History rows, Clean audio) is
+ *  otherwise impossible to eyeball in the dev preview at all. */
+function progressTtsJobs(): void {
+  for (const j of JOBS) {
+    if (j.job_type !== "tts" || j.state !== "running") continue;
+    const started = Date.parse(String(j.started_at ?? j.created_at));
+    if (Date.now() - started < 900) continue;
+    j.state = "completed";
+    j.finished_at = now();
+    j.output_path = `/dev-mock/${j.id}.wav`;
+  }
+}
+
 /** Flip a running `recommend` job to `completed` with a canned report. */
 function progressRecommendJobs(): void {
   for (const j of JOBS) {
@@ -552,6 +567,7 @@ export function installDevMock(): void {
         progressUpgradeJobs();
         progressChatJobs();
         progressRecommendJobs();
+        progressTtsJobs();
         // Fresh array — `usePolled` needs a changed reference to re-render.
         return JOBS.map((j) => ({ ...j }));
       case "get_config":
@@ -611,6 +627,12 @@ export function installDevMock(): void {
         }
         JOBS.splice(i, 1);
         return null;
+      }
+      case "clean_audio": {
+        const job = JOBS.find((j) => j.id === a.id);
+        if (!job) throw new Error(`no such job ${a.id}`);
+        if (job.job_type !== "tts") throw new Error("only narration clips can be cleaned");
+        return 2.5;
       }
       case "list_sessions": {
         const capability = String(a.capability ?? "");
