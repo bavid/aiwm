@@ -67,17 +67,37 @@ export function buildTranscriptPrompt(
   return lines.join("\n");
 }
 
+/** Every occurrence of one marker (`PROMPT` or `NEGATIVE`) in an assistant
+ *  reply, each bounded to stop at the *next* marker line of either kind (not
+ *  just the other one) -- otherwise a reply with two `PROMPT:` lines lets the
+ *  first capture swallow the second one whole, literal "PROMPT:" text and
+ *  all. A model asked for one line sometimes still hands back several (e.g.
+ *  a multi-beat narration); returning all of them lets the caller decide
+ *  whether to join them instead of silently mangling the text. */
+function extractAllMarked(answer: string, marker: "PROMPT" | "NEGATIVE"): string[] {
+  const re = new RegExp(
+    `(?:^|\\n)\\s*${marker}:\\s*([^\\n]*(?:\\n(?!\\s*(?:PROMPT|NEGATIVE):)[^\\n]*)*)`,
+    "gi",
+  );
+  const out: string[] = [];
+  for (const m of answer.matchAll(re)) {
+    const v = m[1]?.trim();
+    if (v) out.push(v);
+  }
+  return out;
+}
+
 /** Pulls a `PROMPT:` / `NEGATIVE:` suggestion out of an assistant reply, if
- *  it followed the format asked for in the preamble. Each capture runs to
- *  the next marker line or the end of the text, so a multi-line prompt still
- *  comes through whole. */
+ *  it followed the format asked for in the preamble. Multiple `PROMPT:` (or
+ *  `NEGATIVE:`) lines are joined rather than dropped -- e.g. a narration
+ *  reply that comes back as several beats reads naturally as one line per
+ *  sentence once joined, since sentence-split synthesis already turns that
+ *  into real pauses. */
 export function extractSuggestion(answer: string): { prompt?: string; negative?: string } {
-  const promptMatch = answer.match(/(?:^|\n)\s*PROMPT:\s*([^\n]*(?:\n(?!\s*NEGATIVE:)[^\n]*)*)/i);
-  const negativeMatch = answer.match(/(?:^|\n)\s*NEGATIVE:\s*([^\n]*(?:\n(?!\s*PROMPT:)[^\n]*)*)/i);
-  const prompt = promptMatch?.[1]?.trim();
-  const negative = negativeMatch?.[1]?.trim();
+  const prompts = extractAllMarked(answer, "PROMPT");
+  const negatives = extractAllMarked(answer, "NEGATIVE");
   return {
-    ...(prompt ? { prompt } : {}),
-    ...(negative ? { negative } : {}),
+    ...(prompts.length ? { prompt: prompts.join(" ") } : {}),
+    ...(negatives.length ? { negative: negatives.join(", ") } : {}),
   };
 }

@@ -356,7 +356,7 @@ pub const KNOWN_MODELS: &[KnownModel] = &[
     // directly (no published checksum exists upstream).
     KnownModel {
         id: "kokoro-v1.0-int8",
-        name: "Kokoro 82M — int8 (voice, default)",
+        name: "Kokoro 82M — int8 (smaller, noisier)",
         kind: "voice_model",
         family: Some("kokoro"),
         publisher: "hexgrad / thewh1teagle",
@@ -366,14 +366,16 @@ pub const KNOWN_MODELS: &[KnownModel] = &[
         sha256: "ae315a79b623f244700e4afb9246c46a26066782e049ba174bf3ba433970ee9c",
         size_bytes: 114_119_327,
         license: "Apache-2.0",
-        note: "Quantized (spectral correlation 0.916 against fp32 per the release notes) — small \
-               and fast, plenty good for narration. Needs the matching voices file below.",
-        is_default: true,
+        note: "Quantized (spectral correlation 0.916 against fp32 per the release notes) — a \
+               reported, reproducible background-noise artifact traces back to this quantization. \
+               Smaller/faster, but fp32 below is the recommended pick. Needs the matching voices \
+               file below.",
+        is_default: false,
         media: "voice",
     },
     KnownModel {
         id: "kokoro-v1.0-fp32",
-        name: "Kokoro 82M — full precision",
+        name: "Kokoro 82M — full precision (voice, default)",
         kind: "voice_model",
         family: Some("kokoro"),
         publisher: "hexgrad / thewh1teagle",
@@ -383,9 +385,9 @@ pub const KNOWN_MODELS: &[KnownModel] = &[
         sha256: "beb0d1848dee9a49da392cc3df26958d46cfa35d321edf434f52949153f0df3a",
         size_bytes: 325_505_369,
         license: "Apache-2.0",
-        note: "The un-quantized export — a bit slower, marginally cleaner than the int8 default. \
-               Needs the matching voices file below.",
-        is_default: false,
+        note: "The un-quantized export — a bit larger, but clean (0.999 spectral correlation, per \
+               the release notes, vs. int8's 0.916). Needs the matching voices file below.",
+        is_default: true,
         media: "voice",
     },
     KnownModel {
@@ -507,7 +509,7 @@ pub const MODEL_STACKS: &[ModelStack] = &[
         id: "kokoro-en",
         label: "Kokoro (English narrator)",
         media: "voice",
-        member_ids: &["kokoro-v1.0-int8", "kokoro-voices-v1.0"],
+        member_ids: &["kokoro-v1.0-fp32", "kokoro-voices-v1.0"],
         note: "The Story Studio narrator. Two files: the model and its voice \
                embeddings — 54 English voices to pick a narrator preset from.",
         is_default: true,

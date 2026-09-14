@@ -65,24 +65,18 @@ pub struct TtsDone {
     pub duration_secs: f64,
 }
 
-/// Render `req` on the sidecar's Kokoro engine, save the result under
-/// `outputs_dir`. The Kokoro model + its voices file are found by role
-/// (`voice_model` / `voice_data`) — there is exactly one of each in practice
-/// (the catalog's "Download entire stack" imports both together), so `Auto`
-/// needs no picker UI, just "is one imported yet".
-pub async fn run(
-    db: &Database,
-    tts: &TtsAdapter,
-    outputs_dir: &Path,
-    job_id: &str,
-    req: TtsRequest,
-) -> Result<TtsDone> {
+/// The `voice_model` / `voice_data` pair to render with. Picks the *largest*
+/// file in each role rather than just "the first one" — when both Kokoro
+/// variants are imported (e.g. someone tried int8 first, then added fp32 for
+/// its cleaner audio), the bigger, un-quantized file wins automatically
+/// instead of depending on DB insertion order.
+async fn resolve_voice_files(db: &Database) -> Result<(crate::db::Model, crate::db::Model)> {
     let model = db
         .models()
         .for_role("voice_model")
         .await?
         .into_iter()
-        .next()
+        .max_by_key(|m| m.size_bytes)
         .ok_or_else(|| {
             tts_err(
                 "no voice model imported — import Kokoro on the Models tab \
@@ -94,13 +88,27 @@ pub async fn run(
         .for_role("voice_data")
         .await?
         .into_iter()
-        .next()
+        .max_by_key(|m| m.size_bytes)
         .ok_or_else(|| {
             tts_err(
                 "no voice data imported — import Kokoro's voices file on the Models tab \
                  (Add models \u{2192} Voice)",
             )
         })?;
+    Ok((model, voices))
+}
+
+/// Render `req` on the sidecar's Kokoro engine, save the result under
+/// `outputs_dir`. The Kokoro model + its voices file are found by role
+/// (`voice_model` / `voice_data`) via [`resolve_voice_files`].
+pub async fn run(
+    db: &Database,
+    tts: &TtsAdapter,
+    outputs_dir: &Path,
+    job_id: &str,
+    req: TtsRequest,
+) -> Result<TtsDone> {
+    let (model, voices) = resolve_voice_files(db).await?;
 
     let client = tts.client().await?;
     let result = client
@@ -213,5 +221,51 @@ mod tests {
             .await
             .unwrap_err();
         assert!(err.to_string().contains("no voice data imported"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn resolve_voice_files_prefers_the_larger_voice_model_when_both_are_imported() {
+        use crate::db::NewModel;
+
+        let db = Database::connect_in_memory().await.unwrap();
+        db.models()
+            .insert(NewModel {
+                name: "kokoro-v1.0.int8".into(),
+                format: "onnx".into(),
+                file_path: "E:\\AI\\models\\voice\\kokoro-v1.0.int8.onnx".into(),
+                size_bytes: 114_119_327,
+                source: "manual".into(),
+                roles: vec!["voice_model".into()],
+                ..NewModel::default()
+            })
+            .await
+            .unwrap();
+        db.models()
+            .insert(NewModel {
+                name: "kokoro-v1.0.fp32".into(),
+                format: "onnx".into(),
+                file_path: "E:\\AI\\models\\voice\\kokoro-v1.0.onnx".into(),
+                size_bytes: 325_505_369,
+                source: "manual".into(),
+                roles: vec!["voice_model".into()],
+                ..NewModel::default()
+            })
+            .await
+            .unwrap();
+        db.models()
+            .insert(NewModel {
+                name: "voices-v1.0".into(),
+                format: "bin".into(),
+                file_path: "E:\\AI\\models\\voice\\voices-v1.0.bin".into(),
+                size_bytes: 28_214_398,
+                source: "manual".into(),
+                roles: vec!["voice_data".into()],
+                ..NewModel::default()
+            })
+            .await
+            .unwrap();
+
+        let (model, _voices) = resolve_voice_files(&db).await.unwrap();
+        assert_eq!(model.name, "kokoro-v1.0.fp32");
     }
 }
