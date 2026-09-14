@@ -422,6 +422,34 @@
   color: var(--load-warn);
 }
 
+.namecell {
+  border: none;
+  background: none;
+  padding: 1px 2px;
+  margin: -1px -2px;
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: text;
+}
+
+.namecell:hover {
+  background: var(--surface-2);
+  outline: 1px dashed var(--border);
+}
+
+.namecell__input {
+  width: 100%;
+  min-width: 12rem;
+  padding: 1px var(--space-1);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--text);
+  font: inherit;
+}
+
 .tagcell {
   display: inline-flex;
   flex-wrap: wrap;

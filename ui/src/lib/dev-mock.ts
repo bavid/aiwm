@@ -731,6 +731,14 @@ export function installDevMock(): void {
         m.roles = clean;
         return clean;
       }
+      case "rename_model": {
+        const m = MODELS.find((x) => x.id === a.id);
+        if (!m) throw new Error(`model ${a.id} is not in the library`);
+        const name = String(a.name ?? "").trim();
+        if (!name) throw new Error("model name must not be empty");
+        m.name = name;
+        return { ...m };
+      }
       case "registry_status":
         return {
           source_id: "huggingface",

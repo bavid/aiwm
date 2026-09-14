@@ -51,6 +51,10 @@ export function PromptAssistant({
       if (!alive || !detail) return;
       const { job } = detail;
       if (!DONE.includes(job.state)) {
+        // `blocked` (not enough VRAM right now) isn't terminal -- the
+        // scheduler re-checks every tick and can recover on its own -- so
+        // keep polling, just surface why instead of a silent "..." forever.
+        setError(job.state === "blocked" ? job.error_text ?? "not enough VRAM free right now" : null);
         setStreaming(job.result ?? "");
         return;
       }
@@ -123,9 +127,9 @@ export function PromptAssistant({
                 </option>
               ))}
             </select>
-            {history.length > 0 && (
+            {(history.length > 0 || pendingId) && (
               <button type="button" className="chip" onClick={reset}>
-                New chat
+                {pendingId ? "Cancel" : "New chat"}
               </button>
             )}
           </div>

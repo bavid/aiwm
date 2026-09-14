@@ -282,6 +282,28 @@ impl<'a> ModelRepo<'a> {
         }
     }
 
+    /// Rename a model (the user's own display name — never the file on disk).
+    /// Same non-empty rule as [`ModelRepo::insert`].
+    pub async fn rename(&self, id: &str, name: &str) -> Result<Model> {
+        let name = name.trim();
+        if name.is_empty() {
+            return Err(CoreError::Db("model name must not be empty".into()));
+        }
+        let res = sqlx::query("UPDATE models SET name = $1 WHERE id = $2")
+            .bind(name)
+            .bind(id)
+            .execute(self.pool)
+            .await?;
+        if res.rows_affected() == 0 {
+            return Err(CoreError::Config(format!(
+                "model {id} is not in the library"
+            )));
+        }
+        self.get(id)
+            .await?
+            .ok_or_else(|| CoreError::Db("model vanished right after rename".into()))
+    }
+
     pub async fn delete(&self, id: &str) -> Result<bool> {
         let res = sqlx::query("DELETE FROM models WHERE id = $1")
             .bind(id)
@@ -788,6 +810,37 @@ mod tests {
         let got = db.models().get(&m.id).await.unwrap().unwrap();
         assert_eq!(got.use_count, 1);
         assert!(got.last_used_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn rename_updates_the_name_and_returns_the_fresh_row() {
+        let db = Database::connect_in_memory().await.unwrap();
+        let m = db
+            .models()
+            .insert(gguf_model("old-name", "h"))
+            .await
+            .unwrap();
+
+        let renamed = db.models().rename(&m.id, "  My Model  ").await.unwrap();
+        assert_eq!(renamed.name, "My Model"); // trimmed
+
+        let got = db.models().get(&m.id).await.unwrap().unwrap();
+        assert_eq!(got.name, "My Model");
+    }
+
+    #[tokio::test]
+    async fn rename_rejects_an_empty_name() {
+        let db = Database::connect_in_memory().await.unwrap();
+        let m = db.models().insert(gguf_model("x", "h")).await.unwrap();
+        assert!(db.models().rename(&m.id, "   ").await.is_err());
+        // Unchanged.
+        assert_eq!(db.models().get(&m.id).await.unwrap().unwrap().name, "x");
+    }
+
+    #[tokio::test]
+    async fn rename_of_an_unknown_id_is_an_error() {
+        let db = Database::connect_in_memory().await.unwrap();
+        assert!(db.models().rename("ghost", "New Name").await.is_err());
     }
 
     #[tokio::test]

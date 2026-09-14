@@ -352,6 +352,15 @@ async fn set_model_roles(
 }
 
 #[tauri::command]
+async fn rename_model(
+    app: tauri::State<'_, Arc<App>>,
+    id: String,
+    name: String,
+) -> Result<Model, String> {
+    to_ipc(handlers::rename_model(&app, &id, &name).await)
+}
+
+#[tauri::command]
 fn registry_status(app: tauri::State<'_, Arc<App>>) -> aiwm_core::RegistryStatus {
     handlers::registry_status(&app)
 }
@@ -553,6 +562,7 @@ fn try_run() -> anyhow::Result<()> {
             model_tags,
             set_model_tags,
             set_model_roles,
+            rename_model,
             registry_status,
             set_hf_token,
             local_api_status,

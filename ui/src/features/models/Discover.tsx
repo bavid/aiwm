@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useModels, useRegistrySearch } from "../../lib/hooks";
 import {
+  cancelJob,
   enqueueDownload,
   jobDetail,
   registryModel,
@@ -270,7 +271,14 @@ function AiSearch({ query, setQuery }: { query: string; setQuery: (q: string) =>
       }
       if (!alive || !detail) return;
       const { job } = detail;
-      if (!JOB_DONE.includes(job.state)) return;
+      if (!JOB_DONE.includes(job.state)) {
+        // `blocked` (not enough VRAM right now) isn't terminal -- the
+        // scheduler re-checks every tick and can recover on its own once
+        // something else frees VRAM -- so keep polling, just show why it's
+        // stuck instead of a silent "Searching..." forever.
+        setError(job.state === "blocked" ? (job.error_text ?? "not enough VRAM free right now") : null);
+        return;
+      }
       setPendingId(null);
       if (job.state === "completed" && job.result) {
         try {
@@ -349,6 +357,19 @@ function AiSearch({ query, setQuery }: { query: string; setQuery: (q: string) =>
         <button type="submit" disabled={!query.trim() || !!pendingId}>
           {pendingId ? "Searching…" : "Search"}
         </button>
+        {pendingId && (
+          <button
+            type="button"
+            className="chip"
+            onClick={() => {
+              cancelJob(pendingId).catch(() => {});
+              setPendingId(null);
+              setError(null);
+            }}
+          >
+            Cancel
+          </button>
+        )}
       </form>
 
       {error && <p className="import__err">{error}</p>}

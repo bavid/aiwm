@@ -15,6 +15,7 @@ import {
   enqueueDownload,
   importModel,
   registryModel,
+  renameModel,
   setModelRoles,
   setModelTags,
   upgradeCheck,
@@ -252,7 +253,9 @@ function ModelLibrary({ models, error }: { models: Model[] | null; error: string
                       {isPinned(m.id) ? "★" : "☆"}
                     </button>
                   </td>
-                  <td title={m.file_path}>{m.name}</td>
+                  <td title={m.file_path}>
+                    <NameCell modelId={m.id} name={m.name} />
+                  </td>
                   <td className="muted">{m.family ?? m.arch ?? "—"}</td>
                   <td>{m.quant ?? "—"}</td>
                   <td className="numeric">{params(m.param_count)}</td>
@@ -329,6 +332,60 @@ function ScoreCell({
         </button>
       )}
     </span>
+  );
+}
+
+/** Click the name to edit it in place -- Enter/blur saves, Escape reverts.
+ *  Optimistic, same pattern as `TagCell` below. Renaming only ever touches
+ *  the library's own `name` column; the file on disk keeps its own name. */
+function NameCell({ modelId, name }: { modelId: string; name: string }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(name);
+  const [local, setLocal] = useState<string | null>(null);
+  const shown = local ?? name;
+
+  const start = () => {
+    setDraft(shown);
+    setEditing(true);
+  };
+
+  const save = async () => {
+    setEditing(false);
+    const next = draft.trim();
+    if (!next || next === shown) return;
+    setLocal(next);
+    try {
+      const m = await renameModel(modelId, next);
+      setLocal(m.name);
+    } catch {
+      setLocal(null); // let the poll restore the truth
+    }
+  };
+
+  if (editing) {
+    return (
+      <input
+        autoFocus
+        className="namecell__input"
+        value={draft}
+        spellCheck={false}
+        onChange={(e) => setDraft(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") e.currentTarget.blur();
+          if (e.key === "Escape") {
+            setDraft(shown);
+            setEditing(false);
+          }
+        }}
+        onBlur={save}
+      />
+    );
+  }
+
+  return (
+    <button type="button" className="namecell" onClick={start} title="Click to rename">
+      {shown}
+    </button>
   );
 }
 

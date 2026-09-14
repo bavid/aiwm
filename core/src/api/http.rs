@@ -13,8 +13,8 @@ use serde::Deserialize;
 
 use super::dto::{
     AgentMessageDto, AgentPermissionDto, AttachDocumentDto, AttachExternalDto, DetachEngineDto,
-    LaunchExternalDto, NewAgentDto, NewSessionDto, OpenAgentSessionDto, RenameSessionDto,
-    SetArchivedDto, SetRolesDto, SetTagsDto, SetTokenDto, SubmitJobDto,
+    LaunchExternalDto, NewAgentDto, NewSessionDto, OpenAgentSessionDto, RenameModelDto,
+    RenameSessionDto, SetArchivedDto, SetRolesDto, SetTagsDto, SetTokenDto, SubmitJobDto,
 };
 use super::handlers;
 use crate::db::JobFilter;
@@ -54,6 +54,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/models/tags", get(model_tags))
         .route("/models/{id}/tags", put(set_model_tags))
         .route("/models/{id}/roles", put(set_model_roles))
+        .route("/models/{id}/name", put(rename_model))
         .route("/registry/status", get(registry_status))
         .route("/registry/token", put(set_hf_token))
         .route("/local-api/status", get(local_api_status))
@@ -376,6 +377,14 @@ async fn set_model_roles(
     Ok(Json(
         handlers::set_model_roles(&app, &id, &body.roles).await?,
     ))
+}
+
+async fn rename_model(
+    State(app): AppState,
+    Path(id): Path<String>,
+    Json(body): Json<RenameModelDto>,
+) -> Result<Json<crate::db::Model>, ApiError> {
+    Ok(Json(handlers::rename_model(&app, &id, &body.name).await?))
 }
 
 async fn registry_status(State(app): AppState) -> Json<crate::registry::RegistryStatus> {

@@ -370,6 +370,10 @@ export const setModelTags = (id: string, tags: string[]) =>
 export const setModelRoles = (id: string, roles: string[]) =>
   invoke<string[]>("set_model_roles", { id, roles });
 
+/** Rename a model's display name -- never touches the file on disk. */
+export const renameModel = (id: string, name: string) =>
+  invoke<Model>("rename_model", { id, name });
+
 /** The registry health line for Diagnostics (`GET /registry/status`). */
 export interface RegistryStatus {
   source_id: string;

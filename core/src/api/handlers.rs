@@ -223,6 +223,11 @@ pub async fn set_model_tags(app: &App, id: &str, tags: &[String]) -> Result<Vec<
     app.db.models().set_tags(id, tags).await
 }
 
+/// Rename a model's display name. The file on disk is never touched.
+pub async fn rename_model(app: &App, id: &str, name: &str) -> Result<Model> {
+    app.db.models().rename(id, name).await
+}
+
 /// Replace one model's roles (e.g. add `coding` after the fact); returns the
 /// cleaned set.
 pub async fn set_model_roles(app: &App, id: &str, roles: &[String]) -> Result<Vec<String>> {

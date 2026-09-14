@@ -7,7 +7,7 @@ type Side = {
   modelId: string;
   answer: string;
   stats: string | null;
-  state: "idle" | "running" | "completed" | "failed";
+  state: "idle" | "running" | "blocked" | "completed" | "failed";
   error: string | null;
 };
 
@@ -99,6 +99,11 @@ export function CompareModels({
           set((s) => ({ ...s, state: j.state === "completed" ? "completed" : "failed" }));
           break;
         }
+        // `blocked` (not enough VRAM right now) isn't terminal -- the
+        // scheduler re-checks every tick and can un-block on its own once
+        // something else frees VRAM -- so keep polling, just show why it's
+        // stuck instead of a silent "Thinking..." forever.
+        set((s) => ({ ...s, state: j.state === "blocked" ? "blocked" : "running" }));
       }
     } catch (err) {
       set((s) => ({ ...s, state: "failed", error: err instanceof Error ? err.message : String(err) }));
@@ -175,6 +180,9 @@ function CompareSide({
         {side.state === "running" && !side.answer && <span className="muted">Thinking…</span>}
         {side.answer}
         {side.state === "failed" && <span className="compare__err">{side.error ?? "failed"}</span>}
+        {side.state === "blocked" && (
+          <span className="compare__err">{side.error ?? "not enough VRAM free right now"}</span>
+        )}
       </div>
       {side.stats && <div className="compare__stats numeric">{side.stats}</div>}
     </div>

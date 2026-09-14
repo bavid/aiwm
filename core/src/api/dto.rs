@@ -403,6 +403,13 @@ pub struct SetRolesDto {
     pub roles: Vec<String>,
 }
 
+/// Body for `PUT /models/{id}/name` — rename a model's display name (never
+/// touches the file on disk).
+#[derive(Debug, Clone, Deserialize)]
+pub struct RenameModelDto {
+    pub name: String,
+}
+
 /// Body for `PUT /registry/token` — set (or clear, when blank) the Hugging Face
 /// token. Applied on the next restart.
 #[derive(Debug, Clone, Deserialize)]
