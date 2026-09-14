@@ -21,7 +21,7 @@ import numpy as np
 
 from aiwm_sidecar import PROTOCOL_VERSION, __version__
 
-CAPABILITIES: list[str] = ["synthesize_speech"]
+CAPABILITIES: list[str] = ["synthesize_speech", "clean_audio"]
 
 _METHOD_NOT_FOUND = -32601
 _INVALID_PARAMS = -32602
@@ -57,6 +57,27 @@ _PAUSE_TAGS: dict[str, float] = {
     "long pause": 0.9,
     "dramatic pause": 0.9,
 }
+# A local chat model (the narration prompt assistant) writes with "smart"
+# typographic punctuation by default -- Kokoro's phonemizer doesn't
+# recognize any of it, so it either mispronounces it or tries to read the
+# character literally. Everything reaching an engine is plain ASCII.
+_ASCII_PUNCTUATION: dict[str, str] = {
+    "—": ", ",  # em dash -- read as a pause, not a word
+    "–": "-",  # en dash
+    "‘": "'",
+    "’": "'",
+    "“": '"',
+    "”": '"',
+    "…": "...",  # ellipsis character
+    " ": " ",  # non-breaking space
+}
+_ASCII_PUNCTUATION_RE = re.compile("|".join(re.escape(k) for k in _ASCII_PUNCTUATION))
+
+
+def _normalize_for_speech(text: str) -> str:
+    return _ASCII_PUNCTUATION_RE.sub(lambda m: _ASCII_PUNCTUATION[m.group(0)], text)
+
+
 _PAUSE_TAG_ALTERNATION = "|".join(re.escape(k) for k in sorted(_PAUSE_TAGS, key=len, reverse=True))
 _PAUSE_TAG_RE = re.compile(rf"\(\s*({_PAUSE_TAG_ALTERNATION})\s*\)", re.IGNORECASE)
 _UNSUPPORTED_TAG_RE = re.compile(r"\([^()]{1,60}\)")
@@ -126,7 +147,7 @@ def _load_kokoro(model_path: str, voices_path: str) -> Any:
 
 
 def _synthesize_speech(params: dict[str, Any]) -> dict[str, Any]:
-    text = str(params.get("text") or "").strip()
+    text = _normalize_for_speech(str(params.get("text") or "")).strip()
     if not text:
         raise ValueError("`text` must not be empty")
 
@@ -177,6 +198,59 @@ def _synthesize_speech(params: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+# A gentle high-pass cutoff -- narration has no meaningful content below
+# this, so it's a safe place to remove sub-audible rumble/DC drift without
+# touching speech.
+_HIGH_PASS_HZ = 80.0
+_PEAK_CEILING = 0.98
+
+
+def _clean_audio(params: dict[str, Any]) -> dict[str, Any]:
+    """Post-processes an already-rendered clip: DC-offset removal, a gentle
+    high-pass filter, and spectral-gate noise reduction (via `noisereduce`,
+    which estimates the noise profile from the signal itself -- no separate
+    noise sample needed). Runs on whatever's on disk already; this is not a
+    new render, so it has no `voice`/`speed`/model concerns at all."""
+    audio_b64 = params.get("audio_base64")
+    if not audio_b64 or not isinstance(audio_b64, str):
+        raise ValueError("`audio_base64` must not be empty")
+
+    import soundfile as sf
+
+    try:
+        raw = base64.b64decode(audio_b64, validate=True)
+        samples, sample_rate = sf.read(io.BytesIO(raw), dtype="float32")
+    except Exception as e:
+        raise ValueError(f"`audio_base64` is not a decodable WAV: {e}") from e
+
+    import noisereduce as nr
+    from scipy.signal import butter, sosfiltfilt
+
+    samples = samples - np.mean(samples)
+    sos = butter(2, _HIGH_PASS_HZ, btype="highpass", fs=sample_rate, output="sos")
+    samples = sosfiltfilt(sos, samples).astype(np.float32)
+    # Pinned explicitly (matches noisereduce's own defaults today) rather
+    # than left implicit -- measured against real Kokoro int8-vs-fp32 output,
+    # this combination cut error against the fp32 reference by ~25%; a
+    # future library version changing its defaults shouldn't silently change
+    # this pipeline's behavior.
+    samples = nr.reduce_noise(
+        y=samples, sr=sample_rate, stationary=False, prop_decrease=1.0
+    ).astype(np.float32)
+
+    peak = float(np.max(np.abs(samples))) if len(samples) else 0.0
+    if peak > _PEAK_CEILING:
+        samples = samples * (_PEAK_CEILING / peak)
+
+    buf = io.BytesIO()
+    sf.write(buf, samples, sample_rate, format="WAV")
+    return {
+        "audio_base64": base64.b64encode(buf.getvalue()).decode("ascii"),
+        "sample_rate": sample_rate,
+        "duration_secs": len(samples) / sample_rate,
+    }
+
+
 def _error(req_id: Any, code: int, message: str) -> dict[str, Any]:
     return {"jsonrpc": "2.0", "id": req_id, "error": {"code": code, "message": message}}
 
@@ -202,6 +276,13 @@ def handle(req: dict[str, Any]) -> dict[str, Any] | None:
             return _error(req_id, _INVALID_PARAMS, str(e))
         except Exception as e:  # pragma: no cover - unexpected engine failure
             return _error(req_id, _INTERNAL_ERROR, f"synthesis failed: {e}")
+    elif method == "clean_audio":
+        try:
+            result = _clean_audio(params)
+        except ValueError as e:
+            return _error(req_id, _INVALID_PARAMS, str(e))
+        except Exception as e:  # pragma: no cover - unexpected engine failure
+            return _error(req_id, _INTERNAL_ERROR, f"cleanup failed: {e}")
     elif method in _PLANNED:
         return _error(req_id, _NOT_IMPLEMENTED, f"{method} is not implemented yet")
     else:

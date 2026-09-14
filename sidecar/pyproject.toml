@@ -10,6 +10,8 @@ dependencies = [
     "torch==2.14.0",
     "transformers>=5.17.0",
     "accelerate>=0.34",
+    "noisereduce>=3.0",
+    "scipy>=1.11",
 ]
 # More deps land later: huggingface_hub (Phase 6), gguf/safetensors readers (Phase 2).
 
