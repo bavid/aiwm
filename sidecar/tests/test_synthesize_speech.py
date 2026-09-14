@@ -176,6 +176,72 @@ def test_inserts_a_pause_between_sentences(monkeypatch: pytest.MonkeyPatch, mode
         assert w.getnframes() == pytest.approx(expected_secs * 24000, abs=1)
 
 
+def test_pause_markup_becomes_a_real_gap_and_is_never_spoken(
+    monkeypatch: pytest.MonkeyPatch, model_files
+):
+    model_path, voices_path = model_files
+    fake = FakeKokoro()
+    monkeypatch.setattr(main, "_load_kokoro", lambda *_: fake)
+
+    resp = request_synth(
+        {
+            "text": "Text text (pause) more text (breath) final text",
+            "model_path": model_path,
+            "voices_path": voices_path,
+        }
+    )
+
+    spoken = [c["text"] for c in fake.calls]
+    assert spoken == ["Text text", "more text", "final text"]
+    assert not any("(" in s or ")" in s for s in spoken)
+
+    expected_secs = 0.5 + main._PAUSE_TAGS["pause"] + 0.5 + main._PAUSE_TAGS["breath"] + 0.5
+    assert resp["result"]["duration_secs"] == pytest.approx(expected_secs)
+
+
+def test_dramatic_pause_markup_uses_a_longer_gap_than_a_plain_pause(
+    monkeypatch: pytest.MonkeyPatch, model_files
+):
+    model_path, voices_path = model_files
+    fake = FakeKokoro()
+    monkeypatch.setattr(main, "_load_kokoro", lambda *_: fake)
+
+    resp = request_synth(
+        {
+            "text": "Wait for it (dramatic pause) now",
+            "model_path": model_path,
+            "voices_path": voices_path,
+        }
+    )
+
+    assert main._PAUSE_TAGS["dramatic pause"] > main._PAUSE_TAGS["pause"]
+    expected_secs = 0.5 + main._PAUSE_TAGS["dramatic pause"] + 0.5
+    assert resp["result"]["duration_secs"] == pytest.approx(expected_secs)
+
+
+def test_unsupported_emotion_tags_are_stripped_not_spoken_literally(
+    monkeypatch: pytest.MonkeyPatch, model_files
+):
+    """No engine can act on a freeform tag like "(angry)" -- letting it
+    through would just get read aloud as literal words, so it's dropped
+    instead of pretending it changed the performance."""
+    model_path, voices_path = model_files
+    fake = FakeKokoro()
+    monkeypatch.setattr(main, "_load_kokoro", lambda *_: fake)
+
+    request_synth(
+        {
+            "text": "Text text (angry) more text (subtle) final text",
+            "model_path": model_path,
+            "voices_path": voices_path,
+        }
+    )
+
+    spoken = [c["text"] for c in fake.calls]
+    assert not any("angry" in s.lower() or "subtle" in s.lower() for s in spoken)
+    assert not any("(" in s or ")" in s for s in spoken)
+
+
 def test_single_sentence_gets_no_added_gap(monkeypatch: pytest.MonkeyPatch, model_files):
     model_path, voices_path = model_files
     fake = FakeKokoro()

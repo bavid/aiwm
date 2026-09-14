@@ -29,6 +29,10 @@ const PRESETS: { id: string; label: string; voice: string; speed: number; blurb:
   { id: "warm", label: "Warm storyteller", voice: "bf_emma", speed: 1.0, blurb: "Fireside, easy to listen to." },
   { id: "drywit", label: "Dry wit", voice: "bm_fable", speed: 1.05, blurb: "Amused, a little detached." },
   { id: "epic", label: "Grand / epic", voice: "bm_george", speed: 0.9, blurb: "Big, formal, scene-setting." },
+  { id: "clinical", label: "Cold and clinical", voice: "am_onyx", speed: 0.92, blurb: "Detached, precise — reciting facts, not comfort." },
+  { id: "wonder", label: "Wide-eyed wonder", voice: "af_sky", speed: 1.05, blurb: "Breathless, delighted — something amazing just happened." },
+  { id: "veteran", label: "Weary veteran", voice: "bm_lewis", speed: 0.9, blurb: "Tired, seen-it-all — one more war story." },
+  { id: "trickster", label: "Playful trickster", voice: "am_puck", speed: 1.1, blurb: "Mischievous, quick — enjoying this more than you are." },
 ];
 
 /** Every English voice Kokoro ships (54 total across 11 languages) — scoped
@@ -42,6 +46,25 @@ const ALL_VOICES = [
   "bf_alice", "bf_emma", "bf_isabella", "bf_lily",
   "bm_daniel", "bm_fable", "bm_george", "bm_lewis",
 ];
+
+/** Kokoro's own voice-id convention: `<accent><gender>_<name>`. This is the
+ *  only thing about a voice we can honestly label sight-unseen — matching it
+ *  to a personality would mean actually listening to each one (measured pitch
+ *  alone is a bad proxy: `am_fenrir`, the "Ominous/low" preset above, isn't
+ *  even below the median pitch of the male voices here — timbre and delivery
+ *  carry more of "ominous" than raw pitch does). */
+const VOICE_ACCENT_GENDER: Record<string, string> = {
+  af: "American, female",
+  am: "American, male",
+  bf: "British, female",
+  bm: "British, male",
+};
+
+function voiceLabel(id: string): string {
+  const prefix = id.split("_")[0];
+  const tag = VOICE_ACCENT_GENDER[prefix];
+  return tag ? `${id} — ${tag}` : id;
+}
 
 const SAMPLE_LINE = "From the mist of the mountain pass, an old story stirs once more.";
 
@@ -218,7 +241,7 @@ export function Voice() {
               >
                 {ALL_VOICES.map((v) => (
                   <option key={v} value={v}>
-                    {v}
+                    {voiceLabel(v)}
                   </option>
                 ))}
               </select>

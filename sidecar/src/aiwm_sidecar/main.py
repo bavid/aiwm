@@ -42,12 +42,67 @@ _DEFAULT_LANG = "en-us"
 # instead of one monotone run-on -- the cheapest lever on "sounds AI-ish"
 # available without swapping the model itself.
 _SENTENCE_GAP_SECS = 0.35
-_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?…])\s+|\n+")
+
+# Neither Kokoro nor (later) Dia understands a freeform stage direction like
+# "(angry)" -- there is no model here that performs emotion from text alone.
+# What *is* real: a precisely-timed silence, which this code controls
+# directly regardless of engine. So a small, fixed vocabulary of pause
+# markers gets a genuine gap; anything else in parentheses is stripped
+# before it reaches the engine, since otherwise it just gets read aloud as
+# literal words ("open paren angry close paren").
+_PAUSE_TAGS: dict[str, float] = {
+    "pause": 0.35,
+    "beat": 0.35,
+    "breath": 0.55,
+    "long pause": 0.9,
+    "dramatic pause": 0.9,
+}
+_PAUSE_TAG_ALTERNATION = "|".join(re.escape(k) for k in sorted(_PAUSE_TAGS, key=len, reverse=True))
+_PAUSE_TAG_RE = re.compile(rf"\(\s*({_PAUSE_TAG_ALTERNATION})\s*\)", re.IGNORECASE)
+_UNSUPPORTED_TAG_RE = re.compile(r"\([^()]{1,60}\)")
+_DELIM_RE = re.compile(
+    rf"{_PAUSE_TAG_RE.pattern}|(?P<sentence_end>[.!?…]+)|(?P<newline>\n+)",
+    re.IGNORECASE,
+)
 
 
-def _split_into_sentences(text: str) -> list[str]:
-    parts = [p.strip() for p in _SENTENCE_SPLIT_RE.split(text)]
-    return [p for p in parts if p]
+def _strip_unspoken_markup(text: str) -> str:
+    """Removes any remaining parenthetical annotation (an unsupported
+    emotion tag, a typo'd pause tag) that isn't one of the real, actionable
+    pause markers -- those are consumed as delimiters before this ever runs."""
+    return _UNSUPPORTED_TAG_RE.sub("", text)
+
+
+def _split_into_beats(text: str) -> list[tuple[str, float]]:
+    """Splits narration text into (spoken_text, gap_after_seconds) beats on
+    sentence boundaries and recognized pause markup ("(pause)", "(breath)",
+    "(dramatic pause)", ...). A recognized tag contributes a real silence at
+    that exact point and is never spoken; anything else in parentheses is
+    stripped rather than read aloud literally."""
+    beats: list[tuple[str, float]] = []
+    pos = 0
+    current = ""
+    for m in _DELIM_RE.finditer(text):
+        current += text[pos : m.start()]
+        pos = m.end()
+        if m.lastgroup == "sentence_end":
+            current += m.group("sentence_end")
+            gap = _SENTENCE_GAP_SECS
+        elif m.lastgroup == "newline":
+            gap = _SENTENCE_GAP_SECS
+        else:
+            gap = _PAUSE_TAGS[m.group(1).lower()]
+        spoken = _strip_unspoken_markup(current).strip()
+        current = ""
+        if spoken:
+            beats.append((spoken, gap))
+        elif beats:
+            prev_text, prev_gap = beats[-1]
+            beats[-1] = (prev_text, max(prev_gap, gap))
+    tail = _strip_unspoken_markup(current + text[pos:]).strip()
+    if tail:
+        beats.append((tail, 0.0))
+    return beats
 
 
 # One loaded Kokoro engine per (model_path, voices_path) -- constructing it
@@ -89,22 +144,25 @@ def _synthesize_speech(params: dict[str, Any]) -> dict[str, Any]:
     lang = str(params.get("lang") or _DEFAULT_LANG)
 
     kokoro = _load_kokoro(model_path, voices_path)
-    sentences = _split_into_sentences(text) or [text]
+    beats = _split_into_beats(text) or [(_strip_unspoken_markup(text).strip() or text, 0.0)]
 
     clips: list[np.ndarray] = []
+    gaps_after: list[float] = []
     sample_rate = 0
-    for sentence in sentences:
-        samples, sample_rate = kokoro.create(sentence, voice=voice, speed=speed, lang=lang)
+    for spoken, gap_after in beats:
+        samples, sample_rate = kokoro.create(spoken, voice=voice, speed=speed, lang=lang)
         clips.append(np.asarray(samples, dtype=np.float32))
+        gaps_after.append(gap_after)
 
     if len(clips) == 1:
         audio = clips[0]
     else:
-        gap = np.zeros(int(_SENTENCE_GAP_SECS * sample_rate), dtype=np.float32)
         pieces: list[np.ndarray] = [clips[0]]
-        for clip in clips[1:]:
-            pieces.append(gap)
-            pieces.append(clip)
+        for i in range(1, len(clips)):
+            gap_secs = gaps_after[i - 1]
+            if gap_secs > 0:
+                pieces.append(np.zeros(int(gap_secs * sample_rate), dtype=np.float32))
+            pieces.append(clips[i])
         audio = np.concatenate(pieces)
 
     import soundfile as sf

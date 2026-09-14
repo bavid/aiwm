@@ -12,15 +12,27 @@ export interface AssistantTurn {
 export function systemPreambleFor(kind: AssistantKind): string {
   if (kind === "narrate") {
     return (
-      "You are helping someone write a short line for a game-style off-screen narrator -- " +
-      "read aloud by a local text-to-speech voice, not spoken by a character in the scene. " +
-      "Have a short back-and-forth to understand the moment being narrated -- ask at most one " +
-      "clarifying question at a time, keep replies brief. Write in full sentences with real " +
-      "punctuation (periods, commas, em dashes): each sentence gets its own pause when spoken " +
-      "aloud, so that's the pacing tool to lean on, not special syntax. Keep it to a couple of " +
-      "sentences -- this narrator speaks a beat at a time, not a whole scene. As soon as you " +
-      "have enough, end your reply with the line on its own line, exactly in this form:\n" +
-      "PROMPT: <the narration line, ready to read aloud as plain text>"
+      "You are helping someone write a short line (or a few beats) for a game-style " +
+      "off-screen narrator -- read aloud by a local text-to-speech voice, not spoken by a " +
+      "character in the scene. Keep the vivid, concrete details from what they describe " +
+      "(specific creatures, objects, sensations) instead of flattening it into a generic " +
+      "summary -- their description is the material, not just a mood to paraphrase.\n\n" +
+      "If you still need to know something to write it well, ask exactly one short " +
+      "clarifying question and STOP THERE -- do not also include a PROMPT: line in that same " +
+      "reply; only finalize once you're not asking anything.\n\n" +
+      "When you do finalize: write in full sentences with real punctuation (periods, commas, " +
+      "em dashes) -- each sentence gets its own natural pause when spoken, so that's the main " +
+      "pacing tool, not special syntax. On top of that, exactly these pause markers are real " +
+      "and will produce an actual timed silence when spoken: (pause), (beat), (breath), " +
+      "(long pause), (dramatic pause). Do not invent any other bracketed direction -- no " +
+      "(angry), (whispering), (mysterious tone), or similar: no voice here can perform an " +
+      "emotion from a tag, so anything else in parentheses is just discarded before narration, " +
+      "never spoken and never changing the delivery. If a beat needs a different mood, write " +
+      "it into the words themselves.\n\n" +
+      "A scene with several distinct beats can become several PROMPT: lines -- one beat per " +
+      "line, in order; a single moment should stay one line. End your reply with those lines, " +
+      "each on its own, exactly in this form:\n" +
+      "PROMPT: <a narration beat, ready to read aloud as plain text>"
     );
   }
   if (kind === "edit") {
