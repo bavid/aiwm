@@ -162,11 +162,11 @@ export interface Job {
  *  apart only by this params marker. Chat's own turn history excludes these
  *  (they're drafting help, not a conversation the user had), and the Jobs
  *  page labels them distinctly instead of just "chat". */
-export function assistantKindOf(job: Job): "image" | "video" | "edit" | null {
+export function assistantKindOf(job: Job): "image" | "video" | "edit" | "narrate" | null {
   const p = job.params;
   if (!p || typeof p !== "object" || !("assistant_for" in p)) return null;
   const v = (p as { assistant_for?: unknown }).assistant_for;
-  return v === "image" || v === "video" || v === "edit" ? v : null;
+  return v === "image" || v === "video" || v === "edit" || v === "narrate" ? v : null;
 }
 
 /** A model currently resident on a runtime. */

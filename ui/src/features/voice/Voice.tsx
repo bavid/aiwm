@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { PromptAssistant } from "../../components/PromptAssistant";
 import { QueueList } from "../../components/QueueList";
 import { useAbout, useJobs, useModels } from "../../lib/hooks";
 import {
@@ -184,6 +185,8 @@ export function Voice() {
             </button>
           ))}
         </div>
+
+        <PromptAssistant kind="narrate" sessionId={null} onApplyPrompt={setText} />
 
         <form
           className="voiceform"

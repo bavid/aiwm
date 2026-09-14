@@ -1,4 +1,4 @@
-export type AssistantKind = "image" | "video" | "edit";
+export type AssistantKind = "image" | "video" | "edit" | "narrate";
 
 export interface AssistantTurn {
   role: "user" | "assistant";
@@ -10,6 +10,19 @@ export interface AssistantTurn {
  *  and no server-side memory (see submission below): each request re-sends
  *  the whole transcript so far. */
 export function systemPreambleFor(kind: AssistantKind): string {
+  if (kind === "narrate") {
+    return (
+      "You are helping someone write a short line for a game-style off-screen narrator -- " +
+      "read aloud by a local text-to-speech voice, not spoken by a character in the scene. " +
+      "Have a short back-and-forth to understand the moment being narrated -- ask at most one " +
+      "clarifying question at a time, keep replies brief. Write in full sentences with real " +
+      "punctuation (periods, commas, em dashes): each sentence gets its own pause when spoken " +
+      "aloud, so that's the pacing tool to lean on, not special syntax. Keep it to a couple of " +
+      "sentences -- this narrator speaks a beat at a time, not a whole scene. As soon as you " +
+      "have enough, end your reply with the line on its own line, exactly in this form:\n" +
+      "PROMPT: <the narration line, ready to read aloud as plain text>"
+    );
+  }
   if (kind === "edit") {
     return (
       "You are helping someone describe how they want an existing photo edited (e.g. " +
