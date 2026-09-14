@@ -38,6 +38,23 @@ pub enum ModelKind {
     /// fires when no explicit `model_type` hint is given, and an import of
     /// this kind always is one (the catalog entry sets it).
     VoiceData,
+    /// One file of Nari Labs' Dia-1.6B narrator (`config.json`,
+    /// `model-0000N-of-00002.safetensors`, …) — nine files that must land as
+    /// *co-located siblings with their original Hugging Face filenames* in
+    /// one directory, because `DiaForConditionalGeneration::from_pretrained`
+    /// reads a directory, not a single path. Unlike every other kind, the
+    /// destination filename is never hash-suffixed on a naming collision
+    /// (`model::import::unique_destination`) — the fixed per-kind
+    /// subdirectory already guarantees nothing else lands next to it.
+    DiaEngine,
+    /// One file of Dia's separate audio codec, `descript/dac_44khz` — three
+    /// files with the same collision-free-by-construction treatment as
+    /// [`DiaEngine`](Self::DiaEngine), but in their own directory: both
+    /// repos ship a `config.json` and the codec is a distinct Hugging Face
+    /// repo (MIT, not Dia's Apache-2.0), so they can never share a folder.
+    /// Imported locally (rather than left for `AutoProcessor` to fetch on
+    /// first use) to keep the narrator fully offline once both are in.
+    DiaCodec,
 }
 
 impl ModelKind {
@@ -53,6 +70,8 @@ impl ModelKind {
             "video_model" | "video_models" | "video" => Self::VideoModel,
             "voice_model" | "voice" => Self::VoiceModel,
             "voice_data" | "voices" => Self::VoiceData,
+            "dia_engine" => Self::DiaEngine,
+            "dia_codec" => Self::DiaCodec,
             _ => return None,
         })
     }
@@ -78,6 +97,10 @@ impl ModelKind {
             Self::Checkpoint | Self::Vae | Self::Lora => ext == "safetensors",
             Self::VoiceModel => ext == "onnx",
             Self::VoiceData => ext == "bin",
+            // A mix of small JSON config/tokenizer files and one or two
+            // safetensors weight shards -- both real extensions, in the same
+            // directory, for both the Dia engine and its DAC codec.
+            Self::DiaEngine | Self::DiaCodec => ext == "json" || ext == "safetensors",
         }
     }
 
@@ -104,6 +127,8 @@ impl ModelKind {
             Self::Chat => None,
             Self::VoiceModel => Some("voice_model"),
             Self::VoiceData => Some("voice_data"),
+            Self::DiaEngine => Some("dia_engine"),
+            Self::DiaCodec => Some("dia_codec"),
         }
     }
 
@@ -118,6 +143,13 @@ impl ModelKind {
             Self::TextEncoder => "image/text_encoders",
             Self::VideoModel => "video/diffusion_models",
             Self::VoiceModel | Self::VoiceData => "voice",
+            // Their own fixed subdirectories, not the flat "voice" folder --
+            // each is a directory of co-located sibling files consumed as a
+            // whole (see the type doc on `DiaEngine`/`DiaCodec`), and needs a
+            // home no other kind's file could ever land in under the same
+            // name.
+            Self::DiaEngine => "voice/dia-engine",
+            Self::DiaCodec => "voice/dia-codec",
         }
     }
 
@@ -126,7 +158,9 @@ impl ModelKind {
     /// (an LLM for llama.cpp, or a voice file for the Python sidecar).
     pub fn comfy_folder(self) -> Option<&'static str> {
         Some(match self {
-            Self::Chat | Self::VoiceModel | Self::VoiceData => return None,
+            Self::Chat | Self::VoiceModel | Self::VoiceData | Self::DiaEngine | Self::DiaCodec => {
+                return None
+            }
             Self::Checkpoint => "checkpoints",
             Self::DiffusionModel | Self::VideoModel => "diffusion_models",
             Self::Vae => "vae",
@@ -146,6 +180,8 @@ impl ModelKind {
             Self::VideoModel => "video_model",
             Self::VoiceModel => "voice_model",
             Self::VoiceData => "voice_data",
+            Self::DiaEngine => "dia_engine",
+            Self::DiaCodec => "dia_codec",
         }
     }
 
@@ -280,5 +316,51 @@ mod tests {
     fn voice_kinds_carry_their_own_distinct_roles() {
         assert_eq!(ModelKind::VoiceModel.default_role(), Some("voice_model"));
         assert_eq!(ModelKind::VoiceData.default_role(), Some("voice_data"));
+    }
+
+    #[test]
+    fn dia_kinds_parse_from_hints_and_land_in_their_own_dedicated_subdirs() {
+        assert_eq!(
+            ModelKind::from_hint("dia_engine"),
+            Some(ModelKind::DiaEngine)
+        );
+        assert_eq!(ModelKind::from_hint("dia_codec"), Some(ModelKind::DiaCodec));
+
+        // Nested under "voice/", but each in its own directory -- never the
+        // flat "voice" folder Kokoro's two files share.
+        assert_eq!(ModelKind::DiaEngine.store_subdir(), "voice/dia-engine");
+        assert_eq!(ModelKind::DiaCodec.store_subdir(), "voice/dia-codec");
+        assert_ne!(
+            ModelKind::DiaEngine.store_subdir(),
+            ModelKind::DiaCodec.store_subdir()
+        );
+    }
+
+    #[test]
+    fn dia_kinds_accept_their_real_file_extensions_only() {
+        assert!(ModelKind::DiaEngine.accepts_ext("json"));
+        assert!(ModelKind::DiaEngine.accepts_ext("safetensors"));
+        assert!(!ModelKind::DiaEngine.accepts_ext("onnx"));
+        assert!(!ModelKind::DiaEngine.accepts_ext("bin"));
+        assert!(ModelKind::DiaCodec.accepts_ext("json"));
+        assert!(ModelKind::DiaCodec.accepts_ext("safetensors"));
+        assert!(!ModelKind::DiaCodec.accepts_ext("gguf"));
+    }
+
+    #[test]
+    fn dia_kinds_are_invisible_to_every_runtimes_own_model_scan() {
+        // Same reasoning as the Kokoro voice kinds above -- the Python
+        // sidecar reads a directory path straight off the resolved model
+        // rows, never a runtime's own model-path scan.
+        assert!(!ModelKind::DiaEngine.is_llm());
+        assert!(!ModelKind::DiaCodec.is_llm());
+        assert_eq!(ModelKind::DiaEngine.comfy_folder(), None);
+        assert_eq!(ModelKind::DiaCodec.comfy_folder(), None);
+    }
+
+    #[test]
+    fn dia_kinds_carry_their_own_distinct_roles() {
+        assert_eq!(ModelKind::DiaEngine.default_role(), Some("dia_engine"));
+        assert_eq!(ModelKind::DiaCodec.default_role(), Some("dia_codec"));
     }
 }

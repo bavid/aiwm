@@ -407,6 +407,219 @@ pub const KNOWN_MODELS: &[KnownModel] = &[
         is_default: false,
         media: "voice",
     },
+    // --- Dia 1.6B (second, more expressive narrator engine) ---
+    // Nine co-located files that must keep their exact Hugging Face names in
+    // one directory (`DiaForConditionalGeneration::from_pretrained` reads a
+    // directory, not a single path) -- see `ModelKind::DiaEngine`. Real
+    // capability, stated honestly: recognized non-verbal tags
+    // ((laughs)/(sighs)/(clears throat)/…) and [S1]/[S2] speaker turns for
+    // actual dialogue -- NOT freeform emotional stage directions like
+    // "(angry)", which no engine here can perform from text alone.
+    KnownModel {
+        id: "dia-1.6b-config",
+        name: "Dia 1.6B — model config",
+        kind: "dia_engine",
+        family: Some("dia"),
+        publisher: "Nari Labs",
+        repo: "nari-labs/Dia-1.6B-0626",
+        file: "config.json",
+        url: "https://huggingface.co/nari-labs/Dia-1.6B-0626/resolve/main/config.json",
+        sha256: "4f4e9c50e6898fa79d6fe16e9991bebef07a4d3dd6926eee5eb7f7e39c88e04f",
+        size_bytes: 1396,
+        license: "Apache-2.0",
+        note: "Dia's encoder/decoder architecture config -- required by every file below.",
+        is_default: false,
+        media: "voice",
+    },
+    KnownModel {
+        id: "dia-1.6b-generation-config",
+        name: "Dia 1.6B — generation defaults",
+        kind: "dia_engine",
+        family: Some("dia"),
+        publisher: "Nari Labs",
+        repo: "nari-labs/Dia-1.6B-0626",
+        file: "generation_config.json",
+        url: "https://huggingface.co/nari-labs/Dia-1.6B-0626/resolve/main/generation_config.json",
+        sha256: "df7c1f7e4dc1c3e35811b7b2e49abd89d8a8b9599ec732eb6b0d17d678548ac4",
+        size_bytes: 238,
+        license: "Apache-2.0",
+        note: "Dia's shipped sampling / max-new-tokens defaults.",
+        is_default: false,
+        media: "voice",
+    },
+    KnownModel {
+        id: "dia-1.6b-audio-tokenizer-config",
+        name: "Dia 1.6B — audio tokenizer pointer",
+        kind: "dia_engine",
+        family: Some("dia"),
+        publisher: "Nari Labs",
+        repo: "nari-labs/Dia-1.6B-0626",
+        file: "audio_tokenizer_config.json",
+        url: "https://huggingface.co/nari-labs/Dia-1.6B-0626/resolve/main/audio_tokenizer_config.json",
+        sha256: "1552f8bdccdfe0a98a8e93f9eb369de315e66a07b1530eba0be41513e2ee8f5e",
+        size_bytes: 98,
+        license: "Apache-2.0",
+        note: "Tiny pointer config for Dia's separate audio codec (the DAC files below).",
+        is_default: false,
+        media: "voice",
+    },
+    KnownModel {
+        id: "dia-1.6b-preprocessor-config",
+        name: "Dia 1.6B — preprocessor config",
+        kind: "dia_engine",
+        family: Some("dia"),
+        publisher: "Nari Labs",
+        repo: "nari-labs/Dia-1.6B-0626",
+        file: "preprocessor_config.json",
+        url: "https://huggingface.co/nari-labs/Dia-1.6B-0626/resolve/main/preprocessor_config.json",
+        sha256: "7dfa85b765a7c5b3fb3907abf43ece88cd9edcbf39402e3e32e056b3275e5433",
+        size_bytes: 243,
+        license: "Apache-2.0",
+        note: "Settings `AutoProcessor` needs to build Dia's input side.",
+        is_default: false,
+        media: "voice",
+    },
+    KnownModel {
+        id: "dia-1.6b-special-tokens-map",
+        name: "Dia 1.6B — special tokens map",
+        kind: "dia_engine",
+        family: Some("dia"),
+        publisher: "Nari Labs",
+        repo: "nari-labs/Dia-1.6B-0626",
+        file: "special_tokens_map.json",
+        url: "https://huggingface.co/nari-labs/Dia-1.6B-0626/resolve/main/special_tokens_map.json",
+        sha256: "4373f3b7455d5a34196fca520de10a0af2af9d7cc05f6177b4be73a8bcfb3f74",
+        size_bytes: 277,
+        license: "Apache-2.0",
+        note: "Text tokenizer special-token metadata (BOS/EOS/pad/…).",
+        is_default: false,
+        media: "voice",
+    },
+    KnownModel {
+        id: "dia-1.6b-tokenizer-config",
+        name: "Dia 1.6B — tokenizer config",
+        kind: "dia_engine",
+        family: Some("dia"),
+        publisher: "Nari Labs",
+        repo: "nari-labs/Dia-1.6B-0626",
+        file: "tokenizer_config.json",
+        url: "https://huggingface.co/nari-labs/Dia-1.6B-0626/resolve/main/tokenizer_config.json",
+        sha256: "6c84315ff3c5214a5846bc3c08cb23fe01146906e4abf395519316732d602e64",
+        size_bytes: 803,
+        license: "Apache-2.0",
+        note: "Text tokenizer config -- how `[S1]`/`[S2]` speaker tags and non-verbal tags \
+               like (laughs)/(sighs) get encoded.",
+        is_default: false,
+        media: "voice",
+    },
+    KnownModel {
+        id: "dia-1.6b-weights-index",
+        name: "Dia 1.6B — weights shard index",
+        kind: "dia_engine",
+        family: Some("dia"),
+        publisher: "Nari Labs",
+        repo: "nari-labs/Dia-1.6B-0626",
+        file: "model.safetensors.index.json",
+        url: "https://huggingface.co/nari-labs/Dia-1.6B-0626/resolve/main/model.safetensors.index.json",
+        sha256: "89664ffd667582a41e71c9aa1a4ba9de8187ec9dcd1e7711d97ec57d6e32dec5",
+        size_bytes: 30_833,
+        license: "Apache-2.0",
+        note: "Maps every tensor to whichever of the two weight shards below holds it -- \
+               required alongside both for `from_pretrained` to load them as one model.",
+        is_default: false,
+        media: "voice",
+    },
+    KnownModel {
+        id: "dia-1.6b-weights-part1",
+        name: "Dia 1.6B — weights (shard 1 of 2)",
+        kind: "dia_engine",
+        family: Some("dia"),
+        publisher: "Nari Labs",
+        repo: "nari-labs/Dia-1.6B-0626",
+        file: "model-00001-of-00002.safetensors",
+        url: "https://huggingface.co/nari-labs/Dia-1.6B-0626/resolve/main/model-00001-of-00002.safetensors",
+        sha256: "9cf8f82d9f87d408f5da9cc0d73a3e9c4d9ca3633a4df3be4d283277b7ff1b1a",
+        size_bytes: 4_993_046_400,
+        license: "Apache-2.0",
+        note: "The bulk of Dia's 1.6B parameters (bf16), ~4.65 GB. Needs shard 2 and the \
+               index above to load.",
+        is_default: false,
+        media: "voice",
+    },
+    KnownModel {
+        id: "dia-1.6b-weights-part2",
+        name: "Dia 1.6B — weights (shard 2 of 2)",
+        kind: "dia_engine",
+        family: Some("dia"),
+        publisher: "Nari Labs",
+        repo: "nari-labs/Dia-1.6B-0626",
+        file: "model-00002-of-00002.safetensors",
+        url: "https://huggingface.co/nari-labs/Dia-1.6B-0626/resolve/main/model-00002-of-00002.safetensors",
+        sha256: "54bf3a47ac13e28ba6193659d57bc63a46875685b211b071f782c32efc834343",
+        size_bytes: 1_451_637_544,
+        license: "Apache-2.0",
+        note: "The rest of Dia's weights (bf16), ~1.35 GB. Needs shard 1 and the index above \
+               to load.",
+        is_default: false,
+        media: "voice",
+    },
+    // Dia's audio tokenizer (DAC) is a *separate* Hugging Face repo --
+    // `AutoProcessor.from_pretrained` would otherwise fetch it over the
+    // network the first time Dia runs, which this project's offline-first
+    // rule doesn't allow. Its own directory: both repos ship a
+    // `config.json` / `preprocessor_config.json`, so they'd collide by
+    // filename if merged into Dia's own folder.
+    KnownModel {
+        id: "dac-44khz-config",
+        name: "DAC 44kHz codec — config",
+        kind: "dia_codec",
+        family: None,
+        publisher: "Descript",
+        repo: "descript/dac_44khz",
+        file: "config.json",
+        url: "https://huggingface.co/descript/dac_44khz/resolve/main/config.json",
+        sha256: "4eb55fb9af1990b8d608184ad29b70e358589719af7ea8d3c06998f7c2264a64",
+        size_bytes: 541,
+        license: "MIT",
+        note: "descript-audio-codec (DAC) 44kHz config -- Dia's audio tokenizer/detokenizer \
+               backend, a separate repo from Dia itself.",
+        is_default: false,
+        media: "voice",
+    },
+    KnownModel {
+        id: "dac-44khz-preprocessor-config",
+        name: "DAC 44kHz codec — preprocessor config",
+        kind: "dia_codec",
+        family: None,
+        publisher: "Descript",
+        repo: "descript/dac_44khz",
+        file: "preprocessor_config.json",
+        url: "https://huggingface.co/descript/dac_44khz/resolve/main/preprocessor_config.json",
+        sha256: "c7d295758ce5777d6d88fef1996e94adc8ef3e2237ddfc5ecc24d1407aaddd7d",
+        size_bytes: 206,
+        license: "MIT",
+        note: "DAC's own preprocessor settings -- same filename as Dia's preprocessor \
+               config above, a different repo, hence its own directory.",
+        is_default: false,
+        media: "voice",
+    },
+    KnownModel {
+        id: "dac-44khz-weights",
+        name: "DAC 44kHz codec — weights",
+        kind: "dia_codec",
+        family: None,
+        publisher: "Descript",
+        repo: "descript/dac_44khz",
+        file: "model.safetensors",
+        url: "https://huggingface.co/descript/dac_44khz/resolve/main/model.safetensors",
+        sha256: "6128ebff483a41422b0164d079a3773b0d8d82e64c4293d775994cbf8baf913a",
+        size_bytes: 306_507_276,
+        license: "MIT",
+        note: "The codec's own weights (~292 MB) -- turns Dia's output tokens into the \
+               actual 44.1kHz waveform.",
+        is_default: false,
+        media: "voice",
+    },
 ];
 
 /// The catalogue entry whose file matches `sha256`, if any.
@@ -513,6 +726,34 @@ pub const MODEL_STACKS: &[ModelStack] = &[
         note: "The Story Studio narrator. Two files: the model and its voice \
                embeddings — 54 English voices to pick a narrator preset from.",
         is_default: true,
+    },
+    ModelStack {
+        id: "dia",
+        label: "Dia 1.6B (expressive narrator)",
+        media: "voice",
+        member_ids: &[
+            "dia-1.6b-config",
+            "dia-1.6b-generation-config",
+            "dia-1.6b-audio-tokenizer-config",
+            "dia-1.6b-preprocessor-config",
+            "dia-1.6b-special-tokens-map",
+            "dia-1.6b-tokenizer-config",
+            "dia-1.6b-weights-index",
+            "dia-1.6b-weights-part1",
+            "dia-1.6b-weights-part2",
+            "dac-44khz-config",
+            "dac-44khz-preprocessor-config",
+            "dac-44khz-weights",
+        ],
+        note: "A second, more expressive narrator engine (Nari Labs' Dia-1.6B). Real \
+               non-verbal tags -- (laughs), (sighs), (clears throat), and more -- plus \
+               [S1]/[S2] speaker turns for actual dialogue, not just single-voice narration. \
+               No freeform emotional stage directions like \"(angry)\": that isn't a real \
+               model capability. Twelve files (~6.8 GB): Dia's own weights/config/tokenizer \
+               (nine files) plus its separate audio codec, descript/dac_44khz (three files) \
+               — both directories are required together, and imported locally so nothing \
+               calls home for the codec at runtime. Slower than Kokoro; needs ~4.4-6 GB VRAM.",
+        is_default: false,
     },
 ];
 
@@ -725,11 +966,16 @@ mod tests {
             .count();
         assert_eq!(base_voice, 1, "exactly one default voice base model");
 
-        // Companions (vae/text_encoder/voice_data) are required, not
-        // alternatives -- none of them should be marked "the pick".
+        // Companions (vae/text_encoder/voice_data/dia_engine/dia_codec) are
+        // required, not alternatives -- none of them should be marked "the
+        // pick". Dia's own 9+3 files have no single "the pick" at all: every
+        // one of them is a required sibling, not an alternative to another.
         assert!(KNOWN_MODELS
             .iter()
-            .filter(|m| matches!(m.kind, "vae" | "text_encoder" | "voice_data"))
+            .filter(|m| matches!(
+                m.kind,
+                "vae" | "text_encoder" | "voice_data" | "dia_engine" | "dia_codec"
+            ))
             .all(|m| !m.is_default));
     }
 
@@ -817,6 +1063,71 @@ mod tests {
                 .filter(|m| m.role == role && m.is_default)
                 .count();
             assert_eq!(count, 1, "role {role} should have exactly one default");
+        }
+    }
+
+    #[test]
+    fn dia_stack_bundles_all_nine_engine_files_and_all_three_codec_files() {
+        let stack = MODEL_STACKS.iter().find(|s| s.id == "dia").unwrap();
+        assert_eq!(stack.media, "voice");
+        assert!(!stack.is_default, "kokoro-en stays the default voice stack");
+
+        let engine_count = stack
+            .member_ids
+            .iter()
+            .filter(|id| {
+                KNOWN_MODELS
+                    .iter()
+                    .find(|m| &m.id == *id)
+                    .is_some_and(|m| m.kind == "dia_engine")
+            })
+            .count();
+        let codec_count = stack
+            .member_ids
+            .iter()
+            .filter(|id| {
+                KNOWN_MODELS
+                    .iter()
+                    .find(|m| &m.id == *id)
+                    .is_some_and(|m| m.kind == "dia_codec")
+            })
+            .count();
+        // Every dia_engine/dia_codec catalog entry belongs to this one stack
+        // -- so these counts double as "the whole catalogue is bundled".
+        let total_engine = KNOWN_MODELS
+            .iter()
+            .filter(|m| m.kind == "dia_engine")
+            .count();
+        let total_codec = KNOWN_MODELS
+            .iter()
+            .filter(|m| m.kind == "dia_codec")
+            .count();
+        assert_eq!(engine_count, 9);
+        assert_eq!(engine_count, total_engine);
+        assert_eq!(codec_count, 3);
+        assert_eq!(codec_count, total_codec);
+        assert_eq!(stack.member_ids.len(), 12);
+    }
+
+    #[test]
+    fn dia_catalog_entries_are_all_apache_or_mit_and_never_claim_freeform_emotion_tags() {
+        for m in KNOWN_MODELS
+            .iter()
+            .filter(|m| matches!(m.kind, "dia_engine" | "dia_codec"))
+        {
+            assert!(
+                matches!(m.license, "Apache-2.0" | "MIT"),
+                "{}: unexpected license {}",
+                m.id,
+                m.license
+            );
+            // Dia cannot perform a freeform stage direction like "(angry)"
+            // from text -- individual file notes must never imply otherwise.
+            assert!(
+                !m.note.to_lowercase().contains("(angry)"),
+                "{}: note must not imply freeform emotion tags work",
+                m.id
+            );
         }
     }
 
