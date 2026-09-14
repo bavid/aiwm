@@ -156,6 +156,19 @@ export interface Job {
   session_id: string | null;
 }
 
+/** A `job_type: "chat"` completion submitted by the Prompt Assistant (Image
+ *  or Video's "talk through what you want" helper) rather than typed by the
+ *  user in the Chat tab -- both are plain chat jobs at the API level, told
+ *  apart only by this params marker. Chat's own turn history excludes these
+ *  (they're drafting help, not a conversation the user had), and the Jobs
+ *  page labels them distinctly instead of just "chat". */
+export function assistantKindOf(job: Job): "image" | "video" | "edit" | null {
+  const p = job.params;
+  if (!p || typeof p !== "object" || !("assistant_for" in p)) return null;
+  const v = (p as { assistant_for?: unknown }).assistant_for;
+  return v === "image" || v === "video" || v === "edit" ? v : null;
+}
+
 /** A model currently resident on a runtime. */
 export interface LoadedModel {
   model_id: string;

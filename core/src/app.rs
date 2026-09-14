@@ -102,7 +102,12 @@ impl App {
                 &paths.runtimes_dir(),
                 ComfyDirs {
                     base: paths.comfyui_data_dir(),
-                    output: paths.outputs_dir(),
+                    // ComfyUI's own scratch output folder -- never the
+                    // canonical `outputs_dir` the job engine writes each
+                    // job's fetched bytes into (`write_output`), or every
+                    // render leaves two files behind: ComfyUI's own
+                    // `<job_id>_00001_.<ext>` and AIWM's clean `<job_id>.<ext>`.
+                    output: paths.comfyui_data_dir().join("output"),
                     models_store: config.store_path.clone(),
                 },
             )
@@ -347,6 +352,27 @@ mod tests {
         // Untouched folders (and the config/db location itself) stay put.
         assert_eq!(app.paths.runtimes_dir(), paths.runtimes_dir());
         assert_eq!(app.paths.root(), paths.root());
+    }
+
+    #[tokio::test]
+    async fn comfyui_gets_its_own_output_dir_distinct_from_the_canonical_one() {
+        // ComfyUI's `SaveImage`/`SaveVideo` nodes always write their own copy
+        // under `--output-directory` -- if that were the same folder the job
+        // engine's own `write_output` writes the fetched bytes into (the
+        // canonical `outputs_dir` the Gallery/API serve from), every
+        // successful render would leave two files behind: ComfyUI's own
+        // `<job_id>_00001_.png` and AIWM's clean `<job_id>.png`. ComfyUI needs
+        // its own scratch folder instead.
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = AppPaths::rooted(tmp.path().join("aiwm"));
+
+        let app = App::load(paths.clone()).await.unwrap();
+
+        assert_ne!(app.comfyui.output_dir(), app.paths.outputs_dir());
+        assert_eq!(
+            app.comfyui.output_dir(),
+            app.paths.comfyui_data_dir().join("output")
+        );
     }
 
     #[tokio::test]

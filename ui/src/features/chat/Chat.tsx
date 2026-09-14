@@ -4,6 +4,7 @@ import { ChatSessionSidebar } from "../../components/ChatSessionSidebar";
 import { CompareModels } from "../../components/CompareModels";
 import { useAbout, useDocuments, useJobs, useModels, useRuntimes } from "../../lib/hooks";
 import {
+  assistantKindOf,
   attachDocument,
   cancelJob,
   deleteDocument,
@@ -131,6 +132,10 @@ export function Chat() {
     const history = jobs
       .filter((j) => {
         if (j.session_id !== sessionId) return false;
+        // A Prompt Assistant completion (drafting an image/video prompt) is a
+        // plain `job_type: "chat"` job like any other -- excluded here so it
+        // never shows up as if the user had that conversation in Chat itself.
+        if (assistantKindOf(j)) return false;
         // "Ungrouped" (no session) is a single shared bucket across every tab
         // -- an image generated on the Image tab with no session picked has
         // the exact same `session_id: null` as an ungrouped chat. Only a real

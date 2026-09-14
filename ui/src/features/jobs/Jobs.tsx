@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useJobs, useSessions } from "../../lib/hooks";
-import { cancelJob, type Job, type JobState } from "../../lib/ipc";
+import { assistantKindOf, cancelJob, type Job, type JobState } from "../../lib/ipc";
 import "./jobs.css";
 
 const CANCELLABLE: JobState[] = ["queued", "scheduled", "blocked", "preparing", "running"];
@@ -18,6 +18,14 @@ const STATE_FILTERS: { key: StateFilter; label: string }[] = [
   { key: "failed", label: "Failed" },
   { key: "cancelled", label: "Cancelled" },
 ];
+
+/** "chat" alone for a real conversation turn; a Prompt Assistant completion
+ *  (drafting an image/video prompt) gets its own label so it reads as what
+ *  it is, distinct from Chat's own history. */
+function typeLabel(job: Job): string {
+  const kind = assistantKindOf(job);
+  return kind ? `${job.job_type} — ${kind} prompt` : job.job_type;
+}
 
 function matchesState(job: Job, filter: StateFilter): boolean {
   switch (filter) {
@@ -108,7 +116,7 @@ export function Jobs() {
           <tbody>
             {filtered.map((j) => (
               <tr key={j.id}>
-                <td>{j.job_type}</td>
+                <td>{typeLabel(j)}</td>
                 <td className="muted">{j.model_id ?? "—"}</td>
                 <td className="muted">
                   {j.session_id ? (sessionNames.get(j.session_id) ?? j.session_id) : "—"}

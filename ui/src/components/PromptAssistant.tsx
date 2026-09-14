@@ -87,7 +87,11 @@ export function PromptAssistant({
         job_type: "chat",
         model_id: picked ? picked.id : undefined,
         runtime_id: picked ? "llamacpp" : undefined,
-        params: { prompt: fullPrompt, max_tokens: 400 },
+        // Marks this as a Prompt Assistant completion, not a real chat turn --
+        // Chat's own turn history excludes anything carrying this, so
+        // drafting an image/video prompt never shows up mixed into a
+        // conversation the user didn't have (see `assistantKindOf`).
+        params: { prompt: fullPrompt, max_tokens: 400, assistant_for: kind },
         session_id: sessionId ?? undefined,
       });
       setPendingId(job.id);

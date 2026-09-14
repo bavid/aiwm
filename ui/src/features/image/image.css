@@ -1,8 +1,8 @@
 .image {
   display: grid;
-  grid-template-columns: minmax(0, 360px) minmax(0, 1fr);
+  grid-template-columns: minmax(420px, 1fr) minmax(0, 1.6fr);
   gap: var(--space-4);
-  max-width: 1600px;
+  max-width: 1720px;
   margin: 0 auto;
   align-items: start;
 }

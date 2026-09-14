@@ -360,6 +360,14 @@ impl ComfyUiAdapter {
         self.dirs.input()
     }
 
+    /// ComfyUI's own `--output-directory` -- a scratch folder it manages
+    /// itself (its own filename + counter suffix). Deliberately not the same
+    /// folder [`crate::orchestrator::JobEngine`] writes each job's fetched
+    /// bytes into, or every render would leave two files behind.
+    pub fn output_dir(&self) -> PathBuf {
+        self.dirs.output.clone()
+    }
+
     /// Run one `workflow` (an API-format graph from [`crate::pipeline`]) on the
     /// running server: queue it, poll `GET /history` until it finishes, then
     /// fetch the output file (image or video). `Ok(None)` means `cancel` flipped

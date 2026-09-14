@@ -401,20 +401,32 @@ pub const MODEL_STACKS: &[ModelStack] = &[
         id: "flux2-klein",
         label: "FLUX.2 [klein] 9B",
         media: "image",
-        member_ids: &["flux2-klein-9b-q4", "qwen3-8b-flux2-encoder", "flux2-vae"],
-        note: "Fast (sub-second at 4 steps), fits a 16 GB card. Three files: the \
-               diffusion model, its Qwen3 text encoder, and its VAE. The realistic-detail \
-               LoRA is a separate, optional download from the Discover tab.",
+        member_ids: &[
+            "flux2-klein-9b-q4",
+            "qwen3-8b-flux2-encoder",
+            "flux2-vae",
+            "flux2-klein-edit-vae",
+        ],
+        note: "Fast (sub-second at 4 steps), fits a 16 GB card. Four files: the \
+               diffusion model, its Qwen3 text encoder, its VAE, and the second VAE that \
+               editing an existing image needs. The realistic-detail LoRA is a separate, \
+               optional download from the Discover tab.",
         is_default: false,
     },
     ModelStack {
         id: "flux2-klein-safetensors",
         label: "FLUX.2 [klein] 9B (safetensors)",
         media: "image",
-        member_ids: &["flux2-klein-9b-fp8", "qwen3-8b-flux2-encoder", "flux2-vae"],
+        member_ids: &[
+            "flux2-klein-9b-fp8",
+            "qwen3-8b-flux2-encoder",
+            "flux2-vae",
+            "flux2-klein-edit-vae",
+        ],
         note: "Same model as the GGUF stack above, as a plain .safetensors file instead \
-               — no ComfyUI-GGUF custom node required. Three files: the diffusion model, \
-               its Qwen3 text encoder, and its VAE.",
+               — no ComfyUI-GGUF custom node required. Four files: the diffusion model, \
+               its Qwen3 text encoder, its VAE, and the second VAE that editing an existing \
+               image needs.",
         is_default: false,
     },
     ModelStack {

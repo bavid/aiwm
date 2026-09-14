@@ -140,6 +140,20 @@ fn model_paths_yaml_body(store_root: &Path) -> String {
         "video",
         &ModelKind::VIDEO_KINDS,
     );
+    // LTX-Video ships as one bundled checkpoint (model + VAE), loaded via
+    // ComfyUI's `CheckpointLoaderSimple` -- unlike Wan's bare UNet, loaded via
+    // `UNETLoader`. There's only one video-model import kind, so both land in
+    // the same folder above under `diffusion_models:` -- register that same
+    // folder under `checkpoints:` too, or an imported LTX file is invisible
+    // to the node that actually needs to load it.
+    let video_dir = store_root
+        .join("video")
+        .join("diffusion_models")
+        .to_string_lossy()
+        .replace('\\', "/");
+    let _ = writeln!(yaml, "aiwm_video_checkpoints:");
+    let _ = writeln!(yaml, "  base_path: {video_dir}");
+    let _ = writeln!(yaml, "  checkpoints: ./");
     yaml
 }
 
@@ -267,6 +281,20 @@ mod tests {
         // second block for the video store
         assert!(body.contains("aiwm_video:"));
         assert!(body.contains("base_path: E:/AI/models/video"));
+    }
+
+    #[test]
+    fn model_paths_yaml_also_registers_the_video_folder_as_checkpoints_for_ltx() {
+        // LTX-Video ships as one bundled checkpoint (model + VAE), loaded via
+        // ComfyUI's `CheckpointLoaderSimple` -- unlike Wan's bare UNet, loaded
+        // via `UNETLoader`. Both land in the same imported video folder
+        // (there's only one video-model import kind), so ComfyUI's
+        // "checkpoints" category needs to see that folder too, or an LTX file
+        // imported through AIWM is invisible to the node that loads it
+        // ("ckpt_name: '...' not in [...]").
+        let body = model_paths_yaml_body(Path::new("E:\\AI\\models"));
+        assert!(body.contains("base_path: E:/AI/models/video/diffusion_models"));
+        assert!(body.contains("checkpoints: ./"));
     }
 
     #[test]
