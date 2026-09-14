@@ -447,6 +447,41 @@ anywhere; `Blocked` is purely `core::scheduler::Decision` (not enough VRAM right
   the form after scrolling, Browse… button no-ops cleanly outside Tauri, no new
   console errors on any tab.
 
+## Story Studio (noch nicht begonnen)
+Charakter-/Szenen-basierter Story-Builder (User: "lets plan actuall a friggin
+lot" → ausführliches Konzept + interaktiver Mockup-Artifact entstanden, aber
+**noch kein Code, kein Doc im Repo** — dieser Eintrag ist der einzige
+Repo-seitige Anker, damit das Konzept nicht mit dem Chat-Verlauf verloren
+geht). Kurzfassung: Story (Setting/Ära, Art-Style, Prämisse) → Character
+(Traits/Backstory, gelockte Referenz-Portrait-Job-ID für konsistentes
+Aussehen, Inventar, Beziehungen) → Character-Log (append-only "Brain" —
+Adventures/Steps/Inventory/Personen) → Location (eigenes gelocktes
+Referenzbild) → Scene (Narrative + Dialogzeilen + Teilnehmer + Location +
+Redline) → Scene-Image (mehrere pro Scene, eine kanonische) → Assembly
+(Auswahl aus Scenes+Images fürs Bündeln/Export). Konsistenz-Mechanismus:
+IP-Adapter (Referenzbild-Konditionierung, kein Training) als MVP, LoRA pro
+Charakter später — beides noch nicht in AIWM installiert (neuer ComfyUI-
+Custom-Node-Pack nötig). Dialog immer UI-Overlay-Text, nie ins Bild gebacken
+(explizite Anforderung — KI-Text in Bildern ist unzuverlässig). Geplante
+Phasen: 1 Text+Bild-MVP → 2 IP-Adapter-Konsistenz → 3 Assembly/Export → 4
+LoRA/ControlNet-Stretch. UI-Idee: neuer "Stories"-Tab, SectionNav-Rail
+(Characters/World/Timeline/Assembly), Timeline als Haupt-Scroll-Fläche mit
+Scene-Cards, persistentes Character-Sheet als Drawer.
+- **Offene Frage vom User (2026-09-14):** lohnt sich eine bestehende
+  Open-Source-Workflow-/Orchestrierungs-Engine für die mehrstufige
+  Story-Pipeline (Charakter-Erstellung → Backstory → Scene → Dialog →
+  Bild-Gen → Narration, mit Redo/Regenerate pro Schritt), statt das
+  Schritt-für-Schritt-Sequencing selbst zu bauen? Noch nicht evaluiert.
+  Kandidaten zu prüfen, wenn's soweit ist: etwas Leichtgewichtiges das sich
+  in einen Rust/Tauri-Prozess einbetten lässt (kein separater Server/Node
+  wie n8n) — z. B. ein reiner State-Machine-/DAG-Executor als Rust-Crate,
+  oder ComfyUI selbst als Graph-Engine zweckentfremden (Story-Schritte als
+  Nodes) — beides ungeprüft, nur Erstgedanken.
+- Vor Implementierung offen (aus dem Konzeptions-Gespräch, unbeantwortet):
+  Phase-1-Umfang (Text-first vs. Konsistenz-von-Tag-1), NPC-Gewicht (volles
+  Character vs. leichtgewichtig), Export-Priorität (HTML-Scroll zuerst vs.
+  PDF/CBZ), Reaktion auf das Mockup-Layout.
+
 ## Offen / später zu entscheiden
 - App-Selbst-Update offline (manueller Installer + Signaturprüfung angenommen)
 - Parallele Jobs: Policy verfeinern (klein-LLM + Upscale gleichzeitig)
@@ -454,3 +489,12 @@ anywhere; `Blocked` is purely `core::scheduler::Decision` (not enough VRAM right
 - LAN-/Remote-Zugriff (opt-in, mit Auth) — frühestens nach Phase 6
 - Relighting, Generative Fill, Video-Restoration
 - Plugin-/Adapter-Plattform für Dritt-Runtimes (erst wenn interne Adapter stabil)
+- RTX Video Super Resolution als ComfyUI-Node (offizieller `Comfy-Org/
+  Nvidia_RTX_Nodes_ComfyUI`, Apache-2.0, braucht RTX-GPU) — Upscale-Schritt
+  für Image/Video-Tab. User bestätigt (2026-09-14), Umsetzung als Nächstes.
+  Nicht zu verwechseln mit "DLSS 5": das ist eine noch nicht final
+  released Game-Rendering-Technologie (GTC 2026 angekündigt), deren
+  populärste GitHub-Repos "geleakte" NVIDIA-Binaries per DLL-Injection in
+  beliebige Spiele patchen — bewusst nicht angefasst (Sicherheits-/
+  Lizenzrisiko, und architektonisch eh nicht für Batch-Datei-Upscaling
+  gedacht, sondern fürs Echtzeit-Rendering einer Game-Engine).
