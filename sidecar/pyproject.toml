@@ -7,6 +7,9 @@ dependencies = [
     "kokoro-onnx>=0.6.1",
     "soundfile>=0.12",
     "numpy>=1.26",
+    "torch==2.14.0",
+    "transformers>=5.17.0",
+    "accelerate>=0.34",
 ]
 # More deps land later: huggingface_hub (Phase 6), gguf/safetensors readers (Phase 2).
 
@@ -19,6 +22,16 @@ dev = ["ruff>=0.6", "pytest>=8"]
 [tool.uv]
 # uv cache (C:) and project (E:) are on different volumes -> hardlinking fails.
 link-mode = "copy"
+
+[tool.uv.sources]
+# CUDA-enabled build for the Dia narrator (RTX 4080 Super) -- the plain PyPI
+# `torch` wheel on Windows is CPU-only.
+torch = { index = "pytorch-cu126" }
+
+[[tool.uv.index]]
+name = "pytorch-cu126"
+url = "https://download.pytorch.org/whl/cu126"
+explicit = true
 
 [build-system]
 requires = ["hatchling"]
