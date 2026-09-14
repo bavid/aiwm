@@ -455,7 +455,7 @@ export interface KnownModel {
   /** The curated "pick this one" model for its role. */
   is_default: boolean;
   /** Which media type this entry belongs to. */
-  media: "image" | "video";
+  media: "image" | "video" | "voice";
   fit: FitVerdict;
 }
 
@@ -466,7 +466,7 @@ export interface KnownModel {
 export interface ModelStack {
   id: string;
   label: string;
-  media: "image" | "video";
+  media: "image" | "video" | "voice";
   note: string;
   /** The curated "pick this one" stack for its media type. */
   is_default: boolean;
@@ -595,7 +595,9 @@ export type ModelType =
   | "vae"
   | "lora"
   | "text_encoder"
-  | "video";
+  | "video"
+  | "voice_model"
+  | "voice_data";
 
 export const importModel = (
   sourcePath: string,

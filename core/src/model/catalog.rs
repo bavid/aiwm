@@ -349,6 +349,62 @@ pub const KNOWN_MODELS: &[KnownModel] = &[
         is_default: false,
         media: "video",
     },
+    // --- voice (Story Studio narrator, WP-9) ---
+    // Not Hugging Face — the working ONNX export + combined voices file for
+    // the `kokoro-onnx` package (what the sidecar actually loads) live as
+    // GitHub release assets. Verified by downloading and hashing both files
+    // directly (no published checksum exists upstream).
+    KnownModel {
+        id: "kokoro-v1.0-int8",
+        name: "Kokoro 82M — int8 (voice, default)",
+        kind: "voice_model",
+        family: Some("kokoro"),
+        publisher: "hexgrad / thewh1teagle",
+        repo: "thewh1teagle/kokoro-onnx",
+        file: "kokoro-v1.0.int8.onnx",
+        url: "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.1/kokoro-v1.0.int8.onnx",
+        sha256: "ae315a79b623f244700e4afb9246c46a26066782e049ba174bf3ba433970ee9c",
+        size_bytes: 114_119_327,
+        license: "Apache-2.0",
+        note: "Quantized (spectral correlation 0.916 against fp32 per the release notes) — small \
+               and fast, plenty good for narration. Needs the matching voices file below.",
+        is_default: true,
+        media: "voice",
+    },
+    KnownModel {
+        id: "kokoro-v1.0-fp32",
+        name: "Kokoro 82M — full precision",
+        kind: "voice_model",
+        family: Some("kokoro"),
+        publisher: "hexgrad / thewh1teagle",
+        repo: "thewh1teagle/kokoro-onnx",
+        file: "kokoro-v1.0.onnx",
+        url: "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.1/kokoro-v1.0.onnx",
+        sha256: "beb0d1848dee9a49da392cc3df26958d46cfa35d321edf434f52949153f0df3a",
+        size_bytes: 325_505_369,
+        license: "Apache-2.0",
+        note: "The un-quantized export — a bit slower, marginally cleaner than the int8 default. \
+               Needs the matching voices file below.",
+        is_default: false,
+        media: "voice",
+    },
+    KnownModel {
+        id: "kokoro-voices-v1.0",
+        name: "Kokoro voices (54 English voices)",
+        kind: "voice_data",
+        family: Some("kokoro"),
+        publisher: "hexgrad / thewh1teagle",
+        repo: "thewh1teagle/kokoro-onnx",
+        file: "voices-v1.0.bin",
+        url: "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.1/voices-v1.0.bin",
+        sha256: "bca610b8308e8d99f32e6fe4197e7ec01679264efed0cac9140fe9c29f1fbf7d",
+        size_bytes: 28_214_398,
+        license: "Apache-2.0",
+        note: "54 American/British English voice embeddings — required by either Kokoro model \
+               above. Not a standalone model; pairs with whichever one you import.",
+        is_default: false,
+        media: "voice",
+    },
 ];
 
 /// The catalogue entry whose file matches `sha256`, if any.
@@ -446,6 +502,15 @@ pub const MODEL_STACKS: &[ModelStack] = &[
         note: "Fast and light. Two files: model + VAE bundled in one, plus a \
                shared T5 text encoder.",
         is_default: false,
+    },
+    ModelStack {
+        id: "kokoro-en",
+        label: "Kokoro (English narrator)",
+        media: "voice",
+        member_ids: &["kokoro-v1.0-int8", "kokoro-voices-v1.0"],
+        note: "The Story Studio narrator. Two files: the model and its voice \
+               embeddings — 54 English voices to pick a narrator preset from.",
+        is_default: true,
     },
 ];
 
@@ -603,11 +668,22 @@ mod tests {
             assert_eq!(m.sha256.len(), 64, "{}: sha256 not 64 hex chars", m.id);
             assert!(m.sha256.chars().all(|c| c.is_ascii_hexdigit()), "{}", m.id);
             assert!(m.size_bytes > 0, "{}", m.id);
-            assert!(m.url.starts_with("https://huggingface.co/"), "{}", m.id);
+            // A small allowlist of hosts trusted to serve immutable, versioned
+            // release assets -- not "any https URL" (Hugging Face's own
+            // `resolve/<rev>/` path is itself one such immutable-per-revision
+            // scheme; a GitHub release asset URL is the same idea).
+            let trusted_host = m.url.starts_with("https://huggingface.co/")
+                || (m.url.starts_with("https://github.com/")
+                    && m.url.contains("/releases/download/"));
+            assert!(trusted_host, "{}: url is not from a trusted host", m.id);
             assert!(m.url.ends_with(m.file), "{}: url/file mismatch", m.id);
             // The declared kind must parse back to a real ModelKind.
             assert!(ModelKind::from_hint(m.kind).is_some(), "{}: bad kind", m.id);
-            assert!(matches!(m.media, "image" | "video"), "{}: bad media", m.id);
+            assert!(
+                matches!(m.media, "image" | "video" | "voice"),
+                "{}: bad media",
+                m.id
+            );
         }
     }
 
@@ -641,11 +717,17 @@ mod tests {
             .count();
         assert_eq!(base_video, 1, "exactly one default video base model");
 
-        // Companions (vae/text_encoder) are required, not alternatives -- none
-        // of them should be marked "the pick".
+        let base_voice = KNOWN_MODELS
+            .iter()
+            .filter(|m| m.kind == "voice_model" && m.is_default)
+            .count();
+        assert_eq!(base_voice, 1, "exactly one default voice base model");
+
+        // Companions (vae/text_encoder/voice_data) are required, not
+        // alternatives -- none of them should be marked "the pick".
         assert!(KNOWN_MODELS
             .iter()
-            .filter(|m| matches!(m.kind, "vae" | "text_encoder"))
+            .filter(|m| matches!(m.kind, "vae" | "text_encoder" | "voice_data"))
             .all(|m| !m.is_default));
     }
 
@@ -686,7 +768,7 @@ mod tests {
 
     #[test]
     fn exactly_one_default_stack_per_media() {
-        for media in ["image", "video"] {
+        for media in ["image", "video", "voice"] {
             let count = MODEL_STACKS
                 .iter()
                 .filter(|s| s.media == media && s.is_default)

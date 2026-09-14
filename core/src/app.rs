@@ -15,7 +15,9 @@ use crate::launcher::{AdapterBinaries, Launcher};
 use crate::orchestrator::JobEngine;
 use crate::paths::AppPaths;
 use crate::registry::{HuggingFaceSource, Registry};
-use crate::runtime::{ColibriAdapter, ComfyDirs, ComfyUiAdapter, LlamaCppAdapter, RuntimeRegistry};
+use crate::runtime::{
+    ColibriAdapter, ComfyDirs, ComfyUiAdapter, LlamaCppAdapter, RuntimeRegistry, TtsAdapter,
+};
 use crate::scheduler::HybridScheduler;
 use crate::telemetry::{GpuStatus, Sampler};
 use crate::Result;
@@ -46,6 +48,10 @@ pub struct App {
     /// constructed and registered like every other runtime so it shows up in
     /// `GET /runtimes` and the Settings install card the same way.
     pub colibri: Arc<ColibriAdapter>,
+    /// The narrator's local text-to-speech runtime (Story Studio, WP-9) —
+    /// always constructed and registered the same way `colibri` is; resolving
+    /// `uv` and spawning the sidecar is deferred to first real use.
+    pub tts: Arc<TtsAdapter>,
     pub scheduler: Arc<HybridScheduler>,
     pub jobs: Arc<JobEngine>,
     /// Long-running agent sessions (Phase 5.1c) — its own subsystem, not a job.
@@ -116,6 +122,8 @@ impl App {
         runtimes.register(comfyui.clone());
         let colibri = Arc::new(ColibriAdapter::discover(db.clone(), &paths.runtimes_dir()));
         runtimes.register(colibri.clone());
+        let tts = Arc::new(TtsAdapter::new());
+        runtimes.register(tts.clone());
         let budget = resolve_vram_budget(&config, &telemetry);
         let scheduler = Arc::new(HybridScheduler::new(runtimes.clone(), budget));
         let auto_pref = config.models.auto_preference;
@@ -141,7 +149,8 @@ impl App {
             .with_telemetry(telemetry.subscribe())
             .with_auto_preference(auto_pref)
             .with_registry(registry.clone())
-            .with_colibri(colibri.clone()),
+            .with_colibri(colibri.clone())
+            .with_tts(tts.clone()),
         );
         let coding = Arc::new(LlamaCodingRuntime::new(
             runtimes.clone(),
@@ -193,6 +202,7 @@ impl App {
             llama,
             comfyui,
             colibri,
+            tts,
             scheduler,
             jobs,
             agents,

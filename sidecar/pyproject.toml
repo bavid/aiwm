@@ -3,8 +3,11 @@ name = "aiwm-sidecar"
 version = "0.0.1"
 description = "AI Workstation Manager — Python sidecar (model-file inspection, HF Hub, agent runners)."
 requires-python = ">=3.11"
-dependencies = []
-# Real deps land later: huggingface_hub (Phase 6), gguf/safetensors readers (Phase 2).
+dependencies = [
+    "kokoro-onnx>=0.6.1",
+    "soundfile>=0.12",
+]
+# More deps land later: huggingface_hub (Phase 6), gguf/safetensors readers (Phase 2).
 
 [project.scripts]
 aiwm-sidecar = "aiwm_sidecar.main:main"

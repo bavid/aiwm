@@ -26,6 +26,18 @@ pub enum ModelKind {
     /// A video diffusion model (Wan 2.2, LTX-2). Its encoder + VAE are imported
     /// separately as [`TextEncoder`](Self::TextEncoder) / [`Vae`](Self::Vae).
     VideoModel,
+    /// A local text-to-speech model (Kokoro ONNX) — the Story Studio narrator.
+    /// Consumed by the Python sidecar, not a runtime's own model-path scan, so
+    /// it never appears in `extra_model_paths.yaml` or gets a runtime link;
+    /// the capability reads `file_path` straight off the model row.
+    VoiceModel,
+    /// Kokoro's paired voice-embeddings file — meaningless without a matching
+    /// [`VoiceModel`](Self::VoiceModel), same relationship [`TextEncoder`] has
+    /// to a diffusion model. Also a `.bin` file, but never confused with the
+    /// Pickle-format guard in `model::import::resolve_kind`: that guard only
+    /// fires when no explicit `model_type` hint is given, and an import of
+    /// this kind always is one (the catalog entry sets it).
+    VoiceData,
 }
 
 impl ModelKind {
@@ -39,6 +51,8 @@ impl ModelKind {
             "lora" | "loras" => Self::Lora,
             "text_encoder" | "text_encoders" | "clip" => Self::TextEncoder,
             "video_model" | "video_models" | "video" => Self::VideoModel,
+            "voice_model" | "voice" => Self::VoiceModel,
+            "voice_data" | "voices" => Self::VoiceData,
             _ => return None,
         })
     }
@@ -62,6 +76,8 @@ impl ModelKind {
                 ext == "safetensors" || ext == "gguf"
             }
             Self::Checkpoint | Self::Vae | Self::Lora => ext == "safetensors",
+            Self::VoiceModel => ext == "onnx",
+            Self::VoiceData => ext == "bin",
         }
     }
 
@@ -86,6 +102,8 @@ impl ModelKind {
             // same way Auto/companion resolution lists VAEs and encoders.
             Self::Lora => Some("lora"),
             Self::Chat => None,
+            Self::VoiceModel => Some("voice_model"),
+            Self::VoiceData => Some("voice_data"),
         }
     }
 
@@ -99,14 +117,16 @@ impl ModelKind {
             Self::Lora => "image/loras",
             Self::TextEncoder => "image/text_encoders",
             Self::VideoModel => "video/diffusion_models",
+            Self::VoiceModel | Self::VoiceData => "voice",
         }
     }
 
     /// The ComfyUI `folder_paths` / `extra_model_paths.yaml` key, when this kind
-    /// is a ComfyUI model.
+    /// is a ComfyUI model. `None` for anything ComfyUI never loads itself
+    /// (an LLM for llama.cpp, or a voice file for the Python sidecar).
     pub fn comfy_folder(self) -> Option<&'static str> {
         Some(match self {
-            Self::Chat => return None,
+            Self::Chat | Self::VoiceModel | Self::VoiceData => return None,
             Self::Checkpoint => "checkpoints",
             Self::DiffusionModel | Self::VideoModel => "diffusion_models",
             Self::Vae => "vae",
@@ -124,6 +144,8 @@ impl ModelKind {
             Self::Lora => "lora",
             Self::TextEncoder => "text_encoder",
             Self::VideoModel => "video_model",
+            Self::VoiceModel => "voice_model",
+            Self::VoiceData => "voice_data",
         }
     }
 
@@ -216,5 +238,47 @@ mod tests {
         );
         assert!(ModelKind::VideoModel.accepts_ext("safetensors"));
         assert!(ModelKind::VideoModel.accepts_ext("gguf"));
+    }
+
+    #[test]
+    fn voice_kinds_parse_from_hints_and_land_in_their_own_store_folder() {
+        assert_eq!(
+            ModelKind::from_hint("voice_model"),
+            Some(ModelKind::VoiceModel)
+        );
+        assert_eq!(ModelKind::from_hint("voice"), Some(ModelKind::VoiceModel));
+        assert_eq!(
+            ModelKind::from_hint("voice_data"),
+            Some(ModelKind::VoiceData)
+        );
+        assert_eq!(ModelKind::from_hint("voices"), Some(ModelKind::VoiceData));
+
+        assert_eq!(ModelKind::VoiceModel.store_subdir(), "voice");
+        assert_eq!(ModelKind::VoiceData.store_subdir(), "voice");
+    }
+
+    #[test]
+    fn voice_kinds_accept_only_their_own_extension() {
+        assert!(ModelKind::VoiceModel.accepts_ext("onnx"));
+        assert!(!ModelKind::VoiceModel.accepts_ext("bin"));
+        assert!(ModelKind::VoiceData.accepts_ext("bin"));
+        assert!(!ModelKind::VoiceData.accepts_ext("onnx"));
+    }
+
+    #[test]
+    fn voice_kinds_are_invisible_to_every_runtimes_own_model_scan() {
+        // Neither llama.cpp nor ComfyUI ever loads these -- only the Python
+        // sidecar does, reading `file_path` straight off the model row -- so
+        // they must never be scheduled for a runtime link or a ComfyUI
+        // extra_model_paths.yaml entry.
+        assert!(!ModelKind::VoiceModel.is_llm());
+        assert_eq!(ModelKind::VoiceModel.comfy_folder(), None);
+        assert_eq!(ModelKind::VoiceData.comfy_folder(), None);
+    }
+
+    #[test]
+    fn voice_kinds_carry_their_own_distinct_roles() {
+        assert_eq!(ModelKind::VoiceModel.default_role(), Some("voice_model"));
+        assert_eq!(ModelKind::VoiceData.default_role(), Some("voice_data"));
     }
 }

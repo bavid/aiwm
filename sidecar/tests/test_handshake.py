@@ -6,6 +6,7 @@ def test_handshake_returns_versions_and_capabilities():
     assert resp is not None
     assert resp["result"]["protocol_version"] == 1
     assert isinstance(resp["result"]["capabilities"], list)
+    assert "synthesize_speech" in resp["result"]["capabilities"]
 
 
 def test_ping_returns_pong():

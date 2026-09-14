@@ -303,6 +303,8 @@ fn media_family(name: &str) -> Option<String> {
 }
 
 /// Record which runtime can reach the freshly-imported model, and how (ADR-007).
+/// A no-op for a kind no runtime scans itself (voice files: the Python
+/// sidecar is handed `file_path` directly, never a folder to search).
 async fn link_for_kind(
     db: &Database,
     model: &Model,
@@ -314,12 +316,14 @@ async fn link_for_kind(
         db.models()
             .link_runtime(&model.id, "llamacpp", "passthrough", &model.file_path)
             .await
-    } else {
+    } else if kind.comfy_folder().is_some() {
         // ComfyUI is pointed at the *directory* via extra_model_paths.yaml (3.3).
         let dir = store_root.join(kind.store_subdir());
         db.models()
             .link_runtime(&model.id, "comfyui", "extra_path", &dir.to_string_lossy())
             .await
+    } else {
+        Ok(())
     }
 }
 
@@ -793,6 +797,70 @@ mod tests {
             .await
             .unwrap_err();
         assert!(err.to_string().contains(".safetensors"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn a_voice_model_and_its_voices_file_import_with_no_runtime_link() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = tmp.path().join("store");
+        let db = Database::connect_in_memory().await.unwrap();
+
+        let onnx = write_safetensors(tmp.path(), "kokoro-v1.0.int8.onnx", &vec![0u8; 1_000_000]);
+        let model_out = import_model(
+            &db,
+            &store,
+            ImportRequest {
+                model_type: Some("voice_model".into()),
+                ..req(&onnx)
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(model_out.model.roles, ["voice_model"]);
+        assert!(
+            model_out.model.runtimes.is_empty(),
+            "no runtime scans this itself"
+        );
+        assert!(db
+            .models()
+            .links(&model_out.model.id)
+            .await
+            .unwrap()
+            .is_empty());
+        let p = model_out.model.file_path.replace('\\', "/");
+        assert!(p.contains("/voice/kokoro-v1.0.int8.onnx"), "{p}");
+
+        // `.bin` is normally refused as a Pickle risk when *inferred* -- an
+        // explicit `voice_data` hint is the one case that's actually safe
+        // (Kokoro's voices file is a packed float blob, not a pickle), and
+        // must not fall through to that guard.
+        let bin = write_safetensors(tmp.path(), "voices-v1.0.bin", &vec![1u8; 500_000]);
+        let voices_out = import_model(
+            &db,
+            &store,
+            ImportRequest {
+                model_type: Some("voice_data".into()),
+                ..req(&bin)
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(voices_out.model.roles, ["voice_data"]);
+        assert!(voices_out.model.runtimes.is_empty());
+        let p = voices_out.model.file_path.replace('\\', "/");
+        assert!(p.contains("/voice/voices-v1.0.bin"), "{p}");
+    }
+
+    #[tokio::test]
+    async fn an_unhinted_bin_file_is_still_refused_as_a_pickle_risk() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = Database::connect_in_memory().await.unwrap();
+        let bin = write_safetensors(tmp.path(), "mystery.bin", b"??");
+
+        let err = import_model(&db, &tmp.path().join("s"), req(&bin))
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("Pickle"), "{err}");
     }
 
     #[tokio::test]

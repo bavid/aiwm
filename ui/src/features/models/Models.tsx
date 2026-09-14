@@ -46,6 +46,8 @@ const MODEL_TYPES: { value: ModelType; label: string; ext: string }[] = [
   { value: "lora", label: "LoRA", ext: ".safetensors" },
   { value: "text_encoder", label: "Text encoder / CLIP", ext: ".safetensors, .gguf" },
   { value: "video", label: "Video model", ext: ".safetensors, .gguf" },
+  { value: "voice_model", label: "Voice model (TTS)", ext: ".onnx" },
+  { value: "voice_data", label: "Voice data (voice presets)", ext: ".bin" },
 ];
 
 const MODEL_SECTIONS: NavSection[] = [
@@ -683,7 +685,11 @@ function FitBadge({ fit }: { fit: FitVerdict }) {
 
 // Values match `KnownModel.media` / `FeaturedModel.role` exactly, so the
 // filters below are a plain equality check.
-type CatalogTab = "image" | "video" | "chat" | "coding";
+type CatalogTab = "image" | "video" | "voice" | "chat" | "coding";
+/** These tabs come from the pinned-URL stack catalogue (`GET /models/stacks`);
+ *  the rest (`chat`/`coding`) come from the dynamic Featured picks, which
+ *  resolve their real file list live against Hugging Face. */
+const STACK_TABS: CatalogTab[] = ["image", "video", "voice"];
 const CATALOG_TABS: { value: CatalogTab; label: string; blurb: string }[] = [
   {
     value: "image",
@@ -694,6 +700,11 @@ const CATALOG_TABS: { value: CatalogTab; label: string; blurb: string }[] = [
     value: "video",
     label: "Video",
     blurb: "A base model for the Video tab, plus its text encoder and VAE.",
+  },
+  {
+    value: "voice",
+    label: "Voice",
+    blurb: "The Story Studio narrator — a local text-to-speech model, plus its voice presets.",
   },
   {
     value: "chat",
@@ -718,9 +729,10 @@ function Catalog({ onUseType }: { onUseType: (t: ModelType) => void }) {
   const [tab, setTab] = useState<CatalogTab>("image");
 
   const active = CATALOG_TABS.find((t) => t.value === tab)!;
+  const isStackTab = STACK_TABS.includes(tab);
   const stackRows = stacks?.filter((s) => s.media === tab);
   const featuredRows = featured?.filter((m) => m.role === tab);
-  const loading = tab === "image" || tab === "video" ? !stacks : !featured;
+  const loading = isStackTab ? !stacks : !featured;
 
   return (
     <section className="card card--wide">
@@ -750,20 +762,20 @@ function Catalog({ onUseType }: { onUseType: (t: ModelType) => void }) {
       <p className="muted">{active.blurb}</p>
 
       {loading && <p className="muted">Loading…</p>}
-      {!loading && (tab === "image" || tab === "video") && (stackRows?.length ?? 0) === 0 && (
+      {!loading && isStackTab && (stackRows?.length ?? 0) === 0 && (
         <p className="muted">Nothing curated here yet.</p>
       )}
-      {(tab === "image" || tab === "video") && stackRows && stackRows.length > 0 && (
+      {isStackTab && stackRows && stackRows.length > 0 && (
         <div className="stacklist">
           {stackRows.map((s) => (
             <StackCard key={s.id} stack={s} onUseType={onUseType} />
           ))}
         </div>
       )}
-      {!loading && (tab === "chat" || tab === "coding") && (featuredRows?.length ?? 0) === 0 && (
+      {!loading && !isStackTab && (featuredRows?.length ?? 0) === 0 && (
         <p className="muted">Nothing curated here yet.</p>
       )}
-      {(tab === "chat" || tab === "coding") && featuredRows && featuredRows.length > 0 && (
+      {!isStackTab && featuredRows && featuredRows.length > 0 && (
         <ul className="known">
           {featuredRows.map((m) => (
             <FeaturedRow key={m.id} model={m} onUseType={onUseType} />

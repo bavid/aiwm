@@ -8,6 +8,7 @@ import { Jobs } from "./features/jobs/Jobs";
 import { Models } from "./features/models/Models";
 import { Settings } from "./features/settings/Settings";
 import { VideoStudio } from "./features/video/Video";
+import { Voice } from "./features/voice/Voice";
 import { CommandPalette } from "./components/CommandPalette";
 import { JobNotifications } from "./components/JobNotifications";
 import { ShortcutsHelp } from "./components/ShortcutsHelp";
@@ -18,6 +19,7 @@ type Tab =
   | "chat"
   | "image"
   | "video"
+  | "voice"
   | "jobs"
   | "agents"
   | "models"
@@ -64,6 +66,16 @@ const TABS: { id: Tab; label: string; icon: ReactNode }[] = [
       <svg viewBox="0 0 20 20">
         <rect x="2.5" y="4.5" width="12" height="11" rx="1.6" />
         <path d="M14.5 8.6 18 6.4v7.2l-3.5-2.2Z" />
+      </svg>
+    ),
+  },
+  {
+    id: "voice",
+    label: "Voice",
+    icon: (
+      <svg viewBox="0 0 20 20">
+        <path d="M10 3.2a2.6 2.6 0 0 1 2.6 2.6v4.4a2.6 2.6 0 1 1-5.2 0V5.8A2.6 2.6 0 0 1 10 3.2Z" />
+        <path d="M5.2 9.4v0.8a4.8 4.8 0 0 0 9.6 0v-0.8M10 15v2" />
       </svg>
     ),
   },
@@ -199,6 +211,7 @@ export default function App() {
         {tab === "chat" && <Chat />}
         {tab === "image" && <ImageStudio />}
         {tab === "video" && <VideoStudio />}
+        {tab === "voice" && <Voice />}
         {tab === "jobs" && <Jobs />}
         {tab === "agents" && <AgentsWorkbench />}
         {tab === "models" && <Models />}

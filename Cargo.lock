@@ -24,6 +24,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "axum",
+ "base64 0.22.1",
  "dirs 7.0.0",
  "futures-util",
  "junction",

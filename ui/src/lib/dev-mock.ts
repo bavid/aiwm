@@ -21,6 +21,8 @@ const MODELS: AnyRecord[] = [
   mkModel("m-lora-flux2-detail", "Realistic Detail LoRA (FLUX.2 Klein 9B)", { family: "flux2", roles: ["lora"], runtimes: ["comfyui"], size_bytes: 165_704_488 }),
   mkModel("m-qwen", "Qwen2.5 7B Instruct", { family: "qwen2", format: "gguf", quant: "Q5_K_M", param_count: 7_615_616_512, ctx_max: 32_768, roles: ["chat"], runtimes: ["llamacpp"], vram_estimate_mb: 6400 }),
   mkModel("m-hermes", "Hermes-3-Llama-3.1-8B", { family: "llama3", format: "gguf", quant: "Q5_K_M", param_count: 8_030_000_000, ctx_max: 131_072, roles: ["chat", "coding"], runtimes: ["llamacpp"], vram_estimate_mb: 5700 }),
+  mkModel("m-kokoro", "Kokoro 82M — int8", { family: "kokoro", format: "onnx", roles: ["voice_model"], runtimes: [], size_bytes: 114_119_327 }),
+  mkModel("m-kokoro-voices", "Kokoro voices (54 English voices)", { family: "kokoro", format: "bin", roles: ["voice_data"], runtimes: [], size_bytes: 28_214_398 }),
 ];
 
 const JOBS: AnyRecord[] = [
@@ -80,6 +82,11 @@ const RUNTIMES: AnyRecord[] = [
   {
     id: "colibri", kind: "colibri", health: "unknown", vram_used_mb: 0,
     detail: "not installed",
+    loaded_models: [],
+  },
+  {
+    id: "tts", kind: "tts", health: "unknown", vram_used_mb: 0,
+    detail: "not started yet",
     loaded_models: [],
   },
 ];
@@ -573,6 +580,7 @@ export function installDevMock(): void {
           chat: "m-qwen",
           colibri: "m-qwen",
           recommend: "m-qwen",
+          tts: "m-kokoro",
         };
         const job = mkJob(`j-dev-${seq++}`, jobType, "running", {
           params: body.params ?? {},

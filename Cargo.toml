@@ -41,6 +41,9 @@ zip = { version = "8", default-features = false, features = ["deflate"] }
 # NTFS directory junctions for the model link manager (ADR-007). Safe API over
 # the reparse-point IOCTL — no admin, no hand-written unsafe.
 junction = "2"
+# Decoding the sidecar's `synthesize_speech` audio bytes (JSON-RPC has no
+# binary frame, so they travel base64-encoded).
+base64 = "0.22"
 
 [workspace.lints.rust]
 unsafe_code = "warn"

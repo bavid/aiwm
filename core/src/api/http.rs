@@ -322,6 +322,7 @@ async fn job_output(State(app): AppState, Path(id): Path<String>) -> Result<Resp
         Some("webp") => "image/webp",
         Some("mp4") => "video/mp4",
         Some("webm") => "video/webm",
+        Some("wav") => "audio/wav",
         _ => "application/octet-stream",
     };
     Ok((

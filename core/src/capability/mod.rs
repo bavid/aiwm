@@ -12,4 +12,5 @@ pub mod chat;
 pub mod colibri;
 pub mod image;
 mod media;
+pub mod tts;
 pub mod video;

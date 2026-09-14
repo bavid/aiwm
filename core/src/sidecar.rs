@@ -69,21 +69,7 @@ impl std::fmt::Debug for Io {
 impl SidecarClient {
     /// Launch the dev sidecar via `uv run` against `<repo>/sidecar`.
     pub async fn for_dev() -> Result<Self> {
-        let sidecar_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("..")
-            .join("sidecar");
-        let uv = resolve_uv().ok_or_else(|| sidecar_err("`uv` was not found on PATH"))?;
-        Self::spawn(SidecarSpec {
-            program: uv,
-            args: vec![
-                "run".into(),
-                "--directory".into(),
-                sidecar_dir.to_string_lossy().into_owned(),
-                "aiwm-sidecar".into(),
-            ],
-            env: vec![("PYTHONUNBUFFERED".into(), "1".into())],
-        })
-        .await
+        Self::spawn(dev_spec()?).await
     }
 
     /// Spawn a sidecar from an explicit spec and complete the handshake.
@@ -218,6 +204,26 @@ async fn raw_call(io: &mut Io, id: u64, method: &str, params: Value) -> Result<V
         }
         return Ok(resp.get("result").cloned().unwrap_or(Value::Null));
     }
+}
+
+/// The dev sidecar's launch spec (`uv run` against `<repo>/sidecar`), without
+/// spawning it — [`TtsAdapter`](crate::runtime::tts::TtsAdapter) holds onto
+/// this and spawns lazily on first real use, same as [`SidecarClient::for_dev`].
+pub fn dev_spec() -> Result<SidecarSpec> {
+    let sidecar_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("sidecar");
+    let uv = resolve_uv().ok_or_else(|| sidecar_err("`uv` was not found on PATH"))?;
+    Ok(SidecarSpec {
+        program: uv,
+        args: vec![
+            "run".into(),
+            "--directory".into(),
+            sidecar_dir.to_string_lossy().into_owned(),
+            "aiwm-sidecar".into(),
+        ],
+        env: vec![("PYTHONUNBUFFERED".into(), "1".into())],
+    })
 }
 
 /// Locate the `uv` executable: PATH, then the common install locations.

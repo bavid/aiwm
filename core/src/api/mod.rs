@@ -699,6 +699,40 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(v.headers()["content-type"].to_str().unwrap(), "video/mp4");
+
+        // A tts job's `.wav` is served as `audio/wav` -- the narrator's
+        // preview/playback in the UI depends on the browser recognizing it.
+        let narration = app.jobs.submit(NewJob::new("tts")).await.unwrap();
+        let wav = app
+            .paths
+            .outputs_dir()
+            .join(format!("{}.wav", narration.id));
+        std::fs::write(&wav, b"RIFF....WAVEfmt ").unwrap();
+        for st in [
+            JobState::Scheduled,
+            JobState::Preparing,
+            JobState::Running,
+            JobState::Post,
+        ] {
+            r.set_state(&narration.id, st, JobPatch::default())
+                .await
+                .unwrap();
+        }
+        r.set_state(
+            &narration.id,
+            JobState::Completed,
+            JobPatch {
+                output_path: Some(wav.to_string_lossy().into_owned()),
+                set_finished_at: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let a = reqwest::get(format!("{base}/jobs/{}/output", narration.id))
+            .await
+            .unwrap();
+        assert_eq!(a.headers()["content-type"].to_str().unwrap(), "audio/wav");
     }
 
     #[tokio::test]

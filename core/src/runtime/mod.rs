@@ -18,6 +18,7 @@ mod job;
 mod llamacpp;
 mod registry;
 mod supervisor;
+pub mod tts;
 
 pub use colibri::install as colibri_install;
 pub use colibri::{
@@ -32,6 +33,7 @@ pub use job::JobObject;
 pub use llamacpp::{GenerationEvent, InstallState, LlamaCppAdapter, LlamaServerOptions};
 pub use registry::RuntimeRegistry;
 pub use supervisor::{RuntimeSupervisor, SupervisorState};
+pub use tts::TtsAdapter;
 
 use std::net::{Ipv4Addr, TcpListener};
 use std::path::PathBuf;
@@ -63,6 +65,7 @@ pub enum RuntimeKind {
     LlamaCpp,
     ComfyUi,
     Colibri,
+    Tts,
     Fake,
 }
 

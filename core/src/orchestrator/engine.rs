@@ -27,7 +27,9 @@ use crate::capability::video::{self, VideoOutcome, VideoRequest};
 use crate::compat::{self, VramEstimate};
 use crate::db::{EventLevel, Job, JobPatch, Model, NewJob};
 use crate::registry::Registry;
-use crate::runtime::{ColibriAdapter, ComfyUiAdapter, LlamaCppAdapter, RuntimeRegistry};
+use crate::runtime::{
+    ColibriAdapter, ComfyUiAdapter, LlamaCppAdapter, RuntimeRegistry, TtsAdapter,
+};
 use crate::scheduler::{Decision, PlanRequest, Scheduler};
 use crate::telemetry::{GpuStatus, SystemTelemetry};
 use crate::{recommend, upgrade, CoreError, Database, Result};
@@ -37,6 +39,7 @@ const CANCEL_REASON: &str = "cancelled by user";
 const LLAMACPP: &str = "llamacpp";
 const COMFYUI: &str = "comfyui";
 const COLIBRI: &str = "colibri";
+const TTS: &str = "tts";
 /// Fallback VRAM reservation for a ComfyUI model whose import estimate is
 /// missing — enough for SDXL on a 16 GB card.
 const IMAGE_VRAM_FALLBACK_MB: u64 = 8192;
@@ -90,6 +93,10 @@ pub struct JobEngine {
     /// optional, RAM-hungry). A `job_type=colibri` job without one is a clear
     /// config error, not a panic.
     colibri: Option<Arc<ColibriAdapter>>,
+    /// Set only when the narrator is wired up (`with_tts`) — same shape as
+    /// `colibri`: optional, a clear config error rather than a panic if a
+    /// `job_type=tts` job is submitted without one.
+    tts: Option<Arc<TtsAdapter>>,
     /// Where image jobs write their output (`<job_id>.png`).
     outputs_dir: PathBuf,
     /// Latest system reading — a `bench` job samples the VRAM / RAM peak from it.
@@ -118,6 +125,7 @@ impl JobEngine {
             llama,
             comfyui,
             colibri: None,
+            tts: None,
             outputs_dir,
             telemetry: frozen_telemetry(),
             auto_preference: crate::select::AutoPreference::default(),
@@ -154,6 +162,15 @@ impl JobEngine {
     #[must_use]
     pub fn with_colibri(mut self, colibri: Arc<ColibriAdapter>) -> Self {
         self.colibri = Some(colibri);
+        self
+    }
+
+    /// Wire up the narrator so `job_type=tts` jobs can run. Optional — an app
+    /// without it just can't run that job type (a clear config error, not a
+    /// panic, if one is ever submitted).
+    #[must_use]
+    pub fn with_tts(mut self, tts: Arc<TtsAdapter>) -> Self {
+        self.tts = Some(tts);
         self
     }
 
@@ -272,6 +289,22 @@ impl JobEngine {
         // cache), so resolve them on their own path — explicit model or `Auto`.
         if job.job_type == "image" || job.job_type == "video" {
             return self.resolve_comfyui_target(job).await;
+        }
+        // The narrator never charges against the VRAM budget (see
+        // `TtsAdapter`'s own doc comment) -- Kokoro is a tiny CPU model
+        // cached inside the sidecar itself, not a scheduler-tracked resident.
+        // No `db.jobs().assign` here (same as Colibri's branch below): there
+        // is no single "the model" for a tts job the way there is for chat/
+        // image/video, since `capability::tts::run` resolves the voice model
+        // *and* its voices file by role itself.
+        if job.job_type == "tts" {
+            return Ok(Target {
+                runtime_id: TTS.into(),
+                model_id: "kokoro".into(),
+                model_name: "Kokoro narrator".into(),
+                vram_mb: 0,
+                estimate: None,
+            });
         }
         if let (Some(runtime_id), Some(model_id)) = (&job.runtime_id, &job.model_id) {
             // Colibri never charges against the VRAM budget (its constraint is
@@ -1036,6 +1069,28 @@ impl JobEngine {
                     return Ok(JobOutcome::Cancelled { job_id: job.id });
                 }
             }
+        } else if job.job_type == "tts" {
+            if runtime_id != TTS {
+                return Err(CoreError::Runtime {
+                    runtime: runtime_id.clone(),
+                    message: "tts jobs run on the narrator".into(),
+                });
+            }
+            let tts = self.tts.clone().ok_or_else(|| {
+                CoreError::Config("the narrator is not configured on this app".into())
+            })?;
+            let req = capability::tts::TtsRequest::from_params(&job.params)?;
+            let done =
+                capability::tts::run(&self.db, &tts, &self.outputs_dir, &job.id, req).await?;
+            self.db
+                .jobs()
+                .append_event(
+                    &job.id,
+                    EventLevel::Info,
+                    &format!("narrated \u{2014} {:.1}s", done.duration_secs),
+                )
+                .await?;
+            output_path = Some(done.output_path.to_string_lossy().into_owned());
         }
 
         self.to(&mut job, JobState::Post, JobPatch::default())
