@@ -12,13 +12,14 @@ import {
   detachEngine,
   installComfyui,
   installLlamacpp,
+  unloadModel,
   type RuntimeStatus,
 } from "../../lib/ipc";
 import { getTheme } from "../../lib/theme";
 import "./diagnostics.css";
 
 export function Diagnostics() {
-  const { data: runtimes } = useRuntimes();
+  const { data: runtimes, refetch: refetchRuntimes } = useRuntimes();
   const { data: logs } = useLogs();
   const { telemetry } = useTelemetry();
   const { data: registry } = useRegistryStatus();
@@ -86,6 +87,7 @@ export function Diagnostics() {
       <section className="card">
         <header className="card__head">
           <h2>Runtimes</h2>
+          <UnloadAllButton runtimes={runtimes} onUnloaded={refetchRuntimes} />
         </header>
         {runtimes && runtimes.length > 0 ? (
           <table className="rt">
@@ -315,6 +317,51 @@ function ExternalEngineCard({ llama }: { llama: RuntimeStatus | undefined }) {
 
       {msg && <span className="muted">{msg}</span>}
     </section>
+  );
+}
+
+/** Free every resident model at once — loops the same per-model unload the
+ *  Dashboard's own UnloadButton calls, one request per loaded model. */
+function UnloadAllButton({
+  runtimes,
+  onUnloaded,
+}: {
+  runtimes: RuntimeStatus[] | null;
+  onUnloaded: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const modelIds = (runtimes ?? []).flatMap((r) => r.loaded_models.map((m) => m.model_id));
+
+  const click = async () => {
+    setBusy(true);
+    setErr(null);
+    const failures: string[] = [];
+    for (const id of modelIds) {
+      try {
+        await unloadModel(id);
+      } catch (e) {
+        failures.push(e instanceof Error ? e.message : String(e));
+      }
+    }
+    setBusy(false);
+    setErr(failures.length > 0 ? failures.join("; ") : null);
+    onUnloaded();
+  };
+
+  return (
+    <span className="diag__unload-wrap">
+      <button
+        type="button"
+        className="diag__unload-btn"
+        onClick={click}
+        disabled={busy || modelIds.length === 0}
+        title="Free every resident model's VRAM/RAM right now"
+      >
+        {busy ? "Unloading…" : "Unload all models"}
+      </button>
+      {err && <span className="diag__unload-err">{err}</span>}
+    </span>
   );
 }
 

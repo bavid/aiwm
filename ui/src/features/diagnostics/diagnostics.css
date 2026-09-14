@@ -34,6 +34,39 @@
   color: var(--text);
 }
 
+.diag__unload-wrap {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.diag__unload-btn {
+  padding: 2px var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: var(--text-xs);
+  cursor: pointer;
+  transition: color var(--dur) var(--ease);
+}
+
+.diag__unload-btn:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--load-crit);
+}
+
+.diag__unload-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.diag__unload-err {
+  color: var(--load-crit);
+  font-size: var(--text-xs);
+}
+
 .kv dt {
   color: var(--muted);
 }
