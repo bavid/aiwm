@@ -12,6 +12,8 @@ version = "0.0.1"
 source = { editable = "." }
 dependencies = [
     { name = "kokoro-onnx" },
+    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
+    { name = "numpy", version = "2.5.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
     { name = "soundfile" },
 ]
 
@@ -24,6 +26,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "kokoro-onnx", specifier = ">=0.6.1" },
+    { name = "numpy", specifier = ">=1.26" },
     { name = "soundfile", specifier = ">=0.12" },
 ]
 

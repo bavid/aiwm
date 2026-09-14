@@ -135,6 +135,60 @@ def test_defaults_voice_speed_and_lang_when_omitted(monkeypatch: pytest.MonkeyPa
     assert fake.calls[0]["lang"] == "en-us"
 
 
+def test_splits_multi_sentence_text_into_one_synth_call_per_sentence(
+    monkeypatch: pytest.MonkeyPatch, model_files
+):
+    model_path, voices_path = model_files
+    fake = FakeKokoro()
+    monkeypatch.setattr(main, "_load_kokoro", lambda *_: fake)
+
+    request_synth(
+        {
+            "text": "One. Two! Three?",
+            "model_path": model_path,
+            "voices_path": voices_path,
+        }
+    )
+
+    assert [c["text"] for c in fake.calls] == ["One.", "Two!", "Three?"]
+
+
+def test_inserts_a_pause_between_sentences(monkeypatch: pytest.MonkeyPatch, model_files):
+    model_path, voices_path = model_files
+    fake = FakeKokoro()
+    monkeypatch.setattr(main, "_load_kokoro", lambda *_: fake)
+
+    resp = request_synth(
+        {
+            "text": "One thing happens. Then another.",
+            "model_path": model_path,
+            "voices_path": voices_path,
+        }
+    )
+
+    result = resp["result"]
+    # Two 0.5s clips (24000Hz) plus one inter-sentence gap, no gap at the ends.
+    expected_secs = 0.5 + main._SENTENCE_GAP_SECS + 0.5
+    assert result["duration_secs"] == pytest.approx(expected_secs)
+
+    audio = base64.b64decode(result["audio_base64"])
+    with wave.open(io.BytesIO(audio), "rb") as w:
+        assert w.getnframes() == pytest.approx(expected_secs * 24000, abs=1)
+
+
+def test_single_sentence_gets_no_added_gap(monkeypatch: pytest.MonkeyPatch, model_files):
+    model_path, voices_path = model_files
+    fake = FakeKokoro()
+    monkeypatch.setattr(main, "_load_kokoro", lambda *_: fake)
+
+    resp = request_synth(
+        {"text": "just one line", "model_path": model_path, "voices_path": voices_path}
+    )
+
+    assert len(fake.calls) == 1
+    assert resp["result"]["duration_secs"] == pytest.approx(0.5)
+
+
 def test_caches_the_loaded_engine_across_calls(monkeypatch: pytest.MonkeyPatch, model_files):
     """`_load_kokoro` itself does the caching; only the expensive constructor
     (`_construct_kokoro`) is faked here, so this actually exercises the cache

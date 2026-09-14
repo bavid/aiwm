@@ -6,6 +6,7 @@ requires-python = ">=3.11"
 dependencies = [
     "kokoro-onnx>=0.6.1",
     "soundfile>=0.12",
+    "numpy>=1.26",
 ]
 # More deps land later: huggingface_hub (Phase 6), gguf/safetensors readers (Phase 2).
 
