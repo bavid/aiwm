@@ -401,6 +401,11 @@ async fn detach_engine(app: tauri::State<'_, Arc<App>>, id: String) -> Result<()
 }
 
 #[tauri::command]
+async fn unload_model(app: tauri::State<'_, Arc<App>>, id: String) -> Result<(), String> {
+    to_ipc(handlers::unload_model(&app, &id).await)
+}
+
+#[tauri::command]
 async fn delete_model(
     app: tauri::State<'_, Arc<App>>,
     id: String,
@@ -559,6 +564,7 @@ fn try_run() -> anyhow::Result<()> {
             upgrade_check,
             storage_report,
             delete_model,
+            unload_model,
             model_tags,
             set_model_tags,
             set_model_roles,

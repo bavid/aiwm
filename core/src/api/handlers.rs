@@ -313,12 +313,25 @@ pub async fn attach_external_engine(app: &App, body: AttachExternalDto) -> Resul
 
 /// `POST /external-engines/detach` — release the runtime slot without
 /// touching a process AIWM doesn't own (a no-op if `model_id` isn't the
-/// currently resident one). The same mechanism as any other unload; scoped
-/// under `/external-engines` because that's the only place the UI currently
-/// exposes a manual load/unload action.
+/// currently resident one).
 pub async fn detach_engine(app: &App, body: DetachEngineDto) -> Result<()> {
     use crate::runtime::RuntimeAdapter;
     app.llama.unload_model(&body.model_id).await
+}
+
+/// `POST /models/{id}/unload` — manually free a resident model's VRAM/RAM
+/// without waiting for the scheduler to evict it for something else. Works
+/// for any runtime (llama.cpp, ComfyUI, Colibri) since it looks the model up
+/// by which one currently has it loaded, rather than assuming llama.cpp like
+/// [`detach_engine`]. A no-op error rather than silent success when the model
+/// isn't actually resident, so a stale "Unload" click says why it did nothing.
+pub async fn unload_model(app: &App, model_id: &str) -> Result<()> {
+    match app.runtimes.runtime_with_model(model_id) {
+        Some(runtime) => runtime.unload_model(model_id).await,
+        None => Err(CoreError::Config(format!(
+            "model {model_id} is not currently loaded"
+        ))),
+    }
 }
 
 /// Storage overview + the "safe to delete" reports (Phase 6.8).

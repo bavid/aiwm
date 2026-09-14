@@ -55,6 +55,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/models/{id}/tags", put(set_model_tags))
         .route("/models/{id}/roles", put(set_model_roles))
         .route("/models/{id}/name", put(rename_model))
+        .route("/models/{id}/unload", post(unload_model))
         .route("/registry/status", get(registry_status))
         .route("/registry/token", put(set_hf_token))
         .route("/local-api/status", get(local_api_status))
@@ -385,6 +386,14 @@ async fn rename_model(
     Json(body): Json<RenameModelDto>,
 ) -> Result<Json<crate::db::Model>, ApiError> {
     Ok(Json(handlers::rename_model(&app, &id, &body.name).await?))
+}
+
+async fn unload_model(
+    State(app): AppState,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    handlers::unload_model(&app, &id).await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn registry_status(State(app): AppState) -> Json<crate::registry::RegistryStatus> {

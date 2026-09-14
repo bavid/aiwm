@@ -777,6 +777,16 @@ export function installDevMock(): void {
         }
         return null;
       }
+      case "unload_model": {
+        const rt = RUNTIMES.find((r) =>
+          ((r.loaded_models as AnyRecord[] | undefined) ?? []).some((m) => m.model_id === a.id),
+        );
+        if (!rt) throw new Error(`model ${a.id} is not currently loaded`);
+        rt.detail = "installed · idle";
+        rt.vram_used_mb = 0;
+        rt.loaded_models = [];
+        return null;
+      }
       case "list_benchmarks":
         progressBenchJobs();
         return [...new Map(BENCHMARKS.map((b) => [b.model_id, b])).values()];

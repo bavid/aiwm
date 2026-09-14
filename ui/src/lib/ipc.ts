@@ -369,6 +369,10 @@ export const storageReport = () => invoke<StorageReport>("storage_report");
 /** Delete a model — its file, links and DB rows. Permanent; refused while
  *  the model is loaded. */
 export const deleteModel = (id: string) => invoke<DeleteOutcome>("delete_model", { id });
+/** Manually free a resident model's VRAM/RAM right now, without waiting for
+ *  the scheduler to evict it for something else. Works for any runtime --
+ *  looked up by whichever one currently has the model loaded. */
+export const unloadModel = (id: string) => invoke<void>("unload_model", { id });
 
 // --- tags & registry status (Phase 6.9) -------------------------------
 

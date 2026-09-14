@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { useAbout, useJobs, useModels, useRuntimes, useStorage, useTelemetry } from "../../lib/hooks";
 import { Meter } from "../../components/Meter";
-import { cancelJob, type Job, type JobState, type RuntimeStatus } from "../../lib/ipc";
+import { cancelJob, unloadModel, type Job, type JobState, type RuntimeStatus } from "../../lib/ipc";
 import "./dashboard.css";
 
 const GB = 1024;
@@ -41,7 +41,7 @@ export function Dashboard({ onNavigate }: { onNavigate: (tab: string) => void })
   const { telemetry, error } = useTelemetry();
   const { data: jobs, refetch: refetchJobs } = useJobs();
   const { data: history } = useJobs({ limit: 300 });
-  const { data: runtimes } = useRuntimes();
+  const { data: runtimes, refetch: refetchRuntimes } = useRuntimes();
   const { data: models } = useModels();
   const { data: storage } = useStorage();
   const about = useAbout();
@@ -145,7 +145,7 @@ export function Dashboard({ onNavigate }: { onNavigate: (tab: string) => void })
           <h2 id="resident-h">Resident right now</h2>
           <span className="card__sub numeric">{runtimes?.length ?? 0} runtimes</span>
         </header>
-        <ResidentList runtimes={runtimes} modelName={modelName} />
+        <ResidentList runtimes={runtimes} modelName={modelName} onUnloaded={refetchRuntimes} />
       </section>
 
       <section className="card card--wide" aria-labelledby="usage-h">
@@ -291,9 +291,11 @@ function UsageSparkline({ days }: { days: { label: string; date: string; count: 
 function ResidentList({
   runtimes,
   modelName,
+  onUnloaded,
 }: {
   runtimes: RuntimeStatus[] | null;
   modelName: (id: string) => string;
+  onUnloaded: () => void;
 }) {
   if (!runtimes) return <p className="muted">Loading…</p>;
 
@@ -313,9 +315,45 @@ function ResidentList({
           <span className="resident-row__size numeric">
             {rt.vram_used_mb > 0 ? `${gb(rt.vram_used_mb)} GB` : "—"}
           </span>
+          {rt.loaded_models.map((m) => (
+            <UnloadButton key={m.model_id} modelId={m.model_id} onUnloaded={onUnloaded} />
+          ))}
         </li>
       ))}
     </ul>
+  );
+}
+
+function UnloadButton({ modelId, onUnloaded }: { modelId: string; onUnloaded: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const click = async () => {
+    setBusy(true);
+    setErr(null);
+    try {
+      await unloadModel(modelId);
+      onUnloaded();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <span className="resident-row__unload">
+      <button
+        type="button"
+        className="resident-row__unload-btn"
+        onClick={click}
+        disabled={busy}
+        title="Free this model's VRAM/RAM right now"
+      >
+        {busy ? "…" : "Unload"}
+      </button>
+      {err && <span className="resident-row__unload-err">{err}</span>}
+    </span>
   );
 }
 
