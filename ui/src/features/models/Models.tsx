@@ -1,4 +1,5 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { SectionNav, type NavSection } from "../../components/SectionNav";
 import {
   useAbout,
   useBenchmarks,
@@ -30,7 +31,6 @@ import {
 import { ColibriPanel } from "./ColibriPanel";
 import { Discover, FileRow } from "./Discover";
 import { Downloads } from "./Downloads";
-import { Recommend } from "./Recommend";
 import { DeleteButton, StoragePanel } from "./StoragePanel";
 import { UpgradeChecks } from "./UpgradeChecks";
 import "./models.css";
@@ -45,6 +45,14 @@ const MODEL_TYPES: { value: ModelType; label: string; ext: string }[] = [
   { value: "lora", label: "LoRA", ext: ".safetensors" },
   { value: "text_encoder", label: "Text encoder / CLIP", ext: ".safetensors, .gguf" },
   { value: "video", label: "Video model", ext: ".safetensors, .gguf" },
+];
+
+const MODEL_SECTIONS: NavSection[] = [
+  { id: "library", label: "Library" },
+  { id: "add", label: "Add models" },
+  { id: "discover", label: "Discover" },
+  { id: "downloads", label: "Downloads" },
+  { id: "maintenance", label: "Maintenance" },
 ];
 
 /** The last path segment of a URL, query/fragment stripped -- a reasonable
@@ -85,41 +93,63 @@ function scoreTitle(b: Benchmark): string {
 export function Models() {
   const { data: models, error, refetch } = useModels();
   const [modelType, setModelType] = useState<ModelType>("chat");
+  const [section, setSection] = useState<string>(MODEL_SECTIONS[0].id);
   const importRef = useRef<HTMLDivElement>(null);
   const [importFlash, setImportFlash] = useState(false);
 
-  // "Set import type" (on a catalog/Discover row) changes a dropdown that
-  // lives in the Import form further down the page -- with no feedback,
-  // clicking it while scrolled past the form does nothing visible. Scroll it
-  // into view and flash it so the effect is obvious.
+  // "Set import type" (on a catalog/Discover row) changes a dropdown on the
+  // Import form, which lives on the "Add models" page -- jump there, then
+  // scroll it into view and flash it once that page has actually rendered
+  // (a plain scrollIntoView here would run before the section switch
+  // commits, when the ref is still null).
+  useEffect(() => {
+    if (importFlash) importRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, [importFlash]);
+
   const useType = (t: ModelType) => {
     setModelType(t);
-    importRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+    setSection("add");
     setImportFlash(true);
     setTimeout(() => setImportFlash(false), 1200);
   };
 
   return (
     <div className="models">
-      <Catalog onUseType={useType} />
+      <header className="models__head">
+        <h1>Models</h1>
+      </header>
+      <div className="models-body">
+        <SectionNav
+          sections={MODEL_SECTIONS}
+          activeId={section}
+          onChange={setSection}
+          ariaLabel="Models sections"
+        />
+        <div className="models-sections">
+          {section === "library" && <ModelLibrary models={models} error={error} />}
 
-      <div ref={importRef} className={importFlash ? "models__flash" : undefined}>
-        <ImportForm modelType={modelType} setModelType={setModelType} onImported={refetch} />
+          {section === "add" && (
+            <>
+              <Catalog onUseType={useType} />
+              <div ref={importRef} className={importFlash ? "models__flash" : undefined}>
+                <ImportForm modelType={modelType} setModelType={setModelType} onImported={refetch} />
+              </div>
+            </>
+          )}
+
+          {section === "discover" && <Discover onUseType={useType} />}
+
+          {section === "downloads" && <Downloads />}
+
+          {section === "maintenance" && (
+            <>
+              <UpgradeChecks />
+              <StoragePanel />
+              <ColibriPanel />
+            </>
+          )}
+        </div>
       </div>
-
-      <ModelLibrary models={models} error={error} />
-
-      <Downloads />
-
-      <UpgradeChecks />
-
-      <StoragePanel />
-
-      <ColibriPanel />
-
-      <Recommend />
-
-      <Discover onUseType={useType} />
     </div>
   );
 }

@@ -10,6 +10,7 @@ import {
   deleteJob,
   jobDetail,
   jobOutputUrl,
+  renameSession,
   submitJob,
   type Job,
   type JobEvent,
@@ -39,13 +40,21 @@ const DONE: JobState[] = ["completed", "failed", "cancelled"];
 const CHAT_JOB_TYPES = ["chat", "colibri", "image", "video"];
 const POLL_MS = 350;
 
-/** `/image <prompt>` or `/video <prompt>` at the start of a message routes
- *  to that capability instead of the chat model -- reliable and explicit,
- *  rather than guessing intent from natural language. */
-const MEDIA_COMMAND = /^\/(image|video)\s+(.+)$/is;
+/** `/image <prompt>`, `/video <prompt>`, or `/edit <instruction>` at the start
+ *  of a message routes to that capability instead of the chat model --
+ *  reliable and explicit, rather than guessing intent from natural language.
+ *  `/edit` reuses the most recent image *in this conversation* as the source
+ *  (FLUX.2 [klein]'s instruction-based editing, same as the Image tab). */
+const MEDIA_COMMAND = /^\/(image|video|edit)\s+(.+)$/is;
 
 function kindOf(jobType: string): TurnKind {
   return jobType === "image" || jobType === "video" ? jobType : "text";
+}
+
+/** A session's first message becomes its name -- first three words, so
+ *  "New chat" doesn't sit there forever unless you rename it by hand. */
+function titleFromMessage(text: string): string {
+  return text.split(/\s+/).slice(0, 3).join(" ");
 }
 
 /** Sensible defaults matching the Image/Video studios' own initial state --
@@ -215,25 +224,50 @@ export function Chat() {
     if (!text || (pendingId && !stuck)) return;
     setSendError(null);
 
+    // This session's very first message becomes its name -- fire-and-forget,
+    // the sidebar's own poll picks up the new name within a few seconds.
+    const isFirstMessage = turns.length === 0;
+
     const media = text.match(MEDIA_COMMAND);
+
+    if (media && media[1] === "edit") {
+      const lastImage = [...turns].reverse().find((t) => t.kind === "image");
+      if (!lastImage) {
+        setSendError(
+          "No image in this chat yet to edit — generate one with /image first, or edit on the Image tab.",
+        );
+        return;
+      }
+    }
 
     try {
       let job: Job;
       let turnModel: string | null;
       if (media) {
-        const kind = media[1] as "image" | "video";
+        const kind = media[1] as "image" | "video" | "edit";
         const mediaPrompt = media[2].trim();
-        job = await submitJob({
-          job_type: kind,
-          params: defaultMediaParams(kind, mediaPrompt),
-          session_id: sessionId ?? undefined,
-        });
+        if (kind === "edit") {
+          // Checked just above; re-finding here keeps this branch
+          // self-contained rather than threading the lookup through.
+          const lastImage = [...turns].reverse().find((t) => t.kind === "image")!;
+          job = await submitJob({
+            job_type: "image",
+            params: { prompt: mediaPrompt, source_image: lastImage.jobId, steps: 8, cfg: 1.5 },
+            session_id: sessionId ?? undefined,
+          });
+        } else {
+          job = await submitJob({
+            job_type: kind,
+            params: defaultMediaParams(kind, mediaPrompt),
+            session_id: sessionId ?? undefined,
+          });
+        }
         turnModel = null; // Auto-picked; the poll below fills in the real name once it lands.
         setTurns((ts) => [
           ...ts,
           {
             jobId: job.id,
-            kind,
+            kind: kind === "edit" ? "image" : kind,
             prompt: mediaPrompt,
             answer: "",
             state: job.state,
@@ -271,6 +305,10 @@ export function Chat() {
       }
       setPrompt("");
       setPendingId(job.id);
+      if (isFirstMessage && sessionId) {
+        const titleSource = media ? media[2].trim() : text;
+        renameSession(sessionId, titleFromMessage(titleSource)).catch(() => {});
+      }
     } catch (err) {
       setSendError(err instanceof Error ? err.message : String(err));
     }
@@ -359,7 +397,7 @@ export function Chat() {
             placeholder={
               pendingId && !stuck
                 ? "Waiting for the answer…"
-                : "Message, or /image · /video a prompt — Enter to send, Shift+Enter for a newline"
+                : "Message, or /image · /video · /edit a prompt — Enter to send, Shift+Enter for a newline"
             }
           />
           <button type="submit" disabled={!prompt.trim() || (!!pendingId && !stuck)}>

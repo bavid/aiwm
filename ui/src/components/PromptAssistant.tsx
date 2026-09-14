@@ -162,7 +162,11 @@ export function PromptAssistant({
             <input
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
-              placeholder="e.g. a moody portrait of an old lighthouse keeper"
+              placeholder={
+                kind === "edit"
+                  ? "e.g. remove the blisters, or make me look like Neo"
+                  : "e.g. a moody portrait of an old lighthouse keeper"
+              }
               spellCheck
             />
             <button type="submit" disabled={!draft.trim() || !!pendingId}>

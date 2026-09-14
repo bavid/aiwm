@@ -532,6 +532,10 @@ export interface ImageParams {
   scheduler: string;
   seed: number;
   loras?: LoraParam[];
+  /** Set on an instruction-based *edit* of an existing image (`prompt` is
+   *  the instruction, not a generation prompt) — a finished job's id, or a
+   *  path. Only FLUX.2 [klein] supports this. */
+  source_image?: string;
 }
 
 /** The parameters of a `job_type=video` job. After the engine runs, `params`
@@ -934,6 +938,11 @@ export const enqueueDownload = (body: EnqueueDownloadBody) =>
 export const pauseDownload = (id: string) => invoke<void>("pause_download", { id });
 export const resumeDownload = (id: string) => invoke<void>("resume_download", { id });
 export const cancelDownload = (id: string) => invoke<void>("cancel_download", { id });
+/** Remove one finished (done/failed) download from the history — refuses one
+ *  still in progress. Never touches an already-imported model. */
+export const deleteDownload = (id: string) => invoke<void>("delete_download", { id });
+/** Clear every finished download at once; returns how many were removed. */
+export const clearFinishedDownloads = () => invoke<number>("clear_finished_downloads");
 
 // --- benchmarks (Phase 6.5) ----------------------------------------------
 

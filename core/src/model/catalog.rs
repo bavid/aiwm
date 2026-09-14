@@ -247,6 +247,24 @@ pub const KNOWN_MODELS: &[KnownModel] = &[
         media: "image",
     },
     KnownModel {
+        id: "flux2-klein-edit-vae",
+        name: "FLUX.2 Edit VAE (small decoder)",
+        kind: "vae",
+        family: Some("flux2"),
+        publisher: "Black Forest Labs",
+        repo: "black-forest-labs/FLUX.2-small-decoder",
+        file: "full_encoder_small_decoder.safetensors",
+        url: "https://huggingface.co/black-forest-labs/FLUX.2-small-decoder/resolve/main/full_encoder_small_decoder.safetensors",
+        sha256: "ea4273f02d1fafbf8e1d1c2cf6018ed8748652eb0bf34f2dd91171f16f15ab62",
+        size_bytes: 249_519_092,
+        license: "Apache-2.0",
+        note: "Only for editing an existing image (not text-to-image) with FLUX.2 [klein] \
+               9B — a different VAE from the plain generation one above, with a fuller \
+               encoder path for re-encoding a real photo. Small (~238 MB).",
+        is_default: false,
+        media: "image",
+    },
+    KnownModel {
         id: "flux2-klein-realistic-detail-lora",
         name: "Realistic Detail LoRA (FLUX.2 Klein 9B)",
         kind: "lora",

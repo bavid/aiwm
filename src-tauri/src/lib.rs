@@ -152,6 +152,16 @@ async fn cancel_download(app: tauri::State<'_, Arc<App>>, id: String) -> Result<
 }
 
 #[tauri::command]
+async fn delete_download(app: tauri::State<'_, Arc<App>>, id: String) -> Result<(), String> {
+    to_ipc(handlers::delete_download(&app, &id).await)
+}
+
+#[tauri::command]
+async fn clear_finished_downloads(app: tauri::State<'_, Arc<App>>) -> Result<u64, String> {
+    to_ipc(handlers::clear_finished_downloads(&app).await)
+}
+
+#[tauri::command]
 async fn export_backup(app: tauri::State<'_, Arc<App>>) -> Result<String, String> {
     to_ipc(handlers::export_backup_to_file(&app).await)
 }
@@ -562,6 +572,8 @@ fn try_run() -> anyhow::Result<()> {
             pause_download,
             resume_download,
             cancel_download,
+            delete_download,
+            clear_finished_downloads,
             export_backup,
             import_backup,
             cancel_job,

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { open } from "@tauri-apps/plugin-dialog";
 import { LoraPicker } from "../../components/LoraPicker";
 import { NumField } from "../../components/NumField";
 import { PromptAssistant } from "../../components/PromptAssistant";
@@ -70,10 +71,32 @@ export function ImageStudio() {
   const [modelId, setModelId] = useState("auto");
   const [loras, setLoras] = useState<LoraParam[]>([]);
   const [sendError, setSendError] = useState<string | null>(null);
+  const [sourceJob, setSourceJob] = useState("none");
+  const [sourcePath, setSourcePath] = useState("");
 
   const selectedCheckpoint = checkpoints.find((m) => m.id === modelId);
   const isFlux = modelId !== "auto" && selectedCheckpoint?.family === "flux";
   const isFlux2 = modelId !== "auto" && selectedCheckpoint?.family === "flux2";
+
+  // Editing an existing image instead of generating one from scratch --
+  // a finished image job's id, or a path to a file on disk.
+  const sourceImage = sourcePath.trim() || (sourceJob === "none" ? "" : sourceJob);
+  const editing = !!sourceImage;
+  const priorImages = (jobs ?? []).filter(
+    (j) => j.job_type === "image" && j.state === "completed" && j.output_path,
+  );
+
+  const browseForSourceImage = async () => {
+    try {
+      const picked = await open({
+        multiple: false,
+        filters: [{ name: "Images", extensions: ["png", "jpg", "jpeg", "webp"] }],
+      });
+      if (typeof picked === "string") setSourcePath(picked);
+    } catch {
+      // Not running inside Tauri (e.g. the browser dev preview) — no-op.
+    }
+  };
 
   const [pendingId, setPendingId] = useState<string | null>(null);
   const [detail, setDetail] = useState<JobDetail | null>(null);
@@ -126,14 +149,16 @@ export function ImageStudio() {
     if (!text || (pendingId && !stuck)) return;
     setSendError(null);
 
-    const params: Record<string, unknown> = {
-      prompt: text,
-      negative: negative.trim(),
-      width: clampDim(width),
-      height: clampDim(height),
-      steps,
-      cfg,
-    };
+    const params: Record<string, unknown> = editing
+      ? { prompt: text, source_image: sourceImage, steps, cfg }
+      : {
+          prompt: text,
+          negative: negative.trim(),
+          width: clampDim(width),
+          height: clampDim(height),
+          steps,
+          cfg,
+        };
     const s = Number(seed);
     if (seed.trim() !== "" && Number.isFinite(s) && s >= 0) params.seed = Math.floor(s);
     if (loras.length > 0) params.loras = loras;
@@ -202,18 +227,59 @@ export function ImageStudio() {
     <div className="image">
       <section className="card image__form">
         <header className="card__head">
-          <h2>Generate an image</h2>
-          {modelId === "auto" && checkpoints.length > 0 && (
+          <h2>{editing ? "Edit an image" : "Generate an image"}</h2>
+          {!editing && modelId === "auto" && checkpoints.length > 0 && (
             <span className="card__sub">Auto · {checkpoints.length} checkpoint(s)</span>
           )}
         </header>
         <SessionSwitcher capability="image" activeId={sessionId} onChange={setSessionId} />
 
+        <fieldset className="startframe">
+          <legend>Edit an existing image (optional)</legend>
+          <label className="imgform__field">
+            <span>A finished image</span>
+            <select value={sourceJob} onChange={(e) => setSourceJob(e.target.value)}>
+              <option value="none">None — generate from a prompt</option>
+              {priorImages.map((j) => (
+                <option key={j.id} value={j.id}>
+                  {promptOf(j).slice(0, 48) || j.id}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="imgform__field">
+            <span>…or an image file</span>
+            <div className="pathpick">
+              <input
+                type="text"
+                value={sourcePath}
+                onChange={(e) => setSourcePath(e.target.value)}
+                placeholder="E:\\photos\\me.jpg"
+                spellCheck={false}
+              />
+              <button type="button" className="chip" onClick={browseForSourceImage}>
+                Browse…
+              </button>
+            </div>
+          </label>
+          {sourceImage && about && sourcePath.trim() === "" && (
+            <img
+              className="startframe__thumb"
+              src={imageOutputUrl(about.core_api_port, sourceImage)}
+              alt="image to edit"
+              loading="lazy"
+            />
+          )}
+          {editing && !isFlux2 && (
+            <p className="muted">Editing needs the FLUX.2 [klein] 9B stack — pick it below.</p>
+          )}
+        </fieldset>
+
         <PromptAssistant
-          kind="image"
+          kind={editing ? "edit" : "image"}
           sessionId={sessionId}
           onApplyPrompt={appendPrompt}
-          onApplyNegative={appendNegative}
+          onApplyNegative={editing ? undefined : appendNegative}
         />
 
 
@@ -236,60 +302,78 @@ export function ImageStudio() {
           }}
         >
           <label className="imgform__field">
-            <span>Prompt</span>
+            <span>{editing ? "Edit instruction" : "Prompt"}</span>
             <textarea
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
               rows={3}
               spellCheck
-              placeholder="a red fox in the snow, cinematic lighting, highly detailed"
+              placeholder={
+                editing
+                  ? "remove the blisters, make the hair blonde, add me to a train platform…"
+                  : "a red fox in the snow, cinematic lighting, highly detailed"
+              }
             />
           </label>
           <PromptPresetPicker kind="positive" onApply={appendPrompt} />
 
-          <label className="imgform__field">
-            <span>Negative prompt</span>
-            <textarea
-              value={negative}
-              onChange={(e) => setNegative(e.target.value)}
-              rows={2}
-              spellCheck
-              placeholder="blurry, low quality, watermark"
-            />
-          </label>
-          <PromptPresetPicker kind="negative" onApply={appendNegative} />
+          {!editing && (
+            <>
+              <label className="imgform__field">
+                <span>Negative prompt</span>
+                <textarea
+                  value={negative}
+                  onChange={(e) => setNegative(e.target.value)}
+                  rows={2}
+                  spellCheck
+                  placeholder="blurry, low quality, watermark"
+                />
+              </label>
+              <PromptPresetPicker kind="negative" onApply={appendNegative} />
+            </>
+          )}
 
-          <div className="imgform__presets">
-            {PRESETS.map((p) => (
-              <button
-                key={p.label}
-                type="button"
-                className="chip"
-                aria-pressed={width === p.w && height === p.h}
-                onClick={() => {
-                  setWidth(p.w);
-                  setHeight(p.h);
-                }}
-              >
-                {p.label}
-              </button>
-            ))}
-            <button
-              type="button"
-              className="chip"
-              title="Swap width and height"
-              onClick={() => {
-                setWidth(height);
-                setHeight(width);
-              }}
-            >
-              ↔
-            </button>
-          </div>
+          {!editing && (
+            <>
+              <div className="imgform__presets">
+                {PRESETS.map((p) => (
+                  <button
+                    key={p.label}
+                    type="button"
+                    className="chip"
+                    aria-pressed={width === p.w && height === p.h}
+                    onClick={() => {
+                      setWidth(p.w);
+                      setHeight(p.h);
+                    }}
+                  >
+                    {p.label}
+                  </button>
+                ))}
+                <button
+                  type="button"
+                  className="chip"
+                  title="Swap width and height"
+                  onClick={() => {
+                    setWidth(height);
+                    setHeight(width);
+                  }}
+                >
+                  ↔
+                </button>
+              </div>
+
+              <div className="imgform__grid">
+                <NumField label="Width" value={width} step={DIM_STEP} min={MIN_DIM} max={MAX_DIM} onChange={setWidth} />
+                <NumField label="Height" value={height} step={DIM_STEP} min={MIN_DIM} max={MAX_DIM} onChange={setHeight} />
+              </div>
+            </>
+          )}
+          {editing && (
+            <p className="muted">The edited image keeps the source image's own size.</p>
+          )}
 
           <div className="imgform__grid">
-            <NumField label="Width" value={width} step={DIM_STEP} min={MIN_DIM} max={MAX_DIM} onChange={setWidth} />
-            <NumField label="Height" value={height} step={DIM_STEP} min={MIN_DIM} max={MAX_DIM} onChange={setHeight} />
             <NumField label="Steps" value={steps} step={1} min={1} max={60} onChange={setSteps} />
             <NumField
               label={isFlux ? "Guidance" : "CFG"}
@@ -480,8 +564,14 @@ function Result({
       <dl className="result__meta">
         {p.prompt && (
           <>
-            <dt>Prompt</dt>
+            <dt>{p.source_image ? "Edit instruction" : "Prompt"}</dt>
             <dd>{p.prompt}</dd>
+          </>
+        )}
+        {p.source_image && (
+          <>
+            <dt>Edited from</dt>
+            <dd className="numeric">{p.source_image}</dd>
           </>
         )}
         {p.negative && (

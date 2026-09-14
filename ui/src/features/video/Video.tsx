@@ -297,6 +297,44 @@ export function VideoStudio() {
             onApply={(text) => setNegative((n) => (n.trim() ? `${n.trim()}, ${text}` : text))}
           />
 
+          <fieldset className="startframe">
+            <legend>Start from an image (optional)</legend>
+            <label className="imgform__field">
+              <span>A finished image</span>
+              <select value={startJob} onChange={(e) => setStartJob(e.target.value)}>
+                <option value="none">None — text to video</option>
+                {imageJobs.map((j) => (
+                  <option key={j.id} value={j.id}>
+                    {promptOf(j).slice(0, 48)}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="imgform__field">
+              <span>…or an image file</span>
+              <div className="pathpick">
+                <input
+                  type="text"
+                  value={startPath}
+                  onChange={(e) => setStartPath(e.target.value)}
+                  placeholder="E:\\shots\\frame_01.png"
+                  spellCheck={false}
+                />
+                <button type="button" className="chip" onClick={browseForImage}>
+                  Browse…
+                </button>
+              </div>
+            </label>
+            {startImage && about && startPath.trim() === "" && (
+              <img
+                className="startframe__thumb"
+                src={jobOutputUrl(about.core_api_port, startImage)}
+                alt="start frame"
+                loading="lazy"
+              />
+            )}
+          </fieldset>
+
           <div className="imgform__presets">
             {PRESETS.map((p) => (
               <button
@@ -357,44 +395,6 @@ export function VideoStudio() {
             selected={loras}
             onChange={setLoras}
           />
-
-          <fieldset className="startframe">
-            <legend>Start from an image (optional)</legend>
-            <label className="imgform__field">
-              <span>A finished image</span>
-              <select value={startJob} onChange={(e) => setStartJob(e.target.value)}>
-                <option value="none">None — text to video</option>
-                {imageJobs.map((j) => (
-                  <option key={j.id} value={j.id}>
-                    {promptOf(j).slice(0, 48)}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="imgform__field">
-              <span>…or an image file</span>
-              <div className="pathpick">
-                <input
-                  type="text"
-                  value={startPath}
-                  onChange={(e) => setStartPath(e.target.value)}
-                  placeholder="E:\\shots\\frame_01.png"
-                  spellCheck={false}
-                />
-                <button type="button" className="chip" onClick={browseForImage}>
-                  Browse…
-                </button>
-              </div>
-            </label>
-            {startImage && about && startPath.trim() === "" && (
-              <img
-                className="startframe__thumb"
-                src={jobOutputUrl(about.core_api_port, startImage)}
-                alt="start frame"
-                loading="lazy"
-              />
-            )}
-          </fieldset>
 
           <p className={heavy ? "video__note video__note--warn" : "video__note"}>
             ~{clipSecs.toFixed(1)}s clip · very rough guess {estLo}–{estHi} min on a 16 GB card

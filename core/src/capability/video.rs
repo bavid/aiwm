@@ -29,9 +29,6 @@ use crate::pipeline::{self, LoraSpec, LtxModels, VideoInputs, VideoRecipe, WanMo
 use crate::runtime::ComfyUiAdapter;
 use crate::Result;
 
-/// Image extensions a start frame may have (ComfyUI's `LoadImage` reads these).
-const FRAME_EXTS: [&str; 4] = ["png", "jpg", "jpeg", "webp"];
-
 const DEFAULT_WIDTH: u32 = 832;
 const DEFAULT_HEIGHT: u32 = 480;
 const MIN_DIM: u32 = 128;
@@ -214,7 +211,9 @@ pub async fn run(
     // folder. The guard removes the copy when this function returns. Do it first
     // so a bad `init_image` fails before the "takes several minutes" event.
     let frame = match &req.init_image {
-        Some(spec) => Some(stage_start_frame(db, comfyui, job_id, spec).await?),
+        Some(spec) => {
+            Some(super::media::stage_image(db, &comfyui.input_dir(), job_id, spec).await?)
+        }
         None => None,
     };
     let resolved_loras = resolve_loras(db, &req.loras).await?;
@@ -377,96 +376,6 @@ pub async fn run(
         length: req.length,
         fps: req.fps,
     }))
-}
-
-/// A start frame copied into ComfyUI's `input/` folder. Dropping it removes the
-/// copy — the frame is only needed for the one render.
-struct StagedFrame {
-    /// Bare file name, as `LoadImage` refers to it.
-    name: String,
-    /// Full path of the copy (removed on drop).
-    path: PathBuf,
-    /// What the user asked for — a job id or a path (for the event trail).
-    source: String,
-}
-
-impl Drop for StagedFrame {
-    fn drop(&mut self) {
-        match std::fs::remove_file(&self.path) {
-            Ok(()) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => tracing::warn!(
-                path = %self.path.display(),
-                "could not remove staged start frame: {e}"
-            ),
-        }
-    }
-}
-
-/// Resolve `spec` (a completed job's id, or a path to an image) to a real file,
-/// then copy it to `<comfyui input>/<job_id>.<ext>` for `LoadImage`.
-async fn stage_start_frame(
-    db: &Database,
-    comfyui: &Arc<ComfyUiAdapter>,
-    job_id: &str,
-    spec: &str,
-) -> Result<StagedFrame> {
-    let source = resolve_start_frame(db, spec).await?;
-    let ext = source
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(str::to_ascii_lowercase)
-        .unwrap_or_else(|| "png".to_string());
-
-    let input_dir = comfyui.input_dir();
-    tokio::fs::create_dir_all(&input_dir)
-        .await
-        .map_err(|e| video_err(format!("create {}: {e}", input_dir.display())))?;
-    let name = format!("{job_id}.{ext}");
-    let path = input_dir.join(&name);
-    tokio::fs::copy(&source, &path).await.map_err(|e| {
-        video_err(format!(
-            "stage start frame {} \u{2192} {}: {e}",
-            source.display(),
-            path.display()
-        ))
-    })?;
-    Ok(StagedFrame {
-        name,
-        path,
-        source: spec.to_string(),
-    })
-}
-
-/// A start frame is either the output of a finished job (the gallery hands us
-/// its id) or a path to an image file on disk. Either way it must be an existing
-/// image ComfyUI's `LoadImage` can read.
-async fn resolve_start_frame(db: &Database, spec: &str) -> Result<PathBuf> {
-    if let Some(job) = db.jobs().get(spec).await? {
-        let out = job
-            .output_path
-            .ok_or_else(|| video_err(format!("job {spec} has no image output to start from")))?;
-        return checked_frame(&out);
-    }
-    checked_frame(spec)
-}
-
-fn checked_frame(path: &str) -> Result<PathBuf> {
-    let p = PathBuf::from(path);
-    let ext = p
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(str::to_ascii_lowercase);
-    if !ext.as_deref().is_some_and(|e| FRAME_EXTS.contains(&e)) {
-        return Err(video_err(format!(
-            "start frame must be a {} image \u{2014} got {path}",
-            FRAME_EXTS.join(" / ")
-        )));
-    }
-    if !p.is_file() {
-        return Err(video_err(format!("start frame not found: {path}")));
-    }
-    Ok(p)
 }
 
 /// Wan's two companion files, resolved from the library by role + name.
@@ -637,54 +546,9 @@ mod tests {
         assert_eq!(params["init_image"], "C:\\shots\\a.png");
     }
 
-    #[test]
-    fn checked_frame_rejects_non_images_and_missing_files() {
-        let tmp = tempfile::tempdir().unwrap();
-        let good = tmp.path().join("frame.png");
-        std::fs::write(&good, b"x").unwrap();
-        assert_eq!(checked_frame(&good.to_string_lossy()).unwrap(), good);
-
-        let mp4 = tmp.path().join("clip.mp4");
-        std::fs::write(&mp4, b"x").unwrap();
-        assert!(checked_frame(&mp4.to_string_lossy())
-            .unwrap_err()
-            .to_string()
-            .contains("must be a"));
-
-        assert!(
-            checked_frame(&tmp.path().join("gone.png").to_string_lossy())
-                .unwrap_err()
-                .to_string()
-                .contains("not found")
-        );
-    }
-
-    #[tokio::test]
-    async fn resolve_start_frame_takes_a_path_or_a_finished_jobs_output() {
-        use crate::db::{Database, NewJob};
-        let tmp = tempfile::tempdir().unwrap();
-        let db = Database::connect_in_memory().await.unwrap();
-
-        // A bare path to an image on disk.
-        let ondisk = tmp.path().join("hand.jpg");
-        std::fs::write(&ondisk, b"x").unwrap();
-        assert_eq!(
-            resolve_start_frame(&db, &ondisk.to_string_lossy())
-                .await
-                .unwrap(),
-            ondisk
-        );
-
-        // An image job that has not produced anything yet → a clear error.
-        let job = db.jobs().insert(NewJob::new("image")).await.unwrap();
-        assert!(resolve_start_frame(&db, &job.id)
-            .await
-            .unwrap_err()
-            .to_string()
-            .contains("no image output"));
-        // (a job id that resolves to a real output is covered end-to-end in
-        // tests/video_job.rs)
-    }
+    // `checked_image_file` / `resolve_staged_image` now live in
+    // `capability::media` (shared with image editing) — see their tests
+    // there.
 
     #[test]
     fn ram_shortfall_flags_a_tight_offload_budget() {

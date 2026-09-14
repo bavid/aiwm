@@ -438,3 +438,139 @@ async fn enqueue_is_refused_in_offline_mode() {
         .unwrap_err();
     assert!(err.to_string().contains("offline"));
 }
+
+fn req(name: &str) -> EnqueueRequest {
+    EnqueueRequest {
+        url: format!("http://x/{name}"),
+        filename: name.into(),
+        model_type: None,
+        sha256: None,
+        size_bytes: None,
+        roles: vec![],
+    }
+}
+
+#[tokio::test]
+async fn delete_removes_a_finished_download() {
+    let tmp = tempfile::tempdir().unwrap();
+    let db = Database::connect_in_memory().await.unwrap();
+    let m = DownloadManager::new(
+        db.clone(),
+        tmp.path().join("store"),
+        tmp.path().join(".downloads"),
+        Arc::new(AtomicBool::new(false)),
+    );
+    let d = m.enqueue(req("a.gguf")).await.unwrap();
+    db.downloads()
+        .set_state(&d.id, DownloadState::Done, None)
+        .await
+        .unwrap();
+
+    m.delete(&d.id).await.unwrap();
+
+    assert!(m.get(&d.id).await.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn delete_removes_a_failed_download() {
+    let tmp = tempfile::tempdir().unwrap();
+    let db = Database::connect_in_memory().await.unwrap();
+    let m = DownloadManager::new(
+        db.clone(),
+        tmp.path().join("store"),
+        tmp.path().join(".downloads"),
+        Arc::new(AtomicBool::new(false)),
+    );
+    let d = m.enqueue(req("a.gguf")).await.unwrap();
+    db.downloads()
+        .set_state(&d.id, DownloadState::Failed, Some("boom"))
+        .await
+        .unwrap();
+
+    m.delete(&d.id).await.unwrap();
+
+    assert!(m.get(&d.id).await.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn delete_refuses_a_download_still_in_progress() {
+    let tmp = tempfile::tempdir().unwrap();
+    let db = Database::connect_in_memory().await.unwrap();
+    let m = DownloadManager::new(
+        db,
+        tmp.path().join("store"),
+        tmp.path().join(".downloads"),
+        Arc::new(AtomicBool::new(false)),
+    );
+    let d = m.enqueue(req("a.gguf")).await.unwrap();
+
+    let err = m.delete(&d.id).await.unwrap_err();
+
+    assert!(
+        err.to_string().to_lowercase().contains("progress")
+            || err.to_string().to_lowercase().contains("cancel")
+    );
+    assert!(
+        m.get(&d.id).await.unwrap().is_some(),
+        "still there — not deleted"
+    );
+}
+
+#[tokio::test]
+async fn delete_of_an_unknown_id_is_an_error() {
+    let tmp = tempfile::tempdir().unwrap();
+    let db = Database::connect_in_memory().await.unwrap();
+    let m = DownloadManager::new(
+        db,
+        tmp.path().join("store"),
+        tmp.path().join(".downloads"),
+        Arc::new(AtomicBool::new(false)),
+    );
+    assert!(m.delete("ghost").await.is_err());
+}
+
+#[tokio::test]
+async fn clear_finished_removes_every_done_and_failed_row_but_keeps_active_ones() {
+    let tmp = tempfile::tempdir().unwrap();
+    let db = Database::connect_in_memory().await.unwrap();
+    let m = DownloadManager::new(
+        db.clone(),
+        tmp.path().join("store"),
+        tmp.path().join(".downloads"),
+        Arc::new(AtomicBool::new(false)),
+    );
+    let queued = m.enqueue(req("queued.gguf")).await.unwrap();
+    let done = m.enqueue(req("done.gguf")).await.unwrap();
+    let failed = m.enqueue(req("failed.gguf")).await.unwrap();
+    db.downloads()
+        .set_state(&done.id, DownloadState::Done, None)
+        .await
+        .unwrap();
+    db.downloads()
+        .set_state(&failed.id, DownloadState::Failed, Some("boom"))
+        .await
+        .unwrap();
+
+    let removed = m.clear_finished().await.unwrap();
+
+    assert_eq!(removed, 2);
+    let remaining = m.list().await.unwrap();
+    assert_eq!(remaining.len(), 1);
+    assert_eq!(remaining[0].id, queued.id);
+}
+
+#[tokio::test]
+async fn clear_finished_is_a_noop_when_nothing_is_terminal() {
+    let tmp = tempfile::tempdir().unwrap();
+    let db = Database::connect_in_memory().await.unwrap();
+    let m = DownloadManager::new(
+        db,
+        tmp.path().join("store"),
+        tmp.path().join(".downloads"),
+        Arc::new(AtomicBool::new(false)),
+    );
+    m.enqueue(req("queued.gguf")).await.unwrap();
+
+    assert_eq!(m.clear_finished().await.unwrap(), 0);
+    assert_eq!(m.list().await.unwrap().len(), 1);
+}

@@ -306,7 +306,7 @@ async fn a_video_job_with_a_missing_start_frame_fails_before_rendering() {
         .unwrap();
     match h.engine.run_next().await.unwrap().unwrap() {
         JobOutcome::Failed { error, .. } => {
-            assert!(error.contains("start frame not found"), "{error}");
+            assert!(error.contains("image not found"), "{error}");
         }
         other => panic!("expected Failed, got {other:?}"),
     }

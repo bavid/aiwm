@@ -1,4 +1,4 @@
-export type AssistantKind = "image" | "video";
+export type AssistantKind = "image" | "video" | "edit";
 
 export interface AssistantTurn {
   role: "user" | "assistant";
@@ -10,6 +10,17 @@ export interface AssistantTurn {
  *  and no server-side memory (see submission below): each request re-sends
  *  the whole transcript so far. */
 export function systemPreambleFor(kind: AssistantKind): string {
+  if (kind === "edit") {
+    return (
+      "You are helping someone describe how they want an existing photo edited (e.g. " +
+      '"remove the blisters", "make the hair blonde", "put me on a train platform", ' +
+      '"make me look like Neo from The Matrix"). Have a short back-and-forth to understand ' +
+      "exactly what they want changed -- ask at most one clarifying question at a time, keep " +
+      "replies brief. As soon as you have enough, end your reply with the edit instruction on " +
+      "its own line, exactly in this form:\n" +
+      "PROMPT: <one clear instruction describing the edit, referring to “the image”>"
+    );
+  }
   const medium = kind === "image" ? "image" : "video";
   const extra =
     kind === "video"

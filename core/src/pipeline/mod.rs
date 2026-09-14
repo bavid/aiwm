@@ -411,6 +411,125 @@ pub fn flux2_klein_txt2img_safetensors(
     g
 }
 
+/// An instruction-based edit of an existing image ("remove the blisters",
+/// "make the hair blonde"), not a fresh generation from a prompt.
+/// `source_image` is the bare file name of an image already placed in
+/// ComfyUI's `input/` folder.
+#[derive(Debug, Clone, Copy)]
+pub struct EditInputs<'a> {
+    pub instruction: &'a str,
+    pub source_image: &'a str,
+    pub steps: u32,
+    pub cfg: f64,
+    pub sampler: &'a str,
+    pub seed: i64,
+    pub filename_prefix: &'a str,
+}
+
+/// FLUX.2 [klein] 9B's own image-editing graph -- the same model unifies
+/// generation and editing, it just needs its own VAE
+/// (`full_encoder_small_decoder.safetensors`, not the plain generation one)
+/// and a different graph shape: `LoadImage` the source, rescale to ~1
+/// megapixel, encode it into a latent, and inject that latent into *both*
+/// the positive and the zeroed-out negative conditioning via
+/// `ReferenceLatent` -- the model edits from the real image instead of
+/// generating from nothing. Output size matches the (rescaled) input image,
+/// not a fixed square. Verified against Comfy-Org's own
+/// `image_flux2_klein_image_edit_9b_distilled` workflow template.
+pub fn flux2_klein_edit(i: &EditInputs, m: &Flux2KleinModels, loras: &[LoraSpec]) -> Value {
+    let mut g = json!({
+        "70": {
+            "class_type": "UNETLoader",
+            "inputs": { "unet_name": m.unet, "weight_dtype": "default" }
+        },
+        "71": {
+            "class_type": "CLIPLoader",
+            "inputs": { "clip_name": m.clip, "type": "flux2" }
+        },
+        "72": {
+            "class_type": "VAELoader",
+            "inputs": { "vae_name": m.vae }
+        },
+        "76": {
+            "class_type": "LoadImage",
+            "inputs": { "image": i.source_image }
+        },
+        "80": {
+            "class_type": "ImageScaleToTotalPixels",
+            "inputs": { "image": ["76", 0], "upscale_method": "lanczos", "megapixels": 1.0 }
+        },
+        "99": {
+            "class_type": "GetImageSize",
+            "inputs": { "image": ["80", 0] }
+        },
+        "124": {
+            "class_type": "VAEEncode",
+            "inputs": { "pixels": ["80", 0], "vae": ["72", 0] }
+        },
+        "74": {
+            "class_type": "CLIPTextEncode",
+            "inputs": { "text": i.instruction, "clip": ["71", 0] }
+        },
+        "123": {
+            "class_type": "ReferenceLatent",
+            "inputs": { "conditioning": ["74", 0], "latent": ["124", 0] }
+        },
+        "82": {
+            "class_type": "ConditioningZeroOut",
+            "inputs": { "conditioning": ["74", 0] }
+        },
+        "125": {
+            "class_type": "ReferenceLatent",
+            "inputs": { "conditioning": ["82", 0], "latent": ["124", 0] }
+        },
+        "61": {
+            "class_type": "KSamplerSelect",
+            "inputs": { "sampler_name": i.sampler }
+        },
+        "62": {
+            "class_type": "Flux2Scheduler",
+            "inputs": { "steps": i.steps, "width": ["99", 0], "height": ["99", 1] }
+        },
+        "73": {
+            "class_type": "RandomNoise",
+            "inputs": { "noise_seed": i.seed }
+        },
+        "63": {
+            "class_type": "CFGGuider",
+            "inputs": {
+                "model": ["70", 0],
+                "positive": ["123", 0],
+                "negative": ["125", 0],
+                "cfg": i.cfg
+            }
+        },
+        "66": {
+            "class_type": "EmptyFlux2LatentImage",
+            "inputs": { "width": ["99", 0], "height": ["99", 1], "batch_size": 1 }
+        },
+        "64": {
+            "class_type": "SamplerCustomAdvanced",
+            "inputs": {
+                "noise": ["73", 0],
+                "guider": ["63", 0],
+                "sampler": ["61", 0],
+                "sigmas": ["62", 0],
+                "latent_image": ["66", 0]
+            }
+        },
+        "65": {
+            "class_type": "VAEDecode",
+            "inputs": { "samples": ["64", 0], "vae": ["72", 0] }
+        },
+        "9": {
+            "class_type": "SaveImage",
+            "inputs": { "filename_prefix": i.filename_prefix, "images": ["65", 0] }
+        }
+    });
+    apply_loras(&mut g, loras, ("70", 0), ("71", 0), "63", &["74"]);
+    g
+}
+
 // --- video --------------------------------------------------------------------
 
 /// A resolved text/image-to-video request. `start_image` is the bare file name
@@ -965,6 +1084,88 @@ mod tests {
         );
         assert_eq!(
             g["6"]["inputs"]["clip"],
+            json!(["90", 1]),
+            "CLIPTextEncode reads the lora'd clip"
+        );
+    }
+
+    fn edit_inputs() -> EditInputs<'static> {
+        EditInputs {
+            instruction: "make the hair blonde",
+            source_image: "job-abc.png",
+            steps: 8,
+            cfg: 1.5,
+            sampler: "euler",
+            seed: 42,
+            filename_prefix: "job-abc",
+        }
+    }
+
+    #[test]
+    fn flux2_klein_edit_graph_wires_the_source_image_into_both_conditionings() {
+        let g = flux2_klein_edit(
+            &edit_inputs(),
+            &Flux2KleinModels {
+                unet: "flux-2-klein-9b-fp8.safetensors",
+                clip: "qwen_3_8b_fp8mixed.safetensors",
+                vae: "full_encoder_small_decoder.safetensors",
+            },
+            &[],
+        );
+        assert_eq!(g["70"]["class_type"], "UNETLoader");
+        assert_eq!(g["71"]["class_type"], "CLIPLoader");
+        assert_eq!(
+            g["72"]["inputs"]["vae_name"],
+            "full_encoder_small_decoder.safetensors"
+        );
+        assert_eq!(g["76"]["class_type"], "LoadImage");
+        assert_eq!(g["76"]["inputs"]["image"], "job-abc.png");
+        // The source image is rescaled, then both the output canvas and the
+        // sampler's sigma schedule are sized from it -- not a fixed square.
+        assert_eq!(g["80"]["inputs"]["image"], json!(["76", 0]));
+        assert_eq!(g["99"]["inputs"]["image"], json!(["80", 0]));
+        assert_eq!(g["66"]["inputs"]["width"], json!(["99", 0]));
+        assert_eq!(g["66"]["inputs"]["height"], json!(["99", 1]));
+        assert_eq!(g["62"]["inputs"]["width"], json!(["99", 0]));
+        // The rescaled image is encoded once, then referenced by *both* the
+        // real (positive) and the zeroed (negative) conditioning.
+        assert_eq!(g["124"]["inputs"]["pixels"], json!(["80", 0]));
+        assert_eq!(g["74"]["inputs"]["text"], "make the hair blonde");
+        assert_eq!(g["123"]["inputs"]["conditioning"], json!(["74", 0]));
+        assert_eq!(g["123"]["inputs"]["latent"], json!(["124", 0]));
+        assert_eq!(g["82"]["inputs"]["conditioning"], json!(["74", 0]));
+        assert_eq!(g["125"]["inputs"]["conditioning"], json!(["82", 0]));
+        assert_eq!(g["125"]["inputs"]["latent"], json!(["124", 0]));
+        assert_eq!(g["63"]["inputs"]["positive"], json!(["123", 0]));
+        assert_eq!(g["63"]["inputs"]["negative"], json!(["125", 0]));
+        assert_eq!(g["63"]["inputs"]["cfg"], 1.5);
+        assert_eq!(g["62"]["inputs"]["steps"], 8);
+        assert_eq!(g["9"]["inputs"]["filename_prefix"], "job-abc");
+    }
+
+    #[test]
+    fn flux2_klein_edit_graph_splices_a_lora_before_the_guider_and_encode() {
+        let g = flux2_klein_edit(
+            &edit_inputs(),
+            &Flux2KleinModels {
+                unet: "u",
+                clip: "c",
+                vae: "v",
+            },
+            &[LoraSpec {
+                file: "some-lora.safetensors",
+                strength: 0.8,
+            }],
+        );
+        assert_eq!(g["90"]["inputs"]["model"], json!(["70", 0]));
+        assert_eq!(g["90"]["inputs"]["clip"], json!(["71", 0]));
+        assert_eq!(
+            g["63"]["inputs"]["model"],
+            json!(["90", 0]),
+            "CFGGuider reads the lora'd model"
+        );
+        assert_eq!(
+            g["74"]["inputs"]["clip"],
             json!(["90", 1]),
             "CLIPTextEncode reads the lora'd clip"
         );

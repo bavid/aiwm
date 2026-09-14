@@ -145,6 +145,102 @@ pub(super) fn resolve_seed(params: &Value) -> i64 {
         .unwrap_or_else(random_seed)
 }
 
+/// Image extensions ComfyUI's `LoadImage` can read.
+const STAGED_IMAGE_EXTS: [&str; 4] = ["png", "jpg", "jpeg", "webp"];
+
+/// An image copied into ComfyUI's `input/` folder for a job to reference (a
+/// video's start frame, an image edit's source). Dropping it removes the
+/// copy — it is only needed for the one render.
+pub(super) struct StagedImage {
+    /// Bare file name, as `LoadImage` refers to it.
+    pub name: String,
+    /// Full path of the copy (removed on drop).
+    path: PathBuf,
+    /// What the caller asked for — a job id or a path (for the event trail).
+    pub source: String,
+}
+
+impl Drop for StagedImage {
+    fn drop(&mut self) {
+        match std::fs::remove_file(&self.path) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => tracing::warn!(
+                path = %self.path.display(),
+                "could not remove staged image: {e}"
+            ),
+        }
+    }
+}
+
+/// Resolve `spec` (a completed job's id, or a path to an image) to a real
+/// file, then copy it to `<comfyui input>/<job_id>.<ext>` for `LoadImage`.
+pub(super) async fn stage_image(
+    db: &Database,
+    input_dir: &Path,
+    job_id: &str,
+    spec: &str,
+) -> Result<StagedImage> {
+    let source = resolve_staged_image(db, spec).await?;
+    let ext = source
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_ascii_lowercase)
+        .unwrap_or_else(|| "png".to_string());
+
+    tokio::fs::create_dir_all(input_dir)
+        .await
+        .map_err(|e| comfy_err(format!("create {}: {e}", input_dir.display())))?;
+    let name = format!("{job_id}.{ext}");
+    let path = input_dir.join(&name);
+    tokio::fs::copy(&source, &path).await.map_err(|e| {
+        comfy_err(format!(
+            "stage image {} \u{2192} {}: {e}",
+            source.display(),
+            path.display()
+        ))
+    })?;
+    Ok(StagedImage {
+        name,
+        path,
+        source: spec.to_string(),
+    })
+}
+
+/// The image is either the output of a finished job (the gallery hands us its
+/// id) or a path to an image file on disk. Either way it must be an existing
+/// image ComfyUI's `LoadImage` can read.
+async fn resolve_staged_image(db: &Database, spec: &str) -> Result<PathBuf> {
+    if let Some(job) = db.jobs().get(spec).await? {
+        let out = job
+            .output_path
+            .ok_or_else(|| comfy_err(format!("job {spec} has no image output to use")))?;
+        return checked_image_file(&out);
+    }
+    checked_image_file(spec)
+}
+
+fn checked_image_file(path: &str) -> Result<PathBuf> {
+    let p = PathBuf::from(path);
+    let ext = p
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_ascii_lowercase);
+    if !ext
+        .as_deref()
+        .is_some_and(|e| STAGED_IMAGE_EXTS.contains(&e))
+    {
+        return Err(comfy_err(format!(
+            "must be a {} image \u{2014} got {path}",
+            STAGED_IMAGE_EXTS.join(" / ")
+        )));
+    }
+    if !p.is_file() {
+        return Err(comfy_err(format!("image not found: {path}")));
+    }
+    Ok(p)
+}
+
 /// Write a finished render to `<outputs_dir>/<job_id>.<ext>`.
 pub(super) async fn write_output(
     outputs_dir: &Path,
@@ -243,6 +339,79 @@ mod tests {
         .await
         .unwrap_err();
         assert!(err.to_string().contains("ghost"));
+    }
+
+    #[test]
+    fn checked_image_file_rejects_non_images_and_missing_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        let good = tmp.path().join("frame.png");
+        std::fs::write(&good, b"x").unwrap();
+        assert_eq!(checked_image_file(&good.to_string_lossy()).unwrap(), good);
+
+        let mp4 = tmp.path().join("clip.mp4");
+        std::fs::write(&mp4, b"x").unwrap();
+        assert!(checked_image_file(&mp4.to_string_lossy())
+            .unwrap_err()
+            .to_string()
+            .contains("must be a"));
+
+        assert!(
+            checked_image_file(&tmp.path().join("gone.png").to_string_lossy())
+                .unwrap_err()
+                .to_string()
+                .contains("not found")
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_staged_image_takes_a_path_or_a_finished_jobs_output() {
+        use crate::db::{Database, NewJob};
+        let tmp = tempfile::tempdir().unwrap();
+        let db = Database::connect_in_memory().await.unwrap();
+
+        // A bare path to an image on disk.
+        let ondisk = tmp.path().join("hand.jpg");
+        std::fs::write(&ondisk, b"x").unwrap();
+        assert_eq!(
+            resolve_staged_image(&db, &ondisk.to_string_lossy())
+                .await
+                .unwrap(),
+            ondisk
+        );
+
+        // A job that has not produced anything yet → a clear error.
+        let job = db.jobs().insert(NewJob::new("image")).await.unwrap();
+        assert!(resolve_staged_image(&db, &job.id)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("no image output"));
+        // (a job id that resolves to a real output is covered end-to-end in
+        // tests/video_job.rs)
+    }
+
+    #[tokio::test]
+    async fn stage_image_copies_into_the_input_dir_and_cleans_up_on_drop() {
+        let src_dir = tempfile::tempdir().unwrap();
+        let input_dir = tempfile::tempdir().unwrap();
+        let db = crate::db::Database::connect_in_memory().await.unwrap();
+
+        let source = src_dir.path().join("edit-me.png");
+        std::fs::write(&source, b"pretend png bytes").unwrap();
+
+        let staged_path = {
+            let staged = stage_image(&db, input_dir.path(), "job-123", &source.to_string_lossy())
+                .await
+                .unwrap();
+            assert_eq!(staged.name, "job-123.png");
+            let path = input_dir.path().join(&staged.name);
+            assert!(path.is_file(), "copy should exist while staged is alive");
+            path
+        };
+        assert!(
+            !staged_path.is_file(),
+            "dropping the guard removes the copy"
+        );
     }
 
     #[tokio::test]

@@ -185,6 +185,37 @@ impl DownloadManager {
         Ok(())
     }
 
+    /// Remove one finished (`done` or `failed`) download from the history.
+    /// Refuses a still-active one — cancel it first.
+    pub async fn delete(&self, id: &str) -> Result<()> {
+        let Some(d) = self.db.downloads().get(id).await? else {
+            return Err(err("no such download"));
+        };
+        if !d.state.is_terminal() {
+            return Err(err("this download is still in progress — cancel it first"));
+        }
+        let _ = tokio::fs::remove_dir_all(self.staging_root.join(id)).await;
+        self.db.downloads().delete(id).await?;
+        Ok(())
+    }
+
+    /// Remove every `done` / `failed` download from the history in one go —
+    /// clears the clutter left by imports whose model was since deleted.
+    /// Active downloads are untouched. Returns how many were removed.
+    pub async fn clear_finished(&self) -> Result<u64> {
+        let mut removed = 0u64;
+        for d in self.db.downloads().list().await? {
+            if !d.state.is_terminal() {
+                continue;
+            }
+            let _ = tokio::fs::remove_dir_all(self.staging_root.join(&d.id)).await;
+            if self.db.downloads().delete(&d.id).await? {
+                removed += 1;
+            }
+        }
+        Ok(removed)
+    }
+
     async fn transition(
         &self,
         id: &str,

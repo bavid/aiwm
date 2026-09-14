@@ -159,16 +159,19 @@ function progressChatJobs(): void {
     const started = Date.parse(String(j.started_at ?? j.created_at));
     const elapsed = Date.now() - started;
     const prompt = String((j.params as AnyRecord)?.prompt ?? "");
-    const isAssistant = /prompt-writing assistant/i.test(prompt);
+    const isEditAssistant = /want an existing photo edited/i.test(prompt);
+    const isAssistant = isEditAssistant || /prompt-writing assistant/i.test(prompt);
     if (elapsed < 1200) {
       j.result = isAssistant ? "Thinking about a good prompt…" : "…";
       continue;
     }
     j.state = "completed";
     j.finished_at = now();
-    j.result = isAssistant
-      ? "Got it — that's enough to work with.\n\nPROMPT: a moody portrait of an old lighthouse keeper, dramatic side lighting, weathered skin, oil painting texture\nNEGATIVE: blurry, cartoon, low detail"
-      : "This is a mocked reply — dev-mock has no real model attached.";
+    j.result = isEditAssistant
+      ? "Got it — that's a clear edit.\n\nPROMPT: give the subject blonde hair, keep everything else the same"
+      : isAssistant
+        ? "Got it — that's enough to work with.\n\nPROMPT: a moody portrait of an old lighthouse keeper, dramatic side lighting, weathered skin, oil painting texture\nNEGATIVE: blurry, cartoon, low detail"
+        : "This is a mocked reply — dev-mock has no real model attached.";
   }
 }
 
@@ -886,6 +889,22 @@ export function installDevMock(): void {
         const i = DOWNLOADS.findIndex((x) => x.id === a.id);
         if (i >= 0) DOWNLOADS.splice(i, 1);
         return null;
+      }
+      case "delete_download": {
+        const i = DOWNLOADS.findIndex((x) => x.id === a.id);
+        if (i < 0) throw new Error("no such download");
+        if (!["done", "failed"].includes(String(DOWNLOADS[i].state))) {
+          throw new Error("this download is still in progress — cancel it first");
+        }
+        DOWNLOADS.splice(i, 1);
+        return null;
+      }
+      case "clear_finished_downloads": {
+        const before = DOWNLOADS.length;
+        for (let i = DOWNLOADS.length - 1; i >= 0; i--) {
+          if (["done", "failed"].includes(String(DOWNLOADS[i].state))) DOWNLOADS.splice(i, 1);
+        }
+        return before - DOWNLOADS.length;
       }
       case "export_backup":
         return "E:\\AI\\data\\exports\\aiwm-export-2026-01-01T00-00-00Z.zip";

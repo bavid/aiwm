@@ -18,7 +18,9 @@ use super::media::{
     str_param, write_output, LoraRef,
 };
 use crate::db::{Database, EventLevel, Model};
-use crate::pipeline::{self, Flux2KleinModels, FluxModels, LoraSpec, Recipe, Txt2ImgInputs};
+use crate::pipeline::{
+    self, EditInputs, Flux2KleinModels, FluxModels, LoraSpec, Recipe, Txt2ImgInputs,
+};
 use crate::runtime::ComfyUiAdapter;
 use crate::Result;
 
@@ -59,6 +61,10 @@ pub struct ImageRequest {
     /// Library references, not yet resolved to files — [`run`] does that once
     /// it has a `Database` handle.
     pub loras: Vec<LoraRef>,
+    /// A finished job's id, or a path to an image file — when set, this is an
+    /// instruction-based *edit* of that image (`prompt` is the instruction)
+    /// rather than a fresh generation. Only FLUX.2 [klein] supports it today.
+    pub source_image: Option<String>,
 }
 
 impl ImageRequest {
@@ -96,6 +102,13 @@ impl ImageRequest {
             .and_then(Value::as_f64)
             .map_or(DEFAULT_CFG, |v| v.clamp(MIN_CFG, MAX_CFG));
 
+        let source_image = params
+            .get("source_image")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string);
+
         Ok(Self {
             prompt,
             negative,
@@ -107,6 +120,7 @@ impl ImageRequest {
             scheduler: str_param(params, "scheduler", DEFAULT_SCHEDULER),
             seed: resolve_seed(params),
             loras: parse_loras(params),
+            source_image,
         })
     }
 
@@ -125,6 +139,9 @@ impl ImageRequest {
         obj.insert("sampler".into(), self.sampler.clone().into());
         obj.insert("scheduler".into(), self.scheduler.clone().into());
         obj.insert("seed".into(), self.seed.into());
+        if let Some(src) = &self.source_image {
+            obj.insert("source_image".into(), src.clone().into());
+        }
         obj.insert(
             "loras".into(),
             serde_json::to_value(&self.loras).unwrap_or(Value::Array(Vec::new())),
@@ -162,6 +179,22 @@ pub async fn run(
     cancel: watch::Receiver<bool>,
 ) -> Result<ImageOutcome> {
     let model_file = file_name(&model.file_path)?;
+
+    if let Some(spec) = &req.source_image {
+        return run_edit(
+            db,
+            comfyui,
+            outputs_dir,
+            job_id,
+            model,
+            model_file,
+            &req,
+            spec,
+            cancel,
+        )
+        .await;
+    }
+
     let recipe = Recipe::for_family(model.family.as_deref(), model_file);
     let resolved_loras = resolve_loras(db, &req.loras).await?;
     if !resolved_loras.is_empty() {
@@ -309,6 +342,115 @@ pub async fn run(
     }))
 }
 
+/// Edit `req.source_image` per `req.prompt` (the instruction) instead of
+/// generating from nothing. Only FLUX.2 [klein] supports this today — a
+/// plain-language config error names the requirement rather than silently
+/// misapplying a text-to-image recipe to a model that can't do it.
+#[allow(clippy::too_many_arguments)]
+async fn run_edit(
+    db: &Database,
+    comfyui: &Arc<ComfyUiAdapter>,
+    outputs_dir: &Path,
+    job_id: &str,
+    model: &Model,
+    model_file: &str,
+    req: &ImageRequest,
+    source_spec: &str,
+    cancel: watch::Receiver<bool>,
+) -> Result<ImageOutcome> {
+    if !model
+        .family
+        .as_deref()
+        .is_some_and(|f| f.eq_ignore_ascii_case("flux2"))
+    {
+        return Err(image_err(
+            "editing an image needs the FLUX.2 [klein] 9B stack \u{2014} pick it from the \
+             Model dropdown, or import it from the Models tab first",
+        ));
+    }
+
+    let staged = super::media::stage_image(db, &comfyui.input_dir(), job_id, source_spec).await?;
+    db.jobs()
+        .append_event(
+            job_id,
+            EventLevel::Info,
+            &format!("editing {}", staged.source),
+        )
+        .await?;
+
+    let resolved_loras = resolve_loras(db, &req.loras).await?;
+    let lora_specs: Vec<LoraSpec> = resolved_loras
+        .iter()
+        .map(|l| LoraSpec {
+            file: &l.file,
+            strength: l.strength,
+        })
+        .collect();
+
+    let c = resolve_flux2_klein_edit_companions(db).await?;
+    db.jobs()
+        .append_event(
+            job_id,
+            EventLevel::Info,
+            &format!(
+                "FLUX.2 edit — text encoder \u{201c}{}\u{201d}, VAE \u{201c}{}\u{201d}",
+                c.clip, c.vae
+            ),
+        )
+        .await?;
+
+    let inputs = EditInputs {
+        instruction: &req.prompt,
+        source_image: &staged.name,
+        steps: req.steps,
+        cfg: req.cfg,
+        sampler: &req.sampler,
+        seed: req.seed,
+        filename_prefix: job_id,
+    };
+    let workflow = pipeline::flux2_klein_edit(
+        &inputs,
+        &Flux2KleinModels {
+            unet: model_file,
+            clip: &c.clip,
+            vae: &c.vae,
+        },
+        &lora_specs,
+    );
+
+    let Some(image) = comfyui
+        .generate_media(&workflow, cancel, IMAGE_TIMEOUT)
+        .await?
+    else {
+        return Ok(ImageOutcome::Cancelled);
+    };
+
+    let output_path = write_output(outputs_dir, job_id, &image.extension, &image.bytes).await?;
+    db.jobs()
+        .append_event(
+            job_id,
+            EventLevel::Info,
+            &format!(
+                "saved {} ({} KB)",
+                output_path.display(),
+                image.bytes.len() / 1024
+            ),
+        )
+        .await?;
+
+    // The edited output's real size follows the source image, not
+    // `req.width`/`req.height` (an edit request has no dimension inputs of
+    // its own) -- these are only used for a display line, not a correctness
+    // path, so the slight imprecision doesn't need a second image-decode
+    // just to read the real pixel size back out.
+    Ok(ImageOutcome::Done(ImageDone {
+        output_path,
+        seed: req.seed,
+        width: req.width,
+        height: req.height,
+    }))
+}
+
 /// Flux's three companion files, resolved from the library by role + name.
 #[derive(Debug)]
 struct FluxCompanionFiles {
@@ -340,15 +482,21 @@ async fn resolve_flux_companions(db: &Database) -> Result<FluxCompanionFiles> {
                  \u{201c}Text encoder / CLIP\u{201d}",
             )
         })?;
-    // Excludes FLUX.2's VAE by name -- now that a second `vae`-role file can
-    // exist in the library, picking blindly (`pick_for_role`, most-recently-
-    // used) risked handing a FLUX.1 job FLUX.2's incompatible VAE.
+    // Excludes FLUX.2's VAEs (plain and edit) by name -- now that other
+    // `vae`-role files can exist in the library, picking blindly
+    // (`pick_for_role`, most-recently-used) risked handing a FLUX.1 job one
+    // of FLUX.2's incompatible VAEs.
     let vae = db
         .models()
         .for_role("vae")
         .await?
         .into_iter()
-        .find(|m| !name_is_flux2(&m.name) && !name_is_flux2(&m.file_path))
+        .find(|m| {
+            !name_is_flux2(&m.name)
+                && !name_is_flux2(&m.file_path)
+                && !name_is_flux2_edit_vae(&m.name)
+                && !name_is_flux2_edit_vae(&m.file_path)
+        })
         .ok_or_else(|| {
             image_err("Flux needs a VAE — import ae.safetensors as \u{201c}VAE\u{201d}")
         })?;
@@ -416,6 +564,51 @@ fn name_is_qwen(s: &str) -> bool {
 
 fn name_is_flux2(s: &str) -> bool {
     s.to_ascii_lowercase().contains("flux2")
+}
+
+/// FLUX.2's editing-only VAE (`full_encoder_small_decoder.safetensors`) --
+/// its name doesn't contain "flux2" like the plain generation VAE does, so it
+/// needs its own heuristic, distinct from [`name_is_flux2`], to keep the two
+/// apart now that both share the `vae` role.
+fn name_is_flux2_edit_vae(s: &str) -> bool {
+    let n = s.to_ascii_lowercase();
+    n.contains("small_decoder") || n.contains("small-decoder") || n.contains("small decoder")
+}
+
+/// FLUX.2 [klein]'s companions for *editing* — the same Qwen3 text encoder as
+/// generation, but its own edit-specific VAE (a fuller encoder path for
+/// re-encoding a real photo), not the plain generation one.
+async fn resolve_flux2_klein_edit_companions(db: &Database) -> Result<Flux2KleinCompanionFiles> {
+    let clip = db
+        .models()
+        .for_role("text_encoder")
+        .await?
+        .into_iter()
+        .find(|m| name_is_qwen(&m.name) || name_is_qwen(&m.file_path))
+        .ok_or_else(|| {
+            image_err(
+                "Editing needs FLUX.2's Qwen3 text encoder — import \
+                 qwen_3_8b_fp8mixed.safetensors as \u{201c}Text encoder / CLIP\u{201d} on the \
+                 Models tab",
+            )
+        })?;
+    let vae = db
+        .models()
+        .for_role("vae")
+        .await?
+        .into_iter()
+        .find(|m| name_is_flux2_edit_vae(&m.name) || name_is_flux2_edit_vae(&m.file_path))
+        .ok_or_else(|| {
+            image_err(
+                "Editing needs FLUX.2's edit VAE — import full_encoder_small_decoder.safetensors \
+                 as \u{201c}VAE\u{201d} (Models tab \u{2192} Discover)",
+            )
+        })?;
+
+    Ok(Flux2KleinCompanionFiles {
+        clip: file_name(&clip.file_path)?.to_string(),
+        vae: file_name(&vae.file_path)?.to_string(),
+    })
 }
 
 #[cfg(test)]
@@ -581,5 +774,113 @@ mod tests {
         let c = resolve_flux2_klein_companions(&db).await.unwrap();
         assert_eq!(c.clip, "qwen_3_8b_fp8mixed.safetensors");
         assert_eq!(c.vae, "flux2-vae.safetensors");
+
+        // FLUX.2's *edit* VAE shares the same `vae` role too -- generation
+        // must not pick it up even though it's also flux2-family.
+        add("full_encoder_small_decoder.safetensors", "vae").await;
+        let c = resolve_flux2_klein_companions(&db).await.unwrap();
+        assert_eq!(c.vae, "flux2-vae.safetensors");
+    }
+
+    #[tokio::test]
+    async fn resolve_flux2_klein_edit_companions_needs_its_own_vae_not_the_generation_one() {
+        use crate::db::{Database, NewModel};
+
+        let db = Database::connect_in_memory().await.unwrap();
+        let add = |name: &str, role: &str| {
+            let (name, role) = (name.to_string(), role.to_string());
+            let db = db.clone();
+            async move {
+                db.models()
+                    .insert(NewModel {
+                        name: name.clone(),
+                        format: "safetensors".into(),
+                        file_path: format!("E:\\AI\\models\\image\\x\\{name}"),
+                        size_bytes: 1_000,
+                        source: "manual".into(),
+                        roles: vec![role],
+                        ..NewModel::default()
+                    })
+                    .await
+                    .unwrap();
+            }
+        };
+
+        // FLUX.1's encoder/VAE and FLUX.2's plain generation VAE are all in
+        // the library -- none of them satisfy an edit request.
+        add("t5xxl_fp8.safetensors", "text_encoder").await;
+        add("ae.safetensors", "vae").await;
+        add("qwen_3_8b_fp8mixed.safetensors", "text_encoder").await;
+        add("flux2-vae.safetensors", "vae").await;
+
+        let err = resolve_flux2_klein_edit_companions(&db).await.unwrap_err();
+        assert!(err.to_string().contains("edit VAE"), "{err}");
+
+        add("full_encoder_small_decoder.safetensors", "vae").await;
+        let c = resolve_flux2_klein_edit_companions(&db).await.unwrap();
+        assert_eq!(c.clip, "qwen_3_8b_fp8mixed.safetensors");
+        assert_eq!(c.vae, "full_encoder_small_decoder.safetensors");
+    }
+
+    #[test]
+    fn source_image_round_trips_and_marks_the_request_as_an_edit() {
+        let none = ImageRequest::from_params(&serde_json::json!({ "prompt": "x" })).unwrap();
+        assert_eq!(none.source_image, None);
+
+        let mut params = serde_json::json!({ "prompt": "  make the hair blonde  ", "source_image": "  C:\\shots\\a.png  " });
+        let r = ImageRequest::from_params(&params).unwrap();
+        assert_eq!(r.source_image.as_deref(), Some("C:\\shots\\a.png"));
+        r.apply_to(&mut params);
+        assert_eq!(params["source_image"], "C:\\shots\\a.png");
+    }
+
+    #[tokio::test]
+    async fn run_edit_refuses_a_non_flux2_model() {
+        use crate::db::{Database, NewJob, NewModel};
+        use crate::runtime::ComfyUiAdapter;
+
+        let db = Database::connect_in_memory().await.unwrap();
+        let model = db
+            .models()
+            .insert(NewModel {
+                name: "SDXL Base 1.0".into(),
+                format: "safetensors".into(),
+                file_path: "E:\\AI\\models\\image\\sdxl.safetensors".into(),
+                size_bytes: 1_000,
+                source: "manual".into(),
+                family: Some("sdxl".into()),
+                ..NewModel::default()
+            })
+            .await
+            .unwrap();
+        let job = db.jobs().insert(NewJob::new("image")).await.unwrap();
+        let (_cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
+        let comfy = std::sync::Arc::new(ComfyUiAdapter::with_launch(
+            db.clone(),
+            None,
+            crate::runtime::ComfyDirs {
+                base: std::env::temp_dir(),
+                output: std::env::temp_dir(),
+                models_store: std::env::temp_dir(),
+            },
+        ));
+        let req = ImageRequest::from_params(&serde_json::json!({
+            "prompt": "make the hair blonde",
+            "source_image": "C:\\nope.png"
+        }))
+        .unwrap();
+
+        let err = run(
+            &db,
+            &comfy,
+            std::path::Path::new("/tmp/out"),
+            &job.id,
+            &model,
+            req,
+            cancel_rx,
+        )
+        .await
+        .unwrap_err();
+        assert!(err.to_string().contains("FLUX.2"), "{err}");
     }
 }

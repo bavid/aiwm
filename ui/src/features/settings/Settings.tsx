@@ -14,12 +14,12 @@ import {
   type ModelsConfig,
   type PathsUpdate,
 } from "../../lib/ipc";
+import { SectionNav, type NavSection } from "../../components/SectionNav";
 import { getTheme, setTheme, type Theme } from "../../lib/theme";
 import { BackupCard } from "./BackupCard";
-import { SettingsNav, type SettingsSection } from "./SettingsNav";
 import "./settings.css";
 
-const SECTIONS: SettingsSection[] = [
+const SECTIONS: NavSection[] = [
   { id: "general", label: "General" },
   { id: "storage", label: "Storage & data" },
   { id: "performance", label: "Performance" },
@@ -170,7 +170,12 @@ export function Settings() {
       </header>
 
       <div className="settings-body">
-        <SettingsNav sections={SECTIONS} activeId={section} onChange={setSection} />
+        <SectionNav
+          sections={SECTIONS}
+          activeId={section}
+          onChange={setSection}
+          ariaLabel="Settings sections"
+        />
         <div className="settings-sections">
           {section === "general" && (
             <section className="card set-group">

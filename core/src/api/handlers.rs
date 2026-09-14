@@ -989,6 +989,18 @@ pub async fn cancel_download(app: &App, id: &str) -> Result<()> {
     app.downloads.cancel(id).await
 }
 
+/// Remove one finished (`done` / `failed`) download from the history —
+/// housekeeping only, never touches an already-imported model.
+pub async fn delete_download(app: &App, id: &str) -> Result<()> {
+    app.downloads.delete(id).await
+}
+
+/// Clear every finished download at once — the "history is full of stuff I
+/// already deleted" cleanup. Returns how many rows were removed.
+pub async fn clear_finished_downloads(app: &App) -> Result<u64> {
+    app.downloads.clear_finished().await
+}
+
 // --- benchmarks (Phase 6.5) -----------------------------------------------
 
 /// The most recent benchmark for every model that has one — the Model Library

@@ -1,5 +1,8 @@
+import { useState } from "react";
 import {
   cancelDownload,
+  clearFinishedDownloads,
+  deleteDownload,
   pauseDownload,
   resumeDownload,
   type Download,
@@ -20,28 +23,62 @@ const STATE_LABEL: Record<DownloadState, string> = {
   failed: "Failed",
 };
 
-/** Active + recent model downloads. Hidden when the list is empty. */
+const TERMINAL: DownloadState[] = ["done", "failed"];
+
+/** Active + recent model downloads. Hidden when the list is empty. History
+ *  (done/failed rows) can pile up once you've deleted the models those
+ *  downloads brought in -- "Clear finished" wipes just those, in one go. */
 export function Downloads() {
-  const { data } = useDownloads();
+  const { data, refetch } = useDownloads();
   const rows = data ?? [];
+  const [clearing, setClearing] = useState(false);
   if (rows.length === 0) return null;
+
+  const finishedCount = rows.filter((d) => TERMINAL.includes(d.state)).length;
+
+  const clearFinished = async () => {
+    setClearing(true);
+    try {
+      await clearFinishedDownloads();
+      refetch();
+    } catch {
+      /* the list just won't shrink -- no need for a modal over this */
+    } finally {
+      setClearing(false);
+    }
+  };
 
   return (
     <section className="card card--wide">
       <header className="card__head">
         <h2>Downloads</h2>
         <span className="card__sub">one at a time · verified, then imported</span>
+        {finishedCount > 0 && (
+          <button type="button" className="chip" onClick={clearFinished} disabled={clearing}>
+            {clearing ? "Clearing…" : `Clear finished (${finishedCount})`}
+          </button>
+        )}
       </header>
       <ul className="dl__list">
         {rows.map((d) => (
-          <DownloadRow key={d.id} d={d} />
+          <DownloadRow key={d.id} d={d} onRemoved={refetch} />
         ))}
       </ul>
     </section>
   );
 }
 
-function DownloadRow({ d }: { d: Download }) {
+function DownloadRow({ d, onRemoved }: { d: Download; onRemoved: () => void }) {
+  const [removing, setRemoving] = useState(false);
+  const remove = async () => {
+    setRemoving(true);
+    try {
+      await deleteDownload(d.id);
+      onRemoved();
+    } catch {
+      setRemoving(false);
+    }
+  };
   const p = pct(d);
   const done = d.bytes_done;
   const size = d.size_bytes ?? 0;
@@ -74,9 +111,14 @@ function DownloadRow({ d }: { d: Download }) {
             Resume
           </button>
         )}
-        {d.state !== "done" && (
+        {d.state !== "done" && d.state !== "failed" && (
           <button type="button" onClick={() => cancelDownload(d.id).catch(() => {})}>
             Cancel
+          </button>
+        )}
+        {TERMINAL.includes(d.state) && (
+          <button type="button" onClick={remove} disabled={removing}>
+            {removing ? "…" : "Remove"}
           </button>
         )}
       </div>

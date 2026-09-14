@@ -1,8 +1,28 @@
 .models {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  max-width: 1160px;
+  margin: 0 auto;
+  padding-bottom: calc(var(--space-6) * 2);
+}
+
+.models__head h1 {
+  font-size: var(--text-xl);
+  margin-bottom: var(--space-1);
+}
+
+.models-body {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-5);
+}
+
+.models-sections {
+  flex: 1;
+  min-width: 0;
   display: grid;
   gap: var(--space-4);
-  max-width: 960px;
-  margin: 0 auto;
 }
 
 .models .card--wide {
@@ -639,9 +659,20 @@
   }
 }
 
-/* --- recommend (tag/vibe model search) --- */
+.recommend__why {
+  margin: var(--space-1) 0;
+  font-size: var(--text-sm);
+}
 
-.recommend__form {
+/* --- discover (6.2) — the "Ask my local model" toggle switches this same
+   control row + result list between the plain browse and AI-ranked modes
+   (see Discover.tsx's `PlainSearch` / `AiSearch`). --- */
+
+.discover__aitoggle {
+  margin: 0 0 var(--space-3);
+}
+
+.discover__controls {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -649,33 +680,7 @@
   margin: var(--space-2) 0 var(--space-3);
 }
 
-.recommend__query {
-  flex: 1;
-  min-width: 16rem;
-  padding: var(--space-2) var(--space-3);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--surface-2);
-  color: var(--text);
-  font-size: var(--text-sm);
-}
-
-.recommend__form select {
-  padding: var(--space-2) var(--space-3);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--surface-2);
-  color: var(--text);
-  font-size: var(--text-sm);
-}
-
-.recommend__query:focus-visible,
-.recommend__form select:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
-}
-
-.recommend__form button {
+.discover__controls button[type="submit"] {
   padding: var(--space-2) var(--space-4);
   border: none;
   border-radius: var(--radius-sm);
@@ -685,24 +690,9 @@
   cursor: pointer;
 }
 
-.recommend__form button:disabled {
+.discover__controls button[type="submit"]:disabled {
   opacity: 0.5;
   cursor: default;
-}
-
-.recommend__why {
-  margin: var(--space-1) 0;
-  font-size: var(--text-sm);
-}
-
-/* --- discover (6.2) --- */
-
-.discover__controls {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-2);
-  margin: var(--space-2) 0 var(--space-3);
 }
 
 .discover__search {
