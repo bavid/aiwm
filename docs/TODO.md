@@ -552,16 +552,16 @@ bauen dass Teilsystem 1 auch ohne Teilsystem 2 nützlich ist:
   Neues `job_type=upscale` läuft — wie Image/Video — als echter
   ComfyUI-Job durch die JobEngine (VRAM-Slot, Queueing), nicht synchron wie
   der Audio-Clean-Pass. UI: "Upscale"-Button auf der Result-Karte in
-  Image/Video, sendet den fertigen Job als neue Quelle. **Ungeprüft**: der
-  Node nutzt ComfyUIs neueres V3-Schema (`io.DynamicCombo` für
-  `resize_type`) statt der klassischen `NODE_CLASS_MAPPINGS`-Registrierung
-  — die genaue `/prompt`-JSON-Form (verschachtelte Keys via
-  `resize_type.scale` / `resize_type.width`/`height`) wurde aus ComfyUIs
-  eigenem `_io.py`/`execution.py`-Quellcode (gepinnter Tag) plus dem Node
-  eigenem `execute()`-Body hergeleitet, nicht gegen einen echten laufenden
-  ComfyUI-Server verifiziert (keiner verfügbar in dieser Umgebung) — vor dem
-  ersten echten Render gegenprüfen (`pipeline::rtx_upscale_image`s
-  Doc-Kommentar). Nicht zu verwechseln mit "DLSS 5": das ist eine noch nicht
+  Image/Video, sendet den fertigen Job als neue Quelle. Der Node nutzt
+  ComfyUIs neueres V3-Schema (`io.DynamicCombo` für `resize_type`) statt der
+  klassischen `NODE_CLASS_MAPPINGS`-Registrierung — die verschachtelten
+  Keys (`resize_type.scale` / `resize_type.width`/`height`) wurden zunächst
+  nur aus ComfyUIs `_io.py`/`execution.py`-Quellcode hergeleitet, dann aber
+  **direkt gegen den echten `_io.py`-Quellcode am gepinnten Tag (v0.34.0)
+  gegengeprüft** (`create_input_dict_v1` baut den Wire-Key explizit als
+  `f"{parent_id}.{nested_id}"`) — die Form ist damit bestätigt, nur ein
+  echter End-to-End-Render mit installiertem Node steht noch aus (gleiche
+  Kategorie wie die offenen Flux/LTX-Live-Checks oben). Nicht zu verwechseln mit "DLSS 5": das ist eine noch nicht
   final released Game-Rendering-Technologie (GTC 2026 angekündigt), deren
   populärste GitHub-Repos "geleakte" NVIDIA-Binaries per DLL-Injection in
   beliebige Spiele patchen — bewusst nicht angefasst (Sicherheits-/
