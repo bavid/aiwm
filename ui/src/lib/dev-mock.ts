@@ -23,6 +23,12 @@ const MODELS: AnyRecord[] = [
   mkModel("m-hermes", "Hermes-3-Llama-3.1-8B", { family: "llama3", format: "gguf", quant: "Q5_K_M", param_count: 8_030_000_000, ctx_max: 131_072, roles: ["chat", "coding"], runtimes: ["llamacpp"], vram_estimate_mb: 5700 }),
   mkModel("m-kokoro", "Kokoro 82M — int8", { family: "kokoro", format: "onnx", roles: ["voice_model"], runtimes: [], size_bytes: 114_119_327 }),
   mkModel("m-kokoro-voices", "Kokoro voices (54 English voices)", { family: "kokoro", format: "bin", roles: ["voice_data"], runtimes: [], size_bytes: 28_214_398 }),
+  // Dia's 9+3 files each import as their own row in the real app; one
+  // representative row per role is enough to drive the dev-preview's
+  // roles-based gate (`hasDiaEngine`/`hasDiaCodec` in Voice.tsx never look
+  // past `.some(...)`).
+  mkModel("m-dia-engine", "Dia 1.6B — model config", { family: "dia", format: "json", roles: ["dia_engine"], runtimes: [], size_bytes: 1396 }),
+  mkModel("m-dia-codec", "DAC 44kHz codec — config", { format: "json", roles: ["dia_codec"], runtimes: [], size_bytes: 541 }),
 ];
 
 const JOBS: AnyRecord[] = [

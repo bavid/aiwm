@@ -13,7 +13,11 @@ use crate::db::Database;
 use crate::runtime::TtsAdapter;
 use crate::{CoreError, Result};
 
-const DEFAULT_VOICE: &str = "am_michael";
+const DEFAULT_KOKORO_VOICE: &str = "am_michael";
+/// Dia has no named voice presets (see [`TtsEngine::Dia`]) -- `voice` is
+/// repurposed as a free-text "narrator identity" label the sidecar hashes
+/// into a stable seed, so the default just needs to be a stable label too.
+const DEFAULT_DIA_NARRATOR: &str = "narrator";
 const DEFAULT_SPEED: f64 = 1.0;
 const MIN_SPEED: f64 = 0.5;
 const MAX_SPEED: f64 = 2.0;
@@ -25,13 +29,44 @@ fn tts_err(msg: impl std::fmt::Display) -> CoreError {
     }
 }
 
+/// Which sidecar narration engine renders a request. Kokoro (the original,
+/// default engine) is fast and flat; Dia (`nari-labs/Dia-1.6B-0626`) is
+/// slower but supports real non-verbal tags (`(laughs)`, `(sighs)`, ...) and
+/// `[S1]`/`[S2]` speaker turns -- see `aiwm_sidecar.dia` for what it
+/// actually does and does not support (no freeform emotion tags either
+/// way).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TtsEngine {
+    Kokoro,
+    Dia,
+}
+
+impl TtsEngine {
+    fn from_hint(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "kokoro" => Some(Self::Kokoro),
+            "dia" => Some(Self::Dia),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Kokoro => "kokoro",
+            Self::Dia => "dia",
+        }
+    }
+}
+
 /// A resolved narration request, pulled from a job's `params`. Only `text` is
-/// required; `voice`/`speed` fall back to a sensible default narrator preset.
+/// required; `engine` falls back to Kokoro, and `voice`/`speed` fall back to
+/// a sensible default for whichever engine was picked.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TtsRequest {
     pub text: String,
     pub voice: String,
     pub speed: f64,
+    pub engine: TtsEngine,
 }
 
 impl TtsRequest {
@@ -43,18 +78,38 @@ impl TtsRequest {
             .filter(|t| !t.is_empty())
             .ok_or_else(|| tts_err("tts job has no `text`"))?
             .to_string();
+        let engine = match params
+            .get("engine")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            Some(s) => TtsEngine::from_hint(s).ok_or_else(|| {
+                tts_err(format!("unknown tts engine {s:?} (expected kokoro or dia)"))
+            })?,
+            None => TtsEngine::Kokoro,
+        };
+        let default_voice = match engine {
+            TtsEngine::Kokoro => DEFAULT_KOKORO_VOICE,
+            TtsEngine::Dia => DEFAULT_DIA_NARRATOR,
+        };
         let voice = params
             .get("voice")
             .and_then(Value::as_str)
             .map(str::trim)
             .filter(|v| !v.is_empty())
-            .unwrap_or(DEFAULT_VOICE)
+            .unwrap_or(default_voice)
             .to_string();
         let speed = params
             .get("speed")
             .and_then(Value::as_f64)
             .map_or(DEFAULT_SPEED, |v| v.clamp(MIN_SPEED, MAX_SPEED));
-        Ok(Self { text, voice, speed })
+        Ok(Self {
+            text,
+            voice,
+            speed,
+            engine,
+        })
     }
 }
 
@@ -98,32 +153,59 @@ async fn resolve_voice_files(db: &Database) -> Result<(crate::db::Model, crate::
     Ok((model, voices))
 }
 
-/// Render `req` on the sidecar's Kokoro engine, save the result under
-/// `outputs_dir`. The Kokoro model + its voices file are found by role
-/// (`voice_model` / `voice_data`) via [`resolve_voice_files`].
-pub async fn run(
-    db: &Database,
-    tts: &TtsAdapter,
-    outputs_dir: &Path,
-    job_id: &str,
-    req: TtsRequest,
-) -> Result<TtsDone> {
-    let (model, voices) = resolve_voice_files(db).await?;
+/// How many catalog files make up one of Dia's directory-shaped components
+/// (`dia_engine` or `dia_codec`) -- read live off the catalog rather than
+/// hand-duplicated here, so the two can never quietly drift apart.
+fn dia_component_total(kind: &str) -> usize {
+    crate::model::KNOWN_MODELS
+        .iter()
+        .filter(|m| m.kind == kind)
+        .count()
+}
 
-    let client = tts.client().await?;
-    let result = client
-        .call(
-            "synthesize_speech",
-            json!({
-                "text": req.text,
-                "model_path": model.file_path,
-                "voices_path": voices.file_path,
-                "voice": req.voice,
-                "speed": req.speed,
-            }),
-        )
-        .await?;
+/// The shared directory holding every imported file with role `role` --
+/// Dia's engine and codec files are imported individually (one `KnownModel`
+/// row per file) but land as siblings in one fixed subdirectory per kind
+/// (see `ModelKind::DiaEngine`/`DiaCodec`), so any one of them names the
+/// directory the sidecar needs. Mirrors [`resolve_voice_files`]'s
+/// role-based lookup, adapted for a kind that's a directory of many files
+/// rather than one or two.
+async fn resolve_dia_component_dir(db: &Database, role: &str, label: &str) -> Result<PathBuf> {
+    let files = db.models().for_role(role).await?;
+    if files.is_empty() {
+        return Err(tts_err(format!(
+            "no {label} files imported — import Dia on the Models tab \
+             (Add models \u{2192} Voice \u{2192} \u{201c}Download entire stack\u{201d})"
+        )));
+    }
+    let expected = dia_component_total(role);
+    if expected > 0 && files.len() < expected {
+        return Err(tts_err(format!(
+            "{label} is incomplete ({} of {expected} files imported) — re-run \u{201c}Download \
+             entire stack\u{201d} on the Models tab to get the rest",
+            files.len()
+        )));
+    }
+    let path = Path::new(&files[0].file_path);
+    path.parent().map(Path::to_path_buf).ok_or_else(|| {
+        tts_err(format!(
+            "{label} file has no parent directory: {}",
+            files[0].file_path
+        ))
+    })
+}
 
+/// Dia's two required directories -- its own weights/config/tokenizer, and
+/// its separate DAC audio codec -- found by role (`dia_engine` / `dia_codec`).
+async fn resolve_dia_dirs(db: &Database) -> Result<(PathBuf, PathBuf)> {
+    let engine_dir = resolve_dia_component_dir(db, "dia_engine", "Dia engine").await?;
+    let codec_dir = resolve_dia_component_dir(db, "dia_codec", "Dia's audio codec (DAC)").await?;
+    Ok((engine_dir, codec_dir))
+}
+
+/// Pulls the finished clip out of a `synthesize_speech` result, common to
+/// both engines.
+fn decode_synth_result(result: &Value) -> Result<(Vec<u8>, f64)> {
     let audio_b64 = result
         .get("audio_base64")
         .and_then(Value::as_str)
@@ -135,7 +217,57 @@ pub async fn run(
         .get("duration_secs")
         .and_then(Value::as_f64)
         .unwrap_or(0.0);
+    Ok((bytes, duration_secs))
+}
 
+/// Render `req` on the sidecar, save the result under `outputs_dir`. Which
+/// engine actually runs is [`TtsRequest::engine`]; each resolves its own
+/// model files by role before ever calling the sidecar, so a missing import
+/// is a clear message here rather than a Python traceback.
+pub async fn run(
+    db: &Database,
+    tts: &TtsAdapter,
+    outputs_dir: &Path,
+    job_id: &str,
+    req: TtsRequest,
+) -> Result<TtsDone> {
+    let result = match req.engine {
+        TtsEngine::Kokoro => {
+            let (model, voices) = resolve_voice_files(db).await?;
+            let client = tts.client().await?;
+            client
+                .call(
+                    "synthesize_speech",
+                    json!({
+                        "engine": "kokoro",
+                        "text": req.text,
+                        "model_path": model.file_path,
+                        "voices_path": voices.file_path,
+                        "voice": req.voice,
+                        "speed": req.speed,
+                    }),
+                )
+                .await?
+        }
+        TtsEngine::Dia => {
+            let (engine_dir, codec_dir) = resolve_dia_dirs(db).await?;
+            let client = tts.client().await?;
+            client
+                .call(
+                    "synthesize_speech",
+                    json!({
+                        "engine": "dia",
+                        "text": req.text,
+                        "model_dir": engine_dir.to_string_lossy(),
+                        "dac_dir": codec_dir.to_string_lossy(),
+                        "voice": req.voice,
+                    }),
+                )
+                .await?
+        }
+    };
+
+    let (bytes, duration_secs) = decode_synth_result(&result)?;
     let output_path = write_output(outputs_dir, job_id, "wav", &bytes).await?;
     Ok(TtsDone {
         output_path,
@@ -154,11 +286,43 @@ mod tests {
     }
 
     #[test]
-    fn from_params_defaults_voice_and_speed() {
+    fn from_params_defaults_engine_voice_and_speed() {
         let r = TtsRequest::from_params(&json!({ "text": "hello there" })).unwrap();
         assert_eq!(r.text, "hello there");
-        assert_eq!(r.voice, DEFAULT_VOICE);
+        assert_eq!(r.engine, TtsEngine::Kokoro);
+        assert_eq!(r.voice, DEFAULT_KOKORO_VOICE);
         assert_eq!(r.speed, DEFAULT_SPEED);
+    }
+
+    #[test]
+    fn from_params_accepts_the_dia_engine_and_its_own_default_narrator_identity() {
+        let r = TtsRequest::from_params(&json!({ "text": "hello", "engine": "dia" })).unwrap();
+        assert_eq!(r.engine, TtsEngine::Dia);
+        assert_eq!(r.voice, DEFAULT_DIA_NARRATOR);
+    }
+
+    #[test]
+    fn from_params_engine_is_case_insensitive() {
+        let r = TtsRequest::from_params(&json!({ "text": "hello", "engine": "DIA" })).unwrap();
+        assert_eq!(r.engine, TtsEngine::Dia);
+    }
+
+    #[test]
+    fn from_params_rejects_an_unknown_engine() {
+        let err = TtsRequest::from_params(&json!({ "text": "hello", "engine": "nonexistent" }))
+            .unwrap_err();
+        assert!(err.to_string().contains("nonexistent"), "{err}");
+    }
+
+    #[test]
+    fn from_params_keeps_an_explicit_dia_narrator_identity() {
+        let r = TtsRequest::from_params(&json!({
+            "text": "hello",
+            "engine": "dia",
+            "voice": "gravelly old man",
+        }))
+        .unwrap();
+        assert_eq!(r.voice, "gravelly old man");
     }
 
     #[test]
@@ -267,5 +431,116 @@ mod tests {
 
         let (model, _voices) = resolve_voice_files(&db).await.unwrap();
         assert_eq!(model.name, "kokoro-v1.0.fp32");
+    }
+
+    fn dia_engine_file_count() -> usize {
+        dia_component_total("dia_engine")
+    }
+
+    fn dia_codec_file_count() -> usize {
+        dia_component_total("dia_codec")
+    }
+
+    async fn insert_dia_files(db: &Database, role: &str, dir: &str, count: usize) {
+        use crate::db::NewModel;
+
+        for i in 0..count {
+            db.models()
+                .insert(NewModel {
+                    name: format!("{role}-file-{i}"),
+                    format: "json".into(),
+                    file_path: format!("{dir}\\file-{i}.json"),
+                    size_bytes: 100,
+                    source: "manual".into(),
+                    roles: vec![role.into()],
+                    ..NewModel::default()
+                })
+                .await
+                .unwrap();
+        }
+    }
+
+    // Same reasoning as the Kokoro tests above -- every case here fails the
+    // role-based resolution before `run` would ever call `tts.client()`.
+
+    #[tokio::test]
+    async fn run_dia_reports_a_clear_error_when_no_dia_engine_files_are_imported() {
+        let db = Database::connect_in_memory().await.unwrap();
+        let tts = TtsAdapter::new();
+        let req = TtsRequest::from_params(&json!({ "text": "hello", "engine": "dia" })).unwrap();
+
+        let err = run(&db, &tts, std::path::Path::new("/tmp/out"), "job-1", req)
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("no Dia engine files imported"),
+            "{err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn run_dia_reports_a_clear_error_when_the_engine_directory_is_incomplete() {
+        let db = Database::connect_in_memory().await.unwrap();
+        insert_dia_files(&db, "dia_engine", "E:\\AI\\models\\voice\\dia-engine", 1).await;
+        let tts = TtsAdapter::new();
+        let req = TtsRequest::from_params(&json!({ "text": "hello", "engine": "dia" })).unwrap();
+
+        let err = run(&db, &tts, std::path::Path::new("/tmp/out"), "job-1", req)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("incomplete"), "{err}");
+        assert!(
+            err.to_string()
+                .contains(&format!("1 of {}", dia_engine_file_count())),
+            "{err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn run_dia_reports_a_clear_error_when_only_the_engine_but_not_the_codec_is_imported() {
+        let db = Database::connect_in_memory().await.unwrap();
+        insert_dia_files(
+            &db,
+            "dia_engine",
+            "E:\\AI\\models\\voice\\dia-engine",
+            dia_engine_file_count(),
+        )
+        .await;
+        let tts = TtsAdapter::new();
+        let req = TtsRequest::from_params(&json!({ "text": "hello", "engine": "dia" })).unwrap();
+
+        let err = run(&db, &tts, std::path::Path::new("/tmp/out"), "job-1", req)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("Dia's audio codec"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn resolve_dia_dirs_finds_the_shared_directory_for_each_fully_imported_component() {
+        let db = Database::connect_in_memory().await.unwrap();
+        insert_dia_files(
+            &db,
+            "dia_engine",
+            "E:\\AI\\models\\voice\\dia-engine",
+            dia_engine_file_count(),
+        )
+        .await;
+        insert_dia_files(
+            &db,
+            "dia_codec",
+            "E:\\AI\\models\\voice\\dia-codec",
+            dia_codec_file_count(),
+        )
+        .await;
+
+        let (engine_dir, codec_dir) = resolve_dia_dirs(&db).await.unwrap();
+        assert_eq!(
+            engine_dir.to_string_lossy().replace('\\', "/"),
+            "E:/AI/models/voice/dia-engine"
+        );
+        assert_eq!(
+            codec_dir.to_string_lossy().replace('\\', "/"),
+            "E:/AI/models/voice/dia-codec"
+        );
     }
 }

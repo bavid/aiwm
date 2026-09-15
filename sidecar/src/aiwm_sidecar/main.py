@@ -2,9 +2,13 @@
 
 Speaks JSON-RPC 2.0 over stdio, one JSON object per line. ``handshake`` and
 ``ping`` let the Rust ``SidecarClient`` verify the connection.
-``synthesize_speech`` renders text to speech with a local Kokoro ONNX model
-(WP-9 -- the Story Studio narrator). ``inspect_model_file`` is declared in the
-contract but not served until Phase 2.
+``synthesize_speech`` renders text to speech (WP-9 -- the Story Studio
+narrator), on one of two engines picked by its ``engine`` param: the default
+``"kokoro"`` (a local ONNX model, handled in this file) or ``"dia"`` (Nari
+Labs' Dia-1.6B via `transformers`, a more expressive second engine with real
+non-verbal tags and multi-speaker turns -- see ``aiwm_sidecar.dia``).
+``inspect_model_file`` is declared in the contract but not served until
+Phase 2.
 """
 
 from __future__ import annotations
@@ -43,13 +47,16 @@ _DEFAULT_LANG = "en-us"
 # available without swapping the model itself.
 _SENTENCE_GAP_SECS = 0.35
 
-# Neither Kokoro nor (later) Dia understands a freeform stage direction like
-# "(angry)" -- there is no model here that performs emotion from text alone.
-# What *is* real: a precisely-timed silence, which this code controls
-# directly regardless of engine. So a small, fixed vocabulary of pause
-# markers gets a genuine gap; anything else in parentheses is stripped
+# Neither Kokoro nor Dia understands a freeform stage direction like
+# "(angry)" -- there is no model here that performs emotion from text alone
+# (Dia's own real vocabulary is a fixed set of non-verbal sounds -- see
+# `aiwm_sidecar.dia._DIA_NONVERBAL_TAGS` -- not an open-ended emotion/tone
+# control). What *is* real: a precisely-timed silence, which this code
+# controls directly regardless of engine. So a small, fixed vocabulary of
+# pause markers gets a genuine gap; anything else in parentheses is stripped
 # before it reaches the engine, since otherwise it just gets read aloud as
-# literal words ("open paren angry close paren").
+# literal words ("open paren angry close paren") -- except Dia's own real
+# tags, which `_strip_unspoken_markup`'s `keep_tags` lets through verbatim.
 _PAUSE_TAGS: dict[str, float] = {
     "pause": 0.35,
     "beat": 0.35,
@@ -87,19 +94,34 @@ _DELIM_RE = re.compile(
 )
 
 
-def _strip_unspoken_markup(text: str) -> str:
+def _strip_unspoken_markup(text: str, keep_tags: frozenset[str] = frozenset()) -> str:
     """Removes any remaining parenthetical annotation (an unsupported
     emotion tag, a typo'd pause tag) that isn't one of the real, actionable
-    pause markers -- those are consumed as delimiters before this ever runs."""
-    return _UNSUPPORTED_TAG_RE.sub("", text)
+    pause markers -- those are consumed as delimiters before this ever runs.
+
+    `keep_tags` lets a caller pass through its own real, recognized tags
+    verbatim instead of stripping them -- Dia's actual non-verbal vocabulary
+    ("(laughs)", "(sighs)", ...) is real input the model understands, not an
+    unsupported stage direction. Kokoro's call sites pass none, so its
+    behavior is exactly what it was before this parameter existed."""
+
+    def _keep_or_drop(m: re.Match[str]) -> str:
+        inner = m.group(0)[1:-1].strip().lower()
+        return m.group(0) if inner in keep_tags else ""
+
+    return _UNSUPPORTED_TAG_RE.sub(_keep_or_drop, text)
 
 
-def _split_into_beats(text: str) -> list[tuple[str, float]]:
+def _split_into_beats(
+    text: str, keep_tags: frozenset[str] = frozenset()
+) -> list[tuple[str, float]]:
     """Splits narration text into (spoken_text, gap_after_seconds) beats on
     sentence boundaries and recognized pause markup ("(pause)", "(breath)",
     "(dramatic pause)", ...). A recognized tag contributes a real silence at
     that exact point and is never spoken; anything else in parentheses is
-    stripped rather than read aloud literally."""
+    stripped rather than read aloud literally -- unless it's in `keep_tags`
+    (see `_strip_unspoken_markup`), in which case it's kept verbatim in the
+    spoken text instead."""
     beats: list[tuple[str, float]] = []
     pos = 0
     current = ""
@@ -113,14 +135,14 @@ def _split_into_beats(text: str) -> list[tuple[str, float]]:
             gap = _SENTENCE_GAP_SECS
         else:
             gap = _PAUSE_TAGS[m.group(1).lower()]
-        spoken = _strip_unspoken_markup(current).strip()
+        spoken = _strip_unspoken_markup(current, keep_tags).strip()
         current = ""
         if spoken:
             beats.append((spoken, gap))
         elif beats:
             prev_text, prev_gap = beats[-1]
             beats[-1] = (prev_text, max(prev_gap, gap))
-    tail = _strip_unspoken_markup(current + text[pos:]).strip()
+    tail = _strip_unspoken_markup(current + text[pos:], keep_tags).strip()
     if tail:
         beats.append((tail, 0.0))
     return beats
@@ -144,6 +166,29 @@ def _load_kokoro(model_path: str, voices_path: str) -> Any:
     if key not in _kokoro_cache:
         _kokoro_cache[key] = _construct_kokoro(model_path, voices_path)
     return _kokoro_cache[key]
+
+
+_DEFAULT_ENGINE = "kokoro"
+_ENGINES = frozenset({"kokoro", "dia"})
+
+
+def _dispatch_synthesize_speech(params: dict[str, Any]) -> dict[str, Any]:
+    """Picks the narration engine (`"kokoro"`, the default and only engine
+    before this, or `"dia"`) and hands off to its own synthesis function.
+    Dia's module is imported lazily, here, rather than at the top of this
+    file -- `dia.py` itself imports this module (to reuse the pause-markup
+    splitter and text normalizer, `keep_tags` and all), so importing it
+    eagerly at module load time would be a circular import. By the time
+    this function actually runs, `main` has already finished loading, so
+    the lazy import resolves without trouble."""
+    engine = str(params.get("engine") or _DEFAULT_ENGINE).strip().lower()
+    if engine not in _ENGINES:
+        raise ValueError(f"unknown tts engine: {engine!r} (expected kokoro or dia)")
+    if engine == "dia":
+        from aiwm_sidecar.dia import synthesize_dia
+
+        return synthesize_dia(params)
+    return _synthesize_speech(params)
 
 
 def _synthesize_speech(params: dict[str, Any]) -> dict[str, Any]:
@@ -271,7 +316,7 @@ def handle(req: dict[str, Any]) -> dict[str, Any] | None:
         result = "pong"
     elif method == "synthesize_speech":
         try:
-            result = _synthesize_speech(params)
+            result = _dispatch_synthesize_speech(params)
         except ValueError as e:
             return _error(req_id, _INVALID_PARAMS, str(e))
         except Exception as e:  # pragma: no cover - unexpected engine failure

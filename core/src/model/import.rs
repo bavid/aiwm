@@ -360,6 +360,10 @@ fn sha256_file(path: &Path) -> Result<String> {
 /// (`<store>/llm/<slug>/<file>`); image models sit flat in their typed folder
 /// (`<store>/image/checkpoints/<file>`) to match ComfyUI's own layout. A name
 /// clash is broken with an 8-char hash.
+///
+/// Dia's two directory-shaped kinds are the one exception: they always keep
+/// their exact original filename with no hash-suffix, even on a "collision"
+/// (see [`unique_destination`]'s doc below for why that's actually safe).
 fn unique_destination(
     store_root: &Path,
     kind: ModelKind,
@@ -384,6 +388,19 @@ fn unique_destination(
         } else {
             candidate
         };
+    }
+
+    // `DiaForConditionalGeneration::from_pretrained` (and `AutoProcessor` for
+    // the codec) read a *directory* of siblings by their real Hugging Face
+    // filenames -- renaming one to `config-a1b2c3d4.json` on a "collision"
+    // would just make the directory unloadable. There is no real collision
+    // to avoid here: each kind gets its own fixed subdirectory
+    // (`ModelKind::store_subdir`), so nothing else's file ever lands next to
+    // it under the same name. A leftover file already at the destination (a
+    // stale partial import that never reached the DB insert below) is
+    // deliberately overwritten by `place_file`, not renamed around.
+    if matches!(kind, ModelKind::DiaEngine | ModelKind::DiaCodec) {
+        return type_dir.join(&filename);
     }
 
     let candidate = type_dir.join(&filename);
@@ -861,6 +878,147 @@ mod tests {
             .await
             .unwrap_err();
         assert!(err.to_string().contains("Pickle"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn dia_engine_files_import_with_their_exact_original_filenames_into_a_dedicated_subdir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = tmp.path().join("store");
+        let db = Database::connect_in_memory().await.unwrap();
+
+        let config = write_safetensors(tmp.path(), "config.json", b"{\"dia\":true}");
+        let out = import_model(
+            &db,
+            &store,
+            ImportRequest {
+                model_type: Some("dia_engine".into()),
+                ..req(&config)
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(out.model.roles, ["dia_engine"]);
+        assert!(
+            out.model.runtimes.is_empty(),
+            "no runtime scans this itself, same as the voice kinds"
+        );
+        let p = out.model.file_path.replace('\\', "/");
+        assert!(p.ends_with("/voice/dia-engine/config.json"), "{p}");
+
+        // A second, differently-named sibling lands right alongside it --
+        // same directory, both keeping their real names.
+        let shard = write_safetensors(
+            tmp.path(),
+            "model-00001-of-00002.safetensors",
+            &vec![0u8; 1000],
+        );
+        let shard_out = import_model(
+            &db,
+            &store,
+            ImportRequest {
+                model_type: Some("dia_engine".into()),
+                ..req(&shard)
+            },
+        )
+        .await
+        .unwrap();
+        let shard_p = shard_out.model.file_path.replace('\\', "/");
+        assert!(
+            shard_p.ends_with("/voice/dia-engine/model-00001-of-00002.safetensors"),
+            "{shard_p}"
+        );
+        assert_eq!(
+            Path::new(&shard_out.model.file_path).parent(),
+            Path::new(&out.model.file_path).parent(),
+            "both Dia engine files must be siblings in the same directory"
+        );
+    }
+
+    #[tokio::test]
+    async fn dia_codec_files_land_in_their_own_subdir_distinct_from_the_dia_engine_one() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = tmp.path().join("store");
+        let db = Database::connect_in_memory().await.unwrap();
+
+        // Both repos ship a same-named "config.json" -- they must not collide.
+        let engine_config = write_safetensors(tmp.path(), "config.json", b"engine");
+        let engine_out = import_model(
+            &db,
+            &store,
+            ImportRequest {
+                model_type: Some("dia_engine".into()),
+                ..req(&engine_config)
+            },
+        )
+        .await
+        .unwrap();
+
+        let codec_dir = tmp.path().join("codec");
+        std::fs::create_dir_all(&codec_dir).unwrap();
+        let codec_config = write_safetensors(&codec_dir, "config.json", b"codec");
+        let codec_out = import_model(
+            &db,
+            &store,
+            ImportRequest {
+                model_type: Some("dia_codec".into()),
+                ..req(&codec_config)
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(codec_out.model.roles, ["dia_codec"]);
+        let engine_p = engine_out.model.file_path.replace('\\', "/");
+        let codec_p = codec_out.model.file_path.replace('\\', "/");
+        assert!(
+            engine_p.ends_with("/voice/dia-engine/config.json"),
+            "{engine_p}"
+        );
+        assert!(
+            codec_p.ends_with("/voice/dia-codec/config.json"),
+            "{codec_p}"
+        );
+        assert_ne!(engine_p, codec_p);
+        assert!(Path::new(&engine_p).is_file());
+        assert!(Path::new(&codec_p).is_file());
+    }
+
+    #[tokio::test]
+    async fn a_stale_leftover_dia_file_is_overwritten_not_hash_suffixed() {
+        // Simulates a previous import that copied the file into the store
+        // but crashed before the DB insert -- a retry must land back on the
+        // exact same original filename (Dia needs it to be *that* name),
+        // never a `config-a1b2c3d4.json` the loader would never look for.
+        let tmp = tempfile::tempdir().unwrap();
+        let store = tmp.path().join("store");
+        let db = Database::connect_in_memory().await.unwrap();
+
+        let stale_dest = store.join("voice/dia-engine/config.json");
+        std::fs::create_dir_all(stale_dest.parent().unwrap()).unwrap();
+        std::fs::write(&stale_dest, b"stale-leftover-bytes").unwrap();
+
+        let fresh = write_safetensors(tmp.path(), "config.json", b"the-real-current-config");
+        let out = import_model(
+            &db,
+            &store,
+            ImportRequest {
+                model_type: Some("dia_engine".into()),
+                ..req(&fresh)
+            },
+        )
+        .await
+        .unwrap();
+
+        let p = out.model.file_path.replace('\\', "/");
+        assert!(
+            p.ends_with("/voice/dia-engine/config.json"),
+            "must not have been hash-suffixed: {p}"
+        );
+        assert_eq!(
+            std::fs::read(&out.model.file_path).unwrap(),
+            b"the-real-current-config"
+        );
     }
 
     #[tokio::test]

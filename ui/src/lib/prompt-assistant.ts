@@ -1,16 +1,56 @@
 export type AssistantKind = "image" | "video" | "edit" | "narrate";
 
+/** Which sidecar engine will actually read the narration back -- only
+ *  meaningful for `kind: "narrate"`. Changes what the preamble tells the
+ *  model is real: Dia understands a small vocabulary of real non-verbal
+ *  tags and speaker turns that Kokoro would just read aloud literally, so
+ *  suggesting them only makes sense when Dia is the one rendering. */
+export type NarrateEngine = "kokoro" | "dia";
+
 export interface AssistantTurn {
   role: "user" | "assistant";
   text: string;
 }
 
+/** Dia's real, recognized non-verbal tags (mirrors
+ *  `aiwm_sidecar.dia._DIA_NONVERBAL_TAGS`) -- genuine input the model
+ *  performs, not a freeform emotion/tone control. Kept in sync by hand;
+ *  both lists are small and change together deliberately. */
+const DIA_NONVERBAL_TAGS = [
+  "laughs",
+  "clears throat",
+  "sighs",
+  "gasps",
+  "coughs",
+  "singing",
+  "sings",
+  "mumbles",
+  "beep",
+  "groans",
+  "sniffs",
+];
+
 /** Frames the model's job for this session -- asked once, at the top of every
  *  request, since the underlying chat endpoint has no separate "system" turn
  *  and no server-side memory (see submission below): each request re-sends
- *  the whole transcript so far. */
-export function systemPreambleFor(kind: AssistantKind): string {
+ *  the whole transcript so far. `narrateEngine` only matters for
+ *  `kind: "narrate"` and defaults to Kokoro -- existing callers that don't
+ *  pass it keep the exact wording they always had. */
+export function systemPreambleFor(
+  kind: AssistantKind,
+  narrateEngine: NarrateEngine = "kokoro",
+): string {
   if (kind === "narrate") {
+    const dia =
+      narrateEngine === "dia"
+        ? "This narrator is Dia, which additionally understands a small, fixed set of real " +
+          `non-verbal sound tags -- ${DIA_NONVERBAL_TAGS.map((t) => `(${t})`).join(", ")} -- ` +
+          "genuinely performed, not just discarded like the pause markers above. Use them only " +
+          "where the scene actually calls for that sound (a laugh, a sigh, someone clearing " +
+          "their throat), not as a substitute for describing mood in the words themselves. " +
+          "Still no freeform tag beyond this exact list and the pause markers -- \"(angry)\" is " +
+          "just as unsupported for Dia as for any other voice.\n\n"
+        : "";
     return (
       "You are helping someone write a short line (or a few beats) for a game-style " +
       "off-screen narrator -- read aloud by a local text-to-speech voice, not spoken by a " +
@@ -29,6 +69,7 @@ export function systemPreambleFor(kind: AssistantKind): string {
       "emotion from a tag, so anything else in parentheses is just discarded before narration, " +
       "never spoken and never changing the delivery. If a beat needs a different mood, write " +
       "it into the words themselves.\n\n" +
+      dia +
       "A scene with several distinct beats can become several PROMPT: lines -- one beat per " +
       "line, in order; a single moment should stay one line. End your reply with those lines, " +
       "each on its own, exactly in this form:\n" +
@@ -70,8 +111,9 @@ export function buildTranscriptPrompt(
   kind: AssistantKind,
   history: AssistantTurn[],
   newMessage: string,
+  narrateEngine: NarrateEngine = "kokoro",
 ): string {
-  const lines = [systemPreambleFor(kind), ""];
+  const lines = [systemPreambleFor(kind, narrateEngine), ""];
   for (const turn of history) {
     lines.push(`${turn.role === "user" ? "User" : "Assistant"}: ${turn.text}`);
   }
