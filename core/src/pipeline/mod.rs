@@ -456,7 +456,19 @@ pub fn flux2_klein_edit(i: &EditInputs, m: &Flux2KleinModels, loras: &[LoraSpec]
         },
         "80": {
             "class_type": "ImageScaleToTotalPixels",
-            "inputs": { "image": ["76", 0], "upscale_method": "lanczos", "megapixels": 1.0 }
+            // `resolution_steps` has a default (1) in ComfyUI's own node
+            // schema, but that default is a widget/editor concept -- an
+            // API-submitted `/prompt` graph that omits it outright gets
+            // rejected with "Required input is missing" (confirmed against
+            // ComfyUI's real v0.34.0 source, comfy_extras/
+            // nodes_post_processing.py). 1 = no snapping, i.e. today's exact
+            // prior behavior.
+            "inputs": {
+                "image": ["76", 0],
+                "upscale_method": "lanczos",
+                "megapixels": 1.0,
+                "resolution_steps": 1
+            }
         },
         "99": {
             "class_type": "GetImageSize",
@@ -1263,6 +1275,10 @@ mod tests {
         // The source image is rescaled, then both the output canvas and the
         // sampler's sigma schedule are sized from it -- not a fixed square.
         assert_eq!(g["80"]["inputs"]["image"], json!(["76", 0]));
+        // Required by ComfyUI's real node schema even though it has a
+        // default -- omitting it entirely made every edit job fail with
+        // "Required input is missing" (a real bug hit live, not a guess).
+        assert_eq!(g["80"]["inputs"]["resolution_steps"], 1);
         assert_eq!(g["99"]["inputs"]["image"], json!(["80", 0]));
         assert_eq!(g["66"]["inputs"]["width"], json!(["99", 0]));
         assert_eq!(g["66"]["inputs"]["height"], json!(["99", 1]));
