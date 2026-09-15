@@ -482,6 +482,62 @@ Scene-Cards, persistentes Character-Sheet als Drawer.
   Character vs. leichtgewichtig), Export-Priorität (HTML-Scroll zuerst vs.
   PDF/CBZ), Reaktion auf das Mockup-Layout.
 
+## Lokale KI-Trainings-Engine (noch nicht begonnen, in Brainstorming)
+User-Leitprinzip (2026-09-15, wörtlich wichtig): AIWM soll ein **lokales
+All-in-one-Tool** bleiben — eigenes Training auf **eigenen Daten, jeder Art**
+soll genauso leicht zugänglich sein wie die bestehenden Image/Video/Chat-
+Features, nicht ein Fremdkörper. D.h. dieses Feature ist kein einmaliger
+"Video-zu-LoRA"-Sonderfall, sondern der erste Schnitt einer generischeren
+"bring your own dataset, train locally"-Fähigkeit — Architektur entsprechend
+offen halten (nicht hart auf Video verdrahten), auch wenn der erste Schnitt
+bei Video anfängt.
+
+Ursprüngliche Anforderung (User, roh): Pfad zu einem Ordnerbaum voller
+Videomaterial (`E:/Data/<VieleOrdner>/*.mp4`, Ordnername = Art-Style/Artist)
+→ automatisch zu Trainingsdaten für ein bestehendes Checkpoint/LoRA
+(Bild- oder Video-Generierung) aufbereiten, dann **ein Klick** = Trainingslauf
+(Stunden), danach das neue Modell testen. Explizite Nutzer-Beobachtungen:
+Einzelbilder sind bessere Trainingsdaten als Rohvideo; Unschärfe/Duplikate
+schaden; das Tool soll das automatisch selbst erkennen und bereinigen;
+ein lokales Vision-Modell soll pro Frame beschriften ("was ist da zu sehen");
+wenn das Modell sich bei einem Frame unsicher ist, soll es Frame X gegen
+Frame X+5 vergleichen (zeitlicher Kontext), um zu verstehen was gerade
+passiert; der Nutzer soll die Auto-Captions "von Zeit zu Zeit" manuell
+korrigieren können, bevor das Training losläuft.
+
+**Erkannt: das ist mindestens zwei große, größtenteils unabhängige
+Teilsysteme** (Skill-Vorgabe: bei Multi-Subsystem-Anfragen erst zerlegen,
+nicht direkt in Detailfragen einsteigen) — getrennt spezifizieren, aber so
+bauen dass Teilsystem 1 auch ohne Teilsystem 2 nützlich ist:
+1. **Dataset-Prep-Pipeline**: Ordner einlesen → Video-Decode/Frame-Extraktion
+   (ffmpeg) → Schärfe-/Duplikat-Filter → lokales VLM captioned jedes Frame →
+   bei Unsicherheit Vergleich Frame X vs. X+N für zeitlichen Kontext →
+   Kuratier-UI zum manuellen Nachbessern der Captions/Auswahl. Braucht einen
+   **neuen Runtime-Typ** (Vision-Language-Model, existiert in AIWM noch gar
+   nicht — Kandidaten ungeprüft: Florence-2, JoyCaption, Qwen2-VL, LLaVA;
+   welches lokal auf 16 GB gut läuft ist offene Recherche).
+2. **Trainings-Orchestrator**: aus dem kuratierten Datensatz einen echten
+   LoRA-/Fine-Tune-Lauf fahren (stundenlang), Fortschritt anzeigen, danach
+   das Ergebnis ins bestehende Image/Video-Modell-System einhängen zum
+   Testen. Braucht einen externen Trainings-Unterbau — für Bildmodelle
+   (SDXL/Flux) existiert reife Tooling (z. B. kohya-ss/sd-scripts), für
+   Video-Modelle (Wan/LTX) ist die Lage deutlich unreifer/unstandardisiert —
+   beides noch nicht recherchiert/entschieden.
+- **Offene Frage vom Assistenten an User (gestellt 2026-09-15, unbeantwortet):**
+  Priorität zuerst auf Bild-LoRA-Training (reife Tooling-Lage) oder
+  Video-LoRA-Training (Kernwunsch laut Beispiel, aber unreifere Tooling-Lage),
+  oder soll die Dataset-Pipeline von Tag 1 an beide Zielarten bedienen?
+- Noch nicht diskutiert: welches lokale VLM für Captioning, ob/wie das
+  Vision-Runtime-Konzept sich in die bestehende `RuntimeAdapter`-Architektur
+  einfügt (analog zu llama.cpp/ComfyUI/Colibri/TTS), Umfang der Kuratier-UI
+  (reine Text-Edits vs. Bild-Grid mit Batch-Aktionen), ob Trainingsläufe
+  durch den bestehenden Job-Scheduler laufen (Stunden-lange VRAM-Reservierung
+  wäre ein neuer Anwendungsfall für den Scheduler) oder als eigener,
+  scheduler-externer Prozess.
+- **Ausdrücklich noch keine Implementierung** — laut `brainstorming`-Skill
+  erst Design/Spec + User-Freigabe, dann `writing-plans`. Dieser Eintrag ist
+  nur der Parkplatz-Anker, falls das Brainstorming-Gespräch unterbrochen wird.
+
 ## Offen / später zu entscheiden
 - App-Selbst-Update offline (manueller Installer + Signaturprüfung angenommen)
 - Parallele Jobs: Policy verfeinern (klein-LLM + Upscale gleichzeitig)
