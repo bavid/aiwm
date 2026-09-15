@@ -206,17 +206,42 @@ export default function App() {
         </button>
       </aside>
 
+      {/* Every tab stays mounted -- only visibility toggles via `hidden`. A
+          tab used to fully unmount on navigation, which wiped any in-progress
+          draft (a typed prompt, unsent form state) the moment you looked at
+          another tab and came back -- a real, reported bug for Image/Video,
+          but the same conditional-mount pattern affected every tab equally. */}
       <main className="main">
-        {tab === "dashboard" && <Dashboard onNavigate={navigate} />}
-        {tab === "chat" && <Chat />}
-        {tab === "image" && <ImageStudio />}
-        {tab === "video" && <VideoStudio />}
-        {tab === "voice" && <Voice />}
-        {tab === "jobs" && <Jobs />}
-        {tab === "agents" && <AgentsWorkbench />}
-        {tab === "models" && <Models />}
-        {tab === "diagnostics" && <Diagnostics />}
-        {tab === "settings" && <Settings />}
+        <div hidden={tab !== "dashboard"}>
+          <Dashboard onNavigate={navigate} />
+        </div>
+        <div hidden={tab !== "chat"}>
+          <Chat />
+        </div>
+        <div hidden={tab !== "image"}>
+          <ImageStudio />
+        </div>
+        <div hidden={tab !== "video"}>
+          <VideoStudio />
+        </div>
+        <div hidden={tab !== "voice"}>
+          <Voice />
+        </div>
+        <div hidden={tab !== "jobs"}>
+          <Jobs />
+        </div>
+        <div hidden={tab !== "agents"}>
+          <AgentsWorkbench />
+        </div>
+        <div hidden={tab !== "models"}>
+          <Models />
+        </div>
+        <div hidden={tab !== "diagnostics"}>
+          <Diagnostics />
+        </div>
+        <div hidden={tab !== "settings"}>
+          <Settings />
+        </div>
       </main>
     </div>
   );
