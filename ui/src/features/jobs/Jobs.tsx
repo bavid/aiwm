@@ -6,7 +6,7 @@ import "./jobs.css";
 const CANCELLABLE: JobState[] = ["queued", "scheduled", "blocked", "preparing", "running"];
 const ACTIVE: JobState[] = ["queued", "scheduled", "blocked", "preparing", "running", "post"];
 
-const JOB_TYPES = ["chat", "image", "video", "bench", "upgrade_check"] as const;
+const JOB_TYPES = ["chat", "image", "video", "upscale", "bench", "upgrade_check"] as const;
 type JobTypeFilter = "all" | (typeof JOB_TYPES)[number];
 
 type StateFilter = "all" | "active" | "completed" | "failed" | "cancelled";

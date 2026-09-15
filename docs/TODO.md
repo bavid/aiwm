@@ -489,11 +489,24 @@ Scene-Cards, persistentes Character-Sheet als Drawer.
 - LAN-/Remote-Zugriff (opt-in, mit Auth) — frühestens nach Phase 6
 - Relighting, Generative Fill, Video-Restoration
 - Plugin-/Adapter-Plattform für Dritt-Runtimes (erst wenn interne Adapter stabil)
-- RTX Video Super Resolution als ComfyUI-Node (offizieller `Comfy-Org/
-  Nvidia_RTX_Nodes_ComfyUI`, Apache-2.0, braucht RTX-GPU) — Upscale-Schritt
-  für Image/Video-Tab. User bestätigt (2026-09-14), Umsetzung als Nächstes.
-  Nicht zu verwechseln mit "DLSS 5": das ist eine noch nicht final
-  released Game-Rendering-Technologie (GTC 2026 angekündigt), deren
+- ✅ **RTX Video Super Resolution als ComfyUI-Node — Upscale-Schritt für
+  Image/Video-Tab umgesetzt** (2026-09-15): offizieller `Comfy-Org/
+  Nvidia_RTX_Nodes_ComfyUI` (Apache-2.0) wird als zweiter Custom-Node-Pack
+  installiert (analog `ComfyUI-GGUF`, gleicher `custom_nodes/`-Junction).
+  Neues `job_type=upscale` läuft — wie Image/Video — als echter
+  ComfyUI-Job durch die JobEngine (VRAM-Slot, Queueing), nicht synchron wie
+  der Audio-Clean-Pass. UI: "Upscale"-Button auf der Result-Karte in
+  Image/Video, sendet den fertigen Job als neue Quelle. **Ungeprüft**: der
+  Node nutzt ComfyUIs neueres V3-Schema (`io.DynamicCombo` für
+  `resize_type`) statt der klassischen `NODE_CLASS_MAPPINGS`-Registrierung
+  — die genaue `/prompt`-JSON-Form (verschachtelte Keys via
+  `resize_type.scale` / `resize_type.width`/`height`) wurde aus ComfyUIs
+  eigenem `_io.py`/`execution.py`-Quellcode (gepinnter Tag) plus dem Node
+  eigenem `execute()`-Body hergeleitet, nicht gegen einen echten laufenden
+  ComfyUI-Server verifiziert (keiner verfügbar in dieser Umgebung) — vor dem
+  ersten echten Render gegenprüfen (`pipeline::rtx_upscale_image`s
+  Doc-Kommentar). Nicht zu verwechseln mit "DLSS 5": das ist eine noch nicht
+  final released Game-Rendering-Technologie (GTC 2026 angekündigt), deren
   populärste GitHub-Repos "geleakte" NVIDIA-Binaries per DLL-Injection in
   beliebige Spiele patchen — bewusst nicht angefasst (Sicherheits-/
   Lizenzrisiko, und architektonisch eh nicht für Batch-Datei-Upscaling

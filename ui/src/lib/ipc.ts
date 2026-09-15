@@ -584,6 +584,25 @@ export interface VideoParams {
   loras?: LoraParam[];
 }
 
+/** The parameters of a `job_type=upscale` job — NVIDIA's RTX Video Super
+ *  Resolution, run on an already-finished `image`/`video` job's output (or a
+ *  raw file path). Only `source` is required; the rest fall back to the
+ *  node's own defaults (2x scale, `ULTRA` quality) on the Rust side, so a
+ *  one-click "Upscale" button can submit just `{ source }`. */
+export interface UpscaleParams {
+  /** A finished `image`/`video` job's id, or a path to a file on disk. */
+  source: string;
+  /** `"scale"` (default) or `"dimensions"`. */
+  resize_mode?: "scale" | "dimensions";
+  /** Used when `resize_mode` is `"scale"` (or omitted) — default 2.0. */
+  scale?: number;
+  /** Used when `resize_mode` is `"dimensions"`. */
+  width?: number;
+  height?: number;
+  /** `"LOW"` | `"MEDIUM"` | `"HIGH"` | `"ULTRA"` (default). */
+  quality?: "LOW" | "MEDIUM" | "HIGH" | "ULTRA";
+}
+
 /** URL the loopback core serves a finished job's output file from — a PNG for
  *  image jobs, an MP4 for video jobs. Used as an `<img>` / `<video>` src; the
  *  CSP allows `http://127.0.0.1:*` for both `img-src` and `media-src`. */
