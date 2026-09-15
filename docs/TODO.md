@@ -555,13 +555,18 @@ bauen dass Teilsystem 1 auch ohne Teilsystem 2 nützlich ist:
   Image/Video, sendet den fertigen Job als neue Quelle. Der Node nutzt
   ComfyUIs neueres V3-Schema (`io.DynamicCombo` für `resize_type`) statt der
   klassischen `NODE_CLASS_MAPPINGS`-Registrierung — die verschachtelten
-  Keys (`resize_type.scale` / `resize_type.width`/`height`) wurden zunächst
-  nur aus ComfyUIs `_io.py`/`execution.py`-Quellcode hergeleitet, dann aber
-  **direkt gegen den echten `_io.py`-Quellcode am gepinnten Tag (v0.34.0)
-  gegengeprüft** (`create_input_dict_v1` baut den Wire-Key explizit als
-  `f"{parent_id}.{nested_id}"`) — die Form ist damit bestätigt, nur ein
-  echter End-to-End-Render mit installiertem Node steht noch aus (gleiche
-  Kategorie wie die offenen Flux/LTX-Live-Checks oben). Nicht zu verwechseln mit "DLSS 5": das ist eine noch nicht
+  Keys (`resize_type.scale` / `resize_type.width`/`height`) wurden aus
+  ComfyUIs `_io.py`/`execution.py`-Quellcode hergeleitet, dann gegen den
+  echten Quellcode gegengeprüft, und schließlich **live verifiziert**
+  (2026-09-15): Node über die echte `install()` in die reale, bereits
+  bestehende ComfyUI-Installation nachinstalliert (nur das fehlende Stück,
+  `uv`/Source/GGUF-Node waren schon da — der eigentliche Auslöser war ein
+  echter Laufzeitfehler "Node 'RTXVideoSuperResolution' not found", weil
+  die Installation vor dem RTX-Feature entstand), `nvvfx` importiert
+  sauber im echten venv, dann ein echter End-to-End-Lauf über `aiwm-cored`
+  gegen die echte API: ein echtes 256×256-SDXL-Bild generiert, per
+  `job_type=upscale` auf 2× skaliert, Ergebnis tatsächlich 512×512 PNG
+  (294 KB) — kein Fehler, keine Annahme. Nicht zu verwechseln mit "DLSS 5": das ist eine noch nicht
   final released Game-Rendering-Technologie (GTC 2026 angekündigt), deren
   populärste GitHub-Repos "geleakte" NVIDIA-Binaries per DLL-Injection in
   beliebige Spiele patchen — bewusst nicht angefasst (Sicherheits-/
