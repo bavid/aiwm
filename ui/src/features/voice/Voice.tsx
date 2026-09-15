@@ -13,12 +13,18 @@ import {
   type JobDetail,
   type JobState,
 } from "../../lib/ipc";
+import type { NarrateEngine } from "../../lib/prompt-assistant";
 import "./voice.css";
 
 const DONE: JobState[] = ["completed", "failed", "cancelled"];
 const POLL_MS = 500;
 const MIN_SPEED = 0.5;
 const MAX_SPEED = 2.0;
+/** Dia has no named voice presets -- `voice` becomes a free-text "narrator
+ *  identity" label the sidecar hashes into a stable seed (see
+ *  `aiwm_sidecar.dia._seed_for_narrator`), so a repeat render actually
+ *  sounds like the same speaker instead of a new random one every time. */
+const DEFAULT_DIA_NARRATOR = "narrator";
 
 /** Curated narrator moods — real Kokoro voice ids, picked by ear (see the
  *  four samples generated while planning this feature), not invented names.
@@ -81,13 +87,42 @@ export function Voice() {
 
   const hasVoiceModel = (models ?? []).some((m) => m.roles.includes("voice_model"));
   const hasVoiceData = (models ?? []).some((m) => m.roles.includes("voice_data"));
-  const ready = hasVoiceModel && hasVoiceData;
+  const kokoroReady = hasVoiceModel && hasVoiceData;
+
+  const hasDiaEngine = (models ?? []).some((m) => m.roles.includes("dia_engine"));
+  const hasDiaCodec = (models ?? []).some((m) => m.roles.includes("dia_codec"));
+  const diaReady = hasDiaEngine && hasDiaCodec;
+
+  // The tab is usable once *either* engine is fully imported -- someone who
+  // only ever imports Dia shouldn't be told "no voice model imported" when
+  // they have a perfectly working narrator.
+  const ready = kokoroReady || diaReady;
 
   const [text, setText] = useState(SAMPLE_LINE);
+  const [engine, setEngineState] = useState<NarrateEngine>("kokoro");
   const [voice, setVoice] = useState(PRESETS[0].voice);
   const [speed, setSpeed] = useState(PRESETS[0].speed);
   const [activePreset, setActivePreset] = useState<string | null>(PRESETS[0].id);
   const [sendError, setSendError] = useState<string | null>(null);
+  const engineReady = engine === "dia" ? diaReady : kokoroReady;
+
+  // Kokoro is imported far more often than Dia, so it's the sane default --
+  // but if only Dia turns out to be ready (Kokoro was never imported), land
+  // on the engine that actually works instead of a dead default.
+  useEffect(() => {
+    if (!kokoroReady && diaReady) setEngineState("dia");
+  }, [kokoroReady, diaReady]);
+
+  const selectEngine = (next: NarrateEngine) => {
+    setEngineState(next);
+    setSendError(null);
+    if (next === "kokoro") {
+      applyPreset(PRESETS[0]);
+    } else {
+      setVoice(DEFAULT_DIA_NARRATOR);
+      setActivePreset(null);
+    }
+  };
 
   const [pendingId, setPendingId] = useState<string | null>(null);
   const [detail, setDetail] = useState<JobDetail | null>(null);
@@ -135,7 +170,7 @@ export function Voice() {
     null;
 
   const stuck = detail?.job.state === "blocked";
-  const canGenerate = !!text.trim() && (!pendingId || stuck) && ready;
+  const canGenerate = !!text.trim() && (!pendingId || stuck) && engineReady;
 
   const applyPreset = (p: (typeof PRESETS)[number]) => {
     setActivePreset(p.id);
@@ -145,12 +180,16 @@ export function Voice() {
 
   const preview = async () => {
     const trimmed = text.trim();
-    if (!trimmed || (pendingId && !stuck)) return;
+    if (!trimmed || (pendingId && !stuck) || !engineReady) return;
     setSendError(null);
     try {
       const job = await submitJob({
         job_type: "tts",
-        params: { text: trimmed, voice, speed },
+        // `speed` has no effect on Dia (it has no rate control) -- sent
+        // regardless since the sidecar simply ignores it for that engine,
+        // same as the UI hides the slider rather than special-casing the
+        // request body.
+        params: { text: trimmed, engine, voice, speed },
       });
       setPendingId(job.id);
       setSelectedId(job.id);
@@ -191,9 +230,12 @@ export function Voice() {
         <section className="card voice__empty">
           <h2>The narrator needs a voice model</h2>
           <p className="muted">
-            Import Kokoro (the local text-to-speech engine) to give Story Studio scenes an
-            off-screen narrator. It's a one-time, fully local download — no cloud calls.
+            Import a narration engine to give Story Studio scenes an off-screen narrator. Both
+            are one-time, fully local downloads — no cloud calls. Kokoro is fast and simple;
+            Dia is slower but supports real non-verbal sounds and multi-speaker dialogue — pick
+            either, or both.
           </p>
+          <p className="voice__empty-subhead">Kokoro (fast, flat)</p>
           <ul className="voice__empty-list">
             <li className={hasVoiceModel ? "done" : ""}>
               {hasVoiceModel ? "✓" : "○"} Kokoro voice model
@@ -202,8 +244,18 @@ export function Voice() {
               {hasVoiceData ? "✓" : "○"} Kokoro voices (54 presets)
             </li>
           </ul>
+          <p className="voice__empty-subhead">Dia (expressive, slower)</p>
+          <ul className="voice__empty-list">
+            <li className={hasDiaEngine ? "done" : ""}>
+              {hasDiaEngine ? "✓" : "○"} Dia engine (9 files)
+            </li>
+            <li className={hasDiaCodec ? "done" : ""}>
+              {hasDiaCodec ? "✓" : "○"} Dia audio codec — DAC (3 files)
+            </li>
+          </ul>
           <p className="voice__empty-hint">
-            Models tab → Add models → Voice → “Download entire stack” gets both files in one go.
+            Models tab → Add models → Voice → “Download entire stack” gets every file for
+            whichever engine you pick in one go.
           </p>
         </section>
       </div>
@@ -218,22 +270,62 @@ export function Voice() {
           <span className="card__sub">an off-screen voice, used a beat at a time</span>
         </header>
 
-        <div className="voice__presets">
-          {PRESETS.map((p) => (
-            <button
-              key={p.id}
-              type="button"
-              className={`voice__preset ${activePreset === p.id ? "voice__preset--on" : ""}`}
-              onClick={() => applyPreset(p)}
-              title={p.blurb}
-            >
-              <span className="voice__preset-label">{p.label}</span>
-              <span className="voice__preset-blurb">{p.blurb}</span>
-            </button>
-          ))}
+        <div className="voice__engines" role="radiogroup" aria-label="Narration engine">
+          <button
+            type="button"
+            role="radio"
+            aria-checked={engine === "kokoro"}
+            className={`voice__engine ${engine === "kokoro" ? "voice__engine--on" : ""}`}
+            disabled={!kokoroReady}
+            title={kokoroReady ? undefined : "Import Kokoro on the Models tab to unlock this"}
+            onClick={() => selectEngine("kokoro")}
+          >
+            <span className="voice__engine-label">Kokoro</span>
+            <span className="voice__engine-blurb">
+              {kokoroReady ? "Fast, flat, 28 English voices" : "Not imported yet"}
+            </span>
+          </button>
+          <button
+            type="button"
+            role="radio"
+            aria-checked={engine === "dia"}
+            className={`voice__engine ${engine === "dia" ? "voice__engine--on" : ""}`}
+            disabled={!diaReady}
+            title={diaReady ? undefined : "Import Dia on the Models tab to unlock this"}
+            onClick={() => selectEngine("dia")}
+          >
+            <span className="voice__engine-label">Dia (expressive)</span>
+            <span className="voice__engine-blurb">
+              {diaReady
+                ? "Real (laughs)/(sighs)/[S1] tags, slower"
+                : "Models tab → Add models → Voice"}
+            </span>
+          </button>
         </div>
 
-        <PromptAssistant kind="narrate" sessionId={null} onApplyPrompt={setText} />
+        {engine === "kokoro" && (
+          <div className="voice__presets">
+            {PRESETS.map((p) => (
+              <button
+                key={p.id}
+                type="button"
+                className={`voice__preset ${activePreset === p.id ? "voice__preset--on" : ""}`}
+                onClick={() => applyPreset(p)}
+                title={p.blurb}
+              >
+                <span className="voice__preset-label">{p.label}</span>
+                <span className="voice__preset-blurb">{p.blurb}</span>
+              </button>
+            ))}
+          </div>
+        )}
+
+        <PromptAssistant
+          kind="narrate"
+          sessionId={null}
+          onApplyPrompt={setText}
+          narrateEngine={engine}
+        />
 
         <form
           className="voiceform"
@@ -253,38 +345,56 @@ export function Voice() {
             />
           </label>
 
-          <div className="voiceform__grid">
+          {engine === "kokoro" ? (
+            <div className="voiceform__grid">
+              <label className="voiceform__field">
+                <span>Voice (advanced)</span>
+                <select
+                  value={voice}
+                  onChange={(e) => {
+                    setVoice(e.target.value);
+                    setActivePreset(null);
+                  }}
+                >
+                  {ALL_VOICES.map((v) => (
+                    <option key={v} value={v}>
+                      {voiceLabel(v)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="voiceform__field">
+                <span>Speed — {speed.toFixed(2)}×</span>
+                <input
+                  type="range"
+                  min={MIN_SPEED}
+                  max={MAX_SPEED}
+                  step={0.05}
+                  value={speed}
+                  onChange={(e) => {
+                    setSpeed(Number(e.target.value));
+                    setActivePreset(null);
+                  }}
+                />
+              </label>
+            </div>
+          ) : (
             <label className="voiceform__field">
-              <span>Voice (advanced)</span>
-              <select
-                value={voice}
-                onChange={(e) => {
-                  setVoice(e.target.value);
-                  setActivePreset(null);
-                }}
-              >
-                {ALL_VOICES.map((v) => (
-                  <option key={v} value={v}>
-                    {voiceLabel(v)}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="voiceform__field">
-              <span>Speed — {speed.toFixed(2)}×</span>
+              <span>Narrator identity</span>
               <input
-                type="range"
-                min={MIN_SPEED}
-                max={MAX_SPEED}
-                step={0.05}
-                value={speed}
-                onChange={(e) => {
-                  setSpeed(Number(e.target.value));
-                  setActivePreset(null);
-                }}
+                type="text"
+                value={voice}
+                onChange={(e) => setVoice(e.target.value)}
+                placeholder={DEFAULT_DIA_NARRATOR}
               />
+              <span className="voice__hint">
+                Dia has no named voices — reusing the same identity (e.g. "gravelly old man")
+                keeps repeat narration sounding like the same speaker. No speed control or
+                freeform mood tags; real sounds like (laughs)/(sighs) work via the assistant
+                above or typed directly.
+              </span>
             </label>
-          </div>
+          )}
 
           <button type="submit" className="voiceform__go" disabled={!canGenerate}>
             {pendingId && !stuck ? "Narrating…" : "Preview"}

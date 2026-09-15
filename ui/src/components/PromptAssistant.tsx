@@ -6,6 +6,7 @@ import {
   extractSuggestion,
   type AssistantKind,
   type AssistantTurn,
+  type NarrateEngine,
 } from "../lib/prompt-assistant";
 import "./prompt-assistant.css";
 
@@ -21,11 +22,16 @@ export function PromptAssistant({
   sessionId,
   onApplyPrompt,
   onApplyNegative,
+  narrateEngine,
 }: {
   kind: AssistantKind;
   sessionId: string | null;
   onApplyPrompt: (text: string) => void;
   onApplyNegative?: (text: string) => void;
+  /** Only meaningful for `kind: "narrate"` -- which sidecar engine will
+   *  actually read this back, so the preamble only suggests Dia's real
+   *  non-verbal tags when Dia is the one that can perform them. */
+  narrateEngine?: NarrateEngine;
 }) {
   const { data: models } = useModels();
   const chatModels = (models ?? []).filter((m) => m.roles.includes("chat"));
@@ -78,7 +84,7 @@ export function PromptAssistant({
     const text = draft.trim();
     if (!text || pendingId) return;
     setError(null);
-    const fullPrompt = buildTranscriptPrompt(kind, history, text);
+    const fullPrompt = buildTranscriptPrompt(kind, history, text, narrateEngine);
     setHistory((h) => [...h, { role: "user", text }]);
     setDraft("");
     try {

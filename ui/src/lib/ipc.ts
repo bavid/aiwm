@@ -603,7 +603,14 @@ export type ModelType =
   | "text_encoder"
   | "video"
   | "voice_model"
-  | "voice_data";
+  | "voice_data"
+  /** One file of the Dia narrator engine or its separate DAC audio codec —
+   *  see `core::model::ModelKind::DiaEngine`/`DiaCodec`. Each lands in its
+   *  own fixed subdirectory under its original Hugging Face filename;
+   *  unlike every other kind, importing one file at a time is expected —
+   *  "Download entire stack" on the Models tab does that automatically. */
+  | "dia_engine"
+  | "dia_codec";
 
 export const importModel = (
   sourcePath: string,

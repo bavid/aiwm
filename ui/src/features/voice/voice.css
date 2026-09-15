@@ -73,6 +73,62 @@
   background: var(--surface-2);
 }
 
+.voice__empty-subhead {
+  margin: var(--space-1) 0 0;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+/* --- engine picker --- */
+
+.voice__engines {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+
+.voice__engine {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  cursor: pointer;
+  text-align: left;
+  transition: border-color var(--dur) var(--ease);
+}
+
+.voice__engine:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+.voice__engine--on {
+  border-color: var(--accent);
+  background: color-mix(in oklab, var(--accent) 12%, var(--surface-2));
+}
+
+.voice__engine:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.voice__engine-label {
+  font-weight: 600;
+  font-size: var(--text-sm);
+}
+
+.voice__engine-blurb {
+  font-size: var(--text-xs);
+  color: var(--muted);
+}
+
 /* --- presets --- */
 
 .voice__presets {
@@ -137,7 +193,8 @@
 }
 
 .voiceform__field textarea,
-.voiceform__field select {
+.voiceform__field select,
+.voiceform__field input[type="text"] {
   padding: var(--space-2) var(--space-3);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
@@ -150,6 +207,11 @@
 .voiceform__field input[type="range"] {
   width: 100%;
   accent-color: var(--accent);
+}
+
+.voice__hint {
+  font-size: var(--text-xs);
+  color: var(--muted);
 }
 
 .voiceform__grid {
