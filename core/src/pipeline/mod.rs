@@ -811,17 +811,21 @@ pub enum UpscaleResize {
 /// Write `resize` onto an `RTXVideoSuperResolution` node's `inputs` object, in
 /// the wire shape its `DynamicCombo` schema actually needs.
 ///
-/// **Verification note**: no real ComfyUI instance was available while
-/// building this (Phase 7 upscale slice) to confirm this against a live
-/// `/prompt` submission — the shape below is derived from reading ComfyUI's
-/// actual `comfy_api/latest/_io.py` (`DynamicCombo::_expand_schema_for_dynamic`,
-/// `parse_class_inputs`, `build_nested_inputs`) and `execution.py`
-/// (`get_input_data`) at the pinned ComfyUI tag (v0.34.0), cross-checked
-/// against the RTX node's own shipped `execute()` body
-/// (`resize_type["resize_type"]`, `resize_type["scale"]` /
-/// `["width"]`/`["height"]`) and its `example_workflows/*.json`. Treat as
-/// best-effort until exercised against a real running ComfyUI with the node
-/// installed.
+/// **Verification note**: derived (not exercised against a live `/prompt`
+/// submission — no real ComfyUI instance was available while building this,
+/// Phase 7 upscale slice) from ComfyUI's actual `comfy_api/latest/_io.py`
+/// (`DynamicCombo::_expand_schema_for_dynamic`, `parse_class_inputs`) and
+/// `execution.py` (`get_input_data`) at the pinned tag (v0.34.0), cross-checked
+/// against the RTX node's own shipped `execute()` body and
+/// `example_workflows/*.json`. **Independently confirmed** against that same
+/// source directly: `_io.py`'s `create_input_dict_v1` builds each nested
+/// input's wire key as `prefixed_id = f"{inp.id}.{nested_inp.id}"`, with an
+/// explicit comment that this matches "the frontend naming convention (e.g.,
+/// `should_texture.enable_pbr`)" — i.e. the dotted form below is what
+/// ComfyUI's own schema resolver actually expects, not a guess that happened
+/// to compile. Still worth a real end-to-end run once ComfyUI + the node are
+/// actually installed, since a source read can't catch every integration
+/// quirk (this project's own norm — see `docs/TODO.md`'s Flux/LTX entries).
 ///
 /// The combo's own selector goes under its bare id (`resize_type`); the
 /// selected branch's nested widget(s) go under `<id>.<nested id>` —
