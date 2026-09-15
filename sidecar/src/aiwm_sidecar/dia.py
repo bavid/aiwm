@@ -10,12 +10,20 @@ alongside Kokoro (`aiwm_sidecar.main`). Real capability, stated honestly:
   (useful for the planned Story Studio feature); a plain narration line with
   no tag at all still works -- see `_with_speaker_tag`.
 * Dia has no named voice presets the way Kokoro does. Without an audio
-  prompt (voice cloning, not implemented here yet), it samples a speaker
-  identity stochastically per generation -- so repeat narration would
-  otherwise sound like a brand-new, unrelated speaker every single call.
-  `_seed_for_narrator` fixes that by deriving a stable seed from the
-  `voice` field (repurposed here as a free-text "narrator identity" label,
-  since Dia has no voice-id list to pick from).
+  prompt, it samples a speaker identity stochastically per generation -- so
+  repeat narration would otherwise sound like a brand-new, unrelated speaker
+  every single call. `_seed_for_narrator` fixes *that* case (a stable but
+  still generic identity) by deriving a seed from the `voice` field
+  (repurposed as a free-text "narrator identity" label).
+* Real voice **character** -- e.g. "a specific old man with a scratchy,
+  smokey voice" -- needs more than a seed: Dia's actual mechanism for it is
+  audio-prompt voice cloning, given a short reference clip plus its own
+  transcript (`reference_audio_path` / `reference_transcript` in
+  `synthesize_dia`'s params; see `_resolve_reference`/`_DiaEngine.render`).
+  The Rust core resolves a *named, saved* voice identity (a reference clip +
+  transcript picked once and reused, `core::db::voice_identities`) into
+  these two params before ever calling here -- this module only ever sees
+  the raw path + transcript, never a "name".
 
 Mirrors `aiwm_sidecar.main`'s `_load_kokoro`/`_construct_kokoro` cache
 pattern via `_load_dia`/`_construct_dia`, in its own module for cohesion --
@@ -32,6 +40,7 @@ import io
 import os
 import re
 import shutil
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -177,18 +186,45 @@ class _DiaEngine:
         self._model = model
         self._processor = processor
 
-    def render(self, text: str, seed: int) -> tuple[np.ndarray, int]:
+    @property
+    def processor(self) -> Any:
+        """Exposed so callers can read `.feature_extractor.sampling_rate`
+        off it (see `_reference_sample_rate`) without reaching into a
+        private attribute."""
+        return self._processor
+
+    def render(
+        self, text: str, seed: int, reference_audio: np.ndarray | None = None
+    ) -> tuple[np.ndarray, int]:
+        """Renders `text` (already fully tagged/prompted by the caller).
+        With `reference_audio` (a mono array at the feature extractor's own
+        sample rate -- see `_resolve_reference`), this is Dia's real
+        voice-cloning path: the processor is handed the reference clip
+        alongside `text`, and `get_audio_prompt_len`/`batch_decode`'s
+        `audio_prompt_len` strip the reference back out of the generated
+        output, per Dia's own confirmed calling convention. Without it, this
+        is the original seed-only path, unchanged."""
         import torch
 
         torch.manual_seed(seed)
         if torch.cuda.is_available():
             torch.cuda.manual_seed_all(seed)
 
-        inputs = self._processor(text=[text], padding=True, return_tensors="pt").to(
-            self._model.device
-        )
+        if reference_audio is None:
+            inputs = self._processor(text=[text], padding=True, return_tensors="pt").to(
+                self._model.device
+            )
+            outputs = self._model.generate(**inputs, max_new_tokens=_max_new_tokens_for(text))
+            decoded = self._processor.batch_decode(outputs)
+            samples = np.asarray(decoded[0], dtype=np.float32)
+            return samples, _DIA_SAMPLE_RATE
+
+        inputs = self._processor(
+            text=text, audio=reference_audio, padding=True, return_tensors="pt"
+        ).to(self._model.device)
+        prompt_len = self._processor.get_audio_prompt_len(inputs["decoder_attention_mask"])
         outputs = self._model.generate(**inputs, max_new_tokens=_max_new_tokens_for(text))
-        decoded = self._processor.batch_decode(outputs)
+        decoded = self._processor.batch_decode(outputs, audio_prompt_len=prompt_len)
         samples = np.asarray(decoded[0], dtype=np.float32)
         return samples, _DIA_SAMPLE_RATE
 
@@ -224,6 +260,102 @@ def _load_dia(model_dir: str, dac_dir: str) -> _DiaEngine:
     return _dia_cache[key]
 
 
+# --- voice cloning: reference audio + transcript ----------------------------
+#
+# Dia's real mechanism for a *chosen* voice character (not just a stable-but-
+# generic seeded one, see `_seed_for_narrator` above): a short reference clip
+# plus its own transcript, fed back to the model alongside the new text so it
+# continues in that voice. `core::db::voice_identities` (Rust) is where a
+# *named* identity is saved and reused; this module only ever receives the
+# resolved path + transcript for one render call.
+
+# `DiaFeatureExtractor.__init__`'s own default `sampling_rate` (confirmed
+# from `transformers`' source, `models/dia/feature_extraction_dia.py`) --
+# used only as a fallback if a loaded processor doesn't expose
+# `.feature_extractor.sampling_rate` for some reason. Dia's *output* audio is
+# 44.1kHz (`_DIA_SAMPLE_RATE`, the DAC codec's rate); the feature extractor
+# that reads a *reference-audio prompt back in* is a different, lower rate --
+# the two must never be confused.
+_DIA_FEATURE_EXTRACTOR_SR_FALLBACK = 16_000
+
+
+def _reference_sample_rate(processor: Any) -> int:
+    """The sample rate Dia's feature extractor expects a reference-audio
+    prompt at. Read live off the loaded processor rather than hardcoded, so
+    a future `transformers` release changing this default doesn't silently
+    resample a reference clip to the wrong rate."""
+    feature_extractor = getattr(processor, "feature_extractor", None)
+    rate = getattr(feature_extractor, "sampling_rate", None)
+    if isinstance(rate, int | float) and rate > 0:
+        return int(rate)
+    return _DIA_FEATURE_EXTRACTOR_SR_FALLBACK
+
+
+def _resample_to(samples: np.ndarray, orig_sr: int, target_sr: int) -> np.ndarray:
+    """Resamples a mono reference clip to `target_sr` -- a no-op when it's
+    already there (the common case: many reference clips will already be
+    16kHz, or whatever the loaded feature extractor expects)."""
+    if orig_sr == target_sr or len(samples) == 0:
+        return samples
+    from scipy.signal import resample
+
+    target_len = max(1, round(len(samples) * target_sr / orig_sr))
+    return np.asarray(resample(samples, target_len), dtype=np.float32)
+
+
+def _read_reference_audio(path: Path) -> tuple[np.ndarray, int]:
+    """Loads a reference clip via `soundfile` (already a sidecar dependency
+    -- handles arbitrary input sample rates/formats), collapsing to mono if
+    the file has more than one channel (Dia's feature extractor expects a
+    single channel)."""
+    import soundfile as sf
+
+    samples, sample_rate = sf.read(str(path), dtype="float32", always_2d=False)
+    samples = np.asarray(samples, dtype=np.float32)
+    if samples.ndim > 1:
+        samples = samples.mean(axis=1).astype(np.float32)
+    return samples, sample_rate
+
+
+@dataclass(frozen=True)
+class _ReferenceVoice:
+    samples: np.ndarray
+    transcript: str
+
+
+def _reference_inputs(params: dict[str, Any]) -> tuple[str, str] | None:
+    """Validates the `reference_audio_path` / `reference_transcript` pair up
+    front, before the expensive model load -- `None` when neither is given
+    (today's seed-only path); the pair when both are. Exactly one given is a
+    clear error rather than a silent fall-back to the seed-only path."""
+    audio_path = str(params.get("reference_audio_path") or "").strip()
+    transcript = str(params.get("reference_transcript") or "").strip()
+    if not audio_path and not transcript:
+        return None
+    if not audio_path or not transcript:
+        raise ValueError(
+            "`reference_audio_path` and `reference_transcript` must be given together"
+        )
+    if not Path(audio_path).is_file():
+        raise ValueError(f"reference audio file not found: {audio_path}")
+    return audio_path, transcript
+
+
+def _resolve_reference(
+    reference_inputs: tuple[str, str] | None, engine: _DiaEngine
+) -> _ReferenceVoice | None:
+    """Loads and resamples the validated reference clip (see
+    `_reference_inputs`) to whatever sample rate `engine`'s feature
+    extractor actually expects. `None` in, `None` out -- the seed-only path."""
+    if reference_inputs is None:
+        return None
+    audio_path, transcript = reference_inputs
+    samples, native_rate = _read_reference_audio(Path(audio_path))
+    target_rate = _reference_sample_rate(engine.processor)
+    resampled = _resample_to(samples, native_rate, target_rate)
+    return _ReferenceVoice(samples=resampled, transcript=transcript)
+
+
 def synthesize_dia(params: dict[str, Any]) -> dict[str, Any]:
     """The Dia counterpart to `main._synthesize_speech` -- same JSON-RPC
     result shape, same pause-markup beat-splitting, but a directory path
@@ -241,10 +373,14 @@ def synthesize_dia(params: dict[str, Any]) -> dict[str, Any]:
         raise ValueError(f"Dia model directory not found: {model_dir}")
     if not Path(dac_dir).is_dir():
         raise ValueError(f"DAC codec directory not found: {dac_dir}")
+    # Validated up front, before the (potentially first-ever, multi-GB) model
+    # load below -- a bad reference clip shouldn't cost that load just to fail.
+    reference_inputs = _reference_inputs(params)
 
     narrator = str(params.get("voice") or _DEFAULT_NARRATOR)
     seed = _seed_for_narrator(narrator)
     engine = _load_dia(model_dir, dac_dir)
+    reference = _resolve_reference(reference_inputs, engine)
 
     beats = _main._split_into_beats(text, keep_tags=_DIA_NONVERBAL_TAGS) or [
         (_main._strip_unspoken_markup(text, keep_tags=_DIA_NONVERBAL_TAGS).strip() or text, 0.0)
@@ -254,7 +390,18 @@ def synthesize_dia(params: dict[str, Any]) -> dict[str, Any]:
     gaps_after: list[float] = []
     sample_rate = _DIA_SAMPLE_RATE
     for spoken, gap_after in beats:
-        samples, sample_rate = engine.render(_with_speaker_tag(spoken), seed)
+        tagged = _with_speaker_tag(spoken)
+        if reference is not None:
+            # Dia's own confirmed calling convention: the reference clip's
+            # transcript and the new text share one prompt, both tagged as
+            # the same speaker (a continuation, not a new turn) -- see
+            # `_DiaEngine.render`'s docstring for what happens with this text.
+            prompt_text = f"[S1] {reference.transcript} {tagged}"
+            samples, sample_rate = engine.render(
+                prompt_text, seed, reference_audio=reference.samples
+            )
+        else:
+            samples, sample_rate = engine.render(tagged, seed)
         clips.append(np.asarray(samples, dtype=np.float32))
         gaps_after.append(gap_after)
 
