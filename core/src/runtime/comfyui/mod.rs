@@ -605,7 +605,7 @@ impl RuntimeAdapter for ComfyUiAdapter {
                     InstallPhase::CreatingVenv => "creating the Python environment",
                     InstallPhase::InstallingTorch => "installing PyTorch (this is a big download)",
                     InstallPhase::InstallingDeps => "installing ComfyUI dependencies",
-                    InstallPhase::InstallingNode => "installing the GGUF node",
+                    InstallPhase::InstallingNode => "installing custom nodes",
                 };
                 return Some(format!("{step}…"));
             }

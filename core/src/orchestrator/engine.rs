@@ -6,8 +6,11 @@
 //! `job_type == "chat"` streams from llama.cpp ([`crate::capability::chat`]);
 //! `job_type == "image"` / `"video"` run a fixed workflow on ComfyUI
 //! ([`crate::capability::image`] / [`crate::capability::video`]);
-//! `job_type == "bench"` runs a local micro-benchmark ([`crate::bench`]); every
-//! other type is still a no-op placeholder.
+//! `job_type == "upscale"` runs NVIDIA's RTX Video Super Resolution node on an
+//! already-finished image/video job's output, also on ComfyUI
+//! ([`crate::capability::upscale`]); `job_type == "bench"` runs a local
+//! micro-benchmark ([`crate::bench`]); every other type is still a no-op
+//! placeholder.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -23,6 +26,7 @@ use crate::capability;
 use crate::capability::chat::{self, ChatOutcome};
 use crate::capability::colibri::ColibriOutcome;
 use crate::capability::image::{self, ImageOutcome, ImageRequest};
+use crate::capability::upscale::{self, UpscaleOutcome, UpscaleRequest};
 use crate::capability::video::{self, VideoOutcome, VideoRequest};
 use crate::compat::{self, VramEstimate};
 use crate::db::{EventLevel, Job, JobPatch, Model, NewJob};
@@ -45,6 +49,17 @@ const TTS: &str = "tts";
 const IMAGE_VRAM_FALLBACK_MB: u64 = 8192;
 /// Same, for a video model (Wan 2.2 5B is ~10 GB of weights).
 const VIDEO_VRAM_FALLBACK_MB: u64 = 11_264;
+/// RTX Video Super Resolution has no downloadable weights file to size a real
+/// estimate from (it's a custom-node install wrapping NVIDIA's `nvidia-vfx`
+/// SDK, not a checkpoint) — a fixed-function CUDA effect, not a diffusion
+/// model, so this is a deliberately conservative placeholder pending a real
+/// measurement, not a scaled-down image/video constant.
+const UPSCALE_VRAM_FALLBACK_MB: u64 = 2048;
+/// Synthetic `model_id` for an `upscale` job's [`Target`] — there is no
+/// library `Model` row for it (see `capability::upscale`'s module doc), just
+/// a fixed label the scheduler's single-VRAM-slot bookkeeping can key on.
+const UPSCALE_MODEL_ID: &str = "rtx-video-super-resolution";
+const UPSCALE_MODEL_NAME: &str = "RTX Video Super Resolution";
 /// The job "shape" `media_headroom_mb`'s per-family constants were sized for
 /// (matches the UI's own "getting heavy" cutoff — `EASY_PIXELS`/`EASY_FRAMES`
 /// in `ui/src/features/video/Video.tsx`, and `Image.tsx`'s 1024×1024 default).
@@ -289,6 +304,26 @@ impl JobEngine {
         // cache), so resolve them on their own path — explicit model or `Auto`.
         if job.job_type == "image" || job.job_type == "video" {
             return self.resolve_comfyui_target(job).await;
+        }
+        // Upscale has no library `Model` to resolve (custom-node install, not
+        // a checkpoint — see `capability::upscale`'s module doc) — a fixed
+        // synthetic target, still on ComfyUI and still worth a real (if
+        // approximate) VRAM reservation, unlike tts/colibri below. Unlike
+        // those two, still worth `assign`-ing (unlike "no single model" for
+        // tts, this synthetic id *is* "the model" here) so the job row and
+        // the UI have something concrete to show.
+        if job.job_type == "upscale" {
+            self.db
+                .jobs()
+                .assign(&job.id, COMFYUI, UPSCALE_MODEL_ID)
+                .await?;
+            return Ok(Target {
+                runtime_id: COMFYUI.into(),
+                model_id: UPSCALE_MODEL_ID.into(),
+                model_name: UPSCALE_MODEL_NAME.into(),
+                vram_mb: job.vram_needed_mb().max(UPSCALE_VRAM_FALLBACK_MB),
+                estimate: None,
+            });
         }
         // The narrator never charges against the VRAM budget (see
         // `TtsAdapter`'s own doc comment) -- Kokoro is a tiny CPU model
@@ -858,6 +893,50 @@ impl JobEngine {
                     self.db
                         .jobs()
                         .append_event(&job.id, EventLevel::Warn, "cancelled while rendering")
+                        .await?;
+                    self.to(
+                        &mut job,
+                        JobState::Cancelled,
+                        JobPatch {
+                            error_text: Some(CANCEL_REASON.into()),
+                            set_finished_at: true,
+                            ..Default::default()
+                        },
+                    )
+                    .await?;
+                    return Ok(JobOutcome::Cancelled { job_id: job.id });
+                }
+            }
+        } else if job.job_type == "upscale" {
+            if runtime_id != COMFYUI {
+                return Err(CoreError::Runtime {
+                    runtime: runtime_id.clone(),
+                    message: "upscale jobs run on ComfyUI".into(),
+                });
+            }
+            let req = UpscaleRequest::from_params(&job.params)?;
+
+            match upscale::run(
+                &self.db,
+                &self.comfyui,
+                &self.outputs_dir,
+                &job.id,
+                req,
+                cancel,
+            )
+            .await?
+            {
+                UpscaleOutcome::Done(done) => {
+                    self.db
+                        .jobs()
+                        .append_event(&job.id, EventLevel::Info, "upscale ready")
+                        .await?;
+                    output_path = Some(done.output_path.to_string_lossy().into_owned());
+                }
+                UpscaleOutcome::Cancelled => {
+                    self.db
+                        .jobs()
+                        .append_event(&job.id, EventLevel::Warn, "cancelled while upscaling")
                         .await?;
                     self.to(
                         &mut job,

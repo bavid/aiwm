@@ -4,8 +4,12 @@
 //! ComfyUI source at a pinned tag, then build a self-contained venv with `uv`
 //! (`uv venv` downloads Python 3.13; then the CUDA `torch` build and ComfyUI's
 //! `requirements.txt`). Everything lands under `<runtimes_dir>/comfyui/` so a
-//! "repair" is a single delete. The custom node (`ComfyUI-GGUF`) is added in
-//! 3.2b.
+//! "repair" is a single delete. Two custom node packs ride along, each a git
+//! source archive extracted flat into `custom_nodes/` plus its own
+//! `requirements.txt` pip-installed into the same venv: `ComfyUI-GGUF` (3.2b,
+//! quantized Flux/SD3.5) and `Nvidia_RTX_Nodes_ComfyUI` (7.x, the "Upscale"
+//! step's RTX Video Super Resolution node — real, official, Apache-licensed;
+//! not to be confused with the unrelated, declined "DLSS 5" tooling).
 //!
 //! The `uv` subprocess steps go through a [`CmdRunner`] so the orchestration is
 //! unit-tested with a recording fake; a real end-to-end run is the smoke test.
@@ -31,15 +35,28 @@ const TORCH_INDEX_URL: &str = "https://download.pytorch.org/whl/cu130";
 
 const COMFYUI_ARCHIVE_BASE: &str = "https://github.com/comfyanonymous/ComfyUI/archive/refs/tags";
 const GGUF_ARCHIVE_BASE: &str = "https://github.com/city96/ComfyUI-GGUF/archive";
+const RTX_ARCHIVE_BASE: &str = "https://github.com/Comfy-Org/Nvidia_RTX_Nodes_ComfyUI/archive";
 
-/// The one custom node we ship (ADR-018): GGUF quantization support, needed to
-/// run Flux / SD3.5 on 16 GB. Pinned to a commit — the repo has no tags — and
-/// the archive SHA-256 we computed. Same caveat as [`COMFYUI_SRC`].
+/// GGUF quantization support (ADR-018), needed to run Flux / SD3.5 on 16 GB.
+/// Pinned to a commit — the repo has no tags — and the archive SHA-256 we
+/// computed. Same caveat as [`COMFYUI_SRC`].
 const GGUF_NODE_DIR: &str = "ComfyUI-GGUF";
 const GGUF_NODE_ARCHIVE: Archive<'static> = Archive {
     name: "6ea2651e7df66d7585f6ffee804b20e92fb38b8a.zip",
     sha256: "aad273a0b774684285b4496f6edff7e2293bd29d71ef89926d6861bfdf4947ac",
     size: 38_051,
+};
+
+/// The real, official `Comfy-Org` RTX Video Super Resolution node (7.x
+/// "Upscale") — Apache-2.0, wraps NVIDIA's proprietary `nvidia-vfx` SDK
+/// bindings (that dependency's own `LicenseRef-NvidiaProprietary` is normal
+/// for an NVIDIA SDK binding, same as a CUDA wheel). Needs an RTX GPU. Also
+/// pinned to a commit — no tags — same caveat as [`COMFYUI_SRC`].
+const RTX_NODE_DIR: &str = "Nvidia_RTX_Nodes_ComfyUI";
+const RTX_NODE_ARCHIVE: Archive<'static> = Archive {
+    name: "892515e3eb9a4920a131a502a047e47adca9eb0d.zip",
+    sha256: "d67e1a02934e8cd20294abab76012b15abd4515cd8238456fa4cee21516fdbfb",
+    size: 96_109,
 };
 
 /// The GitHub source archive for [`PINNED_TAG`]. GitHub does **not** publish a
@@ -85,6 +102,16 @@ fn gguf_node_dir(runtimes_dir: &Path) -> PathBuf {
         .join(GGUF_NODE_DIR)
 }
 
+/// Same tree as [`gguf_node_dir`] — both custom node packs are siblings under
+/// the one real `custom_nodes/`, which `launch::ComfyDirs::ensure` junctions
+/// under ComfyUI's `--base-directory` in one shot, so anything landing here
+/// is automatically discoverable exactly like GGUF already is.
+fn rtx_node_dir(runtimes_dir: &Path) -> PathBuf {
+    comfy_home(runtimes_dir)
+        .join("custom_nodes")
+        .join(RTX_NODE_DIR)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum InstallPhase {
@@ -99,7 +126,7 @@ pub enum InstallPhase {
 /// Bytes to fetch for the toolchain — surfaced in the UI. The venv build adds
 /// gigabytes of wheels whose size we cannot know up front.
 pub const TOOLCHAIN_DOWNLOAD_BYTES: u64 =
-    UV_ARCHIVE.size + COMFYUI_SRC.size + GGUF_NODE_ARCHIVE.size;
+    UV_ARCHIVE.size + COMFYUI_SRC.size + GGUF_NODE_ARCHIVE.size + RTX_NODE_ARCHIVE.size;
 
 // --- the installer --------------------------------------------------------
 
@@ -109,18 +136,22 @@ struct FetchSpec<'a> {
     uv_base: &'a str,
     comfy_base: &'a str,
     gguf_base: &'a str,
+    rtx_base: &'a str,
     uv: &'a Archive<'a>,
     comfy: &'a Archive<'a>,
     gguf: &'a Archive<'a>,
+    rtx: &'a Archive<'a>,
 }
 
 const PINNED_SPEC: FetchSpec<'static> = FetchSpec {
     uv_base: UV_RELEASE_BASE,
     comfy_base: COMFYUI_ARCHIVE_BASE,
     gguf_base: GGUF_ARCHIVE_BASE,
+    rtx_base: RTX_ARCHIVE_BASE,
     uv: &UV_ARCHIVE,
     comfy: &COMFYUI_SRC,
     gguf: &GGUF_NODE_ARCHIVE,
+    rtx: &RTX_NODE_ARCHIVE,
 };
 
 /// Install the pinned ComfyUI into `runtimes_dir`. Idempotent — a complete
@@ -153,9 +184,14 @@ where
     let uv = uv_bin(runtimes_dir);
     let home = comfy_home(runtimes_dir);
     let py = venv_python(runtimes_dir);
-    let node_marker = gguf_node_dir(runtimes_dir).join("__init__.py");
+    let gguf_marker = gguf_node_dir(runtimes_dir).join("__init__.py");
+    let rtx_marker = rtx_node_dir(runtimes_dir).join("__init__.py");
 
-    if py.is_file() && home.join("main.py").is_file() && node_marker.is_file() {
+    if py.is_file()
+        && home.join("main.py").is_file()
+        && gguf_marker.is_file()
+        && rtx_marker.is_file()
+    {
         return Ok(()); // already installed
     }
     if offline {
@@ -170,15 +206,16 @@ where
         &root,
         &home,
         gguf_node_dir(runtimes_dir).as_path(),
+        rtx_node_dir(runtimes_dir).as_path(),
         spec,
         &on_progress,
     )
     .await?;
     build_venv(&root, &uv, &home, &py, runner, &on_progress).await?;
 
-    if !py.is_file() || !node_marker.is_file() {
+    if !py.is_file() || !gguf_marker.is_file() || !rtx_marker.is_file() {
         return Err(comfy_install_err(
-            "install finished but the venv python or the GGUF node is missing — the steps \
+            "install finished but the venv python or a custom node is missing — the steps \
              did not complete",
         ));
     }
@@ -187,11 +224,12 @@ where
 }
 
 /// Fetch + unpack the verified toolchain: `uv` (via [`ensure_uv`]), the ComfyUI
-/// source, and the pinned GGUF node.
+/// source, and the two pinned custom nodes (GGUF, RTX Video Super Resolution).
 async fn fetch_sources<F>(
     root: &Path,
     home: &Path,
-    node_dir: &Path,
+    gguf_dir: &Path,
+    rtx_dir: &Path,
     spec: &FetchSpec<'_>,
     on_progress: &F,
 ) -> Result<()>
@@ -203,7 +241,7 @@ where
     tokio::fs::create_dir_all(&staging)
         .await
         .map_err(|e| comfy_install_err(format!("create {}: {e}", staging.display())))?;
-    let total = spec.uv.size + spec.comfy.size + spec.gguf.size;
+    let total = spec.uv.size + spec.comfy.size + spec.gguf.size + spec.rtx.size;
     let mut done = 0u64;
 
     ensure_uv(spec.uv_base, spec.uv, root, |n| {
@@ -225,7 +263,7 @@ where
     }
     done += spec.comfy.size;
 
-    if !node_dir.join("__init__.py").is_file() {
+    if !gguf_dir.join("__init__.py").is_file() {
         let zip = staging.join(spec.gguf.name);
         download_verified(
             &format!("{}/{}", spec.gguf_base, spec.gguf.name),
@@ -234,7 +272,20 @@ where
             |n| on_progress(InstallPhase::Downloading, done + n, total),
         )
         .await?;
-        extract_zip_flat(&zip, node_dir).await?;
+        extract_zip_flat(&zip, gguf_dir).await?;
+    }
+    done += spec.gguf.size;
+
+    if !rtx_dir.join("__init__.py").is_file() {
+        let zip = staging.join(spec.rtx.name);
+        download_verified(
+            &format!("{}/{}", spec.rtx_base, spec.rtx.name),
+            spec.rtx,
+            &zip,
+            |n| on_progress(InstallPhase::Downloading, done + n, total),
+        )
+        .await?;
+        extract_zip_flat(&zip, rtx_dir).await?;
     }
 
     on_progress(InstallPhase::Extracting, total, total);
@@ -263,9 +314,15 @@ where
     ];
     let venv_s = home.join(".venv").to_string_lossy().into_owned();
     let reqs_s = home.join("requirements.txt").to_string_lossy().into_owned();
-    let node_reqs_s = home
+    let gguf_reqs_s = home
         .join("custom_nodes")
         .join(GGUF_NODE_DIR)
+        .join("requirements.txt")
+        .to_string_lossy()
+        .into_owned();
+    let rtx_reqs_s = home
+        .join("custom_nodes")
+        .join(RTX_NODE_DIR)
         .join("requirements.txt")
         .to_string_lossy()
         .into_owned();
@@ -305,7 +362,14 @@ where
     runner
         .run(
             uv,
-            &["pip", "install", "--python", &py_s, "-r", &node_reqs_s],
+            &["pip", "install", "--python", &py_s, "-r", &gguf_reqs_s],
+            &env,
+        )
+        .await?;
+    runner
+        .run(
+            uv,
+            &["pip", "install", "--python", &py_s, "-r", &rtx_reqs_s],
             &env,
         )
         .await?;
@@ -390,15 +454,21 @@ mod tests {
         uv_zip: Vec<u8>,
         src_zip: Vec<u8>,
         node_zip: Vec<u8>,
+        rtx_zip: Vec<u8>,
         uv_sha: String,
         src_sha: String,
         node_sha: String,
+        rtx_sha: String,
     }
 
     impl Fixtures {
-        /// The three archives, served from one local server. `src`/`node`
+        /// The four archives, served from one local server. `src`/`node`/`rtx`
         /// contents can be overridden (`None` = a valid minimal one).
-        async fn serve(src_body: Option<Vec<u8>>, node_body: Option<Vec<u8>>) -> Self {
+        async fn serve(
+            src_body: Option<Vec<u8>>,
+            node_body: Option<Vec<u8>>,
+            rtx_body: Option<Vec<u8>>,
+        ) -> Self {
             let uv_zip = make_zip(&[("uv.exe", b"MZ uv")]);
             let src_zip = src_body.unwrap_or_else(|| {
                 make_zip(&[
@@ -412,7 +482,21 @@ mod tests {
                     ("ComfyUI-GGUF-abc/requirements.txt", b"gguf>=0.13.0\n"),
                 ])
             });
-            let (u, s, n) = (uv_zip.clone(), src_zip.clone(), node_zip.clone());
+            let rtx_zip = rtx_body.unwrap_or_else(|| {
+                make_zip(&[
+                    ("Nvidia_RTX_Nodes_ComfyUI-abc/__init__.py", b"import nvvfx"),
+                    (
+                        "Nvidia_RTX_Nodes_ComfyUI-abc/requirements.txt",
+                        b"nvidia-vfx\n",
+                    ),
+                ])
+            });
+            let (u, s, n, r) = (
+                uv_zip.clone(),
+                src_zip.clone(),
+                node_zip.clone(),
+                rtx_zip.clone(),
+            );
             let app = Router::new()
                 .route(
                     "/uv/uv.zip",
@@ -434,6 +518,13 @@ mod tests {
                         let b = n.clone();
                         async move { Body::from(b) }
                     }),
+                )
+                .route(
+                    "/rtx/rtx.zip",
+                    get(move || {
+                        let b = r.clone();
+                        async move { Body::from(b) }
+                    }),
                 );
             let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
                 .await
@@ -446,17 +537,20 @@ mod tests {
                 uv_sha: sha(&uv_zip),
                 src_sha: sha(&src_zip),
                 node_sha: sha(&node_zip),
+                rtx_sha: sha(&rtx_zip),
                 uv_zip,
                 src_zip,
                 node_zip,
+                rtx_zip,
             }
         }
 
-        fn spec(&self) -> (String, String, String, [Archive<'_>; 3]) {
-            let (ub, cb, nb) = (
+        fn spec(&self) -> (String, String, String, String, [Archive<'_>; 4]) {
+            let (ub, cb, nb, rb) = (
                 format!("http://127.0.0.1:{}/uv", self.port),
                 format!("http://127.0.0.1:{}/src", self.port),
                 format!("http://127.0.0.1:{}/node", self.port),
+                format!("http://127.0.0.1:{}/rtx", self.port),
             );
             let archives = [
                 Archive {
@@ -474,8 +568,13 @@ mod tests {
                     sha256: &self.node_sha,
                     size: self.node_zip.len() as u64,
                 },
+                Archive {
+                    name: "rtx.zip",
+                    sha256: &self.rtx_sha,
+                    size: self.rtx_zip.len() as u64,
+                },
             ];
-            (ub, cb, nb, archives)
+            (ub, cb, nb, rb, archives)
         }
     }
 
@@ -488,14 +587,16 @@ mod tests {
     where
         F: Fn(InstallPhase, u64, u64) + Send + Sync,
     {
-        let (ub, cb, nb, a) = fx.spec();
+        let (ub, cb, nb, rb, a) = fx.spec();
         let spec = FetchSpec {
             uv_base: &ub,
             comfy_base: &cb,
             gguf_base: &nb,
+            rtx_base: &rb,
             uv: &a[0],
             comfy: &a[1],
             gguf: &a[2],
+            rtx: &a[3],
         };
         install_with(tmp, false, runner, &spec, on_progress).await
     }
@@ -518,6 +619,8 @@ mod tests {
         std::fs::write(comfy_home(tmp.path()).join("main.py"), b"# comfy").unwrap();
         std::fs::create_dir_all(gguf_node_dir(tmp.path())).unwrap();
         std::fs::write(gguf_node_dir(tmp.path()).join("__init__.py"), b"x").unwrap();
+        std::fs::create_dir_all(rtx_node_dir(tmp.path())).unwrap();
+        std::fs::write(rtx_node_dir(tmp.path()).join("__init__.py"), b"x").unwrap();
 
         let runner = RecordingRunner::default();
         install(tmp.path(), true, &runner, |_, _, _| {})
@@ -527,8 +630,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn full_install_fetches_all_three_then_runs_the_uv_steps_in_order() {
-        let fx = Fixtures::serve(None, None).await;
+    async fn full_install_fetches_all_four_then_runs_the_uv_steps_in_order() {
+        let fx = Fixtures::serve(None, None, None).await;
         let tmp = tempfile::tempdir().unwrap();
         let runner = VenvCreatingRunner {
             py: venv_python(tmp.path()),
@@ -549,9 +652,20 @@ mod tests {
             !gguf_node_dir(tmp.path()).join("ComfyUI-GGUF-abc").exists(),
             "flattened"
         );
+        assert!(rtx_node_dir(tmp.path()).join("__init__.py").is_file());
+        assert!(
+            !rtx_node_dir(tmp.path())
+                .join("Nvidia_RTX_Nodes_ComfyUI-abc")
+                .exists(),
+            "flattened"
+        );
 
         let calls = runner.calls.into_inner().unwrap();
-        assert_eq!(calls.len(), 4, "venv, torch, requirements, node: {calls:?}");
+        assert_eq!(
+            calls.len(),
+            5,
+            "venv, torch, requirements, gguf node, rtx node: {calls:?}"
+        );
         assert_eq!(calls[0][0], "venv");
         assert!(
             calls[1].contains(&"--index-url".to_string())
@@ -563,6 +677,11 @@ mod tests {
             .unwrap()
             .replace('\\', "/")
             .ends_with("custom_nodes/ComfyUI-GGUF/requirements.txt"));
+        assert!(calls[4]
+            .last()
+            .unwrap()
+            .replace('\\', "/")
+            .ends_with("custom_nodes/Nvidia_RTX_Nodes_ComfyUI/requirements.txt"));
 
         let phases = phases.into_inner().unwrap();
         for expected in [
@@ -581,7 +700,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_failing_uv_step_surfaces_the_error() {
-        let fx = Fixtures::serve(None, None).await;
+        let fx = Fixtures::serve(None, None, None).await;
         let tmp = tempfile::tempdir().unwrap();
         let err = run_install_with(&fx, tmp.path(), &FailingRunner, |_, _, _| {})
             .await
@@ -591,16 +710,17 @@ mod tests {
 
     #[tokio::test]
     async fn a_bad_source_hash_aborts_before_the_uv_steps() {
-        let fx = Fixtures::serve(Some(b"corrupt".to_vec()), None).await;
+        let fx = Fixtures::serve(Some(b"corrupt".to_vec()), None, None).await;
         let tmp = tempfile::tempdir().unwrap();
         let runner = RecordingRunner::default();
 
         // Override the source sha to a wrong one.
-        let (ub, cb, nb, a) = fx.spec();
+        let (ub, cb, nb, rb, a) = fx.spec();
         let spec = FetchSpec {
             uv_base: &ub,
             comfy_base: &cb,
             gguf_base: &nb,
+            rtx_base: &rb,
             uv: &a[0],
             comfy: &Archive {
                 name: "comfy.zip",
@@ -608,6 +728,7 @@ mod tests {
                 size: 7,
             },
             gguf: &a[2],
+            rtx: &a[3],
         };
         let err = install_with(tmp.path(), false, &runner, &spec, |_, _, _| {})
             .await
@@ -634,15 +755,20 @@ mod tests {
         assert!(venv_python(tmp.path()).is_file());
         assert!(home.join("main.py").is_file());
         assert!(gguf_node_dir(tmp.path()).join("__init__.py").is_file());
-        // torch + the node's `gguf` dep both import (proves the wheels + Python
-        // match; not the GPU driver — that waits for a real render in 3.4).
+        assert!(rtx_node_dir(tmp.path()).join("__init__.py").is_file());
+        // torch, the GGUF node's `gguf` dep, and the RTX node's `nvvfx` dep all
+        // import (proves the wheels + Python match; not the GPU driver — that
+        // waits for a real render in 3.4 / the upscale slice).
         SystemRunner
             .run(
                 &venv_python(tmp.path()),
-                &["-c", "import torch, gguf; print('ok', torch.__version__)"],
+                &[
+                    "-c",
+                    "import torch, gguf, nvvfx; print('ok', torch.__version__)",
+                ],
                 &[],
             )
             .await
-            .expect("torch and gguf should import in the fresh venv");
+            .expect("torch, gguf and nvvfx should import in the fresh venv");
     }
 }
