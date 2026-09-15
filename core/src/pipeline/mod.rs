@@ -796,6 +796,146 @@ pub fn ltx_video(i: &VideoInputs, m: &LtxModels, loras: &[LoraSpec]) -> Value {
     g
 }
 
+/// How to resize when running NVIDIA's RTX Video Super Resolution node's
+/// `resize_type` `DynamicCombo` input — matches its two branches verbatim,
+/// key strings included (`UpscaleType` in `Comfy-Org/Nvidia_RTX_Nodes_ComfyUI`'s
+/// own source).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum UpscaleResize {
+    /// Multiply both dimensions by this factor (the node clamps to 1.0-4.0).
+    ScaleBy(f64),
+    /// Resize to these exact pixel dimensions (the node clamps 64-8192, step 8).
+    Target { width: u32, height: u32 },
+}
+
+/// Write `resize` onto an `RTXVideoSuperResolution` node's `inputs` object, in
+/// the wire shape its `DynamicCombo` schema actually needs.
+///
+/// **Verification note**: derived (not exercised against a live `/prompt`
+/// submission — no real ComfyUI instance was available while building this,
+/// Phase 7 upscale slice) from ComfyUI's actual `comfy_api/latest/_io.py`
+/// (`DynamicCombo::_expand_schema_for_dynamic`, `parse_class_inputs`) and
+/// `execution.py` (`get_input_data`) at the pinned tag (v0.34.0), cross-checked
+/// against the RTX node's own shipped `execute()` body and
+/// `example_workflows/*.json`. **Independently confirmed** against that same
+/// source directly: `_io.py`'s `create_input_dict_v1` builds each nested
+/// input's wire key as `prefixed_id = f"{inp.id}.{nested_inp.id}"`, with an
+/// explicit comment that this matches "the frontend naming convention (e.g.,
+/// `should_texture.enable_pbr`)" — i.e. the dotted form below is what
+/// ComfyUI's own schema resolver actually expects, not a guess that happened
+/// to compile. Still worth a real end-to-end run once ComfyUI + the node are
+/// actually installed, since a source read can't catch every integration
+/// quirk (this project's own norm — see `docs/TODO.md`'s Flux/LTX entries).
+///
+/// The combo's own selector goes under its bare id (`resize_type`); the
+/// selected branch's nested widget(s) go under `<id>.<nested id>` —
+/// ComfyUI's schema resolver only recognizes the dotted form for a
+/// `DynamicCombo`'s nested inputs (a bare `scale`/`width`/`height` doesn't
+/// match any key in the resolved schema, so `get_input_data` silently drops
+/// it and the node would run whatever it defaults `scale` to instead).
+fn set_resize_type(inputs: &mut Value, resize: UpscaleResize) {
+    match resize {
+        UpscaleResize::ScaleBy(scale) => {
+            inputs["resize_type"] = json!("scale by multiplier");
+            inputs["resize_type.scale"] = json!(scale);
+        }
+        UpscaleResize::Target { width, height } => {
+            inputs["resize_type"] = json!("target dimensions");
+            inputs["resize_type.width"] = json!(width);
+            inputs["resize_type.height"] = json!(height);
+        }
+    }
+}
+
+/// Inputs for an image upscale via NVIDIA's RTX Video Super Resolution node.
+#[derive(Debug, Clone, Copy)]
+pub struct UpscaleImageInputs<'a> {
+    pub source_image: &'a str,
+    pub resize: UpscaleResize,
+    /// `"LOW"` | `"MEDIUM"` | `"HIGH"` | `"ULTRA"` — the node's own default is
+    /// `"ULTRA"`.
+    pub quality: &'a str,
+    pub filename_prefix: &'a str,
+}
+
+/// An image upscale via NVIDIA's RTX Video Super Resolution custom node
+/// (`Comfy-Org/Nvidia_RTX_Nodes_ComfyUI`, installed alongside `ComfyUI-GGUF`):
+/// `LoadImage` → `RTXVideoSuperResolution` → `SaveImage`. This sharpens,
+/// denoises and resizes an already-rendered image — it does not hallucinate
+/// new detail the way a diffusion upscaler would.
+pub fn rtx_upscale_image(i: &UpscaleImageInputs) -> Value {
+    let mut g = json!({
+        "1": {
+            "class_type": "LoadImage",
+            "inputs": { "image": i.source_image }
+        },
+        "2": {
+            "class_type": "RTXVideoSuperResolution",
+            "inputs": {
+                "images": ["1", 0],
+                "quality": i.quality
+            }
+        },
+        "3": {
+            "class_type": "SaveImage",
+            "inputs": { "filename_prefix": i.filename_prefix, "images": ["2", 0] }
+        }
+    });
+    set_resize_type(&mut g["2"]["inputs"], i.resize);
+    g
+}
+
+/// Inputs for a video upscale via NVIDIA's RTX Video Super Resolution node.
+#[derive(Debug, Clone, Copy)]
+pub struct UpscaleVideoInputs<'a> {
+    pub source_video: &'a str,
+    pub resize: UpscaleResize,
+    pub quality: &'a str,
+    pub filename_prefix: &'a str,
+}
+
+/// A video upscale via the same node, sandwiched into ComfyUI's own video
+/// load/save nodes rather than inventing a new video pipeline: `LoadVideo` →
+/// `GetVideoComponents` (the source's frames, audio and fps) →
+/// `RTXVideoSuperResolution` (runs on the whole frame batch — one image, or a
+/// video's worth of frames, is the same node either way) → `CreateVideo`
+/// (re-encodes with the *original* audio/fps) → `SaveVideo`. Matches the
+/// node's own shipped `example_workflows/rtx_video_upscale.json` shape.
+pub fn rtx_upscale_video(i: &UpscaleVideoInputs) -> Value {
+    let mut g = json!({
+        "1": {
+            "class_type": "LoadVideo",
+            "inputs": { "file": i.source_video }
+        },
+        "2": {
+            "class_type": "GetVideoComponents",
+            "inputs": { "video": ["1", 0] }
+        },
+        "3": {
+            "class_type": "RTXVideoSuperResolution",
+            "inputs": {
+                "images": ["2", 0],
+                "quality": i.quality
+            }
+        },
+        "4": {
+            "class_type": "CreateVideo",
+            "inputs": { "images": ["3", 0], "audio": ["2", 1], "fps": ["2", 2] }
+        },
+        "5": {
+            "class_type": "SaveVideo",
+            "inputs": {
+                "video": ["4", 0],
+                "filename_prefix": i.filename_prefix,
+                "format": "mp4",
+                "codec": "auto"
+            }
+        }
+    });
+    set_resize_type(&mut g["3"]["inputs"], i.resize);
+    g
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1415,5 +1555,79 @@ mod tests {
         assert_eq!(g["90"]["inputs"]["clip"], json!(["38", 0]));
         assert_eq!(g["72"]["inputs"]["model"], json!(["90", 0]));
         assert_eq!(g["6"]["inputs"]["clip"], json!(["90", 1]));
+    }
+
+    // --- RTX Video Super Resolution (upscale) ---------------------------------
+
+    fn upscale_image_inputs(resize: UpscaleResize) -> UpscaleImageInputs<'static> {
+        UpscaleImageInputs {
+            source_image: "job-src.png",
+            resize,
+            quality: "ULTRA",
+            filename_prefix: "job-up",
+        }
+    }
+
+    fn upscale_video_inputs(resize: UpscaleResize) -> UpscaleVideoInputs<'static> {
+        UpscaleVideoInputs {
+            source_video: "job-src.mp4",
+            resize,
+            quality: "ULTRA",
+            filename_prefix: "job-up",
+        }
+    }
+
+    #[test]
+    fn rtx_upscale_image_wires_load_rtx_save_and_scale_by_as_dotted_dynamic_combo_keys() {
+        let g = rtx_upscale_image(&upscale_image_inputs(UpscaleResize::ScaleBy(2.0)));
+        assert_eq!(g["1"]["class_type"], "LoadImage");
+        assert_eq!(g["1"]["inputs"]["image"], "job-src.png");
+        assert_eq!(g["2"]["class_type"], "RTXVideoSuperResolution");
+        assert_eq!(g["2"]["inputs"]["images"], json!(["1", 0]));
+        // The DynamicCombo's own selector, plus its scale-by branch's one
+        // nested widget under the dotted `resize_type.scale` key -- see
+        // `set_resize_type`'s doc comment for why it must be dotted.
+        assert_eq!(g["2"]["inputs"]["resize_type"], "scale by multiplier");
+        assert_eq!(g["2"]["inputs"]["resize_type.scale"], 2.0);
+        assert!(g["2"]["inputs"].get("resize_type.width").is_none());
+        assert_eq!(g["2"]["inputs"]["quality"], "ULTRA");
+        assert_eq!(g["3"]["class_type"], "SaveImage");
+        assert_eq!(g["3"]["inputs"]["images"], json!(["2", 0]));
+        assert_eq!(g["3"]["inputs"]["filename_prefix"], "job-up");
+    }
+
+    #[test]
+    fn rtx_upscale_image_wires_target_dimensions_as_dotted_width_height() {
+        let g = rtx_upscale_image(&upscale_image_inputs(UpscaleResize::Target {
+            width: 1920,
+            height: 1080,
+        }));
+        assert_eq!(g["2"]["inputs"]["resize_type"], "target dimensions");
+        assert_eq!(g["2"]["inputs"]["resize_type.width"], 1920);
+        assert_eq!(g["2"]["inputs"]["resize_type.height"], 1080);
+        assert!(g["2"]["inputs"].get("resize_type.scale").is_none());
+    }
+
+    #[test]
+    fn rtx_upscale_video_wires_load_video_get_components_rtx_and_create_save_video() {
+        let g = rtx_upscale_video(&upscale_video_inputs(UpscaleResize::ScaleBy(1.5)));
+        assert_eq!(g["1"]["class_type"], "LoadVideo");
+        assert_eq!(g["1"]["inputs"]["file"], "job-src.mp4");
+        assert_eq!(g["2"]["class_type"], "GetVideoComponents");
+        assert_eq!(g["2"]["inputs"]["video"], json!(["1", 0]));
+        assert_eq!(g["3"]["class_type"], "RTXVideoSuperResolution");
+        // The frame batch comes from GetVideoComponents' `images` output (0).
+        assert_eq!(g["3"]["inputs"]["images"], json!(["2", 0]));
+        assert_eq!(g["3"]["inputs"]["resize_type"], "scale by multiplier");
+        assert_eq!(g["3"]["inputs"]["resize_type.scale"], 1.5);
+        assert_eq!(g["4"]["class_type"], "CreateVideo");
+        assert_eq!(g["4"]["inputs"]["images"], json!(["3", 0]));
+        // The original audio (output 1) and fps (output 2) ride along --
+        // upscaling only touches the frames.
+        assert_eq!(g["4"]["inputs"]["audio"], json!(["2", 1]));
+        assert_eq!(g["4"]["inputs"]["fps"], json!(["2", 2]));
+        assert_eq!(g["5"]["class_type"], "SaveVideo");
+        assert_eq!(g["5"]["inputs"]["video"], json!(["4", 0]));
+        assert_eq!(g["5"]["inputs"]["filename_prefix"], "job-up");
     }
 }

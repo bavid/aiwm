@@ -203,6 +203,25 @@ function progressTtsJobs(): void {
   }
 }
 
+/** Flip a running `upscale` job to `completed` a moment in -- mirrors
+ *  `progressTtsJobs`: without this, Image/Video's "Upscale" button has no way
+ *  to ever finish in the dev preview. Output extension follows the source
+ *  job's own kind (an image source produces a `.png`, a video source a
+ *  `.mp4`) so the Result panel's `<img>`/`<video>` tag picks the right one. */
+function progressUpscaleJobs(): void {
+  for (const j of JOBS) {
+    if (j.job_type !== "upscale" || j.state !== "running") continue;
+    const started = Date.parse(String(j.started_at ?? j.created_at));
+    if (Date.now() - started < 900) continue;
+    const source = String((j.params as AnyRecord)?.source ?? "");
+    const sourceJob = JOBS.find((s) => s.id === source);
+    const ext = sourceJob?.job_type === "video" ? "mp4" : "png";
+    j.state = "completed";
+    j.finished_at = now();
+    j.output_path = `/dev-mock/${j.id}.${ext}`;
+  }
+}
+
 /** Flip a running `recommend` job to `completed` with a canned report. */
 function progressRecommendJobs(): void {
   for (const j of JOBS) {
@@ -574,6 +593,7 @@ export function installDevMock(): void {
         progressChatJobs();
         progressRecommendJobs();
         progressTtsJobs();
+        progressUpscaleJobs();
         // Fresh array — `usePolled` needs a changed reference to re-render.
         return JOBS.map((j) => ({ ...j }));
       case "get_config":
@@ -603,6 +623,10 @@ export function installDevMock(): void {
           colibri: "m-qwen",
           recommend: "m-qwen",
           tts: "m-kokoro",
+          // No library model backs this (a custom-node install, not a
+          // checkpoint) -- matches the Rust engine's own synthetic id so it
+          // reads sensibly wherever a raw model_id falls back to display.
+          upscale: "rtx-video-super-resolution",
         };
         const job = mkJob(`j-dev-${seq++}`, jobType, "running", {
           params: body.params ?? {},

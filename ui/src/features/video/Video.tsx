@@ -19,6 +19,7 @@ import {
   type JobEvent,
   type JobState,
   type LoraParam,
+  type UpscaleParams,
   type VideoParams,
 } from "../../lib/ipc";
 import "./video.css";
@@ -216,6 +217,28 @@ export function VideoStudio() {
         setSelectedId(null);
         setDetail(null);
       }
+    } catch (err) {
+      setSendError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  /** A real scheduled ComfyUI job (VRAM, queueing), not a synchronous
+   *  in-place pass — submit it and switch the Result panel over to watch it,
+   *  exactly like `generate()` does for a fresh render. The Rust side
+   *  defaults everything but `source` (2x scale, ULTRA quality), so this is
+   *  a genuine one click. */
+  const handleUpscale = async (id: string) => {
+    setSendError(null);
+    const params: UpscaleParams = { source: id };
+    try {
+      const job = await submitJob({
+        job_type: "upscale",
+        session_id: sessionId ?? undefined,
+        params,
+      });
+      setPendingId(job.id);
+      setSelectedId(job.id);
+      setDetail({ job, events: [] });
     } catch (err) {
       setSendError(err instanceof Error ? err.message : String(err));
     }
@@ -435,6 +458,11 @@ export function VideoStudio() {
             modelNames={modelNames}
             onCancel={selected ? () => cancelJob(selected.id) : undefined}
             onDelete={selected ? () => handleDelete(selected.id) : undefined}
+            onUpscale={
+              selected && selected.state === "completed" && selected.job_type !== "upscale"
+                ? () => handleUpscale(selected.id)
+                : undefined
+            }
             onReuseSeed={setSeed}
           />
         </section>
@@ -512,6 +540,18 @@ function latestProgress(events: JobEvent[]): string | null {
   return null;
 }
 
+function asUpscaleParams(p: unknown): Partial<UpscaleParams> {
+  return p && typeof p === "object" ? (p as Partial<UpscaleParams>) : {};
+}
+
+function upscaleSummary(p: Partial<UpscaleParams>): string {
+  const resize =
+    p.resize_mode === "dimensions" && p.width && p.height
+      ? `${p.width}×${p.height}`
+      : `${(p.scale ?? 2).toFixed(2)}×`;
+  return `${resize} · ${p.quality ?? "ULTRA"} quality`;
+}
+
 function Result({
   job,
   events,
@@ -519,6 +559,7 @@ function Result({
   modelNames,
   onCancel,
   onDelete,
+  onUpscale,
   onReuseSeed,
 }: {
   job: Job | null;
@@ -527,11 +568,14 @@ function Result({
   modelNames: Map<string, string>;
   onCancel?: () => void;
   onDelete?: () => void;
+  onUpscale?: () => void;
   onReuseSeed: (seed: string) => void;
 }) {
   if (!job) return <p className="muted">Fill in a prompt and hit Generate.</p>;
 
+  const isUpscale = job.job_type === "upscale";
   const p = asVideoParams(job.params);
+  const up = asUpscaleParams(job.params);
   const running = !DONE.includes(job.state);
   const modelName = job.model_id ? (modelNames.get(job.model_id) ?? job.model_id) : "—";
   const progress = latestProgress(events);
@@ -550,6 +594,12 @@ function Result({
           </span>
         ) : job.state === "cancelled" ? (
           <span className="muted">cancelled</span>
+        ) : isUpscale ? (
+          <span className="result__spin">
+            upscaling…
+            <br />
+            <span className="muted">This can take a while for a longer clip.</span>
+          </span>
         ) : (
           <span className="result__spin">
             {progress ?? `${job.state}…`}
@@ -559,51 +609,67 @@ function Result({
         )}
       </div>
       <dl className="result__meta">
-        {p.prompt && (
+        {isUpscale ? (
           <>
-            <dt>Prompt</dt>
-            <dd>{p.prompt}</dd>
+            <dt>Upscaled from</dt>
+            <dd className="numeric">{up.source ?? "—"}</dd>
+            <dt>RTX Video Super Resolution</dt>
+            <dd className="numeric">{upscaleSummary(up)}</dd>
           </>
-        )}
-        {p.negative && (
+        ) : (
           <>
-            <dt>Negative</dt>
-            <dd>{p.negative}</dd>
-          </>
-        )}
-        {p.init_image && (
-          <>
-            <dt>Start frame</dt>
-            <dd className="numeric">{p.init_image}</dd>
-          </>
-        )}
-        <dt>Model</dt>
-        <dd>{modelName}</dd>
-        {p.width && p.height && (
-          <>
-            <dt>Clip</dt>
-            <dd className="numeric">
-              {p.width}×{p.height} · {p.length ?? "?"}f @ {p.fps ?? "?"}fps
-              {secs && ` (~${secs}s)`} · {p.steps ?? "?"} steps · cfg {p.cfg ?? "?"}
-            </dd>
-          </>
-        )}
-        {p.seed != null && (
-          <>
-            <dt>Seed</dt>
-            <dd className="numeric">
-              {p.seed}
-              <button
-                type="button"
-                className="result__reuse"
-                onClick={() => onReuseSeed(String(p.seed))}
-              >
-                reuse
-              </button>
-            </dd>
+            {p.prompt && (
+              <>
+                <dt>Prompt</dt>
+                <dd>{p.prompt}</dd>
+              </>
+            )}
+            {p.negative && (
+              <>
+                <dt>Negative</dt>
+                <dd>{p.negative}</dd>
+              </>
+            )}
+            {p.init_image && (
+              <>
+                <dt>Start frame</dt>
+                <dd className="numeric">{p.init_image}</dd>
+              </>
+            )}
+            <dt>Model</dt>
+            <dd>{modelName}</dd>
+            {p.width && p.height && (
+              <>
+                <dt>Clip</dt>
+                <dd className="numeric">
+                  {p.width}×{p.height} · {p.length ?? "?"}f @ {p.fps ?? "?"}fps
+                  {secs && ` (~${secs}s)`} · {p.steps ?? "?"} steps · cfg {p.cfg ?? "?"}
+                </dd>
+              </>
+            )}
+            {p.seed != null && (
+              <>
+                <dt>Seed</dt>
+                <dd className="numeric">
+                  {p.seed}
+                  <button
+                    type="button"
+                    className="result__reuse"
+                    onClick={() => onReuseSeed(String(p.seed))}
+                  >
+                    reuse
+                  </button>
+                </dd>
+              </>
+            )}
           </>
         )}
       </dl>
+      {job.state === "completed" && onUpscale && (
+        <button type="button" className="result__cancel" onClick={onUpscale}>
+          Upscale
+        </button>
+      )}
       {running && onCancel && (
         <button type="button" className="result__cancel" onClick={onCancel}>
           Stop

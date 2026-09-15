@@ -147,12 +147,15 @@ pub(super) fn resolve_seed(params: &Value) -> i64 {
 
 /// Image extensions ComfyUI's `LoadImage` can read.
 const STAGED_IMAGE_EXTS: [&str; 4] = ["png", "jpg", "jpeg", "webp"];
+/// Video extensions ComfyUI's `LoadVideo` can read (`capability::upscale`).
+const STAGED_VIDEO_EXTS: [&str; 4] = ["mp4", "webm", "mkv", "mov"];
 
-/// An image copied into ComfyUI's `input/` folder for a job to reference (a
-/// video's start frame, an image edit's source). Dropping it removes the
-/// copy — it is only needed for the one render.
+/// A file copied into ComfyUI's `input/` folder for a job to reference (a
+/// video's start frame, an image edit's source, an upscale's source image or
+/// video). Dropping it removes the copy — it is only needed for the one render.
+#[derive(Debug)]
 pub(super) struct StagedImage {
-    /// Bare file name, as `LoadImage` refers to it.
+    /// Bare file name, as `LoadImage` / `LoadVideo` refers to it.
     pub name: String,
     /// Full path of the copy (removed on drop).
     path: PathBuf,
@@ -173,20 +176,25 @@ impl Drop for StagedImage {
     }
 }
 
-/// Resolve `spec` (a completed job's id, or a path to an image) to a real
-/// file, then copy it to `<comfyui input>/<job_id>.<ext>` for `LoadImage`.
-pub(super) async fn stage_image(
+/// Resolve `spec` (a completed job's id, or a path to a file) to a real file
+/// of the given `kind`, then copy it to `<comfyui input>/<job_id>.<ext>`.
+/// Shared by [`stage_image`] and [`stage_video`] — see those for the public
+/// entry points; `kind` only shapes error messages ("image"/"video").
+async fn stage_media(
     db: &Database,
     input_dir: &Path,
     job_id: &str,
     spec: &str,
+    exts: &[&str],
+    kind: &str,
+    default_ext: &str,
 ) -> Result<StagedImage> {
-    let source = resolve_staged_image(db, spec).await?;
+    let source = resolve_staged_media(db, spec, exts, kind).await?;
     let ext = source
         .extension()
         .and_then(|e| e.to_str())
         .map(str::to_ascii_lowercase)
-        .unwrap_or_else(|| "png".to_string());
+        .unwrap_or_else(|| default_ext.to_string());
 
     tokio::fs::create_dir_all(input_dir)
         .await
@@ -195,7 +203,7 @@ pub(super) async fn stage_image(
     let path = input_dir.join(&name);
     tokio::fs::copy(&source, &path).await.map_err(|e| {
         comfy_err(format!(
-            "stage image {} \u{2192} {}: {e}",
+            "stage {kind} {} \u{2192} {}: {e}",
             source.display(),
             path.display()
         ))
@@ -207,38 +215,110 @@ pub(super) async fn stage_image(
     })
 }
 
-/// The image is either the output of a finished job (the gallery hands us its
-/// id) or a path to an image file on disk. Either way it must be an existing
-/// image ComfyUI's `LoadImage` can read.
-async fn resolve_staged_image(db: &Database, spec: &str) -> Result<PathBuf> {
+/// Resolve `spec` (a completed job's id, or a path to an image) to a real
+/// file, then copy it to `<comfyui input>/<job_id>.<ext>` for `LoadImage`.
+pub(super) async fn stage_image(
+    db: &Database,
+    input_dir: &Path,
+    job_id: &str,
+    spec: &str,
+) -> Result<StagedImage> {
+    stage_media(
+        db,
+        input_dir,
+        job_id,
+        spec,
+        &STAGED_IMAGE_EXTS,
+        "image",
+        "png",
+    )
+    .await
+}
+
+/// Same as [`stage_image`] but for a video source (`capability::upscale`
+/// upscaling an existing clip) — copies to `<comfyui input>/<job_id>.<ext>`
+/// for `LoadVideo`.
+pub(super) async fn stage_video(
+    db: &Database,
+    input_dir: &Path,
+    job_id: &str,
+    spec: &str,
+) -> Result<StagedImage> {
+    stage_media(
+        db,
+        input_dir,
+        job_id,
+        spec,
+        &STAGED_VIDEO_EXTS,
+        "video",
+        "mp4",
+    )
+    .await
+}
+
+/// The file is either the output of a finished job (the gallery hands us its
+/// id) or a path to a file on disk. Either way it must be an existing file of
+/// the given `kind` ComfyUI's loader node can read. Shared by [`stage_media`]
+/// (both [`stage_image`] and [`stage_video`] go through it).
+async fn resolve_staged_media(
+    db: &Database,
+    spec: &str,
+    exts: &[&str],
+    kind: &str,
+) -> Result<PathBuf> {
     if let Some(job) = db.jobs().get(spec).await? {
         let out = job
             .output_path
-            .ok_or_else(|| comfy_err(format!("job {spec} has no image output to use")))?;
-        return checked_image_file(&out);
+            .ok_or_else(|| comfy_err(format!("job {spec} has no {kind} output to use")))?;
+        return checked_media_file(&out, exts, kind);
     }
-    checked_image_file(spec)
+    checked_media_file(spec, exts, kind)
 }
 
-fn checked_image_file(path: &str) -> Result<PathBuf> {
+fn checked_media_file(path: &str, exts: &[&str], kind: &str) -> Result<PathBuf> {
     let p = PathBuf::from(path);
     let ext = p
         .extension()
         .and_then(|e| e.to_str())
         .map(str::to_ascii_lowercase);
-    if !ext
-        .as_deref()
-        .is_some_and(|e| STAGED_IMAGE_EXTS.contains(&e))
-    {
+    if !ext.as_deref().is_some_and(|e| exts.contains(&e)) {
         return Err(comfy_err(format!(
-            "must be a {} image \u{2014} got {path}",
-            STAGED_IMAGE_EXTS.join(" / ")
+            "must be a {} {kind} \u{2014} got {path}",
+            exts.join(" / ")
         )));
     }
     if !p.is_file() {
-        return Err(comfy_err(format!("image not found: {path}")));
+        return Err(comfy_err(format!("{kind} not found: {path}")));
     }
     Ok(p)
+}
+
+/// Whether `spec` (a job id or a path — an upscale job's `source`) points at
+/// an image or a video: a job id is classified by its own `job_type`; a bare
+/// path by its extension. Lets `capability::upscale` pick `LoadImage` vs
+/// `LoadVideo` (and the matching RTX graph) before it has staged anything.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum MediaKind {
+    Image,
+    Video,
+}
+
+pub(super) async fn media_kind(db: &Database, spec: &str) -> Result<MediaKind> {
+    if let Some(job) = db.jobs().get(spec).await? {
+        return Ok(if job.job_type == "video" {
+            MediaKind::Video
+        } else {
+            MediaKind::Image
+        });
+    }
+    let ext = Path::new(spec)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_ascii_lowercase);
+    Ok(match ext.as_deref() {
+        Some(e) if STAGED_VIDEO_EXTS.contains(&e) => MediaKind::Video,
+        _ => MediaKind::Image,
+    })
 }
 
 /// Write a finished render to `<outputs_dir>/<job_id>.<ext>`.
@@ -342,29 +422,36 @@ mod tests {
     }
 
     #[test]
-    fn checked_image_file_rejects_non_images_and_missing_files() {
+    fn checked_media_file_rejects_the_wrong_kind_and_missing_files() {
         let tmp = tempfile::tempdir().unwrap();
         let good = tmp.path().join("frame.png");
         std::fs::write(&good, b"x").unwrap();
-        assert_eq!(checked_image_file(&good.to_string_lossy()).unwrap(), good);
+        assert_eq!(
+            checked_media_file(&good.to_string_lossy(), &STAGED_IMAGE_EXTS, "image").unwrap(),
+            good
+        );
 
         let mp4 = tmp.path().join("clip.mp4");
         std::fs::write(&mp4, b"x").unwrap();
-        assert!(checked_image_file(&mp4.to_string_lossy())
-            .unwrap_err()
-            .to_string()
-            .contains("must be a"));
-
         assert!(
-            checked_image_file(&tmp.path().join("gone.png").to_string_lossy())
+            checked_media_file(&mp4.to_string_lossy(), &STAGED_IMAGE_EXTS, "image")
                 .unwrap_err()
                 .to_string()
-                .contains("not found")
+                .contains("must be a")
         );
+
+        assert!(checked_media_file(
+            &tmp.path().join("gone.png").to_string_lossy(),
+            &STAGED_IMAGE_EXTS,
+            "image"
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("not found"));
     }
 
     #[tokio::test]
-    async fn resolve_staged_image_takes_a_path_or_a_finished_jobs_output() {
+    async fn resolve_staged_media_takes_a_path_or_a_finished_jobs_output() {
         use crate::db::{Database, NewJob};
         let tmp = tempfile::tempdir().unwrap();
         let db = Database::connect_in_memory().await.unwrap();
@@ -373,7 +460,7 @@ mod tests {
         let ondisk = tmp.path().join("hand.jpg");
         std::fs::write(&ondisk, b"x").unwrap();
         assert_eq!(
-            resolve_staged_image(&db, &ondisk.to_string_lossy())
+            resolve_staged_media(&db, &ondisk.to_string_lossy(), &STAGED_IMAGE_EXTS, "image")
                 .await
                 .unwrap(),
             ondisk
@@ -381,11 +468,13 @@ mod tests {
 
         // A job that has not produced anything yet → a clear error.
         let job = db.jobs().insert(NewJob::new("image")).await.unwrap();
-        assert!(resolve_staged_image(&db, &job.id)
-            .await
-            .unwrap_err()
-            .to_string()
-            .contains("no image output"));
+        assert!(
+            resolve_staged_media(&db, &job.id, &STAGED_IMAGE_EXTS, "image")
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("no image output")
+        );
         // (a job id that resolves to a real output is covered end-to-end in
         // tests/video_job.rs)
     }
@@ -444,5 +533,91 @@ mod tests {
         assert_eq!(resolved.len(), 1);
         assert_eq!(resolved[0].file, "add-detail-xl.safetensors");
         assert_eq!(resolved[0].strength, 0.6);
+    }
+
+    #[tokio::test]
+    async fn stage_video_copies_into_the_input_dir_and_cleans_up_on_drop() {
+        let src_dir = tempfile::tempdir().unwrap();
+        let input_dir = tempfile::tempdir().unwrap();
+        let db = crate::db::Database::connect_in_memory().await.unwrap();
+
+        let source = src_dir.path().join("clip.mp4");
+        std::fs::write(&source, b"pretend mp4 bytes").unwrap();
+
+        let staged_path = {
+            let staged = stage_video(&db, input_dir.path(), "job-123", &source.to_string_lossy())
+                .await
+                .unwrap();
+            assert_eq!(staged.name, "job-123.mp4");
+            let path = input_dir.path().join(&staged.name);
+            assert!(path.is_file(), "copy should exist while staged is alive");
+            path
+        };
+        assert!(
+            !staged_path.is_file(),
+            "dropping the guard removes the copy"
+        );
+    }
+
+    #[tokio::test]
+    async fn stage_video_rejects_an_image_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = crate::db::Database::connect_in_memory().await.unwrap();
+        let png = tmp.path().join("frame.png");
+        std::fs::write(&png, b"x").unwrap();
+
+        let err = stage_video(&db, tmp.path(), "job-1", &png.to_string_lossy())
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("must be a"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn stage_video_from_a_finished_video_job_names_the_kind_in_a_missing_output_error() {
+        use crate::db::{Database, NewJob};
+        let db = Database::connect_in_memory().await.unwrap();
+        let job = db.jobs().insert(NewJob::new("video")).await.unwrap();
+
+        let err = stage_video(&db, Path::new("/tmp/in"), "job-1", &job.id)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("no video output"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn media_kind_classifies_a_job_id_by_its_job_type() {
+        use crate::db::{Database, NewJob};
+        let db = Database::connect_in_memory().await.unwrap();
+        let image_job = db.jobs().insert(NewJob::new("image")).await.unwrap();
+        let video_job = db.jobs().insert(NewJob::new("video")).await.unwrap();
+
+        assert_eq!(
+            media_kind(&db, &image_job.id).await.unwrap(),
+            MediaKind::Image
+        );
+        assert_eq!(
+            media_kind(&db, &video_job.id).await.unwrap(),
+            MediaKind::Video
+        );
+    }
+
+    #[tokio::test]
+    async fn media_kind_classifies_a_bare_path_by_extension_and_defaults_to_image() {
+        let db = crate::db::Database::connect_in_memory().await.unwrap();
+        assert_eq!(
+            media_kind(&db, "C:\\clips\\a.mp4").await.unwrap(),
+            MediaKind::Video
+        );
+        assert_eq!(
+            media_kind(&db, "C:\\shots\\a.png").await.unwrap(),
+            MediaKind::Image
+        );
+        // An unrecognized extension (or none) falls back to image rather than
+        // erroring here -- the actual stage_image/stage_video call still
+        // rejects it with a clear "must be a ... " message.
+        assert_eq!(
+            media_kind(&db, "C:\\mystery\\a.bin").await.unwrap(),
+            MediaKind::Image
+        );
     }
 }
