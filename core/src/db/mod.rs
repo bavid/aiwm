@@ -7,6 +7,7 @@
 mod agents;
 mod bench;
 mod dataset;
+mod datasets;
 mod documents;
 mod downloads;
 mod jobs;
@@ -20,6 +21,7 @@ mod voice_identities;
 pub use agents::{Agent, AgentRepo, AgentSession, AgentSessionEvent, AgentSessionState, NewAgent};
 pub use bench::{BenchRepo, Benchmark, NewBenchmark};
 pub use dataset::{DatasetFrame, DatasetFrameRepo, NewDatasetFrame};
+pub use datasets::{Dataset, DatasetMode, DatasetRepo, NewDataset};
 pub use documents::{Document, DocumentChunk, DocumentRepo, NewDocument};
 pub use downloads::{Download, DownloadRepo, DownloadState, NewDownload};
 pub use jobs::{EventLevel, Job, JobEvent, JobFilter, JobPatch, JobRepo, NewJob};
@@ -155,6 +157,10 @@ impl Database {
 
     pub fn dataset_frames(&self) -> DatasetFrameRepo<'_> {
         DatasetFrameRepo::new(&self.pool)
+    }
+
+    pub fn datasets(&self) -> DatasetRepo<'_> {
+        DatasetRepo::new(&self.pool)
     }
 
     /// Names of the application tables (excludes SQLite internals). Test helper.
