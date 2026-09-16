@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import {
   about,
@@ -206,7 +206,10 @@ function usePolled<T>(key: string, fetcher: () => Promise<T>, intervalMs: number
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key, intervalMs, nonce]);
 
-  const refetch = () => setNonce((n) => n + 1);
+  // Stable across renders: consumers put `refetch` in their own `useCallback`
+  // dep arrays, and a fresh closure here would invalidate those handlers on
+  // every poll tick -- which is what defeats `React.memo` further down.
+  const refetch = useCallback(() => setNonce((n) => n + 1), []);
   return { data, error, refetch };
 }
 

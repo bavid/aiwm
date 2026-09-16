@@ -448,26 +448,32 @@ export function DatasetStudio() {
           </div>
         )}
 
-        {activeDatasetId && view === "grid" && (
-          <ConceptsPanel
-            datasetId={activeDatasetId}
-            concepts={conceptList}
-            onChanged={refetchConceptData}
-          />
+        {activeDatasetId && (
+          <div hidden={view !== "grid"}>
+            <ConceptsPanel
+              datasetId={activeDatasetId}
+              concepts={conceptList}
+              onChanged={refetchConceptData}
+            />
+          </div>
         )}
 
-        {activeDatasetId && view === "learn" && (
-          <LearnSets
-            datasetId={activeDatasetId}
-            frames={frameList}
-            concepts={conceptList}
-            conceptMap={conceptMap ?? {}}
-            imageUrlFor={imageUrlFor}
-            onChanged={() => {
-              refetchConceptData();
-              refetchFrames();
-            }}
-          />
+        {/* Hidden rather than unmounted while the grid is up: the set index,
+            selection, grouping and the concept draft survive a Grid<->Learn
+            round-trip. Keyed by dataset, so switching datasets still resets
+            all of that. */}
+        {activeDatasetId && (
+          <div hidden={view !== "learn"}>
+            <LearnSets
+              key={activeDatasetId}
+              datasetId={activeDatasetId}
+              frames={frameList}
+              concepts={conceptList}
+              conceptMap={conceptMap ?? {}}
+              imageUrlFor={imageUrlFor}
+              onChanged={refetchConceptData}
+            />
+          </div>
         )}
 
         {frameList.length > 0 && view === "grid" && (
