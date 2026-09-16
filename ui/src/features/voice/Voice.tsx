@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { PromptAssistant } from "../../components/PromptAssistant";
 import { QueueList } from "../../components/QueueList";
+import { VoiceIdentityPicker } from "../../components/VoiceIdentityPicker";
 import { useAbout, useJobs, useModels } from "../../lib/hooks";
 import {
   cancelJob,
@@ -104,6 +105,10 @@ export function Voice() {
   const [speed, setSpeed] = useState(PRESETS[0].speed);
   const [activePreset, setActivePreset] = useState<string | null>(PRESETS[0].id);
   const [sendError, setSendError] = useState<string | null>(null);
+  // A saved Dia voice-cloning identity (reference clip + transcript) --
+  // `null` keeps today's free-text, seed-only path (`voice` above). Kokoro
+  // has no equivalent, so this only ever matters while `engine === "dia"`.
+  const [voiceIdentityId, setVoiceIdentityId] = useState<string | null>(null);
   const engineReady = engine === "dia" ? diaReady : kokoroReady;
 
   // Kokoro is imported far more often than Dia, so it's the sane default --
@@ -116,6 +121,7 @@ export function Voice() {
   const selectEngine = (next: NarrateEngine) => {
     setEngineState(next);
     setSendError(null);
+    setVoiceIdentityId(null);
     if (next === "kokoro") {
       applyPreset(PRESETS[0]);
     } else {
@@ -188,8 +194,16 @@ export function Voice() {
         // `speed` has no effect on Dia (it has no rate control) -- sent
         // regardless since the sidecar simply ignores it for that engine,
         // same as the UI hides the slider rather than special-casing the
-        // request body.
-        params: { text: trimmed, engine, voice, speed },
+        // request body. `voice_identity_id` only makes sense for Dia (a
+        // saved reference clip); omitted entirely rather than sent as
+        // `null` when none is picked, or for Kokoro.
+        params: {
+          text: trimmed,
+          engine,
+          voice,
+          speed,
+          ...(engine === "dia" && voiceIdentityId ? { voice_identity_id: voiceIdentityId } : {}),
+        },
       });
       setPendingId(job.id);
       setSelectedId(job.id);
@@ -379,21 +393,37 @@ export function Voice() {
               </label>
             </div>
           ) : (
-            <label className="voiceform__field">
-              <span>Narrator identity</span>
-              <input
-                type="text"
-                value={voice}
-                onChange={(e) => setVoice(e.target.value)}
-                placeholder={DEFAULT_DIA_NARRATOR}
-              />
-              <span className="voice__hint">
-                Dia has no named voices — reusing the same identity (e.g. "gravelly old man")
-                keeps repeat narration sounding like the same speaker. No speed control or
-                freeform mood tags; real sounds like (laughs)/(sighs) work via the assistant
-                above or typed directly.
-              </span>
-            </label>
+            <div className="voiceform__field">
+              <span>Voice</span>
+              <VoiceIdentityPicker value={voiceIdentityId} onChange={setVoiceIdentityId} />
+              {voiceIdentityId ? (
+                <span className="voice__hint">
+                  Cloned from a saved reference clip — a real, chosen voice character, not just
+                  a stable-but-generic seed. No speed control either way; real sounds like
+                  (laughs)/(sighs) work via the assistant above or typed directly.
+                </span>
+              ) : (
+                <>
+                  <label className="voiceform__field">
+                    <span>Narrator identity (free text)</span>
+                    <input
+                      type="text"
+                      value={voice}
+                      onChange={(e) => setVoice(e.target.value)}
+                      placeholder={DEFAULT_DIA_NARRATOR}
+                    />
+                  </label>
+                  <span className="voice__hint">
+                    Dia has no named voices — reusing the same identity (e.g. "gravelly old
+                    man") keeps repeat narration sounding like the same speaker, but it's still
+                    a randomly-sampled voice, not a chosen one. Save a reference clip above (the
+                    "+") for a real voice character. No speed control or freeform mood tags
+                    either way; real sounds like (laughs)/(sighs) work via the assistant above
+                    or typed directly.
+                  </span>
+                </>
+              )}
+            </div>
           )}
 
           <button type="submit" className="voiceform__go" disabled={!canGenerate}>

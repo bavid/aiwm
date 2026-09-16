@@ -18,6 +18,7 @@ import {
   listDownloads,
   listModels,
   listSessions,
+  listVoiceIdentities,
   localApiStatus,
   modelTags,
   registrySearch,
@@ -46,6 +47,7 @@ import {
   type Session,
   type SessionCapability,
   type SystemTelemetry,
+  type VoiceIdentity,
 } from "./ipc";
 
 /** Live telemetry: seeded by one `get_telemetry` call, then updated by the
@@ -209,6 +211,11 @@ export function usePinnedModels() {
 /** Sessions for one capability (Chat/Image/Video "projects"), active first. */
 export const useSessions = (capability: SessionCapability) =>
   usePolled<Session[]>(`sessions:${capability}`, () => listSessions(capability), 3000);
+
+/** Saved Dia voice-cloning identities (Voice tab) — set up once, reused by
+ *  name across many narration calls. */
+export const useVoiceIdentities = () =>
+  usePolled<VoiceIdentity[]>("voice-identities", listVoiceIdentities, 4000);
 
 /** Debounced Hugging Face search for the Discover panel. Runs when `params`
  *  change (400 ms after the last one) and `enabled`; not polled. */

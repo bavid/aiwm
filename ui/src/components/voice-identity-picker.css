@@ -1,0 +1,111 @@
+.voice-identity-picker {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.voice-identity-picker select {
+  flex: 1;
+  min-width: 0;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--text-sm);
+}
+
+.voice-identity-picker__icon {
+  padding: 1px var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  line-height: 1.6;
+  flex-shrink: 0;
+}
+
+.voice-identity-picker__icon:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.voice-identity-picker__icon--danger:hover {
+  color: var(--load-crit);
+  border-color: color-mix(in oklab, var(--load-crit) 40%, var(--border));
+}
+
+.voice-identity-picker--editing {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+
+.voice-identity-picker__field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.voice-identity-picker__field > span {
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.voice-identity-picker__field input,
+.voice-identity-picker__field textarea {
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-1);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--text-sm);
+}
+
+.voice-identity-picker__browse {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.voice-identity-picker__browse input {
+  flex: 1;
+  min-width: 0;
+}
+
+.voice-identity-picker__browse .chip {
+  flex-shrink: 0;
+}
+
+.voice-identity-picker__err {
+  margin: 0;
+  color: var(--load-crit);
+  font-size: var(--text-xs);
+}
+
+.voice-identity-picker__actions {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.voice-identity-picker__cancel {
+  padding: var(--space-2) var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.voice-identity-picker__cancel:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}

@@ -74,6 +74,24 @@ const SESSIONS: AnyRecord[] = [
 
 const DOCUMENTS: AnyRecord[] = [];
 
+function mkVoiceIdentity(id: string, name: string, transcript: string): AnyRecord {
+  return {
+    id,
+    name,
+    reference_audio_path: `E:\\AI\\data\\voice-identities\\${id}\\reference.wav`,
+    reference_transcript: transcript,
+    created_at: now(),
+  };
+}
+
+const VOICE_IDENTITIES: AnyRecord[] = [
+  mkVoiceIdentity(
+    "vi-gareth",
+    "Old Man Gareth",
+    "Well now, I've seen stranger things wash up on this shore, believe you me.",
+  ),
+];
+
 const RUNTIMES: AnyRecord[] = [
   {
     id: "llamacpp", kind: "llama_cpp", health: "healthy", vram_used_mb: 6400,
@@ -728,6 +746,23 @@ export function installDevMock(): void {
       case "delete_document": {
         const i = DOCUMENTS.findIndex((d) => d.id === a.id);
         if (i >= 0) DOCUMENTS.splice(i, 1);
+        return null;
+      }
+      case "list_voice_identities":
+        return VOICE_IDENTITIES.map((v) => ({ ...v }));
+      case "create_voice_identity": {
+        const body = (a.body ?? {}) as AnyRecord;
+        const name = String(body.name ?? "").trim();
+        const transcript = String(body.reference_transcript ?? "").trim();
+        if (!name) throw new Error("voice identity name must not be empty");
+        if (!transcript) throw new Error("reference transcript must not be empty");
+        const identity = mkVoiceIdentity(`vi-dev-${seq++}`, name, transcript);
+        VOICE_IDENTITIES.unshift(identity);
+        return identity;
+      }
+      case "delete_voice_identity": {
+        const i = VOICE_IDENTITIES.findIndex((v) => v.id === a.id);
+        if (i >= 0) VOICE_IDENTITIES.splice(i, 1);
         return null;
       }
       case "storage_report": {

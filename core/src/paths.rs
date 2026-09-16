@@ -155,6 +155,14 @@ impl AppPaths {
         self.local_root.join(".downloads")
     }
 
+    /// Where saved Dia voice-cloning identities' reference clips live, one
+    /// subdirectory per identity — the file a user picks in the Voice tab is
+    /// copied here once on creation ([`crate::voice_identity`]), never kept
+    /// referencing its original location on disk.
+    pub fn voice_identities_dir(&self) -> PathBuf {
+        self.local_root.join("voice-identities")
+    }
+
     /// Optional Hugging Face token (6.9) — a bare file, machine-local only so
     /// it is **never roamed and never in a backup export** (ADR-022).
     pub fn hf_token_file(&self) -> PathBuf {
@@ -238,6 +246,8 @@ mod tests {
         assert!(p.runtimes_dir().ends_with("runtimes"));
         assert!(p.comfyui_data_dir().ends_with("comfyui-data"));
         assert!(p.outputs_dir().ends_with("outputs"));
+        assert!(p.voice_identities_dir().ends_with("voice-identities"));
+        assert!(p.voice_identities_dir().starts_with(p.root()));
         assert!(p.local_api_token_file().ends_with("local_api_token.txt"));
         assert!(p.local_api_token_file().starts_with(p.root()));
         assert!(p.config_file().starts_with(p.root()));
