@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import type { DatasetFrame } from "../../lib/ipc";
 import { countByReason, REJECTION_REASONS } from "./rejection";
 
@@ -11,7 +12,9 @@ type Props = {
  *  hidden so a clean run shows a single chip — except "Kept", which stays
  *  visible as the default even at zero. */
 export function RejectionChips({ frames, active, onSelect }: Props) {
-  const counts = countByReason(frames);
+  // One pass over the whole curation set, re-run only when the frames change --
+  // not on every keystroke elsewhere in the tab.
+  const counts = useMemo(() => countByReason(frames), [frames]);
   const shown = REJECTION_REASONS.filter((r) => r.value === "" || (counts[r.value] ?? 0) > 0);
 
   return (

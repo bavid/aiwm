@@ -25,7 +25,19 @@ export function FrameCard({
   onRestore,
 }: Props) {
   const [caption, setCaption] = useState(frame.caption);
-  useEffect(() => setCaption(frame.caption), [frame.caption]);
+  // The frame list is polled every 3s. Re-syncing the textarea from the server
+  // copy unconditionally would wipe whatever the curator is typing the moment a
+  // tick lands, so an unsaved draft wins until it is committed on blur.
+  const [isDirty, setIsDirty] = useState(false);
+  useEffect(() => {
+    if (isDirty) return;
+    setCaption(frame.caption);
+  }, [frame.caption, isDirty]);
+
+  const commitCaption = () => {
+    setIsDirty(false);
+    onCaptionCommit(caption);
+  };
 
   const captionId = useId();
   const isRejected = frame.rejection_reason !== "";
@@ -33,7 +45,9 @@ export function FrameCard({
   return (
     <div className="framecard" data-excluded={frame.excluded} data-rejected={isRejected}>
       <div className="framecard__thumb">
-        {imageUrl && <img src={imageUrl} alt="" loading="lazy" />}
+        {/* The frame is the content here, not decoration -- name it with its
+            caption, falling back to the folder tag before it is captioned. */}
+        {imageUrl && <img src={imageUrl} alt={frame.caption || frame.tag} loading="lazy" />}
         <label className="framecard__select" title="Select for concept assignment">
           <input type="checkbox" checked={isSelected} onChange={onToggleSelected} />
           <span className="framecard__select-label">Select</span>
@@ -71,8 +85,11 @@ export function FrameCard({
       <textarea
         id={captionId}
         value={caption}
-        onChange={(e) => setCaption(e.target.value)}
-        onBlur={() => onCaptionCommit(caption)}
+        onChange={(e) => {
+          setIsDirty(true);
+          setCaption(e.target.value);
+        }}
+        onBlur={commitCaption}
         rows={2}
       />
 

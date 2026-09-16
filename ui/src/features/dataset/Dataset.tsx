@@ -1,4 +1,4 @@
-import { useEffect, useId, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import {
   useAbout,
@@ -107,10 +107,17 @@ export function DatasetStudio() {
   const [detail, setDetail] = useState<JobDetail | null>(null);
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
   const [filter, setFilter] = useState("");
-  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [selectedIds, setSelectedIds] = useState<ReadonlySet<string>>(() => new Set());
   const [assignConceptId, setAssignConceptId] = useState("");
   const [assignState, setAssignState] = useState<AssignState>({ kind: "idle" });
   const [triggerDraft, setTriggerDraft] = useState<string | null>(null);
+  /** Failures from the per-card actions (restore / exclude / caption) and from
+   *  Cancel, shown above the grid -- these used to reject silently. */
+  const [gridError, setGridError] = useState<string | null>(null);
+  // The trigger word commits on Enter and on blur (click-away-to-save); this
+  // guards against both firing for the same edit -- Enter moves focus off the
+  // input, which would otherwise blur-commit a second time.
+  const triggerSettled = useRef(false);
 
   // --- export -----------------------------------------------------------
   const [destDir, setDestDir] = useState("");
@@ -124,8 +131,14 @@ export function DatasetStudio() {
 
   const frameList = useMemo(() => frames ?? [], [frames]);
   const conceptList = useMemo(() => concepts ?? [], [concepts]);
-  const keptCount = frameList.filter((f) => f.rejection_reason === "" && !f.excluded).length;
-  const shownFrames = frameList.filter((f) => f.rejection_reason === filter);
+  const keptCount = useMemo(
+    () => frameList.filter((f) => f.rejection_reason === "" && !f.excluded).length,
+    [frameList],
+  );
+  const shownFrames = useMemo(
+    () => frameList.filter((f) => f.rejection_reason === filter),
+    [frameList, filter],
+  );
 
   // The live status of the run that produced (or is producing) this dataset.
   const liveJobId = activeDataset?.prep_job_id ?? pendingJobId;
@@ -145,6 +158,7 @@ export function DatasetStudio() {
   const captionerSelectId = useId();
   const triggerId = useId();
   const orderId = useId();
+  const destDirId = useId();
   const assignSelectId = useId();
 
   // Land on the newest dataset when the tab opens, unless a freshly submitted
@@ -196,10 +210,21 @@ export function DatasetStudio() {
     setDetail(null);
     setVisibleCount(PAGE_SIZE);
     setFilter("");
-    setSelectedIds([]);
+    setSelectedIds(new Set());
     setAssignState({ kind: "idle" });
     setTriggerDraft(null);
+    triggerSettled.current = false;
+    setGridError(null);
     setExportState({ kind: "idle" });
+  };
+
+  /** Switching the verdict filter swaps the visible cards out from under the
+   *  selection, so a stale pick cannot linger invisibly in the toolbar. */
+  const selectFilter = (reason: string) => {
+    setFilter(reason);
+    setVisibleCount(PAGE_SIZE);
+    setSelectedIds(new Set());
+    setAssignState({ kind: "idle" });
   };
 
   const start = async () => {
@@ -229,7 +254,8 @@ export function DatasetStudio() {
       setDetail(null);
       setVisibleCount(PAGE_SIZE);
       setFilter("");
-      setSelectedIds([]);
+      setSelectedIds(new Set());
+      setGridError(null);
       setExportState({ kind: "idle" });
       refetchJobs();
       refetchDatasets();
@@ -240,56 +266,84 @@ export function DatasetStudio() {
 
   const cancel = async () => {
     if (!liveJobId) return;
-    await cancelJob(liveJobId);
+    setGridError(null);
+    try {
+      await cancelJob(liveJobId);
+    } catch (e) {
+      setGridError(`Could not cancel the run: ${e}`);
+    }
   };
 
+  /** Commits on Enter and on blur; `triggerSettled` keeps the pair from
+   *  writing twice. The draft is only dropped once the write succeeded, so a
+   *  failure leaves the curator's text in the field to retry. */
   const commitTrigger = async () => {
+    if (triggerSettled.current) return;
+    triggerSettled.current = true;
     if (!activeDataset || triggerDraft === null) return;
     const next = triggerDraft.trim();
-    setTriggerDraft(null);
-    if (next === activeDataset.trigger_word) return;
+    if (next === activeDataset.trigger_word) {
+      setTriggerDraft(null);
+      return;
+    }
     try {
       await updateDataset(activeDataset.id, { trigger_word: next });
+      setTriggerDraft(null);
       refetchDatasets();
     } catch (e) {
-      setSendError(String(e));
+      setGridError(`Could not save the trigger word: ${e}`);
     }
   };
 
   const editCaption = async (frame: DatasetFrame, caption: string) => {
     if (caption === frame.caption) return;
-    await updateDatasetFrame(frame.id, { caption });
-    refetchFrames();
+    try {
+      await updateDatasetFrame(frame.id, { caption });
+      refetchFrames();
+    } catch (e) {
+      setGridError(`Could not save the caption: ${e}`);
+    }
   };
 
   const toggleExcluded = async (frame: DatasetFrame) => {
-    await updateDatasetFrame(frame.id, { excluded: !frame.excluded });
-    refetchFrames();
+    try {
+      await updateDatasetFrame(frame.id, { excluded: !frame.excluded });
+      refetchFrames();
+    } catch (e) {
+      setGridError(`Could not change the exclude flag: ${e}`);
+    }
   };
 
   const restore = async (frame: DatasetFrame) => {
-    await updateDatasetFrame(frame.id, { restore: true });
-    refetchFrames();
+    try {
+      await updateDatasetFrame(frame.id, { restore: true });
+      refetchFrames();
+    } catch (e) {
+      setGridError(`Could not restore the frame: ${e}`);
+    }
   };
 
   const toggleSelected = (frameId: string) => {
-    setSelectedIds((cur) =>
-      cur.includes(frameId) ? cur.filter((id) => id !== frameId) : [...cur, frameId],
-    );
+    setSelectedIds((cur) => {
+      const next = new Set(cur);
+      if (!next.delete(frameId)) next.add(frameId);
+      return next;
+    });
   };
 
   const runAssign = async (attach: boolean) => {
-    if (!assignConceptId || selectedIds.length === 0) return;
+    if (!assignConceptId || selectedIds.size === 0) return;
+    const ids = [...selectedIds];
     try {
       if (attach) {
-        const summary = await assignConcept(assignConceptId, selectedIds);
+        const summary = await assignConcept(assignConceptId, ids);
         setAssignState({
           kind: "done",
           text: `${summary.attached} of ${summary.requested} assigned`,
         });
       } else {
-        await unassignConcept(assignConceptId, selectedIds);
-        setAssignState({ kind: "done", text: `${selectedIds.length} removed` });
+        await unassignConcept(assignConceptId, ids);
+        setAssignState({ kind: "done", text: `${ids.length} removed` });
       }
       refetchConcepts();
       refetchConceptMap();
@@ -566,7 +620,17 @@ export function DatasetStudio() {
                   id={triggerId}
                   type="text"
                   value={triggerValue}
-                  onChange={(e) => setTriggerDraft(e.target.value)}
+                  onChange={(e) => {
+                    triggerSettled.current = false;
+                    setTriggerDraft(e.target.value);
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      commitTrigger();
+                      e.currentTarget.blur();
+                    }
+                  }}
                   onBlur={commitTrigger}
                   placeholder="ghibli_xy"
                 />
@@ -594,19 +658,17 @@ export function DatasetStudio() {
 
         {frameList.length > 0 && (
           <>
-            <RejectionChips
-              frames={frameList}
-              active={filter}
-              onSelect={(reason) => {
-                setFilter(reason);
-                setVisibleCount(PAGE_SIZE);
-              }}
-            />
+            <RejectionChips frames={frameList} active={filter} onSelect={selectFilter} />
 
-            {selectedIds.length > 0 && (
+            {gridError && <p className="dataset__err">{gridError}</p>}
+
+            {selectedIds.size > 0 && (
               <div className="card dataset__toolbar">
-                <span className="dataset__toolbar-count">{selectedIds.length} selected</span>
-                <label className="datasetform__field--inline" htmlFor={assignSelectId}>
+                <span className="dataset__toolbar-count">{selectedIds.size} selected</span>
+                <label
+                  className="datasetform__field datasetform__field--inline"
+                  htmlFor={assignSelectId}
+                >
                   <span className="dataset__toolbar-label">Concept</span>
                   <select
                     id={assignSelectId}
@@ -637,7 +699,7 @@ export function DatasetStudio() {
                 >
                   Remove from concept
                 </button>
-                <button type="button" className="chip" onClick={() => setSelectedIds([])}>
+                <button type="button" className="chip" onClick={() => setSelectedIds(new Set())}>
                   Clear selection
                 </button>
                 {assignState.kind === "done" && (
@@ -655,7 +717,7 @@ export function DatasetStudio() {
                   key={frame.id}
                   frame={frame}
                   imageUrl={about ? frameImageUrl(about.core_api_port, frame) : ""}
-                  isSelected={selectedIds.includes(frame.id)}
+                  isSelected={selectedIds.has(frame.id)}
                   conceptTokens={(conceptMap?.[frame.id] ?? [])
                     .map((id) => tokenByConceptId[id])
                     .filter((t): t is string => !!t)}
@@ -678,17 +740,21 @@ export function DatasetStudio() {
 
             <div className="card dataset__export">
               <h3>Export</h3>
-              <div className="datasetform__row">
-                <input
-                  type="text"
-                  value={destDir}
-                  onChange={(e) => setDestDir(e.target.value)}
-                  placeholder="Where to write NNNN.png + NNNN.txt pairs"
-                />
-                <button type="button" className="chip" onClick={() => browseInto(setDestDir)}>
-                  Browse…
-                </button>
-              </div>
+              <label className="datasetform__field" htmlFor={destDirId}>
+                <span>Destination folder</span>
+                <div className="datasetform__row">
+                  <input
+                    id={destDirId}
+                    type="text"
+                    value={destDir}
+                    onChange={(e) => setDestDir(e.target.value)}
+                    placeholder="Where to write NNNN.png + NNNN.txt pairs"
+                  />
+                  <button type="button" className="chip" onClick={() => browseInto(setDestDir)}>
+                    Browse…
+                  </button>
+                </div>
+              </label>
               <label className="datasetform__field datasetform__field--inline" htmlFor={orderId}>
                 <span>Caption order</span>
                 <select
