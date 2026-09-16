@@ -92,11 +92,11 @@ export function StoryPicker({
           placeholder="Art style"
           spellCheck={false}
         />
-        <input
+        <textarea
           value={draft.premise}
           onChange={(e) => setDraft({ ...draft, premise: e.target.value })}
-          placeholder="Premise"
-          spellCheck={false}
+          placeholder="Premise -- a paragraph or two about what this story is about"
+          rows={3}
         />
         <button type="button" className="story-picker__save" onClick={save} disabled={!draft.name.trim()}>
           Save

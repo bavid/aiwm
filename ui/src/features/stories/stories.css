@@ -80,6 +80,18 @@
   min-width: 160px;
 }
 
+.story-picker--editing textarea {
+  flex: 1 1 100%;
+  padding: var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  min-height: 4.5em;
+  resize: vertical;
+}
+
 .story-picker__icon {
   width: 30px;
   height: 30px;
