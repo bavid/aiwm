@@ -28,7 +28,10 @@ for Dia.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
+
+if TYPE_CHECKING:
+    import numpy as np
 
 
 def _vision_value_error(message: str) -> ValueError:
@@ -256,3 +259,118 @@ def caption_frame_pair(params: dict[str, Any]) -> dict[str, Any]:
     if not caption:
         raise _vision_value_error("Qwen2.5-VL returned an empty caption")
     return {"caption": caption, "engine": "qwen2.5-vl"}
+
+
+# --- WD Danbooru tagger (SmilingWolf, Apache-2.0) ---------------------------
+#
+# A 0.3B ONNX classifier over the Danbooru tag vocabulary. Runs on the CPU
+# via onnxruntime; no torch involved. Input contract (from the reference
+# tagger implementations for the v3 models): 448x448, BGR, float32 0..255,
+# NHWC; outputs are sigmoid probabilities in `selected_tags.csv` row order.
+# Confirmed against the real wd-eva02-tagger-v3 `model.onnx` (1,260,435,999
+# bytes): input name "input", shape ['batch_size', 448, 448, 3], dtype
+# tensor(float) -- matches the assumed NHWC/float32 contract exactly.
+
+_WD_DEFAULT_THRESHOLD = 0.35
+_WD_RATING_CATEGORY = 9
+_WD_CHARACTER_CATEGORY = 4
+_WD_GENERAL_CATEGORY = 0
+
+
+def _wd_preprocess(image_path: str, size: int) -> np.ndarray:
+    import numpy as np
+    from PIL import Image
+
+    image = Image.open(image_path).convert("RGBA")
+    # White background (Danbooru images are padded on white), square pad.
+    canvas = Image.new("RGBA", image.size, (255, 255, 255, 255))
+    canvas.alpha_composite(image)
+    rgb = canvas.convert("RGB")
+    w, h = rgb.size
+    side = max(w, h)
+    square = Image.new("RGB", (side, side), (255, 255, 255))
+    square.paste(rgb, ((side - w) // 2, (side - h) // 2))
+    resized = square.resize((size, size), Image.Resampling.BICUBIC)
+    arr = np.asarray(resized, dtype=np.float32)[:, :, ::-1]  # RGB -> BGR
+    return np.expand_dims(arr, 0)
+
+
+class _WdTaggerEngine:
+    def __init__(
+        self, session: Any, tag_names: list[str], categories: list[int], size: int
+    ) -> None:
+        self._session = session
+        self.tag_names = tag_names
+        self.categories = categories
+        self._size = size
+        self._input_name = session.get_inputs()[0].name
+
+    def predict(self, image_path: str) -> np.ndarray:
+        batch = _wd_preprocess(image_path, self._size)
+        outputs = self._session.run(None, {self._input_name: batch})
+        return outputs[0][0]
+
+
+_wd_tagger_cache: dict[str, _WdTaggerEngine] = {}
+
+
+def _construct_wd_tagger(model_dir: str) -> _WdTaggerEngine:
+    import csv
+
+    import onnxruntime as ort
+
+    model_path = Path(model_dir) / "model.onnx"
+    tags_path = Path(model_dir) / "selected_tags.csv"
+    _require_existing_file(str(model_path), "WD tagger model")
+    _require_existing_file(str(tags_path), "WD tagger tag list")
+
+    session = ort.InferenceSession(str(model_path), providers=["CPUExecutionProvider"])
+    size = int(session.get_inputs()[0].shape[1])  # NHWC: [1, H, W, 3]
+    tag_names: list[str] = []
+    categories: list[int] = []
+    with tags_path.open(encoding="utf-8", newline="") as fh:
+        for row in csv.DictReader(fh):
+            tag_names.append(row["name"])
+            categories.append(int(row["category"]))
+    return _WdTaggerEngine(session, tag_names, categories, size)
+
+
+def _load_wd_tagger(model_dir: str) -> _WdTaggerEngine:
+    if model_dir not in _wd_tagger_cache:
+        _wd_tagger_cache[model_dir] = _construct_wd_tagger(model_dir)
+    return _wd_tagger_cache[model_dir]
+
+
+def tag_frame(params: dict[str, Any]) -> dict[str, Any]:
+    """WD tagger, single image. JSON-RPC `tag_frame`. Returns the general +
+    character tags above `threshold` as one comma-separated caption (Danbooru
+    underscores become spaces), plus the top rating tag separately."""
+    image_path = str(params.get("image_path") or "")
+    model_dir = str(params.get("model_dir") or "")
+    threshold = float(params.get("threshold") or _WD_DEFAULT_THRESHOLD)
+    if not image_path:
+        raise _vision_value_error("`image_path` is required")
+    if not model_dir:
+        raise _vision_value_error("`model_dir` is required")
+    _require_existing_file(image_path, "image")
+    _require_dir(model_dir, "WD tagger model")
+
+    engine = _load_wd_tagger(model_dir)
+    probs = engine.predict(image_path)
+
+    rating = ""
+    rating_prob = -1.0
+    tags: list[str] = []
+    for name, category, prob in zip(engine.tag_names, engine.categories, probs, strict=True):
+        p = float(prob)
+        if category == _WD_RATING_CATEGORY:
+            if p > rating_prob:
+                rating, rating_prob = name, p
+        elif category in (_WD_CHARACTER_CATEGORY, _WD_GENERAL_CATEGORY) and p >= threshold:
+            tags.append(name.replace("_", " "))
+    return {
+        "caption": ", ".join(tags),
+        "rating": rating,
+        "threshold": threshold,
+        "engine": "wd-eva02-tagger-v3",
+    }

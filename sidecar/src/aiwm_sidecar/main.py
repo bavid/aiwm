@@ -30,6 +30,7 @@ CAPABILITIES: list[str] = [
     "clean_audio",
     "caption_frame",
     "caption_frame_pair",
+    "tag_frame",
 ]
 
 _METHOD_NOT_FOUND = -32601
@@ -351,6 +352,15 @@ def handle(req: dict[str, Any]) -> dict[str, Any] | None:
             return _error(req_id, _INVALID_PARAMS, str(e))
         except Exception as e:  # pragma: no cover - unexpected engine failure
             return _error(req_id, _INTERNAL_ERROR, f"captioning failed: {e}")
+    elif method == "tag_frame":
+        from aiwm_sidecar.vision import tag_frame
+
+        try:
+            result = tag_frame(params)
+        except ValueError as e:
+            return _error(req_id, _INVALID_PARAMS, str(e))
+        except Exception as e:  # pragma: no cover - unexpected engine failure
+            return _error(req_id, _INTERNAL_ERROR, f"tagging failed: {e}")
     elif method in _PLANNED:
         return _error(req_id, _NOT_IMPLEMENTED, f"{method} is not implemented yet")
     else:
