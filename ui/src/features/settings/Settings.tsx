@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
-import { useAbout, useLocalApiStatus, useRegistryStatus } from "../../lib/hooks";
+import { useAbout, useCivitaiStatus, useLocalApiStatus, useRegistryStatus } from "../../lib/hooks";
 import {
   getConfig,
   saveConfig,
+  setCivitaiToken,
   setHfToken,
   setLocalApiToken,
   type AppConfig,
@@ -488,6 +489,8 @@ export function Settings() {
             <>
               <HuggingFaceCard />
 
+              <CivitaiCard />
+
               <LocalApiCard />
 
               <section className="card set-group">
@@ -594,6 +597,72 @@ function HuggingFaceCard() {
             disabled={busy}
             onClick={() => save("")}
           >
+            Clear
+          </button>
+        )}
+        {msg && <span className="muted">{msg}</span>}
+      </div>
+    </section>
+  );
+}
+
+/** Optional Civitai API key — for gated/early-access content and higher rate
+ *  limits; anonymous browsing works without one. Same machine-local,
+ *  never-in-a-backup, restart-to-apply treatment as [`HuggingFaceCard`]. */
+function CivitaiCard() {
+  const { data: status } = useCivitaiStatus();
+  const [value, setValue] = useState("");
+  const [msg, setMsg] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const save = async (token: string) => {
+    setBusy(true);
+    setMsg(null);
+    try {
+      await setCivitaiToken(token);
+      setValue("");
+      setMsg(
+        token.trim()
+          ? "Token saved — restart the app to use it."
+          : "Token cleared — restart to apply.",
+      );
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <section className="card set-group">
+      <header className="card__head">
+        <h2>Civitai</h2>
+        <span className="card__sub">restart to apply</span>
+      </header>
+      <label className="set-field">
+        <span>
+          API key — optional, only for <strong>gated/early-access</strong> content or if you
+          hit the anonymous rate limit. Stored on this machine only (never in a backup).
+          Currently: <strong>{status?.token_set ? "set" : "not set"}</strong>.
+        </span>
+        <input
+          type="password"
+          value={value}
+          placeholder={status?.token_set ? "•••••••• (leave blank to keep)" : "civitai key…"}
+          spellCheck={false}
+          autoComplete="off"
+          onChange={(e) => {
+            setValue(e.target.value);
+            setMsg(null);
+          }}
+        />
+      </label>
+      <div className="rt-setup">
+        <button type="button" disabled={busy || !value.trim()} onClick={() => save(value)}>
+          {busy ? "Saving…" : "Save token"}
+        </button>
+        {status?.token_set && (
+          <button type="button" disabled={busy} onClick={() => save("")}>
             Clear
           </button>
         )}

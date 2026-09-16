@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
-import { useModels, useRegistrySearch } from "../../lib/hooks";
+import { useCivitaiSearch, useModels, useRegistrySearch } from "../../lib/hooks";
 import {
   cancelJob,
+  civitaiModel,
   enqueueDownload,
   jobDetail,
   registryModel,
   submitJob,
+  type CivitaiSearchParams,
   type FitVerdict,
   type Freshness,
   type JobState,
@@ -19,6 +21,15 @@ import {
   type RemoteModel,
 } from "../../lib/ipc";
 import { filterDisplayTags } from "../../lib/tags";
+
+/** Which Discover source is active. Civitai has no "ask my local model"
+ *  ranking integration (yet) — that toggle only ever applies to the Hugging
+ *  Face source. */
+type DiscoverSource = "huggingface" | "civitai";
+const SOURCES: { value: DiscoverSource; label: string }[] = [
+  { value: "huggingface", label: "Hugging Face" },
+  { value: "civitai", label: "Civitai" },
+];
 
 const RECENT_KEY = "aiwm.discover.recent";
 
@@ -96,12 +107,12 @@ function fitTitle(fit: FitVerdict, vramMb: number | null): string {
   return `${fit.reason}${est}`;
 }
 
-function freshnessNote(f: Freshness): string | null {
+function freshnessNote(f: Freshness, sourceLabel = "Hugging Face"): string | null {
   if (f.kind === "live") return null;
   const mins = Math.max(1, Math.round(f.age_secs / 60));
   return f.kind === "offline"
     ? `Offline — showing a cached result from ~${mins} min ago.`
-    : `Hugging Face was unreachable — showing a cached result from ~${mins} min ago.`;
+    : `${sourceLabel} was unreachable — showing a cached result from ~${mins} min ago.`;
 }
 
 /** The user's chosen kind is a far better signal than the file format alone
@@ -135,30 +146,55 @@ function rolesFor(kind: RecommendKind): string[] | undefined {
  *  to be two separate pages; splitting "search Hugging Face" into two nav
  *  entries was more surface area than the difference was worth. */
 export function Discover({ onUseType }: { onUseType: (t: ModelType) => void }) {
+  const [source, setSource] = useState<DiscoverSource>("huggingface");
   const [aiMode, setAiMode] = useState(false);
   const [query, setQuery] = useState("");
+
+  const subtitle =
+    source === "civitai"
+      ? "search Civitai · download in your browser, then import above"
+      : aiMode
+        ? "your local model ranks & explains the results"
+        : "search Hugging Face · download in your browser, then import above";
 
   return (
     <section className="card card--wide">
       <header className="card__head">
         <h2>Discover models</h2>
-        <span className="card__sub">
-          {aiMode
-            ? "your local model ranks & explains the results"
-            : "search Hugging Face · download in your browser, then import above"}
-        </span>
+        <span className="card__sub">{subtitle}</span>
       </header>
 
-      <label className="chip discover__aitoggle">
-        <input type="checkbox" checked={aiMode} onChange={(e) => setAiMode(e.target.checked)} />
-        Ask my local model to rank &amp; explain
-      </label>
+      <div className="catalog__tabs" role="tablist" aria-label="Discover source">
+        {SOURCES.map((s) => (
+          <button
+            key={s.value}
+            type="button"
+            role="tab"
+            aria-selected={source === s.value}
+            className={`chip ${source === s.value ? "chip--on" : ""}`}
+            onClick={() => setSource(s.value)}
+          >
+            {s.label}
+          </button>
+        ))}
+      </div>
 
-      {aiMode ? (
-        <AiSearch query={query} setQuery={setQuery} />
-      ) : (
-        <PlainSearch query={query} setQuery={setQuery} onUseType={onUseType} />
+      {source === "huggingface" && (
+        <>
+          <label className="chip discover__aitoggle">
+            <input type="checkbox" checked={aiMode} onChange={(e) => setAiMode(e.target.checked)} />
+            Ask my local model to rank &amp; explain
+          </label>
+
+          {aiMode ? (
+            <AiSearch query={query} setQuery={setQuery} />
+          ) : (
+            <PlainSearch query={query} setQuery={setQuery} onUseType={onUseType} />
+          )}
+        </>
       )}
+
+      {source === "civitai" && <CivitaiSearch onUseType={onUseType} />}
     </section>
   );
 }
@@ -397,6 +433,210 @@ function AiSearch({ query, setQuery }: { query: string; setQuery: (q: string) =>
   );
 }
 
+const CIVITAI_TYPES: { value: string; label: string }[] = [
+  { value: "Checkpoint", label: "Checkpoints" },
+  { value: "LORA", label: "LoRAs" },
+];
+
+const CIVITAI_SORTS: { value: NonNullable<CivitaiSearchParams["sort"]>; label: string }[] = [
+  { value: "downloads", label: "Most downloaded" },
+  { value: "likes", label: "Highest rated" },
+  { value: "trending", label: "Trending" },
+  { value: "new", label: "Newest" },
+];
+
+/** Civitai's own `type` (`model_kind_hint`) is a far better signal than the
+ *  generic `format` guess `importTypeFor` uses for Hugging Face — Civitai
+ *  explicitly labels Checkpoint vs LoRA, which `format` alone can't tell
+ *  apart. Falls back to `importTypeFor` for a type Civitai has that AIWM
+ *  doesn't specifically handle. */
+function civitaiModelType(hint: string | null, format: RemoteModel["format"]): ModelType {
+  switch (hint) {
+    case "LORA":
+      return "lora";
+    case "Checkpoint":
+      return format === "gguf" ? "diffusion_model" : "checkpoint";
+    default:
+      return importTypeFor(format);
+  }
+}
+
+/** The Civitai side of Discover: its own filters (a type toggle instead of
+ *  "GGUF only", an explicit NSFW opt-in instead of nothing) against its own
+ *  search endpoint. No "ask my local model" mode — that ranking job only
+ *  understands the Hugging Face registry today. */
+function CivitaiSearch({ onUseType }: { onUseType: (t: ModelType) => void }) {
+  const [query, setQuery] = useState("");
+  const [types, setTypes] = useState<string[]>(["Checkpoint", "LORA"]);
+  const [sort, setSort] = useState<NonNullable<CivitaiSearchParams["sort"]>>("downloads");
+  // Off by default -- Civitai is an open, anonymous-upload platform where
+  // NSFW content is common and explicitly tagged, unlike Hugging Face. The
+  // user must tick this themselves to see it.
+  const [nsfw, setNsfw] = useState(false);
+
+  const trimmed = query.trim();
+  const searchParams = useMemo<CivitaiSearchParams>(
+    () => ({ q: trimmed || undefined, types, sort, nsfw, limit: 20 }),
+    [trimmed, types, sort, nsfw],
+  );
+  const { result, error, loading } = useCivitaiSearch(searchParams, true);
+  const note = result ? freshnessNote(result.freshness, "Civitai") : null;
+
+  const toggleType = (t: string) =>
+    setTypes((prev) => (prev.includes(t) ? prev.filter((x) => x !== t) : [...prev, t]));
+
+  return (
+    <>
+      <div className="discover__controls">
+        <input
+          type="text"
+          className="discover__search"
+          value={query}
+          placeholder="pony, realistic, anime style…"
+          spellCheck={false}
+          onChange={(e) => setQuery(e.target.value)}
+        />
+        {CIVITAI_TYPES.map((t) => (
+          <label key={t.value} className="chip">
+            <input
+              type="checkbox"
+              checked={types.includes(t.value)}
+              onChange={() => toggleType(t.value)}
+            />
+            {t.label}
+          </label>
+        ))}
+        <select value={sort} onChange={(e) => setSort(e.target.value as typeof sort)}>
+          {CIVITAI_SORTS.map((s) => (
+            <option key={s.value} value={s.value}>
+              {s.label}
+            </option>
+          ))}
+        </select>
+        <label
+          className="chip"
+          title="Off by default — Civitai is an open upload platform where NSFW content is common, unlike Hugging Face"
+        >
+          <input type="checkbox" checked={nsfw} onChange={(e) => setNsfw(e.target.checked)} />
+          Show NSFW
+        </label>
+      </div>
+
+      {loading && !result && <p className="muted">Searching…</p>}
+      {error && <p className="import__err">{error}</p>}
+      {note && <p className="discover__stale">{note}</p>}
+      {types.length === 0 && (
+        <p className="muted">Pick at least one type (Checkpoints / LoRAs) to search.</p>
+      )}
+      {result && result.data.length === 0 && !loading && types.length > 0 && (
+        <p className="muted">No models match — try a broader term or turn on “Show NSFW”.</p>
+      )}
+
+      <ul className="discover__results">
+        {result?.data.map((m) => (
+          <CivitaiResultCard key={m.id} model={m} onUseType={onUseType} />
+        ))}
+      </ul>
+    </>
+  );
+}
+
+function CivitaiResultCard({
+  model,
+  onUseType,
+}: {
+  model: RemoteModel;
+  onUseType: (t: ModelType) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [details, setDetails] = useState<RegistryDetails | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const toggle = async () => {
+    const next = !open;
+    setOpen(next);
+    if (next && !details && !loading) {
+      setLoading(true);
+      setErr(null);
+      try {
+        setDetails(await civitaiModel(model.id));
+      } catch (e) {
+        setErr(e instanceof Error ? e.message : String(e));
+      } finally {
+        setLoading(false);
+      }
+    }
+  };
+
+  const modelType = civitaiModelType(model.model_kind_hint, model.format);
+
+  return (
+    <li className="discover__row">
+      {model.preview_image_url && (
+        <img
+          src={model.preview_image_url}
+          alt=""
+          className="discover__preview"
+          width={72}
+          height={72}
+          loading="lazy"
+        />
+      )}
+      <div className="discover__main">
+        <div className="discover__title">
+          <a
+            href={`https://civitai.com/models/${model.id}`}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            {model.name ?? model.id}
+          </a>
+          {model.nsfw && <span className="badge badge--warn">NSFW</span>}
+          {model.model_kind_hint && <span className="badge">{model.model_kind_hint}</span>}
+        </div>
+        <div className="discover__meta numeric">
+          ↓ {count(model.downloads)} · 👍 {count(model.likes)}
+          {model.base_model_family && ` · ${model.base_model_family}`}
+        </div>
+        {model.allow_commercial_use.length > 0 && (
+          <div className="discover__meta">
+            commercial use: {model.allow_commercial_use.join(", ")}
+          </div>
+        )}
+        <DiscoverTags tags={model.tags} />
+
+        {open && (
+          <div className="discover__files">
+            {loading && <p className="muted">Loading files…</p>}
+            {err && <p className="import__err">{err}</p>}
+            {details?.files.map((f) => (
+              <FileRow
+                key={f.path}
+                file={f}
+                gated={false}
+                modelType={safeModelType(modelType, f.path)}
+              />
+            ))}
+            {details && details.files.length === 0 && (
+              <p className="muted">No files listed for this model.</p>
+            )}
+          </div>
+        )}
+      </div>
+
+      <div className="known__actions">
+        <button type="button" onClick={toggle}>
+          {open ? "Hide files" : "Files"}
+        </button>
+        <button type="button" onClick={() => onUseType(modelType)}>
+          Set import type
+        </button>
+      </div>
+    </li>
+  );
+}
+
 function ResultCard({ model, onUseType }: { model: RemoteModel; onUseType: (t: ModelType) => void }) {
   const [open, setOpen] = useState(false);
   const [details, setDetails] = useState<RegistryDetails | null>(null);
@@ -577,6 +817,46 @@ function DiscoverTags({ tags }: { tags: string[] }) {
   );
 }
 
+/** Civitai's own malware-scan verdicts for one file, surfaced prominently —
+ *  never silently hidden. A non-`"Success"` result (or a scan that hasn't
+ *  finished yet) gets a warning badge naming the exact verdict; a clean scan
+ *  gets a quiet, low-key note. `null`/`null` (Hugging Face, which runs no
+ *  such scan) renders nothing.
+ *
+ *  This is informational only, deliberately: it does not gate the download
+ *  button. AIWM's own import-time Pickle-format guard (`resolve_kind`) is
+ *  the real enforcement and runs unconditionally on the actual downloaded
+ *  file regardless of what Civitai's self-reported scan claims — trusting
+ *  a "Danger" verdict to silently block, same as trusting a "Success"
+ *  verdict to silently allow, would both mean trusting Civitai's own
+ *  self-report instead of AIWM's own check. Showing the verdict lets the
+ *  user make an informed choice; the guard is what actually protects them. */
+function ScanBadge({ pickle, virus }: { pickle: string | null; virus: string | null }) {
+  if (!pickle && !virus) return null;
+  const issues = [
+    pickle && pickle !== "Success" ? `pickle: ${pickle}` : null,
+    virus && virus !== "Success" ? `virus: ${virus}` : null,
+  ].filter((s): s is string => s != null);
+
+  if (issues.length > 0) {
+    return (
+      <span
+        className="badge badge--warn"
+        title={`Civitai's own malware scan flagged this file (${issues.join(
+          ", ",
+        )}). AIWM's own import guard still applies regardless — review before downloading.`}
+      >
+        ⚠ {issues.join(", ")}
+      </span>
+    );
+  }
+  return (
+    <span className="discover__scanok" title="Civitai's own malware scan: clean (pickle + virus)">
+      scan ok
+    </span>
+  );
+}
+
 /** One resolved file row: fit dot, quant, size, "Download & import", "Copy
  *  link". Shared by Discover's own results and the Models tab's Featured
  *  catalog (`Models.tsx`), which passes `roles` so a coding pick actually
@@ -651,6 +931,7 @@ export function FileRow({
         </span>
       )}
       {gated && <span className="badge badge--warn">accept licence on HF</span>}
+      <ScanBadge pickle={file.pickle_scan_result} virus={file.virus_scan_result} />
       {canDownload && (
         <button
           type="button"

@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import {
   about,
+  civitaiSearch,
+  civitaiStatus,
   getRecentLogs,
   getRuntimes,
   getTelemetry,
@@ -27,6 +29,7 @@ import {
   type Agent,
   type AgentRuntime,
   type Benchmark,
+  type CivitaiSearchParams,
   type Document,
   type Download,
   type ExternalEngine,
@@ -167,6 +170,8 @@ export const useModelTags = () =>
   usePolled<Record<string, string[]>>("model-tags", modelTags, 4000);
 export const useRegistryStatus = () =>
   usePolled<RegistryStatus>("registry-status", registryStatus, 5000);
+export const useCivitaiStatus = () =>
+  usePolled<RegistryStatus>("civitai-status", civitaiStatus, 5000);
 export const useLocalApiStatus = () =>
   usePolled<LocalApiStatus>("local-api-status", localApiStatus, 5000);
 export const useExternalEngines = () =>
@@ -245,6 +250,43 @@ export function useRegistrySearch(params: RegistrySearchParams, enabled: boolean
     // a fresh object identity on every render for callers that don't memoize
     // it, but its JSON content — the only thing that reaches `registrySearch`
     // — is unchanged whenever `key` is unchanged.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key, enabled]);
+
+  return { result, error, loading };
+}
+
+/** Debounced Civitai search for the Discover panel — same shape as
+ *  `useRegistrySearch`, against the Civitai source instead. */
+export function useCivitaiSearch(params: CivitaiSearchParams, enabled: boolean) {
+  const [result, setResult] = useState<RegistrySearchResult | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const key = JSON.stringify(params);
+
+  useEffect(() => {
+    if (!enabled) {
+      setResult(null);
+      setError(null);
+      return;
+    }
+    let alive = true;
+    setLoading(true);
+    const id = setTimeout(() => {
+      civitaiSearch(params)
+        .then((r) => {
+          if (alive) {
+            setResult(r);
+            setError(null);
+          }
+        })
+        .catch((e) => alive && setError(e instanceof Error ? e.message : String(e)))
+        .finally(() => alive && setLoading(false));
+    }, 400);
+    return () => {
+      alive = false;
+      clearTimeout(id);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key, enabled]);
 
