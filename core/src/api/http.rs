@@ -71,6 +71,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/models/{id}/upgrade-check", post(upgrade_check))
         .route("/benchmarks", get(latest_benchmarks))
         .route("/runtimes", get(runtimes))
+        .route("/runtimes/versions", get(check_tool_versions))
         .route("/runtimes/llamacpp/install", post(install_llamacpp))
         .route("/runtimes/comfyui/install", post(install_comfyui))
         .route("/runtimes/hermes/install", post(install_hermes))
@@ -598,6 +599,12 @@ async fn import_model(
 
 async fn runtimes(State(app): AppState) -> Json<Vec<super::dto::RuntimeStatusDto>> {
     Json(handlers::runtimes(&app).await)
+}
+
+async fn check_tool_versions(
+    State(app): AppState,
+) -> Result<Json<Vec<crate::runtime::ToolVersionCheck>>, ApiError> {
+    Ok(Json(handlers::check_tool_versions(&app).await?))
 }
 
 async fn install_hermes(
