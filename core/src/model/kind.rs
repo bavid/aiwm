@@ -8,6 +8,11 @@
 //! `extra_model_paths.yaml` (3.3), not a junction (the store and the ComfyUI
 //! install are on different volumes).
 
+/// The model-library role [`ModelKind::WdTagger`] imports under — shared
+/// with `capability::dataset::captioner`'s registry entry so the two never
+/// drift apart (the captioner resolves models by this exact string).
+pub const WD_TAGGER_ROLE: &str = "vision_wd_tagger";
+
 /// Every model kind the importer understands.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModelKind {
@@ -152,7 +157,7 @@ impl ModelKind {
             Self::DiaCodec => Some("dia_codec"),
             Self::ClipVision => Some("clip_vision"),
             Self::IpAdapter => Some("ip_adapter"),
-            Self::WdTagger => Some("vision_wd_tagger"),
+            Self::WdTagger => Some(WD_TAGGER_ROLE),
         }
     }
 
@@ -423,7 +428,8 @@ mod tests {
 
     #[test]
     fn wd_tagger_is_a_sidecar_kind_with_its_own_folder() {
-        assert_eq!(ModelKind::WdTagger.default_role(), Some("vision_wd_tagger"));
+        assert_eq!(ModelKind::WdTagger.default_role(), Some(WD_TAGGER_ROLE));
+        assert_eq!(WD_TAGGER_ROLE, "vision_wd_tagger");
         assert_eq!(ModelKind::WdTagger.store_subdir(), "vision/wd-tagger");
         assert_eq!(ModelKind::WdTagger.comfy_folder(), None);
         assert_eq!(ModelKind::WdTagger.as_str(), "wd_tagger");

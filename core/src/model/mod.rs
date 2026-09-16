@@ -18,7 +18,7 @@ pub use delete::{delete_model, DeleteOutcome};
 pub use gguf::{read_gguf_info, GgufInfo};
 pub(crate) use import::media_headroom_mb;
 pub use import::{import_model, ImportOutcome, ImportRequest};
-pub use kind::ModelKind;
+pub use kind::{ModelKind, WD_TAGGER_ROLE};
 pub use safetensors::{read_safetensors_info, SafetensorsInfo};
 
 /// Bytes per MiB, used for the VRAM/size estimates.
