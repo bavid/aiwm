@@ -6,6 +6,7 @@
 
 mod agents;
 mod bench;
+mod dataset;
 mod documents;
 mod downloads;
 mod jobs;
@@ -16,6 +17,7 @@ mod settings;
 
 pub use agents::{Agent, AgentRepo, AgentSession, AgentSessionEvent, AgentSessionState, NewAgent};
 pub use bench::{BenchRepo, Benchmark, NewBenchmark};
+pub use dataset::{DatasetFrame, DatasetFrameRepo, NewDatasetFrame};
 pub use documents::{Document, DocumentChunk, DocumentRepo, NewDocument};
 pub use downloads::{Download, DownloadRepo, DownloadState, NewDownload};
 pub use jobs::{EventLevel, Job, JobEvent, JobFilter, JobPatch, JobRepo, NewJob};
@@ -112,6 +114,10 @@ impl Database {
 
     pub fn benchmarks(&self) -> BenchRepo<'_> {
         BenchRepo::new(&self.pool)
+    }
+
+    pub fn dataset_frames(&self) -> DatasetFrameRepo<'_> {
+        DatasetFrameRepo::new(&self.pool)
     }
 
     /// Names of the application tables (excludes SQLite internals). Test helper.
