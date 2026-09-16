@@ -2895,7 +2895,7 @@ with thin axum fns in the same shape as `list_dataset_frames`/`update_dataset_fr
 
 - [ ] **Step 4: Tauri commands** (`src-tauri/src/lib.rs`): `list_captioners`, `list_datasets`, `get_dataset`, `update_dataset(id, body)`, `delete_dataset(id)`, `list_dataset_frames_for_dataset(dataset_id)`, `frame_concept_map(dataset_id)`, `list_concepts(dataset_id)`, `create_concept(dataset_id, body)`, `update_concept(id, body)`, `delete_concept(id)`, `assign_concept(concept_id, body)`, `unassign_concept(concept_id, body)`, `export_dataset_by_id(dataset_id, body)` — each `to_ipc(handlers::...)`, each added to `generate_handler!`.
 
-- [ ] **Step 5: `ipc.ts`** — add types and bindings:
+- [ ] **Step 5: `ipc.ts`** — add types and bindings. (Task 6 review finding: the existing `ModelType` union in `ipc.ts` (~line 806) does not list `"wd_tagger"`; add it there so the model library UI can show the tagger's kind.)
 
 ```ts
 export type DatasetMode = "frames" | "clips";
