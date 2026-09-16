@@ -2822,7 +2822,19 @@ pub async fn export_dataset_by_id(app: &App, dataset_id: &str, body: ExportDatas
 }
 ```
 
-Extend the existing `update_dataset_frame` handler: `if body.restore == Some(true) { set_rejection_reason(frame_id, "") }`; `if body.clip_start_secs.is_some() || body.clip_end_secs.is_some() { set_clip_range(frame_id, body.clip_start_secs.flatten(), body.clip_end_secs.flatten()) }`. Point the existing job-keyed `export_dataset` handler at `export_dataset_for_job`.
+Extend the existing `update_dataset_frame` handler: `if body.restore == Some(true) { set_rejection_reason(frame_id, "") }`. For the clip range, **read-merge-write** — `set_clip_range` writes both bounds unconditionally, so a request carrying only one field must not wipe the other (Task 2 review finding):
+
+```rust
+    if body.clip_start_secs.is_some() || body.clip_end_secs.is_some() {
+        let current = app.db.dataset_frames().get(frame_id).await?
+            .ok_or_else(|| CoreError::Config(format!("no such dataset frame {frame_id}")))?;
+        let start = body.clip_start_secs.unwrap_or(current.clip_start_secs);
+        let end = body.clip_end_secs.unwrap_or(current.clip_end_secs);
+        app.db.dataset_frames().set_clip_range(frame_id, start, end).await?;
+    }
+```
+
+(`Option<Option<f64>>`: outer `None` = field absent → keep current; `Some(None)` = explicit null → clear that bound.) Add a handler test: set both, then send only `clip_end_secs: null`, assert start is unchanged and end is cleared. Point the existing job-keyed `export_dataset` handler at `export_dataset_for_job`.
 
 - [ ] **Step 3: Routes** (`http.rs` router), after the existing dataset routes:
 
