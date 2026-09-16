@@ -7,7 +7,8 @@ import {
   type DatasetFrame,
 } from "../../lib/ipc";
 import { CONCEPT_REMINDER, ConceptRow } from "./ConceptRow";
-import { buildSets, fileName, type SetGrouping } from "./sets";
+import { fileName } from "./format";
+import { buildSets, type SetGrouping } from "./sets";
 import { tokenWarning } from "./tokens";
 
 /** Keys pressed inside a field belong to that field, not to the set. */

@@ -30,9 +30,3 @@ export function buildSets(frames: DatasetFrame[], grouping: SetGrouping): Datase
   }
   return sets;
 }
-
-/** The last path segment of a Windows or POSIX path, for the set header. */
-export function fileName(path: string): string {
-  const parts = path.split(/[\\/]/);
-  return parts[parts.length - 1] || path;
-}

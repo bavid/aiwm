@@ -15,6 +15,8 @@ type Props = {
   onCaptionOrderChange: (value: CaptionOrder) => void;
   /** Items that would actually be written — also what the button counts. */
   keptCount: number;
+  /** Clips mode writes trimmed videos, not stills — the button says so. */
+  isClipMode: boolean;
   state: ExportState;
   onExport: () => void;
 };
@@ -27,6 +29,7 @@ export function ExportCard({
   captionOrder,
   onCaptionOrderChange,
   keptCount,
+  isClipMode,
   state,
   onExport,
 }: Props) {
@@ -72,7 +75,9 @@ export function ExportCard({
         onClick={onExport}
         disabled={!destDir.trim() || state.kind === "busy" || keptCount === 0}
       >
-        {state.kind === "busy" ? "Exporting…" : `Export ${keptCount} item(s)`}
+        {state.kind === "busy"
+          ? "Exporting…"
+          : `Export ${keptCount} ${isClipMode ? "clip(s)" : "item(s)"}`}
       </button>
       {state.kind === "done" && (
         <p className="dataset__done">

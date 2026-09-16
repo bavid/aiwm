@@ -695,7 +695,7 @@ stillschweigend weggelassen):**
   die Story-Studio-Oberfläche hat bewusst keine Bildparameter-Feinsteuerung,
   wie schon in Phase 1.
 
-## Lokale KI-Trainings-Engine (Teilsystem 1 ✅ umgesetzt — 2026-09-16, Teilsystem 2 offen)
+## Lokale KI-Trainings-Engine (Teilsystem 1 ✅ umgesetzt inkl. Plan-1-Erweiterungen — 2026-09-16, Teilsystem 2 geplant, nicht gebaut)
 User-Leitprinzip (2026-09-15, wörtlich wichtig): AIWM soll ein **lokales
 All-in-one-Tool** bleiben — eigenes Training auf **eigenen Daten, jeder Art**
 soll genauso leicht zugänglich sein wie die bestehenden Image/Video/Chat-
@@ -845,7 +845,141 @@ Kuratier-Grid mit Caption-Edit/Exclude, Export alle im Screenshot bestätigt).
     GPU-Speicher-Freigabe bei Eviction ist ein Folge-Thema, sobald das an
     echter Hardware gemessen wird.
 
-### Teilsystem 2 — Trainings-Orchestrator: geplant (2026-09-16), noch keine Implementierung
+### Teilsystem 1 — Erweiterungen (Plan 1 "Dataset Extensions"): ✅ umgesetzt (2026-09-16)
+
+Spec: `docs/superpowers/specs/2026-09-16-training-orchestrator-design.md`
+(Abschnitte 3, 3A, 3C, 3D, 3E, 4B, 5); Plan:
+`docs/superpowers/plans/2026-09-16-training-orchestrator-plan-1-dataset-extensions.md`
+(14 Tasks, alle grün). Alle Gates sauber: `cargo fmt --check`/`clippy
+--workspace --all-targets -D warnings` sauber, `cargo test --workspace`
+**909 passed / 0 failed / 4 ignored** (37 Test-Binaries), sidecar `ruff`
+sauber + `pytest` **89 passed**, UI `tsc`/`eslint`/`vite build` sauber, jede
+UI-Task zusätzlich live im Browser gegen den dev-mock verifiziert.
+
+- **Datasets sind jetzt Objekte** (Migration `0015_datasets.sql`): neue
+  Tabellen `datasets` (Name, `mode` `frames|clips`, `source_root`,
+  `trigger_word`, `prep_job_id`, `export_dir`), `dataset_concepts` und
+  `frame_concepts`. `dataset_frames` wurde dafür neu aufgebaut statt
+  ge-`ALTER`t (SQLite kann die FK-Action einer bestehenden Spalte nicht
+  ändern): `job_id` ist nullable mit `ON DELETE SET NULL`, der Cascade hängt
+  jetzt am Dataset. **Ein Datensatz überlebt damit seinen Prep-Job** — er ist
+  das dauerhafte Objekt, auf das ein Trainingslauf aus Teilsystem 2 zeigt,
+  wiederverwendbar über viele Läufe. Die in der 0014-Notiz oben erwähnte
+  Migrations-Nummernkollision ist damit erledigt (`0014` = `dataset_frames`,
+  `0015` = `datasets`).
+- **Verworfene Frames bleiben stehen, mit Begründung**: `rejection_reason`
+  (`''` = behalten) statt stiller Löschung. Das Kuratier-Grid zeigt sie
+  hinter Filter-Chips pro Grund mit Zähler, und **Restore** ("doch behalten")
+  macht ein automatisches Urteil rückgängig — der Nutzer behält das letzte
+  Wort über jede Heuristik.
+- **Filterstufe C** (`capability/dataset/filter.rs`) über Blur/Duplikat
+  hinaus, alles billig und ohne ML: **tote Frames** (flach, nahezu schwarz
+  oder weiß — Blenden, Leerbilder), **Übergänge** (ein *bereits unscharfer*
+  Frame wird gezielt als `transition` statt als `blur` geführt, wenn er per
+  Perceptual-Hash zusätzlich weit von Vorgänger *und* Nachfolger entfernt
+  liegt — die Signatur eines Schnitt-Schmierers/Cross-Fades; Unschärfe allein
+  bleibt Unschärfe, ein scharfer Frame wird nie zum Übergang), und eine
+  **Diversitäts-Obergrenze pro Clip** (Farthest-Point-Auswahl auf denselben
+  Hashes, damit ein langer statischer Clip nicht hunderte fast identische
+  Frames in den Datensatz kippt). Gründe insgesamt: `black`, `transition`,
+  `blur`, `duplicate`, `cap`, `unusable`.
+- **Captioning ist optional** und im Prep-Formular abschaltbar (ohne
+  installierten Captioner bleibt es zwangsweise aus). Die UI erklärt die
+  Konsequenz wörtlich: *"Recommended for style LoRAs: what is described stays
+  controllable, what is not becomes part of the style."* — bzw. ohne
+  Captioner: alles Wiederkehrende fließt in das Trigger-Wort.
+- **Captioner-Registry** (`capability/dataset/captioner.rs`), Auswahl im
+  Formular, Installationsstatus aus der Modell-Library:
+  - **Florence-2** (`florence2`, MIT, Prosa, unterstützt die
+    X-vs-X+N-Eskalation) — wie gehabt über den Vision-Sidecar.
+  - **WD EVA02 Tagger v3** (`wd-eva02-tagger-v3`, Apache-2.0, Danbooru-Tags,
+    keine Eskalation — ein Tagger hat keinen Satz, dessen Sicherheit man
+    beurteilen könnte) — 0.3B ONNX-Klassifikator, läuft per `onnxruntime`
+    **auf der CPU** im Sidecar (`vram_mb: 0`, kein Torch beteiligt).
+    `required_files` = `model.onnx` + `selected_tags.csv`, damit ein
+    einzelner CSV-Import nicht fälschlich als installierter Tagger zählt.
+    **Einmal echt verifiziert**: Gewichte gegen den Katalog-Pin gehasht und
+    ein realer Tagging-Lauf durchgeführt — der einzige echte Modell-Lauf in
+    Plan 1, alles andere läuft über Fake-Doubles.
+  - **JoyCaption: bewusst verschoben.** Der Weg dahin wäre llama.cpp mit
+    `--mmproj` (Multimodal-Projector); ob die im Repo verwendete
+    llama.cpp-Version das in der benötigten Form unterstützt, ist **noch
+    nicht geprüft** — offener Punkt, keine Attrappe gebaut.
+- **Konzepte + geführter "Learn"-Modus** (Spec 3A/4B): ein Konzept ist eine
+  benannte Sache, die der LoRA lernen soll (`token` ohne Vorbedeutung im
+  Basismodell, z. B. `kenji_xy`, plus optionale Beschreibung). Frames werden
+  ihm über `frame_concepts` zugeordnet — **nie** in die Caption-Spalte
+  denormalisiert. Die UI warnt inline, wenn ein Token ein gewöhnliches Wort
+  ist (Client-Spiegel von `compose::token_warning`) und wenn ein Konzept
+  unter 20 Beispiele hat. Der **Learn**-Modus (`LearnSets.tsx`, umschaltbar
+  gegen das Grid) führt durch Sets von maximal 30 behaltenen Frames
+  (Gruppierung "nach Clip" bzw. grob "nach Ähnlichkeit"), mit
+  Mehrfachauswahl (Klick, Shift-Bereich, Alle/Invertieren/Leeren),
+  Tastatursteuerung (←/→ Set, A, I, Esc, Enter = zuweisen) und einer
+  Konzept-Übersicht mit Zählern/Warnungen.
+- **Clip-Modus** (`capability/dataset/clip.rs` + Grid): in `mode = clips`
+  bleibt **jedes Quellvideo ein Objekt** — eine Zeile mit der per `ffprobe`
+  gelesenen Dauer und einem **Vorschau-Standbild** als `frame_path`, das
+  Video selbst als `source_path`. Nicht lesbare oder zu kurze Clips landen
+  als `unusable` (mit Badge, ohne Vorschaubild) statt still zu verschwinden;
+  ein fehlgeschlagenes Vorschaubild kippt nicht den ganzen Lauf. Der Kurator
+  setzt pro Clip **Start/Ende (s)** (leer = ganzer Clip, Validierung in der
+  Karte: Start < Ende, beide ≥ 0 und ≤ Dauer), gespeichert als
+  `clip_start_secs`/`clip_end_secs`; der Export **trimmt per ffmpeg-Stream-
+  Copy** (kein Re-Encode). Fehlt ffmpeg, bricht der Export ab, statt
+  stillschweigend das ungeschnittene Material auszuliefern.
+- **Komponierter Export** (`compose.rs` + `export.rs`): die Caption wird erst
+  beim Export aus getrennt gespeicherten Teilen zusammengesetzt —
+  Dataset-Trigger, Konzept-Token (+ Beschreibung), eigene Auto-/Hand-Caption
+  — in wählbarer **Reihenfolge** (`tags_first` für Anime/SDXL, `prose_first`
+  für FLUX.2). Ausgabe weiterhin `NNNN.<ext>` + `NNNN.txt`-Paare.
+- **API-/Tauri-/`ipc.ts`-Oberfläche** (neu neben den bestehenden
+  Job-Routen): `GET /captioners`; `GET /datasets`; `GET|PUT|DELETE
+  /datasets/{id}`; `GET /datasets/{id}/frames`; `GET
+  /datasets/{id}/frames/{frame_id}/image`; `GET
+  /datasets/{id}/frame-concepts`; `GET|POST /datasets/{id}/concepts`; `POST
+  /datasets/{id}/export`; `PUT|DELETE /concepts/{id}`; `POST|DELETE
+  /concepts/{id}/frames`. Jeweils mit Tauri-Command-Spiegel und typisiertem
+  `ui/src/lib/ipc.ts`-Binding; `PUT .../dataset-frames/{frame_id}` nimmt die
+  Clip-Grenzen dreiwertig entgegen (Schlüssel fehlt = unverändert,
+  `null` = auf die natürliche Grenze zurücksetzen).
+
+**Noch offen / bewusst nicht gebaut (Plan 1):**
+- **Ähnlichkeits-Gruppierung im Learn-Modus ist nur ein grober Proxy**
+  (Tag + Quelle auf dem Client): die Perceptual-Hashes werden nicht in die
+  UI geschickt. Dafür braucht es eine **gespeicherte Hash-Spalte** —
+  verschoben auf Plan 2; serverseitige Gruppierung ist der Folge-Slice.
+- **JoyCaption** als dritter Captioner (siehe oben — llama.cpp-`--mmproj`-
+  Prüfung steht noch aus).
+- **Wan-Clip-Training selbst**: der Clip-Modus produziert getrimmte Clips,
+  aber es gibt keinen Trainingslauf dafür — das ist Teilsystem 2.
+- **Sidecar-Cache-Key-Normalisierung**: die drei Engine-Caches
+  (`_florence2_cache`, `_qwen_vl_cache`, `_wd_tagger_cache`) schlüsseln auf
+  den rohen `model_dir`-String ohne Pfad-Normalisierung — ein
+  Trailing-Slash, abweichende Groß-/Kleinschreibung oder ein Symlink lädt
+  dasselbe Modell ein zweites Mal.
+- **Tagger-Klassifikationslogik** liegt in `tag_frame` statt auf der
+  Engine-Klasse selbst.
+- **Decode-once**: die Filter-Verdrahtung öffnet jedes Frame dreimal
+  (`is_blurry` / `is_dead_frame` / `phash_of`) statt einmal zu dekodieren und
+  das Bild zu teilen.
+- **`pipeline::filter_groups` dekodiert synchron im async `run`**
+  (vorbestehend) — bei Bedarf in `tokio::task::spawn_blocking` wickeln,
+  sobald echte Läufe zeigen, dass es zählt.
+- **`export_dataset_for_job` sucht das Dataset über `list()` + `find`** —
+  ein `DatasetRepo::find_by_prep_job` lohnt sich, sobald die Dataset-Zahl
+  wächst.
+- **Der Export kopiert/trimmt Medien sequenziell.**
+- **UI-Folgepunkte** (aus den Task-12/13-Reviews): das Frame-Grid ist **nicht
+  virtualisiert** (bei `PAGE_SIZE` 60 unkritisch, bei Datensätzen mit
+  tausenden Frames erneut ansehen — `FrameCard` ist inzwischen memoisiert und
+  `usePolled.refetch` stabil, die Virtualisierung fehlt weiterhin); die
+  Prep-/Export-/Konzept-Formulare sind `<div>`s statt semantischer
+  `<form onSubmit>` (kein Enter-zum-Absenden); `ui/eslint.config.js` hat kein
+  `eslint-plugin-jsx-a11y` (hätte die `alt=""`-/unbeschriftete-Input-Funde
+  automatisch gefangen).
+
+### Teilsystem 2 — Trainings-Orchestrator: geplant (2026-09-16), Plan liegt vor unter `docs/superpowers/plans/2026-09-16-training-orchestrator-plan-2-trainer-runtime.md` — noch keine Implementierung
 
 **Priorität entschieden (User, 2026-09-16):** Architektur von Anfang an
 zielart-generisch (`TrainingTarget::Image | Video`), aber der erste

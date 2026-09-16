@@ -621,6 +621,73 @@
   align-self: flex-start;
 }
 
+/* --- clip mode --- */
+
+/* An unusable clip has no preview still: keep the tile's shape so the grid
+   stays even, and let the badge carry the verdict. */
+.framecard__thumb[data-empty="true"] {
+  background: repeating-linear-gradient(
+    135deg,
+    var(--surface-2),
+    var(--surface-2) 8px,
+    var(--surface) 8px,
+    var(--surface) 16px
+  );
+}
+
+.framecard__source {
+  margin: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.framecard__trim {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-2);
+}
+
+.framecard__trim-field {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.framecard__trim-field > span {
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.framecard__trim-field input {
+  min-width: 0;
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--text-xs);
+}
+
+.framecard__trim-field input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.framecard__trim-err {
+  margin: 0;
+  color: var(--load-crit);
+  font-size: var(--text-xs);
+  line-height: 1.4;
+}
+
 /* --- grid / learn view toggle --- */
 
 .dataset__views {

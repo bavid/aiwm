@@ -112,6 +112,9 @@ export function DatasetStudio() {
     (jobs ?? []).find((j) => j.id === liveJobId) ??
     null;
   const isRunning = !!activeJob && !DONE.includes(activeJob.state);
+  /** Clips mode changes what a card is: a whole video with a length and
+   *  curator-set in/out points, not a still. */
+  const isClipMode = activeDataset?.mode === "clips";
 
   const tokenByConceptId = useMemo(() => {
     const map: Record<string, string> = {};
@@ -283,6 +286,20 @@ export function DatasetStudio() {
         refetchFrames();
       } catch (e) {
         setGridError(`Could not restore the frame: ${e}`);
+      }
+    },
+    [refetchFrames],
+  );
+
+  /** Both bounds go in one write: the card validates them as a pair, and an
+   *  explicit `null` clears one back to the clip's natural start/end. */
+  const commitClipBounds = useCallback(
+    async (frame: DatasetFrame, start: number | null, end: number | null) => {
+      try {
+        await updateDatasetFrame(frame.id, { clip_start_secs: start, clip_end_secs: end });
+        refetchFrames();
+      } catch (e) {
+        setGridError(`Could not save the clip bounds: ${e}`);
       }
     },
     [refetchFrames],
@@ -503,10 +520,12 @@ export function DatasetStudio() {
                   imageUrl={imageUrlFor(frame)}
                   isSelected={selectedIds.has(frame.id)}
                   conceptTokens={tokensByFrameId[frame.id] ?? NO_TOKENS}
+                  isClipMode={isClipMode}
                   onToggleSelected={toggleSelected}
                   onCaptionCommit={editCaption}
                   onToggleExcluded={toggleExcluded}
                   onRestore={restore}
+                  onClipBoundsCommit={commitClipBounds}
                 />
               ))}
             </div>
@@ -530,6 +549,7 @@ export function DatasetStudio() {
             captionOrder={captionOrder}
             onCaptionOrderChange={setCaptionOrder}
             keptCount={keptCount}
+            isClipMode={isClipMode}
             state={exportState}
             onExport={runExport}
           />

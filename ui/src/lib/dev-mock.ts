@@ -182,6 +182,19 @@ const FRAME_CONCEPTS: { frame_id: string; concept_id: string }[] = [];
 const DATASET_TAGS = ["Ghibli", "Cyberpunk"];
 const DATASET_MOCK_TOTAL_FRAMES = 18;
 
+/** Clips mode produces one row per source video, not per still. These stand
+ *  in for what `ffprobe` + the preview-still extraction would report: a mix of
+ *  lengths, and one clip the pipeline could not read at all (`unusable` — no
+ *  duration, no preview still, nothing to trim). */
+const DATASET_MOCK_CLIPS: { file: string; duration: number | null; rejection: string }[] = [
+  { file: "opening_pan.mp4", duration: 12.5, rejection: "" },
+  { file: "market_walk.mp4", duration: 48, rejection: "" },
+  { file: "rooftop_cut.mp4", duration: 3, rejection: "" },
+  { file: "corrupt_take.mp4", duration: null, rejection: "unusable" },
+  { file: "night_drive.mp4", duration: 96.4, rejection: "" },
+  { file: "closing_shot.mp4", duration: 7.2, rejection: "" },
+];
+
 /** Loosely mirrors `capability::dataset::compose::COMMON_WORDS` — enough for
  *  the dev preview to show the inline "pick a made-up token" warning. */
 const COMMON_TOKEN_WORDS = [
@@ -254,16 +267,39 @@ function progressDatasetJobs(): void {
     if (j.job_type !== "dataset_prep" || j.state !== "running") continue;
     const jobId = String(j.id);
     const dataset = datasetForJob(j);
+    const clips = dataset.mode === "clips";
+    const target = clips ? DATASET_MOCK_CLIPS.length : DATASET_MOCK_TOTAL_FRAMES;
     const existing = DATASET_FRAMES.filter((f) => f.job_id === jobId);
-    if (existing.length >= DATASET_MOCK_TOTAL_FRAMES) {
+    if (existing.length >= target) {
       j.state = "completed";
       j.finished_at = now();
       continue;
     }
     const idx = existing.length + 1;
     const tag = DATASET_TAGS[existing.length % DATASET_TAGS.length];
+
+    if (clips) {
+      const spec = DATASET_MOCK_CLIPS[existing.length];
+      const unusable = spec.rejection === "unusable";
+      DATASET_FRAMES.push(
+        mkDatasetFrame(`${jobId}-c${idx}`, jobId, tag, {
+          dataset_id: dataset.id,
+          source_path: `E:\\Data\\Demo\\${tag}\\${spec.file}`,
+          // No readable stream means no preview still was ever written.
+          frame_path: unusable ? "" : `E:\\Data\\Demo\\${tag}\\${spec.file}.preview.png`,
+          timestamp_secs: null,
+          caption: unusable ? "" : `${tag} clip, dev-mock: ${spec.file}`,
+          caption_engine: unusable ? "" : "florence2",
+          rejection_reason: spec.rejection,
+          duration_secs: spec.duration,
+          clip_start_secs: null,
+          clip_end_secs: null,
+        }),
+      );
+      continue;
+    }
+
     const escalated = idx % 6 === 0;
-    const clips = dataset.mode === "clips";
     // A slice of every run is auto-rejected, so the "verworfen" filter and the
     // "doch behalten" button have something to act on in the dev preview.
     const rejection = idx % 7 === 0 ? "blur" : idx % 11 === 0 ? "cap" : "";
@@ -278,7 +314,7 @@ function progressDatasetJobs(): void {
           : `${tag} scene, dev-mock caption ${idx}`,
         caption_engine: escalated ? "qwen2.5-vl" : "florence2",
         rejection_reason: rejection,
-        duration_secs: clips ? 4 + (idx % 5) : null,
+        duration_secs: null,
       }),
     );
   }
