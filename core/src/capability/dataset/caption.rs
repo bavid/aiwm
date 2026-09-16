@@ -78,6 +78,16 @@ fn vision_err(msg: impl std::fmt::Display) -> crate::CoreError {
     dataset_err(msg)
 }
 
+/// The shared "not imported" error both `resolve_model_dir` and
+/// `resolve_captioner_dir` report — same wording, same Models-tab pointer,
+/// just parameterized by what's missing and which role to assign it.
+fn not_imported_err(label: &str, role: &str) -> crate::CoreError {
+    vision_err(format!(
+        "no {label} imported — import it on the Models tab (Add models \u{2192} point at its \
+         downloaded snapshot folder \u{2192} role \u{201c}{role}\u{201d})"
+    ))
+}
+
 /// The default single-image task Florence-2 is asked to perform. `<CAPTION>`
 /// is Florence-2's shortest task; `<DETAILED_CAPTION>` is the documented
 /// middle ground between that and `<MORE_DETAILED_CAPTION>` (verbose enough
@@ -116,12 +126,7 @@ pub fn is_low_confidence_caption(
 /// names the shared directory" shape.
 async fn resolve_model_dir(db: &Database, role: &str, label: &str) -> Result<std::path::PathBuf> {
     let files = db.models().for_role(role).await?;
-    let first = files.first().ok_or_else(|| {
-        vision_err(format!(
-            "no {label} imported — import it on the Models tab (Add models \u{2192} point at \
-             its downloaded snapshot folder \u{2192} role \u{201c}{role}\u{201d})"
-        ))
-    })?;
+    let first = files.first().ok_or_else(|| not_imported_err(label, role))?;
     Path::new(&first.file_path)
         .parent()
         .map(Path::to_path_buf)
@@ -144,18 +149,15 @@ pub async fn resolve_qwen_vl_dir(db: &Database) -> Result<std::path::PathBuf> {
 /// at caption time.
 #[allow(dead_code)] // wired into the pipeline in Task 10
 pub async fn resolve_captioner_dir(db: &Database, c: &Captioner) -> Result<std::path::PathBuf> {
-    let label = c.name.split(" (").next().unwrap_or(c.name);
-    installed_captioner_dir(db, c).await?.ok_or_else(|| {
-        vision_err(format!(
-            "no {label} imported — import it on the Models tab (Add models \u{2192} point at \
-             its downloaded snapshot folder \u{2192} role \u{201c}{}\u{201d})",
-            c.role
-        ))
-    })
+    // Registry display names follow "Name (style hint)" — the label is just
+    // the name part.
+    let label = c.name.split_once(" (").map_or(c.name, |(label, _)| label);
+    installed_captioner_dir(db, c)
+        .await?
+        .ok_or_else(|| not_imported_err(label, c.role))
 }
 
 /// Which sidecar JSON-RPC method serves this captioner.
-#[allow(dead_code)] // wired into the pipeline in Task 10
 pub fn rpc_method_for(c: &Captioner) -> &'static str {
     if c.id == FLORENCE2_ID {
         "caption_frame"
@@ -167,7 +169,6 @@ pub fn rpc_method_for(c: &Captioner) -> &'static str {
 /// One auto caption for a single frame from whichever captioner the run
 /// picked. Returns `(caption, engine_label)`; the label is what lands in
 /// `dataset_frames.caption_engine`.
-#[allow(dead_code)] // wired into the pipeline in Task 10
 pub async fn caption_with(
     vision: &VisionAdapter,
     c: &Captioner,
@@ -191,24 +192,18 @@ pub async fn caption_with(
     Ok((extract_caption(&result)?, engine))
 }
 
-/// One Florence-2 caption for a single frame.
+/// One Florence-2 caption for a single frame — delegates to `caption_with`
+/// so Florence-2's request params are built in exactly one place.
 pub async fn caption_frame(
     vision: &VisionAdapter,
     model_dir: &Path,
     image_path: &Path,
 ) -> Result<String> {
-    let client = vision.client().await?;
-    let result = client
-        .call(
-            "caption_frame",
-            json!({
-                "image_path": image_path.to_string_lossy(),
-                "model_dir": model_dir.to_string_lossy(),
-                "task_prompt": FLORENCE2_TASK_PROMPT,
-            }),
-        )
-        .await?;
-    extract_caption(&result)
+    let florence = super::captioner::find_captioner(FLORENCE2_ID)
+        .ok_or_else(|| vision_err("florence2 is missing from the captioner registry"))?;
+    caption_with(vision, florence, model_dir, image_path)
+        .await
+        .map(|(caption, _engine)| caption)
 }
 
 /// A temporal-context re-caption from Qwen2.5-VL: `image_path` is the
