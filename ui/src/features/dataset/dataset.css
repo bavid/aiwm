@@ -338,3 +338,285 @@
 .dataset__export h3 {
   margin: 0;
 }
+
+/* --- selects share the input look --- */
+
+.datasetform__field select,
+.datasetform__field--inline select {
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--text-sm);
+}
+
+.datasetform__field select:focus-visible,
+.datasetform__field--inline select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.datasetform__field--inline input[type="text"] {
+  flex: 1;
+  min-width: 0;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--text-sm);
+}
+
+/* --- captioning fieldset --- */
+
+.datasetform__captioning {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: 0;
+  /* A fieldset defaults to `min-inline-size: min-content`, which lets the
+     longest label push it past the form card -- opt back into normal flex
+     shrinking. */
+  min-inline-size: 0;
+  padding: var(--space-3);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+
+.datasetform__captioning legend {
+  padding: 0 var(--space-2);
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.datasetform__captioning .datasetform__check em {
+  display: block;
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  font-style: normal;
+  line-height: 1.5;
+}
+
+.datasetform__hint {
+  margin: 0;
+  color: var(--load-warn);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+}
+
+.dataset__warn {
+  margin: var(--space-2) 0 0;
+  color: var(--load-warn);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+}
+
+/* --- rejection filter chips --- */
+
+.dataset__filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+/* --- multi-select toolbar --- */
+
+.dataset__toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+}
+
+.dataset__toolbar-count {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--text);
+}
+
+.dataset__toolbar-label {
+  margin-right: var(--space-2);
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.dataset__toolbar-status {
+  color: var(--load-ok);
+  font-size: var(--text-sm);
+}
+
+.dataset__toolbar .chip:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* --- concepts panel --- */
+
+.concepts {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.concepts h3 {
+  margin: 0;
+}
+
+.concepts__intro,
+.concepts__reminder {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+}
+
+.concepts__reminder {
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--border-soft);
+  font-style: italic;
+}
+
+.concepts__list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.concepts__row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+
+.concepts__row-main {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+
+.concepts__name {
+  font-weight: 600;
+  color: var(--text);
+  font-size: var(--text-sm);
+}
+
+.concepts__token,
+.concepts__token-input {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--accent);
+}
+
+.concepts__count {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+.concepts__desc {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+.concepts__warn {
+  margin: 0;
+  color: var(--load-warn);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+}
+
+.concepts__delete {
+  align-self: flex-start;
+}
+
+.concepts__form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--border-soft);
+}
+
+/* --- frame card additions --- */
+
+.framecard[data-rejected="true"] .framecard__thumb {
+  opacity: 0.6;
+}
+
+.framecard__select {
+  position: absolute;
+  left: var(--space-1);
+  top: var(--space-1);
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 2px var(--space-1);
+  border-radius: var(--radius-sm);
+  background: color-mix(in oklab, black 55%, transparent);
+  cursor: pointer;
+}
+
+.framecard__select-label {
+  color: #fff;
+  font-size: var(--text-xs);
+}
+
+.framecard__badge--reject {
+  background: var(--load-crit);
+  color: #fff;
+}
+
+.framecard__duration {
+  position: absolute;
+  right: var(--space-1);
+  bottom: var(--space-1);
+  padding: 1px var(--space-2);
+  border-radius: var(--radius-sm);
+  background: color-mix(in oklab, black 55%, transparent);
+  color: #fff;
+  font-size: var(--text-xs);
+}
+
+.framecard__concepts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+
+.framecard__concept {
+  padding: 1px var(--space-2);
+  border: 1px solid color-mix(in oklab, var(--accent) 45%, var(--border));
+  border-radius: var(--radius-sm);
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+
+.framecard__caption-label {
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.framecard__restore {
+  align-self: flex-start;
+}
