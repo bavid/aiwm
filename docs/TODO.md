@@ -597,7 +597,7 @@ Kuratier-Grid mit Caption-Edit/Exclude, Export alle im Screenshot bestätigt).
   Modell-Id fürs Scheduler-Ledger (`DATASET_VISION_MODEL_ID`, gleiche
   Begründung wie beim Upscale-Job — kein einzelnes Library-`Model` dahinter),
   reale (anfragenabhängige) VRAM-Reservierung statt Fallback-Konstante.
-- **Neue Tabelle** `dataset_frames` (Migration `0012_dataset_frames.sql` —
+- **Neue Tabelle** `dataset_frames` (Migration `0014_dataset_frames.sql` —
   **Namenskollision**: ein parallel arbeitender Story-Studio-Agent hat
   ebenfalls eine `0012_*.sql` angelegt; beim Zusammenführen der Branches muss
   eine der beiden auf `0013` umnummeriert werden, noch nicht gelöst),

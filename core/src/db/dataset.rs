@@ -1,6 +1,6 @@
 //! Frame persistence for a `dataset_prep` job (see
 //! [`crate::capability::dataset`]). Cascade-deletes with its job — see the
-//! `0012_dataset_frames.sql` migration's own doc comment.
+//! `0014_dataset_frames.sql` migration's own doc comment.
 
 use serde::Serialize;
 use sqlx::SqlitePool;
