@@ -659,6 +659,12 @@ export function installDevMock(): void {
         JOBS.splice(i, 1);
         return null;
       }
+      case "save_job_output":
+        // No real filesystem in the browser dev preview -- the save dialog
+        // itself already resolves to `null` here (mocked "plugin:" command),
+        // so `downloadJobOutput` never actually calls this; kept as a no-op
+        // for completeness / future test harnesses that do mock the dialog.
+        return null;
       case "clean_audio": {
         const job = JOBS.find((j) => j.id === a.id);
         if (!job) throw new Error(`no such job ${a.id}`);

@@ -1,22 +1,33 @@
 import { useEffect, useMemo, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
+import { Lightbox } from "../../components/Lightbox";
 import { LoraPicker } from "../../components/LoraPicker";
+import { Meter } from "../../components/Meter";
 import { NumField } from "../../components/NumField";
 import { PromptAssistant } from "../../components/PromptAssistant";
 import { PromptPresetPicker } from "../../components/PromptPresetPicker";
 import { QueueList } from "../../components/QueueList";
 import { SessionSwitcher } from "../../components/SessionSwitcher";
 import { VramEstimateHint } from "../../components/VramEstimateHint";
-import { useAbout, useJobs, useModels, useRuntimes, useTelemetry } from "../../lib/hooks";
+import {
+  useAbout,
+  useJobProgress,
+  useJobs,
+  useModels,
+  useRuntimes,
+  useTelemetry,
+} from "../../lib/hooks";
 import {
   cancelJob,
   deleteJob,
+  downloadJobOutput,
   imageOutputUrl,
   jobDetail,
   submitJob,
   type ImageParams,
   type Job,
   type JobDetail,
+  type JobProgress,
   type JobState,
   type LoraParam,
   type UpscaleParams,
@@ -28,6 +39,7 @@ const POLL_MS = 700;
 const MIN_DIM = 512;
 const MAX_DIM = 2048;
 const DIM_STEP = 64;
+const GALLERY_PAGE_SIZE = 24;
 
 const PRESETS = [
   { label: "Square", w: 1024, h: 1024 },
@@ -102,6 +114,10 @@ export function ImageStudio() {
   const [pendingId, setPendingId] = useState<string | null>(null);
   const [detail, setDetail] = useState<JobDetail | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  // Real per-step progress straight from ComfyUI's own `/ws`, layered on top
+  // of the `jobDetail` poll below (which still carries state/output/events) —
+  // see `core::progress` / `GET /ws/jobs/{id}`.
+  const liveProgress = useJobProgress(about?.core_api_port ?? null, pendingId);
 
   useEffect(() => {
     if (!pendingId) return;
@@ -133,6 +149,19 @@ export function ImageStudio() {
       j.output_path &&
       j.session_id === sessionId,
   );
+
+  const [galleryPage, setGalleryPage] = useState(0);
+  const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
+  const pageCount = Math.max(1, Math.ceil(gallery.length / GALLERY_PAGE_SIZE));
+  const clampedPage = Math.min(galleryPage, pageCount - 1);
+  const pagedGallery = gallery.slice(
+    clampedPage * GALLERY_PAGE_SIZE,
+    clampedPage * GALLERY_PAGE_SIZE + GALLERY_PAGE_SIZE,
+  );
+  useEffect(() => {
+    setGalleryPage(0);
+    setLightboxIndex(null);
+  }, [sessionId]);
 
   const selected =
     (detail?.job.id === selectedId ? detail.job : null) ??
@@ -242,6 +271,34 @@ export function ImageStudio() {
     } catch (err) {
       setSendError(err instanceof Error ? err.message : String(err));
     }
+  };
+
+  /** "Erneut versuchen" — resubmit a failed job's own `params` as a brand new
+   *  job (never mutates the failed one). Mirrors `generate()`/`handleUpscale`:
+   *  submit, then switch the Result panel over to watch the new job. */
+  const handleRetry = async (job: Job) => {
+    setSendError(null);
+    try {
+      const fresh = await submitJob({
+        job_type: job.job_type,
+        model_id: job.model_id ?? undefined,
+        session_id: job.session_id ?? sessionId ?? undefined,
+        params: job.params,
+      });
+      setPendingId(fresh.id);
+      setSelectedId(fresh.id);
+      setDetail({ job: fresh, events: [] });
+    } catch (err) {
+      setSendError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  /** "Use as base" — send a finished result straight into the "Edit an
+   *  existing image" field instead of requiring a fresh file browse, so the
+   *  next prompt re-uses it as the img2img source. */
+  const handleUseAsBase = (jobId: string) => {
+    setSourcePath("");
+    setSourceJob(jobId);
   };
 
   const canGenerate = !!prompt.trim() && (!pendingId || stuck) && comfyReady;
@@ -487,11 +544,20 @@ export function ImageStudio() {
             job={selected}
             port={about?.core_api_port ?? null}
             modelNames={modelNames}
+            progress={liveProgress}
             onCancel={selected ? () => cancelJob(selected.id) : undefined}
             onDelete={selected ? () => handleDelete(selected.id) : undefined}
+            onRetry={
+              selected && selected.state === "failed" ? () => handleRetry(selected) : undefined
+            }
             onUpscale={
               selected && selected.state === "completed" && selected.job_type !== "upscale"
                 ? () => handleUpscale(selected.id)
+                : undefined
+            }
+            onUseAsBase={
+              selected && selected.state === "completed" && selected.job_type === "image"
+                ? () => handleUseAsBase(selected.id)
                 : undefined
             }
             onReuseSeed={setSeed}
@@ -507,46 +573,98 @@ export function ImageStudio() {
         {gallery.length === 0 ? (
           <p className="muted">Generated images show up here.</p>
         ) : (
-          <div className="gallery">
-            {gallery.map((j) => (
-              <div
-                key={j.id}
-                className={
-                  j.id === selectedId ? "gallery__item gallery__item--selected" : "gallery__item"
-                }
-              >
+          <>
+            <div className="gallery">
+              {pagedGallery.map((j, i) => (
+                <div
+                  key={j.id}
+                  className={
+                    j.id === selectedId ? "gallery__item gallery__item--selected" : "gallery__item"
+                  }
+                >
+                  <button
+                    type="button"
+                    className="gallery__item-select"
+                    onClick={() => {
+                      setSelectedId(j.id);
+                      setDetail(null);
+                    }}
+                  >
+                    {about && (
+                      <img src={imageOutputUrl(about.core_api_port, j.id)} alt="" loading="lazy" />
+                    )}
+                    <span className="gallery__cap">
+                      {asImageParams(j.params).prompt ?? "image"}
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    className="gallery__zoom"
+                    title="Zoom"
+                    aria-label="Zoom this image"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setLightboxIndex(i);
+                    }}
+                  >
+                    ⤢
+                  </button>
+                  <button
+                    type="button"
+                    className="gallery__delete"
+                    title="Delete"
+                    aria-label="Delete this image"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleDelete(j.id);
+                    }}
+                  >
+                    ×
+                  </button>
+                </div>
+              ))}
+            </div>
+            {pageCount > 1 && (
+              <div className="gallery__pager">
                 <button
                   type="button"
-                  className="gallery__item-select"
-                  onClick={() => {
-                    setSelectedId(j.id);
-                    setDetail(null);
-                  }}
+                  className="chip"
+                  disabled={clampedPage === 0}
+                  onClick={() => setGalleryPage((p) => Math.max(0, p - 1))}
                 >
-                  {about && (
-                    <img src={imageOutputUrl(about.core_api_port, j.id)} alt="" loading="lazy" />
-                  )}
-                  <span className="gallery__cap">
-                    {asImageParams(j.params).prompt ?? "image"}
-                  </span>
+                  ← Prev
                 </button>
+                <span className="muted numeric">
+                  Page {clampedPage + 1} / {pageCount}
+                </span>
                 <button
                   type="button"
-                  className="gallery__delete"
-                  title="Delete"
-                  aria-label="Delete this image"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    handleDelete(j.id);
-                  }}
+                  className="chip"
+                  disabled={clampedPage >= pageCount - 1}
+                  onClick={() => setGalleryPage((p) => Math.min(pageCount - 1, p + 1))}
                 >
-                  ×
+                  Next →
                 </button>
               </div>
-            ))}
-          </div>
+            )}
+          </>
         )}
       </section>
+
+      {lightboxIndex != null && about && pagedGallery[lightboxIndex] && (
+        <Lightbox
+          kind="image"
+          src={imageOutputUrl(about.core_api_port, pagedGallery[lightboxIndex].id)}
+          caption={asImageParams(pagedGallery[lightboxIndex].params).prompt}
+          onClose={() => setLightboxIndex(null)}
+          onPrev={lightboxIndex > 0 ? () => setLightboxIndex(lightboxIndex - 1) : undefined}
+          onNext={
+            lightboxIndex < pagedGallery.length - 1
+              ? () => setLightboxIndex(lightboxIndex + 1)
+              : undefined
+          }
+        />
+      )}
     </div>
   );
 }
@@ -567,17 +685,31 @@ function Result({
   job,
   port,
   modelNames,
+  progress,
   onCancel,
   onDelete,
+  onRetry,
   onUpscale,
+  onUseAsBase,
   onReuseSeed,
 }: {
   job: Job | null;
   port: number | null;
   modelNames: Map<string, string>;
+  /** Real per-step progress from ComfyUI's own `/ws`, when this job is the
+   *  one currently streaming it (`null` otherwise — an earlier phase with no
+   *  node executing yet, a connection that didn't come up, or this just
+   *  isn't the in-flight job). */
+  progress?: JobProgress | null;
   onCancel?: () => void;
   onDelete?: () => void;
+  /** Resubmit this failed job's own params as a fresh job. Only offered for
+   *  `state === "failed"`. */
+  onRetry?: () => void;
   onUpscale?: () => void;
+  /** Send this finished image back into the "Edit an existing image" field —
+   *  removes the extra file-browse round trip to iterate on a result. */
+  onUseAsBase?: () => void;
   onReuseSeed: (seed: string) => void;
 }) {
   if (!job) return <p className="muted">Fill in a prompt and hit Generate.</p>;
@@ -587,6 +719,7 @@ function Result({
   const up = asUpscaleParams(job.params);
   const running = !DONE.includes(job.state);
   const modelName = job.model_id ? (modelNames.get(job.model_id) ?? job.model_id) : "—";
+  const live = progress && progress.job_id === job.id ? progress : null;
 
   return (
     <div className="result">
@@ -602,9 +735,19 @@ function Result({
         ) : job.state === "cancelled" ? (
           <span className="muted">cancelled</span>
         ) : (
-          <span className="result__spin">{isUpscale ? "upscaling…" : `${job.state}…`}</span>
+          <span className="result__spin">
+            {isUpscale ? "upscaling…" : live?.node ? `${live.node}…` : `${job.state}…`}
+          </span>
         )}
       </div>
+      {running && live?.steps_total != null && (
+        <Meter
+          label="Rendering"
+          value={live.step ?? 0}
+          max={live.steps_total}
+          unit="steps"
+        />
+      )}
       <dl className="result__meta">
         {isUpscale ? (
           <>
@@ -661,21 +804,42 @@ function Result({
           </>
         )}
       </dl>
-      {job.state === "completed" && onUpscale && (
-        <button type="button" className="result__cancel" onClick={onUpscale}>
-          Upscale
-        </button>
-      )}
-      {running && onCancel && (
-        <button type="button" className="result__cancel" onClick={onCancel}>
-          Stop
-        </button>
-      )}
-      {!running && onDelete && (
-        <button type="button" className="result__cancel" onClick={onDelete}>
-          Delete
-        </button>
-      )}
+      <div className="result__actions">
+        {job.state === "completed" && onUpscale && (
+          <button type="button" className="result__cancel" onClick={onUpscale}>
+            Upscale
+          </button>
+        )}
+        {job.state === "completed" && onUseAsBase && (
+          <button type="button" className="result__cancel" onClick={onUseAsBase}>
+            Use as base
+          </button>
+        )}
+        {job.state === "completed" && (
+          <button
+            type="button"
+            className="result__cancel"
+            onClick={() => downloadJobOutput(job)}
+          >
+            Download
+          </button>
+        )}
+        {job.state === "failed" && onRetry && (
+          <button type="button" className="result__cancel" onClick={onRetry}>
+            Erneut versuchen
+          </button>
+        )}
+        {running && onCancel && (
+          <button type="button" className="result__cancel" onClick={onCancel}>
+            Stop
+          </button>
+        )}
+        {!running && onDelete && (
+          <button type="button" className="result__cancel" onClick={onDelete}>
+            Delete
+          </button>
+        )}
+      </div>
     </div>
   );
 }
