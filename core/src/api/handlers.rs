@@ -682,6 +682,19 @@ pub fn install_hermes(app: &App) -> Result<&'static str> {
     Ok("started")
 }
 
+/// Deterministic "is a newer version available upstream" check for the five
+/// externally-sourced tools AIWM installs or resolves (`GET
+/// /runtimes/versions`) — see [`crate::runtime`]'s `version_check` module doc
+/// for exactly which upstream each tool is checked against. **Not** the
+/// LLM-driven per-model [`upgrade_check`] above (job type `upgrade_check`,
+/// Phase 6.7) — that answers "is there a better MODEL on Hugging Face"; this
+/// answers "did AIWM's own curated pin for ComfyUI/llama.cpp/Colibri/Hermes/
+/// OpenCode fall behind upstream". Refuses up front in offline mode, exactly
+/// like `install_llamacpp` et al.
+pub async fn check_tool_versions(app: &App) -> Result<Vec<crate::runtime::ToolVersionCheck>> {
+    crate::runtime::check_versions(app.offline()).await
+}
+
 /// Availability of the agent runtimes (`GET /agent-runtimes`). The UI's profile
 /// form uses `installed` to enable each runtime option.
 pub fn agent_runtimes(app: &App) -> Vec<crate::api::dto::AgentRuntimeDto> {

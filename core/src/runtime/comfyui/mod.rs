@@ -14,7 +14,12 @@
 //! Installing the pinned ComfyUI (venv + one custom node) lands in 3.2.
 
 mod client;
-mod install;
+// `pub(crate)` (not `pub`) rather than restructuring the file itself: another
+// agent is concurrently editing `install.rs` for an unrelated vram_mode
+// feature, so this widened-visibility change lives here instead — it lets
+// `runtime::version_check` read `install::PINNED_TAG` without touching that
+// file at all.
+pub(crate) mod install;
 mod launch;
 
 use std::path::{Path, PathBuf};

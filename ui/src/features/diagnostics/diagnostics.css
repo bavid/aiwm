@@ -87,6 +87,14 @@
   border-bottom: 1px solid var(--surface-2);
 }
 
+.rt td[data-state="warn"] {
+  color: var(--load-warn);
+}
+
+.rt td[data-state="crit"] {
+  color: var(--load-crit);
+}
+
 .rt-setup {
   display: flex;
   align-items: center;

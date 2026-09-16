@@ -9,11 +9,14 @@ import {
 } from "../../lib/hooks";
 import {
   attachExternalEngine,
+  checkToolVersions,
   detachEngine,
   installComfyui,
   installLlamacpp,
   unloadModel,
   type RuntimeStatus,
+  type ToolUpdateStatus,
+  type ToolVersionCheck,
 } from "../../lib/ipc";
 import { getTheme } from "../../lib/theme";
 import "./diagnostics.css";
@@ -120,6 +123,8 @@ export function Diagnostics() {
         />
       </section>
 
+      <ToolUpdatesCard />
+
       <ExternalEngineCard llama={runtimes?.find((r) => r.id === "llamacpp")} />
 
       <section className="card card--wide">
@@ -180,6 +185,85 @@ export function Diagnostics() {
         </pre>
       </section>
     </div>
+  );
+}
+
+const TOOL_LABELS: Record<ToolVersionCheck["id"], string> = {
+  comfyui: "ComfyUI",
+  llamacpp: "llama.cpp",
+  colibri: "Colibri",
+  hermes: "Hermes",
+  opencode: "OpenCode",
+};
+
+function describeToolStatus(status: ToolUpdateStatus): string {
+  if (status.state === "up_to_date") return "up to date";
+  if (status.state === "update_available") return `${status.latest} available`;
+  if (status.state === "unmanaged") return `${status.latest} available upstream`;
+  return `check failed — ${status.error}`;
+}
+
+/** Drives the row's `[data-state]` color accent — amber for an update worth
+ *  taking, red for a failed check, unset (neutral) otherwise. */
+function toolStatusDataState(status: ToolUpdateStatus): "warn" | "crit" | undefined {
+  if (status.state === "update_available") return "warn";
+  if (status.state === "check_failed") return "crit";
+  return undefined;
+}
+
+/** Deterministic "is AIWM's pinned version behind upstream" check for the
+ *  five externally-sourced tools (ComfyUI, llama.cpp, Colibri, Hermes,
+ *  OpenCode) — a plain version-string compare against GitHub Releases / PyPI,
+ *  never the LLM-driven per-model advisor elsewhere in the app. Manually
+ *  triggered rather than polled: it makes a handful of real upstream HTTP
+ *  calls every time. */
+function ToolUpdatesCard() {
+  const [results, setResults] = useState<ToolVersionCheck[] | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const check = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      setResults(await checkToolVersions());
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <section className="card">
+      <header className="card__head">
+        <h2>Tool updates</h2>
+        <button type="button" className="diag__copy" onClick={check} disabled={busy}>
+          {busy ? "Checking…" : "Check for updates"}
+        </button>
+      </header>
+      {results ? (
+        <table className="rt">
+          <tbody>
+            {results.map((r) => (
+              <tr key={r.id}>
+                <td>{TOOL_LABELS[r.id]}</td>
+                <td className="muted numeric">{r.current ?? "bring your own"}</td>
+                <td className="muted" data-state={toolStatusDataState(r.status)}>
+                  {describeToolStatus(r.status)}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      ) : (
+        <p className="muted">
+          {error ??
+            "Compares ComfyUI, llama.cpp, Colibri and Hermes' pinned version against the latest one published upstream (OpenCode has no AIWM-managed pin)."}
+        </p>
+      )}
+      {results && error && <span className="muted">{error}</span>}
+    </section>
   );
 }
 

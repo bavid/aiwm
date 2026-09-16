@@ -86,6 +86,13 @@ async fn get_runtimes(app: tauri::State<'_, Arc<App>>) -> Result<Vec<RuntimeStat
 }
 
 #[tauri::command]
+async fn check_tool_versions(
+    app: tauri::State<'_, Arc<App>>,
+) -> Result<Vec<aiwm_core::runtime::ToolVersionCheck>, String> {
+    to_ipc(handlers::check_tool_versions(&app).await)
+}
+
+#[tauri::command]
 async fn install_llamacpp(app: tauri::State<'_, Arc<App>>) -> Result<String, String> {
     to_ipc(handlers::install_llamacpp(&app).map(str::to_string))
 }
@@ -555,6 +562,7 @@ fn try_run() -> anyhow::Result<()> {
             save_config,
             list_jobs,
             get_runtimes,
+            check_tool_versions,
             get_recent_logs,
             list_models,
             list_known_models,

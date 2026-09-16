@@ -30,6 +30,10 @@ use tokio::sync::mpsc;
 
 pub use fake::FakeAgentAdapter;
 pub use hermes::install::InstallStatus as HermesInstallStatus;
+/// Hermes' pinned `hermes-agent` (PyPI) version — re-exported crate-wide so
+/// `runtime::version_check` can compare it against the latest published
+/// release without duplicating the constant.
+pub(crate) use hermes::install::PINNED_VERSION as HERMES_PINNED_VERSION;
 pub use hermes::HermesAgentAdapter;
 pub use opencode::OpenCodeAdapter;
 
