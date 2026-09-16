@@ -276,6 +276,33 @@ export const getRuntimes = () => invoke<RuntimeStatus[]>("get_runtimes");
 export const installLlamacpp = () => invoke<string>("install_llamacpp");
 /** Start the pinned ComfyUI install — uv + source + venv + PyTorch + deps (background). */
 export const installComfyui = () => invoke<string>("install_comfyui");
+
+/** Whether AIWM's pinned version for one of the five externally-sourced tools
+ *  (ComfyUI, llama.cpp, Colibri, Hermes, OpenCode) is behind the latest one
+ *  published upstream. Not the per-model "is there a better model" advisor
+ *  (see `upgradeCheck`) -- this is a deterministic version-string compare
+ *  against GitHub Releases / PyPI, wherever each tool's installer already
+ *  sources its pinned archive from. */
+export type ToolUpdateStatus =
+  | { state: "up_to_date" }
+  | { state: "update_available"; latest: string }
+  /** AIWM does not pin a version for this tool (OpenCode: bring your own
+   *  binary) -- `latest` is shown for reference only, never compared. */
+  | { state: "unmanaged"; latest: string }
+  /** The upstream check itself failed (network, unexpected shape, ...). */
+  | { state: "check_failed"; error: string };
+
+export interface ToolVersionCheck {
+  id: "comfyui" | "llamacpp" | "colibri" | "hermes" | "opencode";
+  /** AIWM's pinned version, or `null` for the unmanaged OpenCode. */
+  current: string | null;
+  status: ToolUpdateStatus;
+}
+
+/** Fetches all five tools' upstream versions right now (a few real HTTP
+ *  calls) -- not polled, since it hits GitHub/PyPI on every call. Rejects
+ *  with "offline mode is on ..." when offline mode is active. */
+export const checkToolVersions = () => invoke<ToolVersionCheck[]>("check_tool_versions");
 export const getRecentLogs = (lines = 200) =>
   invoke<string[]>("get_recent_logs", { lines });
 export const listJobs = (opts?: { states?: JobState[]; limit?: number }) =>

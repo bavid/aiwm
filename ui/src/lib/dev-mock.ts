@@ -97,6 +97,16 @@ const RUNTIMES: AnyRecord[] = [
   },
 ];
 
+/** One example of each `ToolUpdateStatus` state, so the dev preview exercises
+ *  every row style the Diagnostics card can render. */
+const TOOL_VERSIONS: AnyRecord[] = [
+  { id: "comfyui", current: "v0.34.0", status: { state: "up_to_date" } },
+  { id: "llamacpp", current: "b10855", status: { state: "update_available", latest: "b10900" } },
+  { id: "colibri", current: "v1.10.2", status: { state: "up_to_date" } },
+  { id: "hermes", current: "0.19.0", status: { state: "update_available", latest: "0.20.0" } },
+  { id: "opencode", current: null, status: { state: "unmanaged", latest: "v0.5.0" } },
+];
+
 const COLIBRI_MODELS: AnyRecord[] = [
   {
     id: "qwen3.6-35b-a3b-colibri", label: "Qwen3.6-35B-A3B (Colibri)",
@@ -558,6 +568,8 @@ export function installDevMock(): void {
         return TELEMETRY;
       case "get_runtimes":
         return RUNTIMES;
+      case "check_tool_versions":
+        return TOOL_VERSIONS;
       case "list_models":
         // Fresh array — `usePolled` needs a changed reference to re-render
         // (e.g. after delete_model splices MODELS).
