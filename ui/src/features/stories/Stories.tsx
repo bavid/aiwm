@@ -36,6 +36,11 @@ export function Stories() {
   });
   const [section, setSection] = useState<SectionId>("timeline");
   const [selectedCharacterId, setSelectedCharacterId] = useState<string | null>(null);
+  // Bumped only when a character is opened via the roster's "Edit" control
+  // (not on a plain row click) so the sheet's `key` below changes and it
+  // remounts straight into edit mode -- see CharacterSheet's `initialEditing`.
+  const [editRequestSeq, setEditRequestSeq] = useState(0);
+  const [editRequestActive, setEditRequestActive] = useState(false);
 
   const changeStory = (id: string | null) => {
     setStoryId(id);
@@ -46,6 +51,17 @@ export function Stories() {
     } catch {
       /* localStorage unavailable -- the choice just won't stick across reloads */
     }
+  };
+
+  const selectCharacter = (id: string) => {
+    setSelectedCharacterId(id);
+    setEditRequestActive(false);
+  };
+
+  const editCharacter = (id: string) => {
+    setSelectedCharacterId(id);
+    setEditRequestActive(true);
+    setEditRequestSeq((n) => n + 1);
   };
 
   const story = (stories ?? []).find((s) => s.id === storyId) ?? null;
@@ -86,7 +102,8 @@ export function Stories() {
                 storyId={story.id}
                 characters={characters ?? []}
                 selectedId={selectedCharacterId}
-                onSelect={setSelectedCharacterId}
+                onSelect={selectCharacter}
+                onEdit={editCharacter}
                 onChanged={refetchCharacters}
               />
             )}
@@ -99,7 +116,7 @@ export function Stories() {
                 characters={characters ?? []}
                 locations={locations ?? []}
                 scenes={scenes ?? []}
-                onSelectCharacter={setSelectedCharacterId}
+                onSelectCharacter={selectCharacter}
                 onChanged={refetchAll}
               />
             )}
@@ -107,9 +124,11 @@ export function Stories() {
           </div>
 
           <CharacterSheet
+            key={`${selectedCharacterId ?? "none"}:${editRequestSeq}`}
             character={selectedCharacter}
             story={story}
             characters={characters ?? []}
+            initialEditing={editRequestActive}
             onClose={() => setSelectedCharacterId(null)}
             onChanged={refetchCharacters}
           />

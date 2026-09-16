@@ -260,6 +260,39 @@
   cursor: default;
 }
 
+.roster__item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.roster__item .roster__row {
+  width: auto;
+  flex: 1;
+  min-width: 0;
+}
+
+.roster__edit {
+  flex: none;
+  width: 30px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--muted);
+  cursor: pointer;
+  font-size: var(--text-md);
+  line-height: 1;
+}
+
+.roster__edit:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
 .roster__row:hover,
 .roster__row--active {
   border-color: var(--accent);
