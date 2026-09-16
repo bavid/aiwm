@@ -45,6 +45,8 @@ const MODEL_TYPES: { value: ModelType; label: string; ext: string }[] = [
   { value: "vae", label: "VAE", ext: ".safetensors" },
   { value: "lora", label: "LoRA", ext: ".safetensors" },
   { value: "text_encoder", label: "Text encoder / CLIP", ext: ".safetensors, .gguf" },
+  { value: "clip_vision", label: "CLIP vision (character consistency)", ext: ".safetensors" },
+  { value: "ip_adapter", label: "IP-Adapter (character consistency)", ext: ".safetensors" },
   { value: "video", label: "Video model", ext: ".safetensors, .gguf" },
   { value: "voice_model", label: "Voice model (TTS)", ext: ".onnx" },
   { value: "voice_data", label: "Voice data (voice presets)", ext: ".bin" },

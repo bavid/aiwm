@@ -813,6 +813,11 @@ export type ModelType =
   | "video"
   | "voice_model"
   | "voice_data"
+  /** A CLIP vision encoder, or an IP-Adapter weight file — the two
+   *  supporting models Story Studio Phase 2's SDXL character-consistency
+   *  path needs (`core::model::ModelKind::ClipVision`/`IpAdapter`). */
+  | "clip_vision"
+  | "ip_adapter"
   /** One file of the Dia narrator engine or its separate DAC audio codec —
    *  see `core::model::ModelKind::DiaEngine`/`DiaCodec`. Each lands in its
    *  own fixed subdirectory under its original Hugging Face filename;

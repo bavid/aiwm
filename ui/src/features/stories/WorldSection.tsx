@@ -65,7 +65,13 @@ function LocationsPanel({
   const generateReference = async (location: StoryLocation) => {
     setGeneratingId(location.id);
     try {
-      const jobId = await generateImage(locationReferencePrompt(story, location));
+      // Same anchoring treatment as a Character's portrait: a regeneration
+      // stays recognizably the same location instead of drifting (Story
+      // Studio Phase 2). A first-ever reference has nothing to anchor to.
+      const jobId = await generateImage(
+        locationReferencePrompt(story, location),
+        location.reference_job_id ?? undefined,
+      );
       await setLocationReference(location.id, jobId);
       onChanged();
     } finally {
@@ -92,11 +98,16 @@ function LocationsPanel({
                   type="button"
                   onClick={() => generateReference(loc)}
                   disabled={generatingId === loc.id}
+                  title={
+                    loc.reference_job_id
+                      ? "Anchored to the current reference image for a consistent look"
+                      : undefined
+                  }
                 >
                   {generatingId === loc.id
                     ? "Generating…"
                     : loc.reference_job_id
-                      ? "Regenerate"
+                      ? "Regenerate (anchored)"
                       : "Generate reference"}
                 </button>
                 <button

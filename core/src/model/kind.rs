@@ -55,6 +55,17 @@ pub enum ModelKind {
     /// Imported locally (rather than left for `AutoProcessor` to fetch on
     /// first use) to keep the narrator fully offline once both are in.
     DiaCodec,
+    /// A CLIP vision encoder (`ComfyUI`'s core `CLIPVisionLoader`) — the
+    /// image half of IP-Adapter-style character consistency (Story Studio
+    /// Phase 2). Distinct from [`TextEncoder`](Self::TextEncoder): that role
+    /// feeds `CLIPTextEncode` (prompts), this one feeds `CLIPVisionEncode`
+    /// (reference images), and the two are never interchangeable files.
+    ClipVision,
+    /// An IP-Adapter weight file (`ComfyUI_IPAdapter_plus`'s
+    /// `IPAdapterModelLoader`) — the identity/style-lock half of Story
+    /// Studio Phase 2 character consistency, paired with a
+    /// [`ClipVision`](Self::ClipVision) encoder.
+    IpAdapter,
 }
 
 impl ModelKind {
@@ -72,6 +83,8 @@ impl ModelKind {
             "voice_data" | "voices" => Self::VoiceData,
             "dia_engine" => Self::DiaEngine,
             "dia_codec" => Self::DiaCodec,
+            "clip_vision" | "clip_vision_model" => Self::ClipVision,
+            "ip_adapter" | "ipadapter" => Self::IpAdapter,
             _ => return None,
         })
     }
@@ -94,7 +107,9 @@ impl ModelKind {
             Self::DiffusionModel | Self::TextEncoder | Self::VideoModel => {
                 ext == "safetensors" || ext == "gguf"
             }
-            Self::Checkpoint | Self::Vae | Self::Lora => ext == "safetensors",
+            Self::Checkpoint | Self::Vae | Self::Lora | Self::ClipVision | Self::IpAdapter => {
+                ext == "safetensors"
+            }
             Self::VoiceModel => ext == "onnx",
             Self::VoiceData => ext == "bin",
             // A mix of small JSON config/tokenizer files and one or two
@@ -129,6 +144,8 @@ impl ModelKind {
             Self::VoiceData => Some("voice_data"),
             Self::DiaEngine => Some("dia_engine"),
             Self::DiaCodec => Some("dia_codec"),
+            Self::ClipVision => Some("clip_vision"),
+            Self::IpAdapter => Some("ip_adapter"),
         }
     }
 
@@ -150,6 +167,8 @@ impl ModelKind {
             // name.
             Self::DiaEngine => "voice/dia-engine",
             Self::DiaCodec => "voice/dia-codec",
+            Self::ClipVision => "image/clip_vision",
+            Self::IpAdapter => "image/ipadapter",
         }
     }
 
@@ -166,6 +185,8 @@ impl ModelKind {
             Self::Vae => "vae",
             Self::Lora => "loras",
             Self::TextEncoder => "text_encoders",
+            Self::ClipVision => "clip_vision",
+            Self::IpAdapter => "ipadapter",
         })
     }
 
@@ -182,17 +203,21 @@ impl ModelKind {
             Self::VoiceData => "voice_data",
             Self::DiaEngine => "dia_engine",
             Self::DiaCodec => "dia_codec",
+            Self::ClipVision => "clip_vision",
+            Self::IpAdapter => "ip_adapter",
         }
     }
 
     /// Image kinds that live under `<store>/image/` — for the ComfyUI
     /// model-paths config.
-    pub const IMAGE_KINDS: [Self; 5] = [
+    pub const IMAGE_KINDS: [Self; 7] = [
         Self::Checkpoint,
         Self::DiffusionModel,
         Self::Vae,
         Self::Lora,
         Self::TextEncoder,
+        Self::ClipVision,
+        Self::IpAdapter,
     ];
 
     /// Kinds that live under `<store>/video/`.
@@ -362,5 +387,47 @@ mod tests {
     fn dia_kinds_carry_their_own_distinct_roles() {
         assert_eq!(ModelKind::DiaEngine.default_role(), Some("dia_engine"));
         assert_eq!(ModelKind::DiaCodec.default_role(), Some("dia_codec"));
+    }
+
+    #[test]
+    fn clip_vision_and_ip_adapter_parse_from_hints() {
+        assert_eq!(
+            ModelKind::from_hint("clip_vision"),
+            Some(ModelKind::ClipVision)
+        );
+        assert_eq!(
+            ModelKind::from_hint("clip_vision_model"),
+            Some(ModelKind::ClipVision)
+        );
+        assert_eq!(
+            ModelKind::from_hint("ip_adapter"),
+            Some(ModelKind::IpAdapter)
+        );
+        assert_eq!(
+            ModelKind::from_hint("ipadapter"),
+            Some(ModelKind::IpAdapter)
+        );
+    }
+
+    #[test]
+    fn clip_vision_and_ip_adapter_are_safetensors_only_and_route_to_their_own_comfy_folders() {
+        assert!(ModelKind::ClipVision.accepts_ext("safetensors"));
+        assert!(!ModelKind::ClipVision.accepts_ext("gguf"));
+        assert!(ModelKind::IpAdapter.accepts_ext("safetensors"));
+        assert!(!ModelKind::IpAdapter.accepts_ext("bin"));
+
+        assert_eq!(ModelKind::ClipVision.store_subdir(), "image/clip_vision");
+        assert_eq!(ModelKind::ClipVision.comfy_folder(), Some("clip_vision"));
+        assert_eq!(ModelKind::IpAdapter.store_subdir(), "image/ipadapter");
+        assert_eq!(ModelKind::IpAdapter.comfy_folder(), Some("ipadapter"));
+
+        assert_eq!(ModelKind::ClipVision.default_role(), Some("clip_vision"));
+        assert_eq!(ModelKind::IpAdapter.default_role(), Some("ip_adapter"));
+
+        // Both are ComfyUI-loaded image models, so they must ride along in
+        // IMAGE_KINDS (which drives `extra_model_paths.yaml`) same as every
+        // other image kind.
+        assert!(ModelKind::IMAGE_KINDS.contains(&ModelKind::ClipVision));
+        assert!(ModelKind::IMAGE_KINDS.contains(&ModelKind::IpAdapter));
     }
 }

@@ -542,6 +542,350 @@ pub fn flux2_klein_edit(i: &EditInputs, m: &Flux2KleinModels, loras: &[LoraSpec]
     g
 }
 
+// --- character consistency (Story Studio Phase 2) ------------------------------
+
+/// The two files SDXL-family IP-Adapter conditioning needs (`ComfyUI_IPAdapter_plus`'s
+/// `IPAdapterModelLoader` + core ComfyUI's `CLIPVisionLoader`), plus the reference
+/// portrait already staged in ComfyUI's `input/` folder and how strongly it should
+/// steer the render.
+#[derive(Debug, Clone, Copy)]
+pub struct IpAdapterSpec<'a> {
+    pub clip_vision: &'a str,
+    pub ipadapter_model: &'a str,
+    /// Bare file name of the reference image, already placed in ComfyUI's
+    /// `input/` folder (same convention as [`EditInputs::source_image`]).
+    pub reference_image: &'a str,
+    /// `IPAdapterAdvanced`'s `weight`. The node's own default is `1.0`; the
+    /// pack's README recommends lowering it (it suggests "at least 0.8") for
+    /// better prompt adherence, so callers should default there, not to 1.0.
+    pub weight: f64,
+}
+
+/// SDXL (and any single-file SD checkpoint) txt2img with IP-Adapter character/style
+/// conditioning spliced in: the same graph as [`checkpoint_txt2img`], plus a
+/// `CLIPVisionLoader` + `IPAdapterModelLoader` + `LoadImage` feeding an
+/// `IPAdapterAdvanced` node between the checkpoint (and any LoRAs) and the sampler.
+///
+/// Uses the *explicit-file* loaders (`CLIPVisionLoader`, `IPAdapterModelLoader`),
+/// not `IPAdapterUnifiedLoader` — the unified loader's `preset` argument resolves
+/// to a file by matching hard-coded name patterns (`get_clipvision_file` /
+/// `get_ipadapter_file` in the node pack's `utils.py`), which would silently break
+/// the moment a user imports either file under a different name. Passing both
+/// bare file names explicitly (the same convention every other function in this
+/// module already uses for `checkpoint`/`vae`/`unet`/…) is one extra node but
+/// never depends on a naming convention outside AIWM's control.
+///
+/// Verified against the real `ComfyUI_IPAdapter_plus` node source
+/// (`cubiq/ComfyUI_IPAdapter_plus`, commit `a0f451a`): `IPAdapterAdvanced.
+/// apply_ipadapter` accepts a raw `IPADAPTER` model (not just the unified
+/// loader's `{clipvision, ipadapter, insightface}` dict) as long as a `clip_vision`
+/// is also supplied on its optional input — exactly the shape built here.
+pub fn checkpoint_ipadapter_txt2img(
+    i: &Txt2ImgInputs,
+    checkpoint: &str,
+    ip: &IpAdapterSpec,
+    loras: &[LoraSpec],
+) -> Value {
+    let mut g = json!({
+        "4": {
+            "class_type": "CheckpointLoaderSimple",
+            "inputs": { "ckpt_name": checkpoint }
+        },
+        "5": {
+            "class_type": "EmptyLatentImage",
+            "inputs": { "width": i.width, "height": i.height, "batch_size": 1 }
+        },
+        "6": {
+            "class_type": "CLIPTextEncode",
+            "inputs": { "text": i.positive, "clip": ["4", 1] }
+        },
+        "7": {
+            "class_type": "CLIPTextEncode",
+            "inputs": { "text": i.negative, "clip": ["4", 1] }
+        },
+        "40": {
+            "class_type": "CLIPVisionLoader",
+            "inputs": { "clip_name": ip.clip_vision }
+        },
+        "41": {
+            "class_type": "IPAdapterModelLoader",
+            "inputs": { "ipadapter_file": ip.ipadapter_model }
+        },
+        "42": {
+            "class_type": "LoadImage",
+            "inputs": { "image": ip.reference_image }
+        },
+        "43": {
+            "class_type": "IPAdapterAdvanced",
+            "inputs": {
+                "model": ["4", 0],
+                "ipadapter": ["41", 0],
+                "image": ["42", 0],
+                "clip_vision": ["40", 0],
+                "weight": ip.weight,
+                "weight_type": "linear",
+                "combine_embeds": "concat",
+                "start_at": 0.0,
+                "end_at": 1.0,
+                "embeds_scaling": "V only"
+            }
+        },
+        "3": {
+            "class_type": "KSampler",
+            "inputs": {
+                "seed": i.seed,
+                "steps": i.steps,
+                "cfg": i.cfg,
+                "sampler_name": i.sampler,
+                "scheduler": i.scheduler,
+                "denoise": 1.0,
+                "model": ["43", 0],
+                "positive": ["6", 0],
+                "negative": ["7", 0],
+                "latent_image": ["5", 0]
+            }
+        },
+        "8": {
+            "class_type": "VAEDecode",
+            "inputs": { "samples": ["3", 0], "vae": ["4", 2] }
+        },
+        "9": {
+            "class_type": "SaveImage",
+            "inputs": { "filename_prefix": i.filename_prefix, "images": ["8", 0] }
+        }
+    });
+    // LoRAs patch the checkpoint's model/clip *before* IPAdapter sees it (the
+    // common community ordering: checkpoint -> LoRA -> IPAdapter -> sampler),
+    // so route the chain into node "43" instead of the sampler directly.
+    apply_loras(&mut g, loras, ("4", 0), ("4", 1), "43", &["6", "7"]);
+    g
+}
+
+/// FLUX.2 \[klein\] GGUF txt2img with a reference portrait steering the render,
+/// built on the same mechanism [`flux2_klein_edit`] uses for instruction-based
+/// edits: `ReferenceLatent`. Unlike an edit, this is a *fresh* generation from
+/// noise at the caller's own `width`/`height` (not the reference's own size) —
+/// the reference only anchors identity/style via the guiding latent injected
+/// into both the real and the zeroed-out conditioning, the same
+/// "Kontext-style" technique real FLUX.2/Kontext character-consistency
+/// workflows use.
+///
+/// Only meaningful for FLUX.2 \[klein\], which is edit-trained (that's what
+/// makes `ReferenceLatent` actually do something -- see its own doc string,
+/// "sets the guiding latent for an edit model"). Plain FLUX.1-dev was never
+/// trained to read `reference_latents` conditioning, so this recipe is not
+/// offered for it (see `docs/TODO.md`'s Story Studio Phase 2 entry for the
+/// FLUX.1 gap and what would close it — Flux Redux).
+///
+/// GGUF checkpoints only — see [`flux2_klein_reference_txt2img_safetensors`]
+/// for a plain `.safetensors` FLUX.2 [klein] file (a real distinction, not a
+/// pedantic one: `UnetLoaderGGUF` only ever lists `.gguf` files to ComfyUI, so
+/// handing it a `.safetensors` name fails at `/prompt` submission — hit live
+/// during this slice's real end-to-end smoke test, not a hypothetical).
+pub fn flux2_klein_reference_txt2img(
+    i: &Txt2ImgInputs,
+    m: &Flux2KleinModels,
+    reference_image: &str,
+    loras: &[LoraSpec],
+) -> Value {
+    let mut g = json!({
+        "12": {
+            "class_type": "UnetLoaderGGUF",
+            "inputs": { "unet_name": m.unet }
+        },
+        "11": {
+            "class_type": "CLIPLoader",
+            "inputs": { "clip_name": m.clip, "type": "flux2" }
+        },
+        "10": {
+            "class_type": "VAELoader",
+            "inputs": { "vae_name": m.vae }
+        },
+        "50": {
+            "class_type": "LoadImage",
+            "inputs": { "image": reference_image }
+        },
+        "51": {
+            "class_type": "ImageScaleToTotalPixels",
+            // Same "required despite having a default" quirk as the edit
+            // graph -- an API-submitted `/prompt` rejects a missing
+            // `resolution_steps` outright. 1 = no snapping.
+            "inputs": {
+                "image": ["50", 0],
+                "upscale_method": "lanczos",
+                "megapixels": 1.0,
+                "resolution_steps": 1
+            }
+        },
+        "52": {
+            "class_type": "VAEEncode",
+            "inputs": { "pixels": ["51", 0], "vae": ["10", 0] }
+        },
+        "6": {
+            "class_type": "CLIPTextEncode",
+            "inputs": { "text": i.positive, "clip": ["11", 0] }
+        },
+        "53": {
+            "class_type": "ReferenceLatent",
+            "inputs": { "conditioning": ["6", 0], "latent": ["52", 0] }
+        },
+        "27": {
+            "class_type": "ConditioningZeroOut",
+            "inputs": { "conditioning": ["6", 0] }
+        },
+        "54": {
+            "class_type": "ReferenceLatent",
+            "inputs": { "conditioning": ["27", 0], "latent": ["52", 0] }
+        },
+        "28": {
+            "class_type": "KSamplerSelect",
+            "inputs": { "sampler_name": i.sampler }
+        },
+        "29": {
+            "class_type": "Flux2Scheduler",
+            "inputs": { "steps": i.steps, "width": i.width, "height": i.height }
+        },
+        "30": {
+            "class_type": "RandomNoise",
+            "inputs": { "noise_seed": i.seed }
+        },
+        "31": {
+            "class_type": "CFGGuider",
+            "inputs": {
+                "model": ["12", 0],
+                "positive": ["53", 0],
+                "negative": ["54", 0],
+                "cfg": i.cfg
+            }
+        },
+        "32": {
+            "class_type": "EmptyFlux2LatentImage",
+            "inputs": { "width": i.width, "height": i.height, "batch_size": 1 }
+        },
+        "3": {
+            "class_type": "SamplerCustomAdvanced",
+            "inputs": {
+                "noise": ["30", 0],
+                "guider": ["31", 0],
+                "sampler": ["28", 0],
+                "sigmas": ["29", 0],
+                "latent_image": ["32", 0]
+            }
+        },
+        "8": {
+            "class_type": "VAEDecode",
+            "inputs": { "samples": ["3", 0], "vae": ["10", 0] }
+        },
+        "9": {
+            "class_type": "SaveImage",
+            "inputs": { "filename_prefix": i.filename_prefix, "images": ["8", 0] }
+        }
+    });
+    apply_loras(&mut g, loras, ("12", 0), ("11", 0), "31", &["6"]);
+    g
+}
+
+/// Same as [`flux2_klein_reference_txt2img`] but for a plain `.safetensors`
+/// FLUX.2 [klein] checkpoint (`UNETLoader`, no `ComfyUI-GGUF` custom node) —
+/// [`Recipe::Flux2KleinSafetensors`]'s own graph shape (`FluxGuidance` + a
+/// plain `KSampler` at CFG 1, like [`flux2_klein_txt2img_safetensors`]), not
+/// the GGUF recipe's `CFGGuider`/`SamplerCustomAdvanced` chain. A real bug
+/// hit live (Story Studio Phase 2 smoke test): reusing the GGUF-only
+/// function for a safetensors checkpoint fails at `/prompt` submission with
+/// `unet_name: '<file>' not in ['<the-gguf-file>']` — `UnetLoaderGGUF` only
+/// ever lists `.gguf` files, so a `.safetensors` FLUX.2 [klein] file (like
+/// the fp8 mixed-precision one) is invisible to it. This function exists
+/// specifically so [`Recipe::for_family`]'s file-extension split has a
+/// correct home on both sides.
+pub fn flux2_klein_reference_txt2img_safetensors(
+    i: &Txt2ImgInputs,
+    m: &Flux2KleinModels,
+    reference_image: &str,
+    loras: &[LoraSpec],
+) -> Value {
+    let guidance = i.cfg.clamp(1.0, 10.0);
+    let mut g = json!({
+        "12": {
+            "class_type": "UNETLoader",
+            "inputs": { "unet_name": m.unet, "weight_dtype": "default" }
+        },
+        "11": {
+            "class_type": "CLIPLoader",
+            "inputs": { "clip_name": m.clip, "type": "flux2" }
+        },
+        "10": {
+            "class_type": "VAELoader",
+            "inputs": { "vae_name": m.vae }
+        },
+        "50": {
+            "class_type": "LoadImage",
+            "inputs": { "image": reference_image }
+        },
+        "51": {
+            "class_type": "ImageScaleToTotalPixels",
+            "inputs": {
+                "image": ["50", 0],
+                "upscale_method": "lanczos",
+                "megapixels": 1.0,
+                "resolution_steps": 1
+            }
+        },
+        "52": {
+            "class_type": "VAEEncode",
+            "inputs": { "pixels": ["51", 0], "vae": ["10", 0] }
+        },
+        "6": {
+            "class_type": "CLIPTextEncode",
+            "inputs": { "text": i.positive, "clip": ["11", 0] }
+        },
+        "53": {
+            "class_type": "ReferenceLatent",
+            "inputs": { "conditioning": ["6", 0], "latent": ["52", 0] }
+        },
+        "26": {
+            "class_type": "FluxGuidance",
+            "inputs": { "conditioning": ["53", 0], "guidance": guidance }
+        },
+        "27": {
+            "class_type": "ConditioningZeroOut",
+            "inputs": { "conditioning": ["6", 0] }
+        },
+        "54": {
+            "class_type": "ReferenceLatent",
+            "inputs": { "conditioning": ["27", 0], "latent": ["52", 0] }
+        },
+        "32": {
+            "class_type": "EmptyFlux2LatentImage",
+            "inputs": { "width": i.width, "height": i.height, "batch_size": 1 }
+        },
+        "3": {
+            "class_type": "KSampler",
+            "inputs": {
+                "seed": i.seed,
+                "steps": i.steps,
+                "cfg": 1.0,
+                "sampler_name": i.sampler,
+                "scheduler": i.scheduler,
+                "denoise": 1.0,
+                "model": ["12", 0],
+                "positive": ["26", 0],
+                "negative": ["54", 0],
+                "latent_image": ["32", 0]
+            }
+        },
+        "8": {
+            "class_type": "VAEDecode",
+            "inputs": { "samples": ["3", 0], "vae": ["10", 0] }
+        },
+        "9": {
+            "class_type": "SaveImage",
+            "inputs": { "filename_prefix": i.filename_prefix, "images": ["8", 0] }
+        }
+    });
+    apply_loras(&mut g, loras, ("12", 0), ("11", 0), "3", &["6"]);
+    g
+}
+
 // --- video --------------------------------------------------------------------
 
 /// A resolved text/image-to-video request. `start_image` is the bare file name
@@ -1325,6 +1669,200 @@ mod tests {
             json!(["90", 1]),
             "CLIPTextEncode reads the lora'd clip"
         );
+    }
+
+    fn ipadapter_spec() -> IpAdapterSpec<'static> {
+        IpAdapterSpec {
+            clip_vision: "CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors",
+            ipadapter_model: "ip-adapter-plus_sdxl_vit-h.safetensors",
+            reference_image: "job-portrait.png",
+            weight: 0.8,
+        }
+    }
+
+    #[test]
+    fn checkpoint_ipadapter_graph_wires_the_clip_vision_and_ipadapter_chain() {
+        let g = checkpoint_ipadapter_txt2img(
+            &inputs(),
+            "sd_xl_base_1.0.safetensors",
+            &ipadapter_spec(),
+            &[],
+        );
+        assert_eq!(g["4"]["inputs"]["ckpt_name"], "sd_xl_base_1.0.safetensors");
+        assert_eq!(g["40"]["class_type"], "CLIPVisionLoader");
+        assert_eq!(
+            g["40"]["inputs"]["clip_name"],
+            "CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors"
+        );
+        assert_eq!(g["41"]["class_type"], "IPAdapterModelLoader");
+        assert_eq!(
+            g["41"]["inputs"]["ipadapter_file"],
+            "ip-adapter-plus_sdxl_vit-h.safetensors"
+        );
+        assert_eq!(g["42"]["class_type"], "LoadImage");
+        assert_eq!(g["42"]["inputs"]["image"], "job-portrait.png");
+        assert_eq!(g["43"]["class_type"], "IPAdapterAdvanced");
+        assert_eq!(g["43"]["inputs"]["model"], json!(["4", 0]));
+        assert_eq!(g["43"]["inputs"]["ipadapter"], json!(["41", 0]));
+        assert_eq!(g["43"]["inputs"]["image"], json!(["42", 0]));
+        assert_eq!(g["43"]["inputs"]["clip_vision"], json!(["40", 0]));
+        assert_eq!(g["43"]["inputs"]["weight"], 0.8);
+        assert_eq!(g["43"]["inputs"]["weight_type"], "linear");
+        // The sampler reads the IPAdapter-patched model, not the bare checkpoint.
+        assert_eq!(g["3"]["inputs"]["model"], json!(["43", 0]));
+        assert_eq!(g["3"]["inputs"]["positive"], json!(["6", 0]));
+        assert_eq!(g["8"]["inputs"]["vae"], json!(["4", 2]));
+        assert_eq!(g["9"]["inputs"]["filename_prefix"], "job-abc");
+    }
+
+    #[test]
+    fn checkpoint_ipadapter_graph_splices_loras_before_the_ipadapter_node() {
+        let g = checkpoint_ipadapter_txt2img(
+            &inputs(),
+            "x.safetensors",
+            &ipadapter_spec(),
+            &[LoraSpec {
+                file: "style.safetensors",
+                strength: 0.6,
+            }],
+        );
+        assert_eq!(g["90"]["inputs"]["model"], json!(["4", 0]));
+        assert_eq!(g["90"]["inputs"]["clip"], json!(["4", 1]));
+        assert_eq!(
+            g["43"]["inputs"]["model"],
+            json!(["90", 0]),
+            "IPAdapterAdvanced reads the lora'd model"
+        );
+        assert_eq!(
+            g["6"]["inputs"]["clip"],
+            json!(["90", 1]),
+            "CLIPTextEncode reads the lora'd clip"
+        );
+        assert_eq!(
+            g["3"]["inputs"]["model"],
+            json!(["43", 0]),
+            "the sampler still reads the IPAdapter output, on top of the LoRA"
+        );
+    }
+
+    #[test]
+    fn flux2_klein_reference_graph_injects_the_portrait_into_both_conditionings() {
+        let g = flux2_klein_reference_txt2img(
+            &inputs(),
+            &Flux2KleinModels {
+                unet: "flux-2-klein-9b-fp8mixed.safetensors",
+                clip: "qwen_3_8b_fp8mixed.safetensors",
+                vae: "flux2-vae.safetensors",
+            },
+            "job-portrait.png",
+            &[],
+        );
+        assert_eq!(g["50"]["class_type"], "LoadImage");
+        assert_eq!(g["50"]["inputs"]["image"], "job-portrait.png");
+        assert_eq!(g["51"]["inputs"]["image"], json!(["50", 0]));
+        assert_eq!(g["51"]["inputs"]["resolution_steps"], 1);
+        assert_eq!(g["52"]["class_type"], "VAEEncode");
+        assert_eq!(g["52"]["inputs"]["pixels"], json!(["51", 0]));
+        // The new scene's own dimensions drive the canvas, not the portrait's.
+        assert_eq!(g["32"]["inputs"]["width"], 1024);
+        assert_eq!(g["29"]["inputs"]["width"], 1024);
+        // The reference latent anchors *both* the real and the zeroed-out
+        // conditioning, same pattern as the edit graph.
+        assert_eq!(g["53"]["class_type"], "ReferenceLatent");
+        assert_eq!(g["53"]["inputs"]["conditioning"], json!(["6", 0]));
+        assert_eq!(g["53"]["inputs"]["latent"], json!(["52", 0]));
+        assert_eq!(g["54"]["class_type"], "ReferenceLatent");
+        assert_eq!(g["54"]["inputs"]["conditioning"], json!(["27", 0]));
+        assert_eq!(g["54"]["inputs"]["latent"], json!(["52", 0]));
+        assert_eq!(g["31"]["inputs"]["positive"], json!(["53", 0]));
+        assert_eq!(g["31"]["inputs"]["negative"], json!(["54", 0]));
+        assert_eq!(g["6"]["inputs"]["text"], "a red fox in the snow");
+        assert_eq!(g["9"]["inputs"]["filename_prefix"], "job-abc");
+    }
+
+    #[test]
+    fn flux2_klein_reference_graph_splices_a_lora_before_the_guider_and_encode() {
+        let g = flux2_klein_reference_txt2img(
+            &inputs(),
+            &Flux2KleinModels {
+                unet: "u",
+                clip: "c",
+                vae: "v",
+            },
+            "job-portrait.png",
+            &[LoraSpec {
+                file: "style.safetensors",
+                strength: 0.5,
+            }],
+        );
+        assert_eq!(g["90"]["inputs"]["model"], json!(["12", 0]));
+        assert_eq!(g["90"]["inputs"]["clip"], json!(["11", 0]));
+        assert_eq!(g["31"]["inputs"]["model"], json!(["90", 0]));
+        assert_eq!(g["6"]["inputs"]["clip"], json!(["90", 1]));
+    }
+
+    #[test]
+    fn flux2_klein_reference_safetensors_graph_uses_unet_loader_and_a_plain_ksampler() {
+        // The real bug this test guards: a plain .safetensors FLUX.2 [klein]
+        // file (e.g. flux-2-klein-9b-fp8mixed.safetensors) must never be
+        // routed through UnetLoaderGGUF -- that node only ever lists .gguf
+        // files to ComfyUI, so submitting it fails at /prompt with
+        // "unet_name: '<file>' not in ['<some .gguf file>']" (hit live during
+        // this slice's real end-to-end smoke test).
+        let g = flux2_klein_reference_txt2img_safetensors(
+            &inputs(),
+            &Flux2KleinModels {
+                unet: "flux-2-klein-9b-fp8mixed.safetensors",
+                clip: "qwen_3_8b_fp8mixed.safetensors",
+                vae: "flux2-vae.safetensors",
+            },
+            "job-portrait.png",
+            &[],
+        );
+        assert_eq!(g["12"]["class_type"], "UNETLoader");
+        assert_eq!(
+            g["12"]["inputs"]["unet_name"],
+            "flux-2-klein-9b-fp8mixed.safetensors"
+        );
+        assert_eq!(g["50"]["class_type"], "LoadImage");
+        assert_eq!(g["50"]["inputs"]["image"], "job-portrait.png");
+        assert_eq!(g["52"]["class_type"], "VAEEncode");
+        assert_eq!(g["53"]["class_type"], "ReferenceLatent");
+        assert_eq!(g["53"]["inputs"]["conditioning"], json!(["6", 0]));
+        assert_eq!(g["53"]["inputs"]["latent"], json!(["52", 0]));
+        assert_eq!(g["26"]["class_type"], "FluxGuidance");
+        assert_eq!(g["26"]["inputs"]["conditioning"], json!(["53", 0]));
+        assert_eq!(g["54"]["class_type"], "ReferenceLatent");
+        assert_eq!(g["54"]["inputs"]["conditioning"], json!(["27", 0]));
+        assert_eq!(g["54"]["inputs"]["latent"], json!(["52", 0]));
+        assert_eq!(g["3"]["class_type"], "KSampler");
+        assert_eq!(g["3"]["inputs"]["cfg"], 1.0, "runs at CFG 1, like FLUX.1");
+        assert_eq!(g["3"]["inputs"]["positive"], json!(["26", 0]));
+        assert_eq!(g["3"]["inputs"]["negative"], json!(["54", 0]));
+        assert_eq!(g["3"]["inputs"]["model"], json!(["12", 0]));
+        assert_eq!(g["32"]["inputs"]["width"], 1024);
+        assert_eq!(g["9"]["inputs"]["filename_prefix"], "job-abc");
+    }
+
+    #[test]
+    fn flux2_klein_reference_safetensors_graph_splices_a_lora_before_the_sampler_and_encode() {
+        let g = flux2_klein_reference_txt2img_safetensors(
+            &inputs(),
+            &Flux2KleinModels {
+                unet: "u",
+                clip: "c",
+                vae: "v",
+            },
+            "job-portrait.png",
+            &[LoraSpec {
+                file: "style.safetensors",
+                strength: 0.5,
+            }],
+        );
+        assert_eq!(g["90"]["inputs"]["model"], json!(["12", 0]));
+        assert_eq!(g["90"]["inputs"]["clip"], json!(["11", 0]));
+        assert_eq!(g["3"]["inputs"]["model"], json!(["90", 0]));
+        assert_eq!(g["6"]["inputs"]["clip"], json!(["90", 1]));
     }
 
     fn video_inputs() -> VideoInputs<'static> {

@@ -90,7 +90,14 @@ export function CharacterSheet({
     if (!story) return;
     setGenerating(true);
     try {
-      const jobId = await generateImage(characterPortraitPrompt(story, character));
+      // Anchor a regeneration to the character's current portrait so it stays
+      // recognizably the same character (Story Studio Phase 2). A first-ever
+      // portrait has nothing to anchor to yet, so it generates independently,
+      // same as Phase 1.
+      const jobId = await generateImage(
+        characterPortraitPrompt(story, character),
+        character.portrait_job_id ?? undefined,
+      );
       await setCharacterPortrait(character.id, jobId);
       onChanged();
     } finally {
@@ -122,8 +129,13 @@ export function CharacterSheet({
         alt={`${character.name}'s portrait`}
         className="char-sheet__portrait"
       />
+      {character.portrait_job_id && (
+        <span className="badge badge--soft" title="Regenerating this portrait, or a scene featuring only this character, anchors the render to it (IP-Adapter / reference-latent) instead of generating independently.">
+          Consistency-anchored
+        </span>
+      )}
       <button type="button" className="char-sheet__generate" onClick={generatePortrait} disabled={generating || !story}>
-        {generating ? "Generating…" : character.portrait_job_id ? "Regenerate portrait" : "Generate portrait"}
+        {generating ? "Generating…" : character.portrait_job_id ? "Regenerate portrait (anchored)" : "Generate portrait"}
       </button>
 
       {editing && draft ? (

@@ -41,12 +41,27 @@ export function SceneCard({
   const locationName = locations.find((l) => l.id === scene.location_id)?.name ?? null;
   const canonical = scene.images.find((img) => img.is_canonical) ?? scene.images[0] ?? null;
   const alternates = scene.images.filter((img) => img.id !== canonical?.id);
+  // Anchor to a participant's portrait for character consistency (Story
+  // Studio Phase 2) -- only when there's exactly one participant with a
+  // portrait set. A multi-character scene has no single reference image the
+  // IP-Adapter / reference-latent graphs could anchor to (that would need one
+  // conditioning pass per character, a Phase-3+ extension), so those scenes
+  // keep Phase 1's independent-generation behavior rather than silently
+  // picking one participant to anchor to and not the others.
+  const soloParticipant =
+    scene.participant_ids.length === 1
+      ? characters.find((c) => c.id === scene.participant_ids[0])
+      : undefined;
+  const anchorJobId = soloParticipant?.portrait_job_id ?? undefined;
 
   const generate = async () => {
     setGenerating(true);
     try {
       const participantNames = scene.participant_ids.map(nameOf);
-      const jobId = await generateImage(sceneImagePrompt(story, scene, participantNames, locationName));
+      const jobId = await generateImage(
+        sceneImagePrompt(story, scene, participantNames, locationName),
+        anchorJobId,
+      );
       await addSceneImage(scene.id, jobId);
       onChanged();
     } finally {
@@ -90,8 +105,18 @@ export function SceneCard({
       </div>
 
       <div className="scene-card__image-actions">
-        <button type="button" onClick={generate} disabled={generating}>
+        <button
+          type="button"
+          onClick={generate}
+          disabled={generating}
+          title={
+            anchorJobId
+              ? `Anchored to ${soloParticipant?.name}'s portrait for a consistent look`
+              : undefined
+          }
+        >
           {generating ? "Generating…" : canonical ? "Generate alternate" : "Generate image"}
+          {anchorJobId && !generating && " (anchored)"}
         </button>
         {alternates.length > 0 && (
           <ul className="scene-card__alternates">
