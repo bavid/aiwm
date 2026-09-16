@@ -124,10 +124,10 @@ pub async fn run(
         let fetched = registry
             .search(&SearchQuery {
                 text: Some(family.to_string()),
-                base_model: None,
                 gguf_only: target.is_llm,
                 sort,
                 limit: SEARCH_LIMIT,
+                ..SearchQuery::default()
             })
             .await?;
         freshness = stalest(freshness, fetched.freshness);
@@ -484,6 +484,7 @@ mod tests {
     fn rm(id: &str, downloads: i64, likes: i64, params: u64, updated: &str) -> RemoteModel {
         RemoteModel {
             id: id.into(),
+            name: None,
             author: id.split('/').next().map(str::to_string),
             downloads,
             likes,
@@ -501,6 +502,11 @@ mod tests {
             ctx_max: Some(32_768),
             precision: Some("Q4_K_M".into()),
             format: RemoteFormat::Gguf,
+            nsfw: false,
+            preview_image_url: None,
+            allow_commercial_use: vec![],
+            model_kind_hint: None,
+            base_model_family: None,
         }
     }
 

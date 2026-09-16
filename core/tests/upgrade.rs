@@ -51,6 +51,12 @@ fn rm(id: &str, downloads: i64, params: u64, updated: &str) -> RemoteModel {
         ctx_max: Some(32_768),
         precision: Some("Q4_K_M".into()),
         format: RemoteFormat::Gguf,
+        name: None,
+        nsfw: false,
+        preview_image_url: None,
+        allow_commercial_use: vec![],
+        model_kind_hint: None,
+        base_model_family: None,
     }
 }
 
