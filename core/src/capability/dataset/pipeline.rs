@@ -83,15 +83,11 @@ async fn discard_empty_dataset(db: &Database, dataset_id: &str) {
 /// `vision.client()` to talk to the already-running sidecar, never
 /// `load_model` itself.
 ///
-/// A dataset is never left behind without frames: if the run fails after the
-/// `datasets` row was created but before anything was filed under it, the row
-/// is deleted again. A failed run that already stored frames *keeps* them —
-/// the job's failure stays visible through `prep_job_id`, and a partial
-/// dataset is still worth curating.
-///
-/// Cancellation works the same way: whatever frames and captions were written
-/// before the cancel are kept, so the dataset is safe to curate and export
-/// partially.
+/// A dataset is never left behind without frames: a cancelled or failed run
+/// keeps whatever frames and captions were already written — the job's fate
+/// stays visible through `prep_job_id`, and a partial dataset is safe to
+/// curate and export — but one that never received a single frame is deleted
+/// again rather than left as an empty shell.
 pub async fn run(
     db: &Database,
     vision: &VisionAdapter,
@@ -306,7 +302,9 @@ pub async fn run(
     }
     .await;
 
-    if outcome.is_err() {
+    // Cancelling counts the same as failing here: neither is a reason to keep
+    // a dataset nobody can curate.
+    if !matches!(outcome, Ok(DatasetPrepOutcome::Done(_))) {
         discard_empty_dataset(db, &dataset.id).await;
     }
     outcome
@@ -739,6 +737,35 @@ mod tests {
         assert!(
             db.datasets().list().await.unwrap().is_empty(),
             "the dataset row was rolled back"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_run_cancelled_before_its_first_frame_leaves_no_dataset_behind() {
+        let db = Database::connect_in_memory().await.unwrap();
+        let vision = VisionAdapter::new();
+        let job = new_job(&db).await;
+        let work = tempfile::tempdir().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let tag_dir = root.path().join("MyStyle");
+        std::fs::create_dir_all(&tag_dir).unwrap();
+        sharp_checkerboard(32, 0)
+            .save(tag_dir.join("a.png"))
+            .unwrap();
+
+        // Cancelled before the first candidate is even extracted: the run
+        // comes to rest cleanly, but nothing was ever filed under the dataset.
+        let (tx, rx) = watch::channel(false);
+        tx.send(true).unwrap();
+        let req = DatasetPrepRequest::from_params(
+            &serde_json::json!({ "root": root.path().to_string_lossy() }),
+        )
+        .unwrap();
+        let outcome = run(&db, &vision, work.path(), &job, req, rx).await.unwrap();
+        assert!(matches!(outcome, DatasetPrepOutcome::Cancelled));
+        assert!(
+            db.datasets().list().await.unwrap().is_empty(),
+            "a frameless cancelled run is discarded like a failed one"
         );
     }
 }

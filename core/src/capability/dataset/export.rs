@@ -133,6 +133,11 @@ pub async fn export_dataset(db: &Database, req: &ExportRequest) -> Result<Export
 /// Refusing to fall back to a whole-clip copy when ffmpeg is missing is
 /// deliberate: that would hand the trainer exactly the footage the curator
 /// cut away, silently.
+///
+/// Invariant: `ffmpeg` is resolved only in clips mode and `clip_start_secs`/
+/// `clip_end_secs` are only ever set on clips-mode rows, so `(has_range,
+/// ffmpeg)` already stands in for an explicit `DatasetMode::Clips` check —
+/// a frames-mode row can reach neither of the first two arms.
 async fn write_media(
     src: &Path,
     dest: &Path,

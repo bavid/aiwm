@@ -32,10 +32,10 @@
 //! the dataset trigger, the frame's concepts and its own caption (see
 //! [`compose`]).
 //!
-//! A cancelled run keeps every frame and caption written before the cancel,
-//! and a failed one keeps them too — a partial dataset is safe to curate and
-//! export. Only a dataset that never received a single frame is discarded
-//! again (see [`pipeline::run`]).
+//! A cancelled or failed run keeps whatever frames and captions were written
+//! before it stopped — a partial dataset is safe to curate and export. Only a
+//! dataset that never received a single frame is discarded again (see
+//! [`pipeline::run`]).
 
 mod caption;
 mod captioner;
