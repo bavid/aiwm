@@ -133,10 +133,6 @@ async fn resolve_model_dir(db: &Database, role: &str, label: &str) -> Result<std
         .ok_or_else(|| vision_err(format!("{label} file has no parent directory")))
 }
 
-pub async fn resolve_florence2_dir(db: &Database) -> Result<std::path::PathBuf> {
-    resolve_model_dir(db, FLORENCE2_ROLE, "Florence-2").await
-}
-
 pub async fn resolve_qwen_vl_dir(db: &Database) -> Result<std::path::PathBuf> {
     resolve_model_dir(db, QWEN_VL_ROLE, "Qwen2.5-VL").await
 }
@@ -147,7 +143,6 @@ pub async fn resolve_qwen_vl_dir(db: &Database) -> Result<std::path::PathBuf> {
 /// `model.onnx` + `selected_tags.csv`), so a half-imported tagger is
 /// reported as missing rather than resolved to a directory that will fail
 /// at caption time.
-#[allow(dead_code)] // wired into the pipeline in Task 10
 pub async fn resolve_captioner_dir(db: &Database, c: &Captioner) -> Result<std::path::PathBuf> {
     // Registry display names follow "Name (style hint)" — the label is just
     // the name part.
@@ -190,20 +185,6 @@ pub async fn caption_with(
         .unwrap_or(c.id)
         .to_string();
     Ok((extract_caption(&result)?, engine))
-}
-
-/// One Florence-2 caption for a single frame — delegates to `caption_with`
-/// so Florence-2's request params are built in exactly one place.
-pub async fn caption_frame(
-    vision: &VisionAdapter,
-    model_dir: &Path,
-    image_path: &Path,
-) -> Result<String> {
-    let florence = super::captioner::find_captioner(FLORENCE2_ID)
-        .ok_or_else(|| vision_err("florence2 is missing from the captioner registry"))?;
-    caption_with(vision, florence, model_dir, image_path)
-        .await
-        .map(|(caption, _engine)| caption)
 }
 
 /// A temporal-context re-caption from Qwen2.5-VL: `image_path` is the
@@ -290,40 +271,35 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn resolve_florence2_dir_reports_a_clear_error_when_not_imported() {
+    async fn resolve_qwen_vl_dir_reports_a_clear_error_when_not_imported() {
         let db = empty_db().await;
-        let err = resolve_florence2_dir(&db).await.unwrap_err();
-        assert!(err.to_string().contains("Florence-2"), "{err}");
+        let err = resolve_qwen_vl_dir(&db).await.unwrap_err();
+        assert!(err.to_string().contains("Qwen2.5-VL"), "{err}");
     }
 
+    /// Pins `resolve_model_dir`'s "any file in the role names the shared
+    /// directory" shape — the parent of the imported row, not the row itself.
     #[tokio::test]
-    async fn resolve_florence2_dir_finds_the_snapshot_folder() {
+    async fn resolve_qwen_vl_dir_finds_the_snapshot_folder() {
         let db = empty_db().await;
         db.models()
             .insert(NewModel {
-                name: "florence-2-large".into(),
+                name: "qwen2.5-vl-7b-instruct".into(),
                 format: "safetensors".into(),
-                file_path: "E:\\AI\\models\\vision\\florence-2-large\\model.safetensors".into(),
+                file_path: "E:\\AI\\models\\vision\\qwen2.5-vl-7b\\model.safetensors".into(),
                 size_bytes: 1,
                 source: "manual".into(),
-                roles: vec![FLORENCE2_ROLE.into()],
+                roles: vec![QWEN_VL_ROLE.into()],
                 ..NewModel::default()
             })
             .await
             .unwrap();
 
-        let dir = resolve_florence2_dir(&db).await.unwrap();
+        let dir = resolve_qwen_vl_dir(&db).await.unwrap();
         assert_eq!(
             dir.to_string_lossy().replace('\\', "/"),
-            "E:/AI/models/vision/florence-2-large"
+            "E:/AI/models/vision/qwen2.5-vl-7b"
         );
-    }
-
-    #[tokio::test]
-    async fn resolve_qwen_vl_dir_reports_a_clear_error_when_not_imported() {
-        let db = empty_db().await;
-        let err = resolve_qwen_vl_dir(&db).await.unwrap_err();
-        assert!(err.to_string().contains("Qwen2.5-VL"), "{err}");
     }
 
     #[test]

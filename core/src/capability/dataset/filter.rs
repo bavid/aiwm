@@ -125,23 +125,6 @@ pub fn phash_of(path: &Path) -> Result<ImageHash> {
     Ok(hasher.hash_image(&img))
 }
 
-/// Drop `path` if it is a near-duplicate of `last_kept` (when there is a
-/// previous kept frame in the same group). Returns the hash to remember as
-/// "last kept" when `path` survives, or `None` when it was dropped.
-pub fn dedup_step(
-    path: &Path,
-    last_kept: Option<&ImageHash>,
-    max_distance: u32,
-) -> Result<Option<ImageHash>> {
-    let hash = phash_of(path)?;
-    if let Some(prev) = last_kept {
-        if prev.dist(&hash) <= max_distance {
-            return Ok(None);
-        }
-    }
-    Ok(Some(hash))
-}
-
 /// Why a frame was dropped. Stored on the row (`dataset_frames.rejection_reason`)
 /// so the curation grid can show each reason as a filter chip and restore
 /// individual frames. `""` on the row means "kept".
@@ -156,7 +139,6 @@ pub enum RejectionReason {
     Unusable,
 }
 
-#[allow(dead_code)] // wired into the pipeline in Task 10
 impl RejectionReason {
     pub const ALL: [RejectionReason; 6] = [
         Self::Black,
@@ -185,23 +167,18 @@ impl RejectionReason {
 
 /// A frame whose mean luma sits within this many levels of pure black (0) or
 /// pure white (255) *and* whose pixels barely vary is a fade/blank frame.
-#[allow(dead_code)] // wired into the pipeline in Task 10
 const DEAD_FRAME_LUMA_MARGIN: f64 = 12.0;
-#[allow(dead_code)] // wired into the pipeline in Task 10
 const DEAD_FRAME_MAX_STDDEV: f64 = 6.0;
 
 /// Hamming distance above which two frames count as "different pictures"
 /// for transition detection — deliberately far above the duplicate
 /// threshold (6): a cut between two scenes is *very* different, a slow pan
 /// is not.
-#[allow(dead_code)] // wired into the pipeline in Task 10
 pub const DEFAULT_TRANSITION_MIN_DISTANCE: u32 = 20;
 
 /// Per-clip diversity cap default (spec 3, filter 4). `0` = unlimited.
-#[allow(dead_code)] // wired into the pipeline in Task 10
 pub const DEFAULT_MAX_FRAMES_PER_CLIP: usize = 40;
 
-#[allow(dead_code)] // wired into the pipeline in Task 10
 fn luma_mean_and_stddev(gray: &image::GrayImage) -> (f64, f64) {
     let n = (gray.width() as f64) * (gray.height() as f64);
     if n == 0.0 {
@@ -221,7 +198,6 @@ fn luma_mean_and_stddev(gray: &image::GrayImage) -> (f64, f64) {
 
 /// (Nearly) all-black or all-white with almost no variation — a fade, a
 /// blank, a dead frame between scenes.
-#[allow(dead_code)] // wired into the pipeline in Task 10
 pub fn is_dead_frame(path: &Path) -> Result<bool> {
     let img = image::open(path)
         .map_err(|e| dataset_err(format!("read {} for dead-frame check: {e}", path.display())))?;
@@ -234,7 +210,6 @@ pub fn is_dead_frame(path: &Path) -> Result<bool> {
 /// A transition (cut smear / cross-fade) is a *blurry* frame that is very
 /// different from both its previous and its next neighbour. Either
 /// neighbour missing (first/last frame) means "not a transition".
-#[allow(dead_code)] // wired into the pipeline in Task 10
 pub fn is_transition(
     blurry: bool,
     prev: Option<&ImageHash>,
@@ -252,7 +227,6 @@ pub fn is_transition(
 /// always starting with index 0, then repeatedly the frame whose *minimum*
 /// distance to everything already chosen is largest. Returns indices in
 /// their original order.
-#[allow(dead_code)] // wired into the pipeline in Task 10
 pub fn select_diverse(hashes: &[ImageHash], cap: usize) -> Vec<usize> {
     if cap == 0 || hashes.len() <= cap {
         return (0..hashes.len()).collect();
@@ -345,16 +319,7 @@ mod tests {
     }
 
     #[test]
-    fn dedup_step_keeps_the_first_frame_when_there_is_no_prior_hash() {
-        let tmp = tempfile::tempdir().unwrap();
-        let path = tmp.path().join("a.png");
-        write_png(&path, &sharp_checkerboard(32));
-        let kept = dedup_step(&path, None, DEFAULT_PHASH_MAX_DISTANCE).unwrap();
-        assert!(kept.is_some());
-    }
-
-    #[test]
-    fn dedup_step_drops_a_near_identical_successor_and_keeps_a_distinct_one() {
+    fn phash_of_separates_identical_pictures_from_genuinely_different_ones() {
         let tmp = tempfile::tempdir().unwrap();
         let a = tmp.path().join("a.png");
         let b_same = tmp.path().join("b.png");
@@ -363,16 +328,14 @@ mod tests {
         write_png(&b_same, &sharp_checkerboard(32)); // identical picture
         write_png(&c_diff, &flat_gray(32, 10)); // a completely different image
 
-        let hash_a = dedup_step(&a, None, DEFAULT_PHASH_MAX_DISTANCE)
-            .unwrap()
-            .unwrap();
-        let after_b = dedup_step(&b_same, Some(&hash_a), DEFAULT_PHASH_MAX_DISTANCE).unwrap();
-        assert!(after_b.is_none(), "an identical frame must be dropped");
-
-        let after_c = dedup_step(&c_diff, Some(&hash_a), DEFAULT_PHASH_MAX_DISTANCE).unwrap();
+        let hash_a = phash_of(&a).unwrap();
         assert!(
-            after_c.is_some(),
-            "a genuinely different frame must survive"
+            hash_a.dist(&phash_of(&b_same).unwrap()) <= DEFAULT_PHASH_MAX_DISTANCE,
+            "an identical frame reads as a duplicate"
+        );
+        assert!(
+            hash_a.dist(&phash_of(&c_diff).unwrap()) > DEFAULT_PHASH_MAX_DISTANCE,
+            "a genuinely different frame does not"
         );
     }
 

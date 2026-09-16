@@ -163,7 +163,6 @@ async fn run_ffmpeg(ffmpeg_bin: &Path, args: &[String], what: &str, subject: &Pa
 
 /// `ffprobe` ships next to `ffmpeg` in every distribution AIWM cares about
 /// (WinGet, the official builds) — same directory, same lookup.
-#[allow(dead_code)] // wired into the pipeline in Task 10
 pub fn resolve_ffprobe() -> Option<PathBuf> {
     let ffmpeg = resolve_ffmpeg()?;
     let dir = ffmpeg.parent()?;
@@ -176,7 +175,6 @@ pub fn resolve_ffprobe() -> Option<PathBuf> {
     None
 }
 
-#[allow(dead_code)] // wired into the pipeline in Task 10
 pub fn ffprobe_duration_args(video: &Path) -> Vec<String> {
     vec![
         "-v".into(),
@@ -189,7 +187,6 @@ pub fn ffprobe_duration_args(video: &Path) -> Vec<String> {
     ]
 }
 
-#[allow(dead_code)] // wired into the pipeline in Task 10
 pub fn parse_ffprobe_duration(stdout: &str) -> Option<f64> {
     stdout
         .trim()
@@ -200,7 +197,6 @@ pub fn parse_ffprobe_duration(stdout: &str) -> Option<f64> {
 
 /// `Ok(None)` when the file is not decodable / has no duration (the clip
 /// gets rejected as `Unusable`), `Err` only when ffprobe itself cannot run.
-#[allow(dead_code)] // wired into the pipeline in Task 10
 pub async fn probe_duration_secs(ffprobe_bin: &Path, video: &Path) -> Result<Option<f64>> {
     let output = Command::new(ffprobe_bin)
         .args(ffprobe_duration_args(video))
@@ -218,7 +214,6 @@ pub async fn probe_duration_secs(ffprobe_bin: &Path, video: &Path) -> Result<Opt
     )))
 }
 
-#[allow(dead_code)] // wired into the pipeline in Task 10
 pub fn ffmpeg_preview_args(video: &Path, out_png: &Path, at_secs: f64) -> Vec<String> {
     vec![
         "-y".into(),
@@ -237,7 +232,6 @@ pub fn ffmpeg_preview_args(video: &Path, out_png: &Path, at_secs: f64) -> Vec<St
 /// Callers must pass finite, non-negative seconds (the values come from
 /// `probe_duration_secs`/user ranges; NaN/inf/negatives are formatted
 /// verbatim into the CLI).
-#[allow(dead_code)] // wired into the pipeline in Task 10
 pub async fn extract_preview_still(
     ffmpeg_bin: &Path,
     video: &Path,
@@ -255,7 +249,6 @@ pub async fn extract_preview_still(
 
 /// Stream-copy trim: `-ss`/`-to` only when a bound is set, so a clip with
 /// only an end (or only a start) keeps the other side intact.
-#[allow(dead_code)] // wired into the pipeline in Task 10
 pub fn ffmpeg_trim_args(
     src: &Path,
     dest: &Path,
@@ -287,7 +280,6 @@ pub fn ffmpeg_trim_args(
 /// verbatim into the CLI). Input-side `-ss` with `-c copy` snaps the real
 /// start back to the previous keyframe — an accepted trade-off of
 /// stream-copy trimming.
-#[allow(dead_code)] // wired into the pipeline in Task 10
 pub async fn trim_clip(
     ffmpeg_bin: &Path,
     src: &Path,

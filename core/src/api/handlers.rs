@@ -307,13 +307,20 @@ pub async fn update_dataset_frame(
 
 /// `POST /jobs/{id}/dataset-export` — write the curator's final, non-excluded
 /// selection to `dest_dir` as `NNNN.png` + `NNNN.txt` pairs.
+///
+/// Exports prose-first via the dataset this job produced; the dataset-keyed
+/// route (with a caller-chosen caption order) is the richer entry point.
 pub async fn export_dataset(
     app: &App,
     job_id: &str,
     dest_dir: &str,
 ) -> Result<crate::capability::dataset::ExportSummary> {
-    crate::capability::dataset::export_dataset(&app.db, job_id, std::path::Path::new(dest_dir))
-        .await
+    crate::capability::dataset::export_dataset_for_job(
+        &app.db,
+        job_id,
+        std::path::Path::new(dest_dir),
+    )
+    .await
 }
 
 pub async fn list_models(app: &App) -> Result<Vec<Model>> {
