@@ -334,10 +334,13 @@ pub async fn run(
                 .dataset_frames()
                 .insert(NewDatasetFrame {
                     job_id: job_id.to_string(),
+                    dataset_id: None,
                     tag: cand.tag.clone(),
                     source_path: cand.source.to_string_lossy().into_owned(),
                     frame_path: cand.path.to_string_lossy().into_owned(),
                     timestamp_secs: cand.timestamp_secs,
+                    rejection_reason: String::new(),
+                    duration_secs: None,
                 })
                 .await?;
             *tag_counts.entry(cand.tag.clone()).or_insert(0) += 1;
@@ -650,10 +653,13 @@ mod tests {
                 .dataset_frames()
                 .insert(NewDatasetFrame {
                     job_id: job.id.clone(),
+                    dataset_id: None,
                     tag: "Ghibli".into(),
                     source_path: "E:\\Data\\Ghibli\\clip.mp4".into(),
                     frame_path: img_path.to_string_lossy().into_owned(),
                     timestamp_secs: Some(f64::from(i)),
+                    rejection_reason: String::new(),
+                    duration_secs: None,
                 })
                 .await
                 .unwrap();

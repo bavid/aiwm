@@ -294,19 +294,14 @@ mod tests {
             .dataset_frames()
             .insert(NewDatasetFrame {
                 job_id: job.id.clone(),
+                dataset_id: Some(ds.id.clone()),
                 tag: "Ghibli".into(),
                 source_path: "E:\\Data\\Ghibli\\clip.mp4".into(),
                 frame_path: "C:\\datasets\\job-1\\0001.png".into(),
                 timestamp_secs: Some(1.5),
+                rejection_reason: String::new(),
+                duration_secs: None,
             })
-            .await
-            .unwrap();
-        // Task 2 adds a `dataset_id` field to `NewDatasetFrame`; for now, set
-        // it directly to simulate a frame that already belongs to a dataset.
-        sqlx::query("UPDATE dataset_frames SET dataset_id = $1 WHERE id = $2")
-            .bind(&ds.id)
-            .bind(&frame.id)
-            .execute(&db.pool)
             .await
             .unwrap();
 
@@ -314,7 +309,8 @@ mod tests {
 
         let got_ds = db.datasets().get(&ds.id).await.unwrap().unwrap();
         assert_eq!(got_ds.prep_job_id, None);
-        assert!(db.dataset_frames().get(&frame.id).await.unwrap().is_some());
+        let got = db.dataset_frames().get(&frame.id).await.unwrap().unwrap();
+        assert_eq!(got.job_id, None);
 
         db.datasets().delete(&ds.id).await.unwrap();
         assert!(db.dataset_frames().get(&frame.id).await.unwrap().is_none());
