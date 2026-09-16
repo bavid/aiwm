@@ -110,23 +110,7 @@ pub async fn extract_frames(
         .map_err(|e| dataset_err(format!("create {}: {e}", out_dir.display())))?;
 
     let args = ffmpeg_extract_args(video, out_dir, fps);
-    let output = Command::new(ffmpeg_bin)
-        .args(&args)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .output()
-        .await
-        .map_err(|e| dataset_err(format!("spawn ffmpeg: {e}")))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(dataset_err(format!(
-            "ffmpeg failed on {}: {}",
-            video.display(),
-            first_lines(&stderr, 4)
-        )));
-    }
+    run_ffmpeg(ffmpeg_bin, &args, "ffmpeg", video).await?;
 
     let mut names: Vec<PathBuf> = std::fs::read_dir(out_dir)
         .map_err(|e| dataset_err(format!("read {}: {e}", out_dir.display())))?
@@ -148,6 +132,33 @@ pub async fn extract_frames(
 
 fn first_lines(s: &str, n: usize) -> String {
     s.lines().take(n).collect::<Vec<_>>().join(" | ")
+}
+
+/// Spawn `ffmpeg_bin` with `args`, mapping a spawn failure to `"spawn
+/// ffmpeg: {e}"` and a non-zero exit to `"{what} failed on {subject}:
+/// {stderr}"` (first 4 lines only). Shared by every ffmpeg invocation in
+/// this module that just needs pass/fail — `probe_duration_secs` stays
+/// separate since it wires stdout instead of stderr and treats a non-zero
+/// exit as `Ok(None)`, not an error.
+async fn run_ffmpeg(ffmpeg_bin: &Path, args: &[String], what: &str, subject: &Path) -> Result<()> {
+    let output = Command::new(ffmpeg_bin)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .output()
+        .await
+        .map_err(|e| dataset_err(format!("spawn ffmpeg: {e}")))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(dataset_err(format!(
+            "{what} failed on {}: {}",
+            subject.display(),
+            first_lines(&stderr, 4)
+        )));
+    }
+    Ok(())
 }
 
 /// `ffprobe` ships next to `ffmpeg` in every distribution AIWM cares about
@@ -222,6 +233,10 @@ pub fn ffmpeg_preview_args(video: &Path, out_png: &Path, at_secs: f64) -> Vec<St
 }
 
 /// One still from `video` at `at_secs` — the clip-mode preview.
+///
+/// Callers must pass finite, non-negative seconds (the values come from
+/// `probe_duration_secs`/user ranges; NaN/inf/negatives are formatted
+/// verbatim into the CLI).
 #[allow(dead_code)] // wired into the pipeline in Task 10
 pub async fn extract_preview_still(
     ffmpeg_bin: &Path,
@@ -234,22 +249,8 @@ pub async fn extract_preview_still(
             .await
             .map_err(|e| dataset_err(format!("create {}: {e}", parent.display())))?;
     }
-    let output = Command::new(ffmpeg_bin)
-        .args(ffmpeg_preview_args(video, out_png, at_secs))
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .output()
-        .await
-        .map_err(|e| dataset_err(format!("spawn ffmpeg: {e}")))?;
-    if !output.status.success() {
-        return Err(dataset_err(format!(
-            "ffmpeg preview failed on {}: {}",
-            video.display(),
-            first_lines(&String::from_utf8_lossy(&output.stderr), 4)
-        )));
-    }
-    Ok(())
+    let args = ffmpeg_preview_args(video, out_png, at_secs);
+    run_ffmpeg(ffmpeg_bin, &args, "ffmpeg preview", video).await
 }
 
 /// Stream-copy trim: `-ss`/`-to` only when a bound is set, so a clip with
@@ -280,6 +281,12 @@ pub fn ffmpeg_trim_args(
 
 /// Copy `src` to `dest` trimmed to `[start, end]` (either side optional),
 /// without re-encoding. Used by clip-mode export.
+///
+/// Callers must pass finite, non-negative seconds (the values come from
+/// `probe_duration_secs`/user ranges; NaN/inf/negatives are formatted
+/// verbatim into the CLI). Input-side `-ss` with `-c copy` snaps the real
+/// start back to the previous keyframe — an accepted trade-off of
+/// stream-copy trimming.
 #[allow(dead_code)] // wired into the pipeline in Task 10
 pub async fn trim_clip(
     ffmpeg_bin: &Path,
@@ -293,22 +300,8 @@ pub async fn trim_clip(
             .await
             .map_err(|e| dataset_err(format!("create {}: {e}", parent.display())))?;
     }
-    let output = Command::new(ffmpeg_bin)
-        .args(ffmpeg_trim_args(src, dest, start, end))
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .output()
-        .await
-        .map_err(|e| dataset_err(format!("spawn ffmpeg: {e}")))?;
-    if !output.status.success() {
-        return Err(dataset_err(format!(
-            "ffmpeg trim failed on {}: {}",
-            src.display(),
-            first_lines(&String::from_utf8_lossy(&output.stderr), 4)
-        )));
-    }
-    Ok(())
+    let args = ffmpeg_trim_args(src, dest, start, end);
+    run_ffmpeg(ffmpeg_bin, &args, "ffmpeg trim", src).await
 }
 
 #[cfg(test)]
