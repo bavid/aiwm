@@ -269,17 +269,26 @@ mod tests {
         );
     }
 
+    // 0015 changed `job_id`'s FK action from CASCADE to SET NULL: a frame with
+    // no dataset must still survive its producing job's deletion (it becomes
+    // unreachable by job_id, not gone). `DatasetFrame.job_id` is still `String`
+    // here (Task 2 makes it `Option<String>`), so a NULLed row can't be
+    // decoded via `get` yet — this only exercises `list_for_job`.
     #[tokio::test]
-    async fn deleting_the_job_cascades_to_its_frames() {
+    async fn deleting_the_job_makes_the_frame_unreachable_by_job_id() {
         let (db, job_id) = db_with_job().await;
-        let frame = db
-            .dataset_frames()
+        db.dataset_frames()
             .insert(new_frame(&job_id, "Ghibli"))
             .await
             .unwrap();
 
         db.jobs().delete(&job_id).await.unwrap();
 
-        assert!(db.dataset_frames().get(&frame.id).await.unwrap().is_none());
+        assert!(db
+            .dataset_frames()
+            .list_for_job(&job_id)
+            .await
+            .unwrap()
+            .is_empty());
     }
 }

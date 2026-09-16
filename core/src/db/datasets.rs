@@ -6,7 +6,7 @@ use sqlx::SqlitePool;
 use uuid::Uuid;
 
 use super::now_rfc3339;
-use crate::Result;
+use crate::{CoreError, Result};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -64,18 +64,22 @@ struct DatasetRow {
     created_at: String,
 }
 
-impl From<DatasetRow> for Dataset {
-    fn from(r: DatasetRow) -> Self {
-        Self {
+impl TryFrom<DatasetRow> for Dataset {
+    type Error = CoreError;
+
+    fn try_from(r: DatasetRow) -> Result<Self> {
+        let mode = DatasetMode::parse(&r.mode)
+            .ok_or_else(|| CoreError::Db(format!("bad dataset mode {:?}", r.mode)))?;
+        Ok(Self {
             id: r.id,
             name: r.name,
-            mode: DatasetMode::parse(&r.mode).unwrap_or(DatasetMode::Frames),
+            mode,
             source_root: r.source_root,
             trigger_word: r.trigger_word,
             prep_job_id: r.prep_job_id,
             export_dir: r.export_dir,
             created_at: r.created_at,
-        }
+        })
     }
 }
 
@@ -118,7 +122,7 @@ impl<'a> DatasetRepo<'a> {
         .bind(id)
         .fetch_optional(self.pool)
         .await?;
-        Ok(row.map(Dataset::from))
+        row.map(Dataset::try_from).transpose()
     }
 
     /// Newest first — the Dataset tab lists the most recent run on top.
@@ -128,7 +132,9 @@ impl<'a> DatasetRepo<'a> {
         )))
         .fetch_all(self.pool)
         .await?;
-        Ok(rows.into_iter().map(Dataset::from).collect())
+        rows.into_iter()
+            .map(Dataset::try_from)
+            .collect::<Result<Vec<_>>>()
     }
 
     pub async fn set_trigger_word(&self, id: &str, trigger_word: &str) -> Result<()> {
@@ -161,7 +167,7 @@ impl<'a> DatasetRepo<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::{Database, NewJob};
+    use crate::db::{Database, NewDatasetFrame, NewJob};
 
     #[tokio::test]
     async fn create_then_get_round_trips_and_defaults_trigger_to_empty() {
@@ -245,6 +251,73 @@ mod tests {
         db.jobs().delete(&job.id).await.unwrap();
         let got = db.datasets().get(&ds.id).await.unwrap().unwrap();
         assert_eq!(got.prep_job_id, None);
+    }
+
+    #[tokio::test]
+    async fn set_export_dir_persists() {
+        let db = Database::connect_in_memory().await.unwrap();
+        let ds = db
+            .datasets()
+            .create(NewDataset {
+                name: "A".into(),
+                mode: DatasetMode::Frames,
+                source_root: "x".into(),
+                prep_job_id: None,
+            })
+            .await
+            .unwrap();
+        db.datasets()
+            .set_export_dir(&ds.id, "E:\\Exports\\anime-lora")
+            .await
+            .unwrap();
+        assert_eq!(
+            db.datasets().get(&ds.id).await.unwrap().unwrap().export_dir,
+            Some("E:\\Exports\\anime-lora".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn deleting_the_prep_job_keeps_frames_that_belong_to_a_dataset() {
+        let db = Database::connect_in_memory().await.unwrap();
+        let job = db.jobs().insert(NewJob::new("dataset_prep")).await.unwrap();
+        let ds = db
+            .datasets()
+            .create(NewDataset {
+                name: "A".into(),
+                mode: DatasetMode::Frames,
+                source_root: "x".into(),
+                prep_job_id: Some(job.id.clone()),
+            })
+            .await
+            .unwrap();
+        let frame = db
+            .dataset_frames()
+            .insert(NewDatasetFrame {
+                job_id: job.id.clone(),
+                tag: "Ghibli".into(),
+                source_path: "E:\\Data\\Ghibli\\clip.mp4".into(),
+                frame_path: "C:\\datasets\\job-1\\0001.png".into(),
+                timestamp_secs: Some(1.5),
+            })
+            .await
+            .unwrap();
+        // Task 2 adds a `dataset_id` field to `NewDatasetFrame`; for now, set
+        // it directly to simulate a frame that already belongs to a dataset.
+        sqlx::query("UPDATE dataset_frames SET dataset_id = $1 WHERE id = $2")
+            .bind(&ds.id)
+            .bind(&frame.id)
+            .execute(&db.pool)
+            .await
+            .unwrap();
+
+        db.jobs().delete(&job.id).await.unwrap();
+
+        let got_ds = db.datasets().get(&ds.id).await.unwrap().unwrap();
+        assert_eq!(got_ds.prep_job_id, None);
+        assert!(db.dataset_frames().get(&frame.id).await.unwrap().is_some());
+
+        db.datasets().delete(&ds.id).await.unwrap();
+        assert!(db.dataset_frames().get(&frame.id).await.unwrap().is_none());
     }
 
     #[tokio::test]

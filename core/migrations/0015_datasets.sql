@@ -15,15 +15,37 @@ CREATE TABLE datasets (
     created_at    TEXT NOT NULL
 ) STRICT;
 
--- Frames now belong to a dataset (cascade: no dataset, no frames). Rejected
--- frames are stored too, with the reason, so the curation grid can show and
--- restore them ('' = kept). Clip mode stores one row per video with its
--- preview still as frame_path and the clip itself as source_path.
-ALTER TABLE dataset_frames ADD COLUMN dataset_id TEXT REFERENCES datasets(id) ON DELETE CASCADE;
-ALTER TABLE dataset_frames ADD COLUMN rejection_reason TEXT NOT NULL DEFAULT '';
-ALTER TABLE dataset_frames ADD COLUMN duration_secs REAL;
-ALTER TABLE dataset_frames ADD COLUMN clip_start_secs REAL;
-ALTER TABLE dataset_frames ADD COLUMN clip_end_secs REAL;
+-- dataset_frames is rebuilt rather than ALTERed: SQLite cannot change an
+-- existing column's FK action, and frames must now outlive the job that
+-- produced them (job_id becomes nullable, ON DELETE SET NULL) while
+-- cascading from their dataset instead. Rejected frames are stored too,
+-- with the reason, so the curation grid can show and restore them
+-- ('' = kept). Clip mode stores one row per video with its preview still as
+-- frame_path and the clip itself as source_path.
+CREATE TABLE dataset_frames_new (
+    id               TEXT PRIMARY KEY,
+    job_id           TEXT REFERENCES jobs(id) ON DELETE SET NULL,
+    dataset_id       TEXT REFERENCES datasets(id) ON DELETE CASCADE,
+    tag              TEXT NOT NULL,
+    source_path      TEXT NOT NULL,
+    frame_path       TEXT NOT NULL,
+    timestamp_secs   REAL,
+    caption          TEXT NOT NULL DEFAULT '',
+    caption_engine   TEXT NOT NULL DEFAULT '',
+    excluded         INTEGER NOT NULL DEFAULT 0,
+    rejection_reason TEXT NOT NULL DEFAULT '',
+    duration_secs    REAL,
+    clip_start_secs  REAL,
+    clip_end_secs    REAL,
+    created_at       TEXT NOT NULL
+) STRICT;
+INSERT INTO dataset_frames_new
+    (id, job_id, tag, source_path, frame_path, timestamp_secs, caption, caption_engine, excluded, created_at)
+    SELECT id, job_id, tag, source_path, frame_path, timestamp_secs, caption, caption_engine, excluded, created_at
+    FROM dataset_frames;
+DROP TABLE dataset_frames;
+ALTER TABLE dataset_frames_new RENAME TO dataset_frames;
+CREATE INDEX idx_dataset_frames_job ON dataset_frames(job_id);
 CREATE INDEX idx_dataset_frames_dataset ON dataset_frames(dataset_id);
 
 -- A concept: a thing the user wants the LoRA to learn by name. `token` is
