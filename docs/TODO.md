@@ -897,10 +897,10 @@ Code" — AGPL-Lizenz macht Code-Kopieren ohnehin heikel). Ergebnis unten;
 **LoRA-Stack-UI wird direkt umgesetzt** (siehe eigener Abschnitt), der Rest
 ist Backlog für spätere Slices, absteigend nach Aufwand geordnet:
 
-- **LoRA-Stack mit Pro-Item-Stärke-Regler** — ✅ wird jetzt gebaut, siehe
-  unten. Direkter, bereits heute existierender Lücke: `core::pipeline`
-  unterstützt eine LoRA-Kette mit Pro-LoRA-Stärke seit längerem
-  (`LoraSpec`/`splice_loras`), aber kein UI-Tab verdrahtet das je.
+- **LoRA-Stack mit Pro-Item-Stärke-Regler** — ✅ umgesetzt, siehe eigener
+  Abschnitt unten. `core::pipeline` unterstützt eine LoRA-Kette mit
+  Pro-LoRA-Stärke seit längerem (`LoraSpec`/`apply_loras`); die UI-Seite
+  fehlte bzw. traf die Spec nicht genau.
 - **Hardware-Fit-Badge im Discover-Tab** — Modelle nach VRAM-Fit in Tiers
   einsortieren (passt/knapp/zu groß) statt nur einer binären Warnung;
   kleiner, in sich geschlossener Slice.
@@ -940,16 +940,79 @@ ist Backlog für spätere Slices, absteigend nach Aufwand geordnet:
 - **Telefon-/Tunnel-Fernzugriff** — **verworfen**, widerspricht AIWMs
   Loopback-only/Offline-first-Grundsatz (ADR-008/009) direkt.
 
-## LoRA-Stack-UI (2026-09-16, in Arbeit)
+## LoRA-Stack-UI — ✅ umgesetzt (2026-09-16)
 
-Schließt die oben genannte Lücke direkt: `core::pipeline::LoraSpec`/
-`splice_loras` existieren bereits und werden von `checkpoint_txt2img`/
-`flux_txt2img` genutzt, aber kein UI-Tab (`Image.tsx`/`Video.tsx`) exponiert
-das je — ein Nutzer kann heute keine LoRA auswählen, geschweige denn
-mehrere stapeln. Baut eine Stack-UI (aktive LoRAs als Liste mit
-Pro-Item-Stärke-Regler 0–2, Default-Stärke 0.8, Rescan-Button gegen den
-Modell-Store, ausgeblendet für Checkpoint-Familien ohne LoRA-Seam) nach dem
-in `locally-uncensored` beobachteten (nicht kopierten) Muster.
+Schließt die oben genannte Lücke: `core::pipeline`s `LoraSpec`/`apply_loras`
+(interner Name der Funktion, die den Doc-Text oben `splice_loras` nennt)
+existieren seit längerem und werden von **jedem** Bild- und Video-Rezept
+genutzt — `checkpoint_txt2img`, `flux_txt2img`, `flux2_klein_txt2img`,
+`flux2_klein_txt2img_safetensors`, `flux2_klein_edit`, `wan_ti2v`,
+`ltx_video` nehmen alle einen `loras: &[LoraSpec]`-Parameter. Genauso war
+die Job-Param-Ebene (`ImageRequest`/`VideoRequest` in
+`core/src/capability/{image,video}.rs`, `parse_loras`/`resolve_loras` in
+`capability/media.rs`) bereits vollständig verdrahtet, inklusive eigener
+Unit-Tests für Parsing/Auflösung. Die **einzige** echte Lücke war die UI:
+`ui/src/components/LoraPicker.tsx` existierte zwar schon (aus einer
+früheren Session/Slice) und war in `Image.tsx`/`Video.tsx` eingehängt, traf
+aber die hier verlangte Spec nicht exakt — dieser Slice bringt sie in Deckung
+und liefert den bis dahin fehlenden Beweis-Test:
+
+- **Default-Stärke auf 0.8 umgestellt** (vorher 1.0) — passend zum Wert, den
+  `core::pipeline`s eigene Tests durchgängig als Beispiel nutzen
+  (`add-detail-xl.safetensors @ 0.8`, `flux-2-realistic-detail @ 0.8`).
+- **Regler-Bereich auf 0–2 umgestellt** (vorher −2–2) und von einem
+  Zahlenfeld auf einen echten `<input type="range">`-Slider umgestellt —
+  gleiches Muster wie der Speed-Regler im Voice-Tab
+  (`Voice.tsx`/`voiceform__field input[type="range"]`), inklusive
+  Live-Wertanzeige `Name — 0.80`.
+- **Bleibt sichtbar bei null importierten LoRAs**, mit Hinweistext statt
+  komplett zu verschwinden (vorher: `return null` bei leerer Liste) —
+  mirrort das an anderer Stelle beobachtete "leer, aber mit
+  Ordner-Hinweis"-Muster (z. B. "No image checkpoint yet — import an SDXL
+  `.safetensors`…").
+- **Ausblenden für Familien ohne LoRA-Seam**: `FAMILIES_WITHOUT_LORA_SEAM` in
+  `LoraPicker.tsx` ist ein explizites (aktuell **leeres**) Array statt eines
+  stillschweigenden "immer sichtbar" — geprüft gegen `core/src/pipeline/
+  mod.rs`: **jedes** heute ausgelieferte Rezept (SDXL/einfacher Checkpoint,
+  FLUX.1, FLUX.2 [klein] GGUF/safetensors/Edit, Wan 2.2, LTX-Video) hat
+  eine LoRA-Naht. Es gibt also aktuell **keine** Familie, die die Sektion
+  verstecken müsste — anders als in der Aufgabenstellung vermutet, aber
+  ehrlich im Code dokumentiert statt stillschweigend weggelassen, falls
+  künftig ein Rezept ohne `loras`-Parameter dazukommt.
+- **Kein Rescan-Button gebaut**: `useModels()` pollt bereits alle 3 s
+  (`ui/src/lib/hooks.ts`) — eine mitten in der Session importierte LoRA
+  taucht ohne App-Neustart und ohne manuellen Rescan von selbst auf; ein
+  zusätzlicher Button wäre reine Redundanz gewesen.
+- **`ui/src/lib/dev-mock.ts`** um ein Wan-Family-LoRA-Fake
+  (`m-lora-wan-motion`, Name identisch zum Fixture-Namen aus
+  `core::pipeline`s eigenen Tests, `wan-motion.safetensors`) ergänzt, damit
+  der Video-Tab im Dev-Preview eine familien-passende LoRA zum Stapeln hat
+  (SDXL-/Flux-/FLUX.2-LoRAs existierten dort bereits).
+- **Neuer End-to-End-Beweis-Test**
+  (`an_image_job_with_a_lora_splices_a_loraloader_into_the_real_graph` in
+  `core/tests/image_job.rs`): submittet einen echten Job mit
+  `params.loras = [{ model_id, strength: 0.65 }]` durch die reale
+  `JobEngine`, und prüft **nicht nur**, dass der Job `Completed` erreicht,
+  sondern fragt danach den tatsächlich von ComfyUI empfangenen Graphen ab
+  — dafür wurde `aiwm-fake-comfy` (das Test-Fixture) um einen
+  Introspektions-Endpunkt `GET /__test/last_lora_chain` erweitert, der die
+  `LoraLoader`-Kette des zuletzt eingereichten Graphen (Datei + Stärke, in
+  Ketten-Reihenfolge) zurückgibt. Damit ist die komplette Kette
+  UI-Param-Shape → `parse_loras` → `resolve_loras` → `pipeline::
+  checkpoint_txt2img`'s `LoraLoader`-Node einmal end-to-end bewiesen, nicht
+  nur stückweise per Unit-Test (die es für jedes einzelne Glied schon vorher
+  gab).
+
+**Gates**: `cargo fmt --all -- --check` sauber, `cargo clippy --workspace
+--all-targets -- -D warnings` sauber (0 Warnungen), `cargo test --workspace`
+sauber — **826 bestanden, 0 fehlgeschlagen, 2 ignoriert** (netzwerkabhängige
+Hugging-Face-Tests). UI: `pnpm typecheck`/`pnpm lint`/`pnpm build` sauber.
+Live gegen `dev-mock` im Browser verifiziert (eigener Dev-Server aus diesem
+Worktree heraus gestartet, da der zuvor laufende `ui-dev`-Server auf einen
+anderen Checkout zeigte): zwei LoRAs gleichzeitig aktiv mit unterschiedlicher
+Stärke (0.80 / 1.55) im Image-Tab, Entfernen einer LoRA per Checkbox
+bestätigt (Regler verschwindet, andere LoRA bleibt unverändert), gleiches
+Verhalten im Video-Tab mit der neuen Wan-LoRA bestätigt.
 
 ## Offen / später zu entscheiden
 - App-Selbst-Update offline (manueller Installer + Signaturprüfung angenommen)

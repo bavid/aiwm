@@ -12,6 +12,12 @@
 //! check that the referenced file exists under `<base-directory>/input/` —
 //! image→video staging (4.2) is only "done" if the start frame really landed.
 //!
+//! `GET /__test/last_lora_chain` (fixture-only, no real-ComfyUI equivalent)
+//! hands back the most recently submitted graph's `LoraLoader` chain — lets an
+//! integration test prove a job's `params.loras` actually reached ComfyUI as
+//! real nodes (file + strength, in chain order), not just that the job
+//! completed.
+//!
 //! Fixture-only flags:
 //! - `--fake-ready-ms <n>`  — delay the socket bind by `n` ms (slow cold start).
 //! - `--fake-render-ms <n>` — `/history` reports "pending" until `n` ms after
@@ -52,6 +58,21 @@ struct Fixture {
     history_error: bool,
     input_dir: PathBuf,
     prompts: Arc<Mutex<HashMap<String, Prompt>>>,
+    /// The most recently submitted graph's `LoraLoader` chain, in node-id
+    /// order (`90`, `91`, …) — read back by `GET /__test/last_lora_chain` so
+    /// integration tests can prove a job's `params.loras` actually reached
+    /// the ComfyUI graph as real `LoraLoader` nodes, not just that the job
+    /// completed. Test-only surface; the real ComfyUI has no such endpoint.
+    last_lora_chain: Arc<Mutex<Vec<LoraLink>>>,
+}
+
+/// One `LoraLoader` node's `lora_name` + `strength_model` (mirrors
+/// `core::pipeline::LoraSpec`, since `strength_model`/`strength_clip` are
+/// always set equal by `apply_loras`).
+#[derive(Clone, serde::Serialize)]
+struct LoraLink {
+    file: String,
+    strength: f64,
 }
 
 struct Prompt {
@@ -102,6 +123,7 @@ async fn main() -> anyhow::Result<()> {
         history_error,
         input_dir: base_dir.join("input"),
         prompts: Arc::new(Mutex::new(HashMap::new())),
+        last_lora_chain: Arc::new(Mutex::new(Vec::new())),
     };
 
     let app = Router::new()
@@ -111,6 +133,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/prompt", post(submit_prompt))
         .route("/history/{id}", get(history))
         .route("/view", get(view))
+        .route("/__test/last_lora_chain", get(last_lora_chain))
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, port)).await?;
@@ -142,12 +165,15 @@ async fn ok() -> impl IntoResponse {
 
 async fn submit_prompt(State(fx): State<Fixture>, Json(body): Json<Value>) -> Json<Value> {
     // Find the SaveImage / SaveVideo node and its filename_prefix, plus any
-    // LoadImage (image→video start frame).
+    // LoadImage (image→video start frame) and every LoraLoader in the chain
+    // (node ids sorted numerically -- `apply_loras` always assigns them in
+    // chain order starting at "90").
     let mut prefix = "fake".to_string();
     let mut is_video = false;
     let mut load_image = None;
+    let mut lora_nodes: Vec<(u32, LoraLink)> = Vec::new();
     if let Some(nodes) = body.get("prompt").and_then(Value::as_object) {
-        for node in nodes.values() {
+        for (node_id, node) in nodes {
             match node.get("class_type").and_then(Value::as_str) {
                 Some("SaveVideo") => is_video = true,
                 Some("SaveImage") => {}
@@ -156,6 +182,21 @@ async fn submit_prompt(State(fx): State<Fixture>, Json(body): Json<Value>) -> Js
                         .pointer("/inputs/image")
                         .and_then(Value::as_str)
                         .map(str::to_string);
+                    continue;
+                }
+                Some("LoraLoader") => {
+                    let file = node
+                        .pointer("/inputs/lora_name")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_string();
+                    let strength = node
+                        .pointer("/inputs/strength_model")
+                        .and_then(Value::as_f64)
+                        .unwrap_or(0.0);
+                    if let Ok(id) = node_id.parse::<u32>() {
+                        lora_nodes.push((id, LoraLink { file, strength }));
+                    }
                     continue;
                 }
                 _ => continue,
@@ -168,6 +209,12 @@ async fn submit_prompt(State(fx): State<Fixture>, Json(body): Json<Value>) -> Js
             }
         }
     }
+    lora_nodes.sort_by_key(|(id, _)| *id);
+    let lora_chain: Vec<LoraLink> = lora_nodes.into_iter().map(|(_, link)| link).collect();
+    if let Ok(mut last) = fx.last_lora_chain.lock() {
+        *last = lora_chain;
+    }
+
     let id = format!("p-{}", fx.prompts.lock().map(|m| m.len()).unwrap_or(0) + 1);
     if let Ok(mut prompts) = fx.prompts.lock() {
         prompts.insert(
@@ -181,6 +228,19 @@ async fn submit_prompt(State(fx): State<Fixture>, Json(body): Json<Value>) -> Js
         );
     }
     Json(json!({ "prompt_id": id, "number": 1, "node_errors": {} }))
+}
+
+/// Test-only introspection: the most recently submitted graph's LoRA chain,
+/// so an integration test can assert a job's `params.loras` actually reached
+/// ComfyUI as real `LoraLoader` nodes (file name + strength, in chain order)
+/// instead of only checking the job completed.
+async fn last_lora_chain(State(fx): State<Fixture>) -> Json<Value> {
+    let chain = fx
+        .last_lora_chain
+        .lock()
+        .map(|c| c.clone())
+        .unwrap_or_default();
+    Json(json!({ "loras": chain }))
 }
 
 async fn history(State(fx): State<Fixture>, Path(id): Path<String>) -> Json<Value> {

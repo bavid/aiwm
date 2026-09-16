@@ -15,9 +15,25 @@ use std::time::Duration;
 use aiwm_core::db::{Database, NewJob, NewModel};
 use aiwm_core::orchestrator::{JobEngine, JobOutcome, JobState};
 use aiwm_core::runtime::{
-    ComfyDirs, ComfyLaunch, ComfyUiAdapter, LlamaCppAdapter, RuntimeRegistry,
+    ComfyDirs, ComfyLaunch, ComfyUiAdapter, LlamaCppAdapter, RuntimeAdapter, RuntimeRegistry,
 };
 use aiwm_core::scheduler::HybridScheduler;
+
+/// `detail()` always renders the port right after `verb :` (`format!("{verb}
+/// :{port}")`, see `comfyui_adapter.rs`'s own copy of this helper) — pull it
+/// back out so a test can hit the fake server's test-only endpoints directly.
+fn port_from_detail(detail: &str) -> u16 {
+    let after_colon = detail
+        .split_once(':')
+        .expect("detail should contain a port")
+        .1;
+    after_colon
+        .chars()
+        .take_while(char::is_ascii_digit)
+        .collect::<String>()
+        .parse()
+        .expect("port digits")
+}
 
 fn fake_comfy_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_aiwm-fake-comfy"))
@@ -33,6 +49,9 @@ struct Harness {
     db: Database,
     engine: Arc<JobEngine>,
     outputs: PathBuf,
+    /// Kept so a test can reach the fake ComfyUI's test-only endpoints
+    /// directly (`detail()` names the port once the server is up).
+    comfyui: Arc<ComfyUiAdapter>,
     _tmp: tempfile::TempDir,
 }
 
@@ -90,7 +109,7 @@ async fn harness_with(with_model: bool, extra_args: &[&str]) -> Harness {
         registry,
         scheduler,
         llama,
-        comfyui,
+        comfyui.clone(),
         outputs.clone(),
     ));
 
@@ -98,6 +117,7 @@ async fn harness_with(with_model: bool, extra_args: &[&str]) -> Harness {
         db,
         engine,
         outputs,
+        comfyui,
         _tmp: tmp,
     }
 }
@@ -202,6 +222,68 @@ async fn explicit_checkpoint_image_job_completes() {
     );
     let stored = h.db.jobs().get(&job.id).await.unwrap().unwrap();
     assert!(stored.output_path.is_some());
+}
+
+/// The UI's new LoRA-stack picker (`ui/src/components/LoraPicker.tsx`) submits
+/// `params.loras = [{ model_id, strength }, …]`. This proves that shape makes
+/// it all the way through the real job pipeline — `ImageRequest::from_params`
+/// (`parse_loras`) → `resolve_loras` (library lookup) →
+/// `pipeline::checkpoint_txt2img`'s `loras: &[LoraSpec]` — by inspecting the
+/// *actual graph ComfyUI received* (via the fake server's
+/// `/__test/last_lora_chain`), not just that the job completed. Mirrors the
+/// unit-level proof already covering each link (`parse_loras_reads_ids_and_
+/// clamps_strength`, `resolve_loras_resolves_the_bare_file_name`,
+/// `checkpoint_graph_splices_a_lora_before_the_sampler_and_clip`) with one
+/// end-to-end check that they actually compose.
+#[tokio::test]
+async fn an_image_job_with_a_lora_splices_a_loraloader_into_the_real_graph() {
+    let h = harness(true).await;
+    let lora_path = h._tmp.path().join("add-detail-xl.safetensors");
+    std::fs::write(&lora_path, b"fixture").unwrap();
+    let lora =
+        h.db.models()
+            .insert(NewModel {
+                name: "Add Detail XL".into(),
+                family: Some("sdxl".into()),
+                format: "safetensors".into(),
+                file_path: lora_path.to_string_lossy().into_owned(),
+                size_bytes: 1_000,
+                source: "manual".into(),
+                roles: vec!["lora".into()],
+                ..NewModel::default()
+            })
+            .await
+            .unwrap();
+
+    let mut job = image_job("a red fox in the snow");
+    job.params["loras"] = serde_json::json!([{ "model_id": lora.id, "strength": 0.65 }]);
+    let job = h.engine.submit(job).await.unwrap();
+
+    let outcome = h.engine.run_next().await.unwrap().unwrap();
+    assert!(
+        matches!(&outcome, JobOutcome::Completed { job_id } if *job_id == job.id),
+        "got {outcome:?}"
+    );
+
+    // The resolved LoRA is pinned back onto the job's own params too (3.5's
+    // gallery needs concrete values, same as seed/width/height).
+    let stored = h.db.jobs().get(&job.id).await.unwrap().unwrap();
+    assert_eq!(stored.params["loras"][0]["model_id"], lora.id.as_str());
+    assert_eq!(stored.params["loras"][0]["strength"], 0.65);
+
+    // The real proof: ask the fake ComfyUI what graph it actually received.
+    let port = port_from_detail(&h.comfyui.detail().expect("comfyui detail"));
+    let resp: serde_json::Value =
+        reqwest::get(format!("http://127.0.0.1:{port}/__test/last_lora_chain"))
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+    let chain = resp["loras"].as_array().expect("loras array");
+    assert_eq!(chain.len(), 1, "{resp:?}");
+    assert_eq!(chain[0]["file"], "add-detail-xl.safetensors");
+    assert_eq!(chain[0]["strength"], 0.65);
 }
 
 #[tokio::test]

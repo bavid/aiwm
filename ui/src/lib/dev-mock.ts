@@ -23,6 +23,7 @@ const MODELS: AnyRecord[] = [
   mkModel("m-wan", "wan2.2_ti2v_5B_fp16", { family: "wan", roles: ["base_video"], runtimes: ["comfyui"], vram_estimate_mb: 11800 }),
   mkModel("m-umt5", "umt5_xxl_fp8_e4m3fn_scaled", { roles: ["text_encoder"], runtimes: ["comfyui"] }),
   mkModel("m-wanvae", "wan2.2_vae", { family: "wan", roles: ["vae"], runtimes: ["comfyui"] }),
+  mkModel("m-lora-wan-motion", "Wan Motion Boost", { family: "wan", roles: ["lora"], runtimes: ["comfyui"], size_bytes: 128_000_000 }),
   mkModel("m-sdxl", "SDXL Base 1.0", { family: "sdxl", roles: ["base_diffusion"], runtimes: ["comfyui"], vram_estimate_mb: 8200 }),
   mkModel("m-lora-detail", "Add Detail XL", { family: "sdxl", roles: ["lora"], runtimes: ["comfyui"], size_bytes: 220_000_000 }),
   mkModel("m-lora-flux-style", "Ink Wash Style (Flux)", { family: "flux", roles: ["lora"], runtimes: ["comfyui"], size_bytes: 340_000_000 }),
