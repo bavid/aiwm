@@ -58,7 +58,12 @@ pub struct Config {
 const MAX_RESERVE_VRAM_MB: u64 = 8192;
 
 /// The `[comfyui]` table — ComfyUI server options the Settings UI exposes.
-/// Applied at startup; a change needs a restart.
+/// A change is applied live when possible: [`crate::api::handlers::save_config`]
+/// pushes it to [`crate::runtime::ComfyUiAdapter::set_options`], which
+/// gracefully restarts a server we manage with the new flags (ComfyUI itself
+/// has no live-reconfigure endpoint, so a restart is the only way — see that
+/// method's doc comment). A server the user attached to isn't ours to
+/// restart; there the new options apply the next time *we* start one.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct ComfyConfig {

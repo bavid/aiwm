@@ -65,13 +65,18 @@ pub fn config(app: &App) -> Result<Config> {
 }
 
 /// Apply the user-editable fields, persist `config.toml`, and flip the live
-/// offline switch. Everything else needs an app restart to take effect — the UI
-/// says so. Returns the full saved config.
-pub fn save_config(app: &App, update: ConfigUpdate) -> Result<Config> {
+/// offline switch. Most fields still need an app restart (`[llama]`,
+/// `[paths]`, `vram_budget_mb`) — the UI says so. `[comfyui]` is the
+/// exception: a change is pushed to [`ComfyUiAdapter::set_options`], which
+/// live-restarts a server we manage (best-effort — a failure here doesn't
+/// fail the save, since the new config is already persisted and will apply on
+/// the next start regardless). Returns the full saved config.
+pub async fn save_config(app: &App, update: ConfigUpdate) -> Result<Config> {
     if update.store_path.trim().is_empty() {
         return Err(CoreError::Config("store path must not be empty".into()));
     }
     let mut cfg = Config::read_from(&app.paths)?;
+    let comfyui_changed = cfg.comfyui != update.comfyui;
     cfg.store_path = update.store_path.trim().into();
     cfg.offline_mode = update.offline_mode;
     cfg.vram_budget_mb = update.vram_budget_mb;
@@ -83,6 +88,16 @@ pub fn save_config(app: &App, update: ConfigUpdate) -> Result<Config> {
     cfg.paths.cache_path = non_empty_path(&update.paths.cache_path);
     cfg.save(&app.paths)?;
     app.set_offline(cfg.offline_mode);
+
+    if comfyui_changed {
+        if let Err(e) = app.comfyui.set_options(cfg.comfyui.to_options()).await {
+            tracing::warn!(
+                error = %e,
+                "saved the new ComfyUI options, but the live restart failed — \
+                 they'll still apply on the next manual restart"
+            );
+        }
+    }
     Ok(cfg)
 }
 
@@ -1125,8 +1140,107 @@ pub fn recent_logs(app: &App, lines: usize) -> Result<Vec<String>> {
 
 #[cfg(test)]
 mod tests {
+    use std::net::Ipv4Addr;
+
+    use axum::routing::get;
+    use axum::{Json, Router};
+
     use super::*;
     use crate::registry::SearchSort;
+    use crate::runtime::RuntimeAdapter;
+
+    /// Bare-minimum ComfyUI stand-in — just enough for `attach` + `health` to
+    /// succeed, mirroring `runtime::comfyui`'s own test fixture.
+    async fn mock_comfy() -> u16 {
+        let router = Router::new().route(
+            "/system_stats",
+            get(|| async {
+                Json(serde_json::json!({
+                    "system": { "comfyui_version": "0.34.0-mock" },
+                    "devices": [{ "name": "cuda:0 test", "vram_total": 17_000_000_000u64, "vram_free": 15_000_000_000u64 }]
+                }))
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+            .await
+            .unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            axum::serve(listener, router).await.unwrap();
+        });
+        port
+    }
+
+    /// End-to-end wiring check for the 3.7 live-apply gap: saving a changed
+    /// `[comfyui]` block through the same handler the HTTP/Tauri surfaces call
+    /// must reach `ComfyUiAdapter::set_options` with the freshly derived
+    /// options — not just rewrite `config.toml` and leave the running server
+    /// on its old flags until a full app restart.
+    #[tokio::test]
+    async fn save_config_live_applies_a_changed_comfyui_vram_mode() {
+        let tmp = tempfile::tempdir().unwrap();
+        let app = crate::App::load(crate::AppPaths::rooted(tmp.path()))
+            .await
+            .unwrap();
+
+        let port = mock_comfy().await;
+        app.comfyui.attach(port).await.unwrap();
+        assert!(!app.comfyui.detail().unwrap().contains("lowvram"));
+
+        let mut update = ConfigUpdate {
+            store_path: app.config.store_path.display().to_string(),
+            offline_mode: false,
+            vram_budget_mb: app.config.vram_budget_mb,
+            llama: app.config.llama.clone(),
+            comfyui: app.config.comfyui.clone(),
+            models: app.config.models,
+            paths: Default::default(),
+        };
+        update.comfyui.vram_mode = "lowvram".to_string();
+
+        let saved = save_config(&app, update).await.unwrap();
+        assert_eq!(saved.comfyui.vram_mode, "lowvram");
+
+        // Reached the real adapter: an attached server isn't restarted (not
+        // ours to kill), but the new options are recorded live, immediately
+        // visible in `detail()` -- no app restart needed.
+        let detail = app.comfyui.detail().unwrap();
+        assert!(detail.contains("lowvram"), "{detail}");
+        assert!(
+            detail.starts_with(&format!("attached to :{port}")),
+            "{detail}"
+        );
+        assert_eq!(app.comfyui.health().await, crate::runtime::Health::Healthy);
+    }
+
+    /// The common case (an unrelated field changes, `[comfyui]` doesn't)
+    /// must not touch the running server at all.
+    #[tokio::test]
+    async fn save_config_leaves_comfyui_alone_when_its_block_is_unchanged() {
+        let tmp = tempfile::tempdir().unwrap();
+        let app = crate::App::load(crate::AppPaths::rooted(tmp.path()))
+            .await
+            .unwrap();
+
+        let port = mock_comfy().await;
+        app.comfyui.attach(port).await.unwrap();
+
+        let update = ConfigUpdate {
+            store_path: app.config.store_path.display().to_string(),
+            offline_mode: false,
+            vram_budget_mb: 12_000, // an unrelated field changes
+            llama: app.config.llama.clone(),
+            comfyui: app.config.comfyui.clone(), // unchanged
+            models: app.config.models,
+            paths: Default::default(),
+        };
+
+        let saved = save_config(&app, update).await.unwrap();
+        assert_eq!(saved.vram_budget_mb, 12_000);
+        // Still attached on the same port, health untouched -- no restart
+        // attempt was made for an unrelated config change.
+        assert_eq!(app.comfyui.health().await, crate::runtime::Health::Healthy);
+    }
 
     #[test]
     fn combined_fit_sums_every_members_size_not_just_the_base() {
