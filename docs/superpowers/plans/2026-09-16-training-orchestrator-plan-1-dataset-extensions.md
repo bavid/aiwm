@@ -2787,6 +2787,15 @@ pub async fn create_concept(app: &App, dataset_id: &str, body: ConceptBodyDto) -
     if body.name.trim().is_empty() || body.token.trim().is_empty() {
         return Err(CoreError::Config("concept name and token must not be empty".into()));
     }
+    // A duplicate token is a user mistake, not a server fault: the UNIQUE
+    // (dataset_id, token) violation would otherwise surface as CoreError::Sqlx
+    // -> HTTP 500 (Task 3 review finding). Pre-check and answer 400.
+    let token = body.token.trim();
+    if app.db.concepts().list_for_dataset(dataset_id).await?.iter().any(|c| c.token == token) {
+        return Err(CoreError::Config(format!(
+            "token {token:?} is already used by another concept in this dataset"
+        )));
+    }
     app.db
         .concepts()
         .create(crate::db::NewConcept { dataset_id: dataset_id.to_string(), name: body.name, token: body.token, description: body.description })
@@ -2794,6 +2803,20 @@ pub async fn create_concept(app: &App, dataset_id: &str, body: ConceptBodyDto) -
 }
 
 pub async fn update_concept(app: &App, id: &str, body: ConceptBodyDto) -> Result<()> {
+    if body.name.trim().is_empty() || body.token.trim().is_empty() {
+        return Err(CoreError::Config("concept name and token must not be empty".into()));
+    }
+    let current = app.db.concepts().get(id).await?
+        .ok_or_else(|| CoreError::Config(format!("no such concept {id}")))?;
+    let token = body.token.trim();
+    // Same duplicate-token pre-check as create_concept, excluding this concept itself.
+    if app.db.concepts().list_for_dataset(&current.dataset_id).await?
+        .iter().any(|c| c.id != id && c.token == token)
+    {
+        return Err(CoreError::Config(format!(
+            "token {token:?} is already used by another concept in this dataset"
+        )));
+    }
     app.db.concepts().update(id, &body.name, &body.token, &body.description).await
 }
 
