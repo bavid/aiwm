@@ -13,6 +13,7 @@ mod models;
 mod runtimes;
 mod sessions;
 mod settings;
+pub mod stories;
 mod voice_identities;
 
 pub use agents::{Agent, AgentRepo, AgentSession, AgentSessionEvent, AgentSessionState, NewAgent};
@@ -24,6 +25,12 @@ pub use models::{Model, ModelLink, ModelRepo, NewModel};
 pub use runtimes::{state as runtime_state, RuntimeRecord, RuntimeRepo};
 pub use sessions::{Session, SessionRepo};
 pub use settings::SettingsRepo;
+pub use stories::{
+    Character, CharacterLogEntry, CharacterRelationship, CharacterRepo, CharacterUpdate,
+    DialogueLine, Location, LocationRepo, LocationUpdate, NewCharacter, NewDialogueLine,
+    NewLocation, NewNpc, NewScene, Npc, NpcRepo, NpcUpdate, Scene, SceneImage, SceneImageRepo,
+    SceneRepo, SceneUpdate, Story, StoryRepo, StoryUpdate,
+};
 pub use voice_identities::{VoiceIdentity, VoiceIdentityRepo};
 
 use std::path::Path;
@@ -118,6 +125,30 @@ impl Database {
 
     pub fn voice_identities(&self) -> VoiceIdentityRepo<'_> {
         VoiceIdentityRepo::new(&self.pool)
+    }
+
+    pub fn stories(&self) -> StoryRepo<'_> {
+        StoryRepo::new(&self.pool)
+    }
+
+    pub fn characters(&self) -> CharacterRepo<'_> {
+        CharacterRepo::new(&self.pool)
+    }
+
+    pub fn npcs(&self) -> NpcRepo<'_> {
+        NpcRepo::new(&self.pool)
+    }
+
+    pub fn locations(&self) -> LocationRepo<'_> {
+        LocationRepo::new(&self.pool)
+    }
+
+    pub fn scenes(&self) -> SceneRepo<'_> {
+        SceneRepo::new(&self.pool)
+    }
+
+    pub fn scene_images(&self) -> SceneImageRepo<'_> {
+        SceneImageRepo::new(&self.pool)
     }
 
     /// Names of the application tables (excludes SQLite internals). Test helper.

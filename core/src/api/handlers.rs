@@ -6,17 +6,20 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use super::dto::{
-    AboutDto, AgentPermissionDto, AgentSessionDetailDto, AttachExternalDto, ColibriModelDto,
-    ConfigUpdate, DetachEngineDto, EnqueueDownloadDto, FeaturedModelDto, JobDetailDto,
-    KnownModelDto, LaunchExternalDto, LocalApiStatusDto, ModelStackDto, NewAgentDto, NewSessionDto,
-    NewVoiceIdentityDto, OpenAgentSessionDto, RegisterColibriModelDto, RegistryDetailsDto,
-    RegistryFileDto, RegistrySearchDto, RuntimeStatusDto, SubmitJobDto,
+    AboutDto, AgentPermissionDto, AgentSessionDetailDto, AttachExternalDto, CharacterBodyDto,
+    ColibriModelDto, ConfigUpdate, DetachEngineDto, DialogueLineDto, EnqueueDownloadDto,
+    FeaturedModelDto, JobDetailDto, KnownModelDto, LaunchExternalDto, LocalApiStatusDto,
+    LocationBodyDto, ModelStackDto, NewAgentDto, NewSessionDto, NewVoiceIdentityDto, NpcBodyDto,
+    OpenAgentSessionDto, RegisterColibriModelDto, RegistryDetailsDto, RegistryFileDto,
+    RegistrySearchDto, RuntimeStatusDto, SceneBodyDto, SceneDetailDto, StoryBodyDto, SubmitJobDto,
 };
 use crate::compat::FitVerdict;
 use crate::config::Config;
 use crate::db::{
-    Agent, AgentSession, Benchmark, Download, EventLevel, Job, JobFilter, Model, NewAgent, NewJob,
-    Session, VoiceIdentity,
+    Agent, AgentSession, Benchmark, Character, CharacterLogEntry, CharacterRelationship,
+    CharacterUpdate, Download, EventLevel, Job, JobFilter, Location, LocationUpdate, Model,
+    NewAgent, NewCharacter, NewDialogueLine, NewJob, NewLocation, NewNpc, NewScene, Npc, NpcUpdate,
+    Scene, SceneImage, SceneUpdate, Session, Story, StoryUpdate, VoiceIdentity,
 };
 use crate::download::EnqueueRequest;
 use crate::launcher::LaunchRequest;
@@ -850,6 +853,279 @@ pub async fn delete_voice_identity(app: &App, id: &str) -> Result<()> {
         return Ok(()); // already gone — deleting is idempotent, same as sessions/documents
     };
     voice_identity::delete_voice_identity(&app.db, &identity).await
+}
+
+// --- Story Studio (Phase 1: text + plain image, docs/TODO.md) -------------
+//
+// Portrait/reference images and Scene images are never generated here --
+// they are plain `job_id`s pointing at a `job_type=image` job the caller
+// already submitted through the ordinary Image capability (`submit_job`
+// above). Story Studio only remembers which job was picked.
+
+pub async fn list_stories(app: &App) -> Result<Vec<Story>> {
+    app.db.stories().list().await
+}
+
+pub async fn create_story(app: &App, body: StoryBodyDto) -> Result<Story> {
+    app.db.stories().create(story_update_from(body)).await
+}
+
+pub async fn update_story(app: &App, id: &str, body: StoryBodyDto) -> Result<()> {
+    app.db.stories().update(id, story_update_from(body)).await
+}
+
+fn story_update_from(body: StoryBodyDto) -> StoryUpdate {
+    StoryUpdate {
+        name: body.name,
+        setting: body.setting,
+        art_style: body.art_style,
+        premise: body.premise,
+    }
+}
+
+pub async fn delete_story(app: &App, id: &str) -> Result<()> {
+    app.db.stories().delete(id).await
+}
+
+pub async fn list_characters(app: &App, story_id: &str) -> Result<Vec<Character>> {
+    app.db.characters().list_for_story(story_id).await
+}
+
+pub async fn create_character(
+    app: &App,
+    story_id: &str,
+    body: CharacterBodyDto,
+) -> Result<Character> {
+    app.db
+        .characters()
+        .create(NewCharacter {
+            story_id: story_id.to_string(),
+            name: body.name,
+            traits: body.traits,
+            backstory: body.backstory,
+            alignment: body.alignment,
+        })
+        .await
+}
+
+pub async fn update_character(app: &App, id: &str, body: CharacterBodyDto) -> Result<()> {
+    app.db
+        .characters()
+        .update(
+            id,
+            CharacterUpdate {
+                name: body.name,
+                traits: body.traits,
+                backstory: body.backstory,
+                alignment: body.alignment,
+            },
+        )
+        .await
+}
+
+pub async fn delete_character(app: &App, id: &str) -> Result<()> {
+    app.db.characters().delete(id).await
+}
+
+/// Pick (`Some`) or clear (`None`) a character's reference portrait.
+pub async fn set_character_portrait(app: &App, id: &str, job_id: Option<&str>) -> Result<()> {
+    app.db.characters().set_portrait(id, job_id).await
+}
+
+pub async fn set_character_inventory(app: &App, id: &str, items: &[String]) -> Result<()> {
+    app.db.characters().set_inventory(id, items).await
+}
+
+pub async fn list_character_relationships(
+    app: &App,
+    id: &str,
+) -> Result<Vec<CharacterRelationship>> {
+    app.db.characters().list_relationships(id).await
+}
+
+pub async fn add_character_relationship(
+    app: &App,
+    character_id: &str,
+    related_character_id: &str,
+    note: &str,
+) -> Result<CharacterRelationship> {
+    app.db
+        .characters()
+        .add_relationship(character_id, related_character_id, note)
+        .await
+}
+
+pub async fn remove_character_relationship(app: &App, id: &str) -> Result<()> {
+    app.db.characters().remove_relationship(id).await
+}
+
+pub async fn character_log(app: &App, id: &str) -> Result<Vec<CharacterLogEntry>> {
+    app.db.characters().logs_for(id).await
+}
+
+pub async fn list_npcs(app: &App, story_id: &str) -> Result<Vec<Npc>> {
+    app.db.npcs().list_for_story(story_id).await
+}
+
+pub async fn create_npc(app: &App, story_id: &str, body: NpcBodyDto) -> Result<Npc> {
+    app.db
+        .npcs()
+        .create(NewNpc {
+            story_id: story_id.to_string(),
+            name: body.name,
+            role: body.role,
+            location_id: body.location_id,
+            description: body.description,
+        })
+        .await
+}
+
+pub async fn update_npc(app: &App, id: &str, body: NpcBodyDto) -> Result<()> {
+    app.db
+        .npcs()
+        .update(
+            id,
+            NpcUpdate {
+                name: body.name,
+                role: body.role,
+                location_id: body.location_id,
+                description: body.description,
+            },
+        )
+        .await
+}
+
+pub async fn delete_npc(app: &App, id: &str) -> Result<()> {
+    app.db.npcs().delete(id).await
+}
+
+pub async fn list_locations(app: &App, story_id: &str) -> Result<Vec<Location>> {
+    app.db.locations().list_for_story(story_id).await
+}
+
+pub async fn create_location(app: &App, story_id: &str, body: LocationBodyDto) -> Result<Location> {
+    app.db
+        .locations()
+        .create(NewLocation {
+            story_id: story_id.to_string(),
+            name: body.name,
+            description: body.description,
+        })
+        .await
+}
+
+pub async fn update_location(app: &App, id: &str, body: LocationBodyDto) -> Result<()> {
+    app.db
+        .locations()
+        .update(
+            id,
+            LocationUpdate {
+                name: body.name,
+                description: body.description,
+            },
+        )
+        .await
+}
+
+pub async fn delete_location(app: &App, id: &str) -> Result<()> {
+    app.db.locations().delete(id).await
+}
+
+/// Pick (`Some`) or clear (`None`) a location's reference image.
+pub async fn set_location_reference(app: &App, id: &str, job_id: Option<&str>) -> Result<()> {
+    app.db.locations().set_reference(id, job_id).await
+}
+
+fn dialogue_from(lines: Vec<DialogueLineDto>) -> Vec<NewDialogueLine> {
+    lines
+        .into_iter()
+        .map(|l| NewDialogueLine {
+            character_id: l.character_id,
+            text: l.text,
+        })
+        .collect()
+}
+
+/// Composes a [`SceneDetailDto`] -- everything the Timeline needs for one
+/// scene card -- from the scene row plus its participants, dialogue, and
+/// images (mirrors how `job_detail` composes a job with its events).
+async fn scene_detail(app: &App, scene: Scene) -> Result<SceneDetailDto> {
+    let participant_ids = app.db.scenes().participants(&scene.id).await?;
+    let dialogue = app.db.scenes().dialogue(&scene.id).await?;
+    let images = app.db.scene_images().list_for_scene(&scene.id).await?;
+    Ok(SceneDetailDto {
+        scene,
+        participant_ids,
+        dialogue,
+        images,
+    })
+}
+
+/// Every scene in a story's timeline, in order, each with its full detail.
+pub async fn list_scenes(app: &App, story_id: &str) -> Result<Vec<SceneDetailDto>> {
+    let scenes = app.db.scenes().list_for_story(story_id).await?;
+    let mut out = Vec::with_capacity(scenes.len());
+    for scene in scenes {
+        out.push(scene_detail(app, scene).await?);
+    }
+    Ok(out)
+}
+
+pub async fn create_scene(app: &App, story_id: &str, body: SceneBodyDto) -> Result<SceneDetailDto> {
+    let scene = app
+        .db
+        .scenes()
+        .create(NewScene {
+            story_id: story_id.to_string(),
+            location_id: body.location_id,
+            narrative: body.narrative,
+            redline: body.redline,
+            participant_ids: body.participant_ids,
+            dialogue: dialogue_from(body.dialogue),
+        })
+        .await?;
+    scene_detail(app, scene).await
+}
+
+pub async fn update_scene(app: &App, id: &str, body: SceneBodyDto) -> Result<SceneDetailDto> {
+    app.db
+        .scenes()
+        .update(
+            id,
+            SceneUpdate {
+                location_id: body.location_id,
+                narrative: body.narrative,
+                redline: body.redline,
+                participant_ids: body.participant_ids,
+                dialogue: dialogue_from(body.dialogue),
+            },
+        )
+        .await?;
+    let scene = app
+        .db
+        .scenes()
+        .get(id)
+        .await?
+        .ok_or_else(|| CoreError::Db(format!("no scene {id}")))?;
+    scene_detail(app, scene).await
+}
+
+pub async fn delete_scene(app: &App, id: &str) -> Result<()> {
+    app.db.scenes().delete(id).await
+}
+
+/// Attaches an already-submitted `job_type=image` job as a new image for a
+/// scene (the first one becomes canonical automatically).
+pub async fn add_scene_image(app: &App, scene_id: &str, job_id: &str) -> Result<SceneImage> {
+    app.db.scene_images().add(scene_id, job_id).await
+}
+
+pub async fn set_canonical_scene_image(app: &App, id: &str) -> Result<()> {
+    app.db.scene_images().set_canonical(id).await
+}
+
+pub async fn delete_scene_image(app: &App, id: &str) -> Result<()> {
+    app.db.scene_images().delete(id).await
 }
 
 // --- agents (Phase 5.1c) ---------------------------------------------------

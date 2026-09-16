@@ -142,6 +142,118 @@ pub struct NewVoiceIdentityDto {
     pub reference_transcript: String,
 }
 
+// --- Story Studio (Phase 1: text + plain image, docs/TODO.md) -------------
+
+/// Body for `POST /stories` and `PUT /stories/{id}` — every editable Story
+/// field, always supplied together (no partial updates).
+#[derive(Debug, Clone, Deserialize)]
+pub struct StoryBodyDto {
+    pub name: String,
+    #[serde(default)]
+    pub setting: String,
+    #[serde(default)]
+    pub art_style: String,
+    #[serde(default)]
+    pub premise: String,
+}
+
+/// Body for `POST /stories/{id}/characters` and `PUT /characters/{id}`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct CharacterBodyDto {
+    pub name: String,
+    #[serde(default)]
+    pub traits: String,
+    #[serde(default)]
+    pub backstory: String,
+    #[serde(default)]
+    pub alignment: String,
+}
+
+/// Body for `PUT /characters/{id}/portrait` and `PUT /locations/{id}/reference`
+/// — pick (`Some`) or clear (`None`) a reference image, an already-submitted
+/// `job_type=image` job id.
+#[derive(Debug, Clone, Deserialize)]
+pub struct SetReferenceJobDto {
+    pub job_id: Option<String>,
+}
+
+/// Body for `PUT /characters/{id}/inventory` — full replace.
+#[derive(Debug, Clone, Deserialize)]
+pub struct SetInventoryDto {
+    pub items: Vec<String>,
+}
+
+/// Body for `POST /characters/{id}/relationships`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct NewRelationshipDto {
+    pub related_character_id: String,
+    pub note: String,
+}
+
+/// Body for `POST /stories/{id}/npcs` and `PUT /npcs/{id}`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct NpcBodyDto {
+    pub name: String,
+    #[serde(default)]
+    pub role: String,
+    #[serde(default)]
+    pub location_id: Option<String>,
+    #[serde(default)]
+    pub description: String,
+}
+
+/// Body for `POST /stories/{id}/locations` and `PUT /locations/{id}`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct LocationBodyDto {
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+}
+
+/// One dialogue line inside a [`SceneBodyDto`].
+#[derive(Debug, Clone, Deserialize)]
+pub struct DialogueLineDto {
+    pub character_id: String,
+    pub text: String,
+}
+
+/// Body for `POST /stories/{id}/scenes` and `PUT /scenes/{id}` — full replace
+/// of every editable field, participants and dialogue included (`position`
+/// is never client-editable).
+#[derive(Debug, Clone, Deserialize)]
+pub struct SceneBodyDto {
+    #[serde(default)]
+    pub location_id: Option<String>,
+    #[serde(default)]
+    pub narrative: String,
+    #[serde(default)]
+    pub redline: String,
+    #[serde(default)]
+    pub participant_ids: Vec<String>,
+    #[serde(default)]
+    pub dialogue: Vec<DialogueLineDto>,
+}
+
+/// A Scene plus everything the Timeline needs to render one card, composed
+/// from several repos (mirrors how `JobDetailDto` composes a job with its
+/// events).
+#[derive(Debug, Clone, Serialize)]
+pub struct SceneDetailDto {
+    #[serde(flatten)]
+    pub scene: crate::db::Scene,
+    pub participant_ids: Vec<String>,
+    pub dialogue: Vec<crate::db::DialogueLine>,
+    pub images: Vec<crate::db::SceneImage>,
+}
+
+/// Body for `POST /scenes/{id}/images` — attach an already-submitted
+/// `job_type=image` job as a new alternate (or, if it's the first, the
+/// canonical) image for the scene.
+#[derive(Debug, Clone, Deserialize)]
+pub struct AddSceneImageDto {
+    pub job_id: String,
+}
+
 /// Body for `POST /agents` / `create_agent` — a new agent profile.
 #[derive(Debug, Clone, Deserialize)]
 pub struct NewAgentDto {

@@ -7,17 +7,19 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 use aiwm_core::api::dto::{
-    AboutDto, AgentPermissionDto, AgentSessionDetailDto, AttachExternalDto, ColibriModelDto,
-    ConfigUpdate, EnqueueDownloadDto, FeaturedModelDto, JobDetailDto, KnownModelDto,
-    LaunchExternalDto, LocalApiStatusDto, ModelStackDto, NewAgentDto, NewSessionDto,
-    NewVoiceIdentityDto, OpenAgentSessionDto, RegisterColibriModelDto, RegistryDetailsDto,
-    RegistrySearchDto, RuntimeStatusDto, SubmitJobDto,
+    AboutDto, AgentPermissionDto, AgentSessionDetailDto, AttachExternalDto, CharacterBodyDto,
+    ColibriModelDto, ConfigUpdate, EnqueueDownloadDto, FeaturedModelDto, JobDetailDto,
+    KnownModelDto, LaunchExternalDto, LocalApiStatusDto, LocationBodyDto, ModelStackDto,
+    NewAgentDto, NewSessionDto, NewVoiceIdentityDto, NpcBodyDto, OpenAgentSessionDto,
+    RegisterColibriModelDto, RegistryDetailsDto, RegistrySearchDto, RuntimeStatusDto, SceneBodyDto,
+    SceneDetailDto, StoryBodyDto, SubmitJobDto,
 };
 use aiwm_core::api::handlers;
 use aiwm_core::config::Config;
 use aiwm_core::db::Document;
 use aiwm_core::db::{
-    Agent, AgentSession, Benchmark, Download, Job, JobFilter, Model, Session, VoiceIdentity,
+    Agent, AgentSession, Benchmark, Character, CharacterLogEntry, CharacterRelationship, Download,
+    Job, JobFilter, Location, Model, Npc, SceneImage, Session, Story, VoiceIdentity,
 };
 use aiwm_core::model::{ImportOutcome, ImportRequest};
 use aiwm_core::orchestrator::JobState;
@@ -262,6 +264,239 @@ async fn attach_document(
 #[tauri::command]
 async fn delete_document(app: tauri::State<'_, Arc<App>>, id: String) -> Result<(), String> {
     to_ipc(handlers::delete_document(&app, &id).await)
+}
+
+// --- Story Studio (Phase 1: text + plain image, docs/TODO.md) ---
+
+#[tauri::command]
+async fn list_stories(app: tauri::State<'_, Arc<App>>) -> Result<Vec<Story>, String> {
+    to_ipc(handlers::list_stories(&app).await)
+}
+
+#[tauri::command]
+async fn create_story(
+    app: tauri::State<'_, Arc<App>>,
+    body: StoryBodyDto,
+) -> Result<Story, String> {
+    to_ipc(handlers::create_story(&app, body).await)
+}
+
+#[tauri::command]
+async fn update_story(
+    app: tauri::State<'_, Arc<App>>,
+    id: String,
+    body: StoryBodyDto,
+) -> Result<(), String> {
+    to_ipc(handlers::update_story(&app, &id, body).await)
+}
+
+#[tauri::command]
+async fn delete_story(app: tauri::State<'_, Arc<App>>, id: String) -> Result<(), String> {
+    to_ipc(handlers::delete_story(&app, &id).await)
+}
+
+#[tauri::command]
+async fn list_characters(
+    app: tauri::State<'_, Arc<App>>,
+    story_id: String,
+) -> Result<Vec<Character>, String> {
+    to_ipc(handlers::list_characters(&app, &story_id).await)
+}
+
+#[tauri::command]
+async fn create_character(
+    app: tauri::State<'_, Arc<App>>,
+    story_id: String,
+    body: CharacterBodyDto,
+) -> Result<Character, String> {
+    to_ipc(handlers::create_character(&app, &story_id, body).await)
+}
+
+#[tauri::command]
+async fn update_character(
+    app: tauri::State<'_, Arc<App>>,
+    id: String,
+    body: CharacterBodyDto,
+) -> Result<(), String> {
+    to_ipc(handlers::update_character(&app, &id, body).await)
+}
+
+#[tauri::command]
+async fn delete_character(app: tauri::State<'_, Arc<App>>, id: String) -> Result<(), String> {
+    to_ipc(handlers::delete_character(&app, &id).await)
+}
+
+#[tauri::command]
+async fn set_character_portrait(
+    app: tauri::State<'_, Arc<App>>,
+    id: String,
+    job_id: Option<String>,
+) -> Result<(), String> {
+    to_ipc(handlers::set_character_portrait(&app, &id, job_id.as_deref()).await)
+}
+
+#[tauri::command]
+async fn set_character_inventory(
+    app: tauri::State<'_, Arc<App>>,
+    id: String,
+    items: Vec<String>,
+) -> Result<(), String> {
+    to_ipc(handlers::set_character_inventory(&app, &id, &items).await)
+}
+
+#[tauri::command]
+async fn list_character_relationships(
+    app: tauri::State<'_, Arc<App>>,
+    id: String,
+) -> Result<Vec<CharacterRelationship>, String> {
+    to_ipc(handlers::list_character_relationships(&app, &id).await)
+}
+
+#[tauri::command]
+async fn add_character_relationship(
+    app: tauri::State<'_, Arc<App>>,
+    id: String,
+    related_character_id: String,
+    note: String,
+) -> Result<CharacterRelationship, String> {
+    to_ipc(handlers::add_character_relationship(&app, &id, &related_character_id, &note).await)
+}
+
+#[tauri::command]
+async fn remove_character_relationship(
+    app: tauri::State<'_, Arc<App>>,
+    id: String,
+) -> Result<(), String> {
+    to_ipc(handlers::remove_character_relationship(&app, &id).await)
+}
+
+#[tauri::command]
+async fn character_log(
+    app: tauri::State<'_, Arc<App>>,
+    id: String,
+) -> Result<Vec<CharacterLogEntry>, String> {
+    to_ipc(handlers::character_log(&app, &id).await)
+}
+
+#[tauri::command]
+async fn list_npcs(app: tauri::State<'_, Arc<App>>, story_id: String) -> Result<Vec<Npc>, String> {
+    to_ipc(handlers::list_npcs(&app, &story_id).await)
+}
+
+#[tauri::command]
+async fn create_npc(
+    app: tauri::State<'_, Arc<App>>,
+    story_id: String,
+    body: NpcBodyDto,
+) -> Result<Npc, String> {
+    to_ipc(handlers::create_npc(&app, &story_id, body).await)
+}
+
+#[tauri::command]
+async fn update_npc(
+    app: tauri::State<'_, Arc<App>>,
+    id: String,
+    body: NpcBodyDto,
+) -> Result<(), String> {
+    to_ipc(handlers::update_npc(&app, &id, body).await)
+}
+
+#[tauri::command]
+async fn delete_npc(app: tauri::State<'_, Arc<App>>, id: String) -> Result<(), String> {
+    to_ipc(handlers::delete_npc(&app, &id).await)
+}
+
+#[tauri::command]
+async fn list_locations(
+    app: tauri::State<'_, Arc<App>>,
+    story_id: String,
+) -> Result<Vec<Location>, String> {
+    to_ipc(handlers::list_locations(&app, &story_id).await)
+}
+
+#[tauri::command]
+async fn create_location(
+    app: tauri::State<'_, Arc<App>>,
+    story_id: String,
+    body: LocationBodyDto,
+) -> Result<Location, String> {
+    to_ipc(handlers::create_location(&app, &story_id, body).await)
+}
+
+#[tauri::command]
+async fn update_location(
+    app: tauri::State<'_, Arc<App>>,
+    id: String,
+    body: LocationBodyDto,
+) -> Result<(), String> {
+    to_ipc(handlers::update_location(&app, &id, body).await)
+}
+
+#[tauri::command]
+async fn delete_location(app: tauri::State<'_, Arc<App>>, id: String) -> Result<(), String> {
+    to_ipc(handlers::delete_location(&app, &id).await)
+}
+
+#[tauri::command]
+async fn set_location_reference(
+    app: tauri::State<'_, Arc<App>>,
+    id: String,
+    job_id: Option<String>,
+) -> Result<(), String> {
+    to_ipc(handlers::set_location_reference(&app, &id, job_id.as_deref()).await)
+}
+
+#[tauri::command]
+async fn list_scenes(
+    app: tauri::State<'_, Arc<App>>,
+    story_id: String,
+) -> Result<Vec<SceneDetailDto>, String> {
+    to_ipc(handlers::list_scenes(&app, &story_id).await)
+}
+
+#[tauri::command]
+async fn create_scene(
+    app: tauri::State<'_, Arc<App>>,
+    story_id: String,
+    body: SceneBodyDto,
+) -> Result<SceneDetailDto, String> {
+    to_ipc(handlers::create_scene(&app, &story_id, body).await)
+}
+
+#[tauri::command]
+async fn update_scene(
+    app: tauri::State<'_, Arc<App>>,
+    id: String,
+    body: SceneBodyDto,
+) -> Result<SceneDetailDto, String> {
+    to_ipc(handlers::update_scene(&app, &id, body).await)
+}
+
+#[tauri::command]
+async fn delete_scene(app: tauri::State<'_, Arc<App>>, id: String) -> Result<(), String> {
+    to_ipc(handlers::delete_scene(&app, &id).await)
+}
+
+#[tauri::command]
+async fn add_scene_image(
+    app: tauri::State<'_, Arc<App>>,
+    scene_id: String,
+    job_id: String,
+) -> Result<SceneImage, String> {
+    to_ipc(handlers::add_scene_image(&app, &scene_id, &job_id).await)
+}
+
+#[tauri::command]
+async fn set_canonical_scene_image(
+    app: tauri::State<'_, Arc<App>>,
+    id: String,
+) -> Result<(), String> {
+    to_ipc(handlers::set_canonical_scene_image(&app, &id).await)
+}
+
+#[tauri::command]
+async fn delete_scene_image(app: tauri::State<'_, Arc<App>>, id: String) -> Result<(), String> {
+    to_ipc(handlers::delete_scene_image(&app, &id).await)
 }
 
 #[tauri::command]
@@ -643,6 +878,36 @@ fn try_run() -> anyhow::Result<()> {
             list_voice_identities,
             create_voice_identity,
             delete_voice_identity,
+            list_stories,
+            create_story,
+            update_story,
+            delete_story,
+            list_characters,
+            create_character,
+            update_character,
+            delete_character,
+            set_character_portrait,
+            set_character_inventory,
+            list_character_relationships,
+            add_character_relationship,
+            remove_character_relationship,
+            character_log,
+            list_npcs,
+            create_npc,
+            update_npc,
+            delete_npc,
+            list_locations,
+            create_location,
+            update_location,
+            delete_location,
+            set_location_reference,
+            list_scenes,
+            create_scene,
+            update_scene,
+            delete_scene,
+            add_scene_image,
+            set_canonical_scene_image,
+            delete_scene_image,
             list_agents,
             create_agent,
             delete_agent,

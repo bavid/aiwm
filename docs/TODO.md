@@ -505,40 +505,74 @@ anywhere; `Blocked` is purely `core::scheduler::Decision` (not enough VRAM right
   the form after scrolling, Browse… button no-ops cleanly outside Tauri, no new
   console errors on any tab.
 
-## Story Studio (noch nicht begonnen)
-Charakter-/Szenen-basierter Story-Builder (User: "lets plan actuall a friggin
-lot" → ausführliches Konzept + interaktiver Mockup-Artifact entstanden, aber
-**noch kein Code, kein Doc im Repo** — dieser Eintrag ist der einzige
-Repo-seitige Anker, damit das Konzept nicht mit dem Chat-Verlauf verloren
-geht). Kurzfassung: Story (Setting/Ära, Art-Style, Prämisse) → Character
-(Traits/Backstory, gelockte Referenz-Portrait-Job-ID für konsistentes
-Aussehen, Inventar, Beziehungen) → Character-Log (append-only "Brain" —
-Adventures/Steps/Inventory/Personen) → Location (eigenes gelocktes
-Referenzbild) → Scene (Narrative + Dialogzeilen + Teilnehmer + Location +
-Redline) → Scene-Image (mehrere pro Scene, eine kanonische) → Assembly
-(Auswahl aus Scenes+Images fürs Bündeln/Export). Konsistenz-Mechanismus:
-IP-Adapter (Referenzbild-Konditionierung, kein Training) als MVP, LoRA pro
-Charakter später — beides noch nicht in AIWM installiert (neuer ComfyUI-
-Custom-Node-Pack nötig). Dialog immer UI-Overlay-Text, nie ins Bild gebacken
-(explizite Anforderung — KI-Text in Bildern ist unzuverlässig). Geplante
-Phasen: 1 Text+Bild-MVP → 2 IP-Adapter-Konsistenz → 3 Assembly/Export → 4
-LoRA/ControlNet-Stretch. UI-Idee: neuer "Stories"-Tab, SectionNav-Rail
-(Characters/World/Timeline/Assembly), Timeline als Haupt-Scroll-Fläche mit
-Scene-Cards, persistentes Character-Sheet als Drawer.
-- **Offene Frage vom User (2026-09-14):** lohnt sich eine bestehende
-  Open-Source-Workflow-/Orchestrierungs-Engine für die mehrstufige
-  Story-Pipeline (Charakter-Erstellung → Backstory → Scene → Dialog →
-  Bild-Gen → Narration, mit Redo/Regenerate pro Schritt), statt das
-  Schritt-für-Schritt-Sequencing selbst zu bauen? Noch nicht evaluiert.
-  Kandidaten zu prüfen, wenn's soweit ist: etwas Leichtgewichtiges das sich
-  in einen Rust/Tauri-Prozess einbetten lässt (kein separater Server/Node
-  wie n8n) — z. B. ein reiner State-Machine-/DAG-Executor als Rust-Crate,
-  oder ComfyUI selbst als Graph-Engine zweckentfremden (Story-Schritte als
-  Nodes) — beides ungeprüft, nur Erstgedanken.
-- Vor Implementierung offen (aus dem Konzeptions-Gespräch, unbeantwortet):
-  Phase-1-Umfang (Text-first vs. Konsistenz-von-Tag-1), NPC-Gewicht (volles
-  Character vs. leichtgewichtig), Export-Priorität (HTML-Scroll zuerst vs.
-  PDF/CBZ), Reaktion auf das Mockup-Layout.
+## Story Studio (Phase 1 umgesetzt — 2026-09-16)
+Charakter-/Szenen-basierter Story-Builder. Kurzfassung des Gesamtkonzepts:
+Story (Setting/Ära, Art-Style, Prämisse) → Character (Traits/Backstory,
+gelockte Referenz-Portrait-Job-ID für konsistentes Aussehen, Inventar,
+Beziehungen) → Character-Log (append-only "Brain") → Location (eigenes
+gelocktes Referenzbild) → Scene (Narrative + Dialogzeilen + Teilnehmer +
+Location + Redline) → Scene-Image (mehrere pro Scene, eine kanonische) →
+Assembly (Auswahl aus Scenes+Images fürs Bündeln/Export). Geplante Phasen:
+1 Text+Bild-MVP → 2 IP-Adapter-Konsistenz → 3 Assembly/Export → 4
+LoRA/ControlNet-Stretch.
+
+**Phase 1 (text + plain image, keine Konsistenz-Maschinerie) ist gebaut:**
+- Datenmodell komplett: `core/migrations/0013_stories.sql` +
+  `core/src/db/stories/{mod,characters,npcs,locations,scenes,scene_images}.rs`
+  — Story/Character/Npc/Location/Scene/SceneImage, normalisierte
+  `character_relationships` und ein append-only `character_logs` (auto-append
+  bei jedem neu hinzugefügten Scene-Teilnehmer, kein Duplikat beim Re-Save).
+  Cascade-Deletes durchgängig; `scene_images` erzwingt "genau ein kanonisches
+  Bild pro Scene" über einen partiellen Unique-Index. 37 neue lib-Tests.
+- API-Wiring nach bestehendem Muster (dto.rs → handlers.rs → http.rs-Routen
+  **und** Tauri-Commands in `src-tauri/src/lib.rs`, identisch zu
+  Sessions/Documents): ~30 Handler, Scenes werden als `SceneDetailDto`
+  (Scene + Participants + Dialogue + Images) zusammengesetzt, analog zu
+  `job_detail`. Ein HTTP-Integrationstest deckt den vollen Flow ab
+  (Story → Character → Scene → Character-Log-Auto-Append → Scene-Image →
+  cascade-delete).
+- Generierung nutzt die bestehende Image-Capability 1:1: `ui/src/features/
+  stories/generateImage.ts` submitted einen normalen `job_type=image`-Job
+  (gleiche Defaults wie Image-Tab), der Prompt kommt aus
+  `storyPrompts.ts` (Story-Art-Style + Character/Location/Scene-Felder).
+  Kein neuer Node, keine neue Capability.
+- UI: neuer "Stories"-Tab (`ui/src/features/stories/`), folgt dem
+  `hidden`-statt-Conditional-Mount-Muster aus `App.tsx`. `SectionNav`-Rail
+  (Characters/World/Timeline/Assembly-Stub, Assembly bewusst leer für
+  Phase 3), Timeline als vertikaler Scene-Card-Scroll mit Dialogzeilen als
+  echtem UI-Overlay über dem Bild (nie ins Bild gebacken), persistentes
+  Character-Sheet als Drawer (Portrait, Traits/Backstory editierbar,
+  Inventar, Beziehungen, Character-Log) — aus jeder Section erreichbar,
+  wie explizit gefordert. `dev-mock.ts` hat einen vollständigen In-Memory-
+  Mock inkl. einer vorgefüllten Beispiel-Story für die Vorschau.
+- Verifiziert: `cargo fmt`/`clippy --workspace --all-targets -D warnings`/
+  `test --workspace` grün (Rust-Datenmodell + API); `tsc --noEmit`,
+  `eslint .` und `vite build` grün (UI). Live im Browser (dev-mock)
+  gegengeprüft: Story-Picker, Section-Rail, Timeline-Card mit
+  Dialog-Overlay funktionieren wie vorgesehen.
+
+**Bewusst NICHT gebaut (Phase-1-Scope-Cuts, siehe Auftrag):**
+Charakter-Konsistenz (IP-Adapter/LoRA — Phase 2, braucht neuen ComfyUI-
+Custom-Node-Pack), Assembly/Export-Logik (Phase 3, nur Stub-Sektion),
+NPCs bewusst leichtgewichtig (kein volles Character-Schema), Szenen-
+Reorder-UI/-Endpoint (Timeline ordnet sich aktuell nur nach Erstellreihenfolge
+— `position` ist im Schema vorhanden, ein Reorder-Endpoint kann später ohne
+Migration ergänzt werden), die "story-scene"-PromptAssistant-Erweiterung
+(im Auftrag als "nice-to-have, not mandatory" markiert), der spätere
+Workflow-Diagramm-View ("wer hat mit wem gesprochen") — das Datenmodell
+(normalisierte `scene_participants`/`scene_dialogue_lines`/`position`)
+unterstützt das aber bereits ohne Restrukturierung.
+
+- **Offene Frage vom User (2026-09-14, weiterhin unbeantwortet):** lohnt
+  sich eine bestehende Open-Source-Workflow-/Orchestrierungs-Engine für die
+  mehrstufige Story-Pipeline (Charakter-Erstellung → Backstory → Scene →
+  Dialog → Bild-Gen → Narration, mit Redo/Regenerate pro Schritt), statt
+  das Schritt-für-Schritt-Sequencing selbst zu bauen? Noch nicht evaluiert;
+  für Phase 1 nicht nötig gewesen (nur ein einzelner Image-Job pro Schritt).
+- Für Phase 2/3 offen: IP-Adapter-Node-Pack-Auswahl, Assembly-Format-
+  Priorität (HTML-Scroll zuerst vs. PDF/CBZ), ob/wie ein Reorder-Endpoint
+  für die Timeline gebraucht wird, sobald Nutzer:innen wirklich Szenen
+  nachträglich umsortieren wollen.
 
 ## Lokale KI-Trainings-Engine (noch nicht begonnen, in Brainstorming)
 User-Leitprinzip (2026-09-15, wörtlich wichtig): AIWM soll ein **lokales
