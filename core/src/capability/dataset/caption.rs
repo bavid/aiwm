@@ -35,6 +35,7 @@ use crate::db::Database;
 use crate::runtime::VisionAdapter;
 use crate::Result;
 
+use super::captioner::{installed_captioner_dir, Captioner, FLORENCE2_ID};
 use super::dataset_err;
 
 /// Model-library roles a Florence-2 / Qwen2.5-VL checkpoint is imported
@@ -133,6 +134,61 @@ pub async fn resolve_florence2_dir(db: &Database) -> Result<std::path::PathBuf> 
 
 pub async fn resolve_qwen_vl_dir(db: &Database) -> Result<std::path::PathBuf> {
     resolve_model_dir(db, QWEN_VL_ROLE, "Qwen2.5-VL").await
+}
+
+/// Directory holding the captioner's files, or the same "import it on the
+/// Models tab" error `resolve_model_dir` gives. "Installed" means every one
+/// of the captioner's `required_files` sits in one directory (tagger:
+/// `model.onnx` + `selected_tags.csv`), so a half-imported tagger is
+/// reported as missing rather than resolved to a directory that will fail
+/// at caption time.
+#[allow(dead_code)] // wired into the pipeline in Task 10
+pub async fn resolve_captioner_dir(db: &Database, c: &Captioner) -> Result<std::path::PathBuf> {
+    let label = c.name.split(" (").next().unwrap_or(c.name);
+    installed_captioner_dir(db, c).await?.ok_or_else(|| {
+        vision_err(format!(
+            "no {label} imported — import it on the Models tab (Add models \u{2192} point at \
+             its downloaded snapshot folder \u{2192} role \u{201c}{}\u{201d})",
+            c.role
+        ))
+    })
+}
+
+/// Which sidecar JSON-RPC method serves this captioner.
+#[allow(dead_code)] // wired into the pipeline in Task 10
+pub fn rpc_method_for(c: &Captioner) -> &'static str {
+    if c.id == FLORENCE2_ID {
+        "caption_frame"
+    } else {
+        "tag_frame"
+    }
+}
+
+/// One auto caption for a single frame from whichever captioner the run
+/// picked. Returns `(caption, engine_label)`; the label is what lands in
+/// `dataset_frames.caption_engine`.
+#[allow(dead_code)] // wired into the pipeline in Task 10
+pub async fn caption_with(
+    vision: &VisionAdapter,
+    c: &Captioner,
+    model_dir: &Path,
+    image_path: &Path,
+) -> Result<(String, String)> {
+    let client = vision.client().await?;
+    let mut params = json!({
+        "image_path": image_path.to_string_lossy(),
+        "model_dir": model_dir.to_string_lossy(),
+    });
+    if c.id == FLORENCE2_ID {
+        params["task_prompt"] = json!(FLORENCE2_TASK_PROMPT);
+    }
+    let result = client.call(rpc_method_for(c), params).await?;
+    let engine = result
+        .get("engine")
+        .and_then(Value::as_str)
+        .unwrap_or(c.id)
+        .to_string();
+    Ok((extract_caption(&result)?, engine))
 }
 
 /// One Florence-2 caption for a single frame.
@@ -283,5 +339,67 @@ mod tests {
         );
         assert!(extract_caption(&json!({ "caption": "   " })).is_err());
         assert!(extract_caption(&json!({})).is_err());
+    }
+
+    #[tokio::test]
+    async fn resolve_captioner_dir_uses_the_registry_role() {
+        use super::super::captioner::{find_captioner, FLORENCE2_ID, WD_TAGGER_ID};
+        let db = empty_db().await;
+        // Both companion files must be present (Task 6 review decision):
+        // the tag list alone is "not installed".
+        for (name, format) in [("selected_tags.csv", "csv"), ("model.onnx", "onnx")] {
+            db.models()
+                .insert(NewModel {
+                    name: name.into(),
+                    format: format.into(),
+                    file_path: format!("E:\\AI\\models\\vision\\wd-tagger\\{name}"),
+                    size_bytes: 1,
+                    source: "manual".into(),
+                    roles: vec![crate::model::WD_TAGGER_ROLE.into()],
+                    ..NewModel::default()
+                })
+                .await
+                .unwrap();
+        }
+        let c = find_captioner(WD_TAGGER_ID).unwrap();
+        let dir = resolve_captioner_dir(&db, c).await.unwrap();
+        assert!(dir
+            .to_string_lossy()
+            .replace('\\', "/")
+            .ends_with("vision/wd-tagger"));
+
+        let florence = find_captioner(FLORENCE2_ID).unwrap();
+        let err = resolve_captioner_dir(&db, florence).await.unwrap_err();
+        assert!(err.to_string().contains("Florence-2"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn resolve_captioner_dir_rejects_a_half_imported_tagger() {
+        use super::super::captioner::{find_captioner, WD_TAGGER_ID};
+        let db = empty_db().await;
+        db.models()
+            .insert(NewModel {
+                name: "selected_tags.csv".into(),
+                format: "csv".into(),
+                file_path: "E:\\AI\\models\\vision\\wd-tagger\\selected_tags.csv".into(),
+                size_bytes: 1,
+                source: "manual".into(),
+                roles: vec![crate::model::WD_TAGGER_ROLE.into()],
+                ..NewModel::default()
+            })
+            .await
+            .unwrap();
+        let c = find_captioner(WD_TAGGER_ID).unwrap();
+        let err = resolve_captioner_dir(&db, c).await.unwrap_err();
+        assert!(err.to_string().contains("WD EVA02 Tagger v3"), "{err}");
+    }
+
+    #[test]
+    fn rpc_method_and_engine_label_follow_the_captioner() {
+        use super::super::captioner::{find_captioner, FLORENCE2_ID, WD_TAGGER_ID};
+        let wd = find_captioner(WD_TAGGER_ID).unwrap();
+        assert_eq!(rpc_method_for(wd), "tag_frame");
+        let fl = find_captioner(FLORENCE2_ID).unwrap();
+        assert_eq!(rpc_method_for(fl), "caption_frame");
     }
 }
