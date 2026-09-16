@@ -611,6 +611,64 @@ export const jobOutputUrl = (coreApiPort: number, jobId: string) =>
 /** @deprecated use {@link jobOutputUrl} */
 export const imageOutputUrl = jobOutputUrl;
 
+/** The parameters of a `job_type=dataset_prep` job — the dataset-prep
+ *  pipeline (ingest -> ffmpeg frame extraction -> blur/duplicate filtering ->
+ *  Florence-2/Qwen2.5-VL captioning). Only `root` is required; the rest fall
+ *  back to the Rust side's own defaults. */
+export interface DatasetPrepParams {
+  /** Folder tree root — each immediate subfolder becomes a tag. */
+  root: string;
+  /** Frames sampled per second of video (default ~1.5). */
+  sample_fps?: number;
+  /** Variance-of-Laplacian cutoff below which a frame is dropped as blurry. */
+  blur_threshold?: number;
+  /** Hamming-distance cutoff (of a 64-bit perceptual hash) for near-duplicates. */
+  phash_max_distance?: number;
+  /** Re-caption a low-confidence video frame with Qwen2.5-VL + a nearby frame. */
+  escalate?: boolean;
+  escalate_every_nth?: number;
+  context_offset?: number;
+}
+
+/** One frame from a `dataset_prep` job's curation set (`GET /jobs/{id}/
+ *  dataset-frames`). */
+export interface DatasetFrame {
+  id: string;
+  job_id: string;
+  /** The folder name this frame's source lived under. */
+  tag: string;
+  source_path: string;
+  frame_path: string;
+  /** Position within the source video; `null` for a plain image file. */
+  timestamp_secs: number | null;
+  caption: string;
+  /** `"florence2"` | `"qwen2.5-vl"` | `""` (not captioned yet, or hand-edited). */
+  caption_engine: string;
+  excluded: boolean;
+  created_at: string;
+}
+
+export const listDatasetFrames = (jobId: string) =>
+  invoke<DatasetFrame[]>("list_dataset_frames", { jobId });
+
+/** URL the loopback core serves one curated frame's still image from — same
+ *  shape as {@link jobOutputUrl}. */
+export const datasetFrameImageUrl = (coreApiPort: number, jobId: string, frameId: string) =>
+  `http://127.0.0.1:${coreApiPort}/jobs/${jobId}/dataset-frames/${frameId}/image`;
+
+export const updateDatasetFrame = (
+  frameId: string,
+  body: { caption?: string; excluded?: boolean },
+) => invoke<DatasetFrame>("update_dataset_frame", { frameId, body });
+
+export interface ExportDatasetSummary {
+  exported: number;
+  dest_dir: string;
+}
+
+export const exportDataset = (jobId: string, destDir: string) =>
+  invoke<ExportDatasetSummary>("export_dataset", { jobId, destDir });
+
 /** What kind of file is being imported. `chat` → GGUF LLM for llama.cpp; the
  *  rest are ComfyUI image / video models routed to their typed store folder. */
 export type ModelType =

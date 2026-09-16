@@ -2,6 +2,7 @@ import { useState, type ReactNode } from "react";
 import { AgentsWorkbench } from "./features/agents/Agents";
 import { Chat } from "./features/chat/Chat";
 import { Dashboard } from "./features/dashboard/Dashboard";
+import { DatasetStudio } from "./features/dataset/Dataset";
 import { Diagnostics } from "./features/diagnostics/Diagnostics";
 import { ImageStudio } from "./features/image/Image";
 import { Jobs } from "./features/jobs/Jobs";
@@ -20,6 +21,7 @@ type Tab =
   | "image"
   | "video"
   | "voice"
+  | "dataset"
   | "jobs"
   | "agents"
   | "models"
@@ -76,6 +78,19 @@ const TABS: { id: Tab; label: string; icon: ReactNode }[] = [
       <svg viewBox="0 0 20 20">
         <path d="M10 3.2a2.6 2.6 0 0 1 2.6 2.6v4.4a2.6 2.6 0 1 1-5.2 0V5.8A2.6 2.6 0 0 1 10 3.2Z" />
         <path d="M5.2 9.4v0.8a4.8 4.8 0 0 0 9.6 0v-0.8M10 15v2" />
+      </svg>
+    ),
+  },
+  {
+    id: "dataset",
+    label: "Dataset",
+    icon: (
+      <svg viewBox="0 0 20 20">
+        <rect x="2.5" y="2.5" width="6" height="6" rx="1.2" />
+        <rect x="11.5" y="2.5" width="6" height="6" rx="1.2" />
+        <rect x="2.5" y="11.5" width="6" height="6" rx="1.2" />
+        <rect x="11.5" y="11.5" width="6" height="6" rx="1.2" />
+        <path d="M8.5 5.5h3M5.5 8.5v3M14.5 8.5v3M8.5 14.5h3" />
       </svg>
     ),
   },
@@ -226,6 +241,9 @@ export default function App() {
         </div>
         <div hidden={tab !== "voice"}>
           <Voice />
+        </div>
+        <div hidden={tab !== "dataset"}>
+          <DatasetStudio />
         </div>
         <div hidden={tab !== "jobs"}>
           <Jobs />

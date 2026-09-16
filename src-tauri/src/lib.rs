@@ -11,12 +11,15 @@ use aiwm_core::api::dto::{
     ConfigUpdate, EnqueueDownloadDto, FeaturedModelDto, JobDetailDto, KnownModelDto,
     LaunchExternalDto, LocalApiStatusDto, ModelStackDto, NewAgentDto, NewSessionDto,
     OpenAgentSessionDto, RegisterColibriModelDto, RegistryDetailsDto, RegistrySearchDto,
-    RuntimeStatusDto, SubmitJobDto,
+    RuntimeStatusDto, SubmitJobDto, UpdateDatasetFrameDto,
 };
 use aiwm_core::api::handlers;
+use aiwm_core::capability::dataset::ExportSummary;
 use aiwm_core::config::Config;
 use aiwm_core::db::Document;
-use aiwm_core::db::{Agent, AgentSession, Benchmark, Download, Job, JobFilter, Model, Session};
+use aiwm_core::db::{
+    Agent, AgentSession, Benchmark, DatasetFrame, Download, Job, JobFilter, Model, Session,
+};
 use aiwm_core::model::{ImportOutcome, ImportRequest};
 use aiwm_core::orchestrator::JobState;
 use aiwm_core::registry::{Fetched, RemoteModel};
@@ -248,6 +251,32 @@ async fn attach_document(
     path: String,
 ) -> Result<Document, String> {
     to_ipc(handlers::attach_document(&app, &session_id, &path).await)
+}
+
+#[tauri::command]
+async fn list_dataset_frames(
+    app: tauri::State<'_, Arc<App>>,
+    job_id: String,
+) -> Result<Vec<DatasetFrame>, String> {
+    to_ipc(handlers::list_dataset_frames(&app, &job_id).await)
+}
+
+#[tauri::command]
+async fn update_dataset_frame(
+    app: tauri::State<'_, Arc<App>>,
+    frame_id: String,
+    body: UpdateDatasetFrameDto,
+) -> Result<DatasetFrame, String> {
+    to_ipc(handlers::update_dataset_frame(&app, &frame_id, body).await)
+}
+
+#[tauri::command]
+async fn export_dataset(
+    app: tauri::State<'_, Arc<App>>,
+    job_id: String,
+    dest_dir: String,
+) -> Result<ExportSummary, String> {
+    to_ipc(handlers::export_dataset(&app, &job_id, &dest_dir).await)
 }
 
 #[tauri::command]
@@ -610,6 +639,9 @@ fn try_run() -> anyhow::Result<()> {
             list_documents,
             attach_document,
             delete_document,
+            list_dataset_frames,
+            update_dataset_frame,
+            export_dataset,
             list_agents,
             create_agent,
             delete_agent,
