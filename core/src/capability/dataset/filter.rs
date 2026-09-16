@@ -31,13 +31,17 @@
 //! Filter level C adds three more, cheap, non-ML checks on top of the above:
 //! **dead frames** — a flat, (near-)black or (near-)white frame (a fade to
 //! black, a blank slate) carries no visual information and only dilutes
-//! training data; **transitions** — a blurry frame sitting between two very
-//! different neighbours is a cut smear or cross-fade, not a real shot, so it
-//! is dropped even though its own blur score alone might pass; **diversity
-//! cap** — long, mostly-static clips can otherwise dump hundreds of
-//! near-identical (but not quite duplicate) frames into a dataset, so a
-//! per-clip cap keeps only the most visually spread-out subset via
-//! farthest-point selection on the same perceptual hashes used for dedup.
+//! training data; **transitions** — a frame that is *already blurry* is
+//! further reclassified as a transition specifically, rather than plain
+//! blur, when it is additionally very different (by perceptual hash) from
+//! both its previous and next neighbour: that combination — blur *and* two
+//! distant neighbours — is the signature of a cut smear or cross-fade, not a
+//! real shot. Blur alone is still just blur, and a sharp frame is never a
+//! transition, however different its neighbours are; **diversity cap** —
+//! long, mostly-static clips can otherwise dump hundreds of near-identical
+//! (but not quite duplicate) frames into a dataset, so a per-clip cap keeps
+//! only the most visually spread-out subset via farthest-point selection on
+//! the same perceptual hashes used for dedup.
 
 use std::path::Path;
 
@@ -142,7 +146,6 @@ pub fn dedup_step(
 /// so the curation grid can show each reason as a filter chip and restore
 /// individual frames. `""` on the row means "kept".
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)] // wired into the pipeline in Task 10
 pub enum RejectionReason {
     Black,
     Transition,
@@ -255,17 +258,22 @@ pub fn select_diverse(hashes: &[ImageHash], cap: usize) -> Vec<usize> {
         return (0..hashes.len()).collect();
     }
     let mut chosen: Vec<usize> = vec![0];
+    let mut is_chosen = vec![false; hashes.len()];
+    is_chosen[0] = true;
     let mut min_dist: Vec<u32> = hashes.iter().map(|h| hashes[0].dist(h)).collect();
     while chosen.len() < cap {
         let Some((best, _)) = min_dist
             .iter()
             .enumerate()
-            .filter(|(i, _)| !chosen.contains(i))
+            .filter(|(i, _)| !is_chosen[*i])
+            // Ties favour the lower index: `Reverse(i)` grows as `i` shrinks,
+            // so `max_by_key` picks the earliest tied frame deterministically.
             .max_by_key(|(i, d)| (**d, std::cmp::Reverse(*i)))
         else {
             break;
         };
         chosen.push(best);
+        is_chosen[best] = true;
         for (i, d) in min_dist.iter_mut().enumerate() {
             *d = (*d).min(hashes[best].dist(&hashes[i]));
         }
@@ -402,6 +410,54 @@ mod tests {
             "flat mid-gray is blurry, not dead"
         );
         assert!(!is_dead_frame(&content).unwrap());
+
+        // Pin luma_mean_and_stddev itself for these fixtures: flat images have
+        // zero variance, and a 50/50 checkerboard has an exactly-computable
+        // mean/stddev — both catch drift in the helper, not just the thresholds.
+        assert_eq!(
+            luma_mean_and_stddev(&flat_gray(32, 3).to_luma8()),
+            (3.0, 0.0)
+        );
+        assert_eq!(
+            luma_mean_and_stddev(&flat_gray(32, 252).to_luma8()),
+            (252.0, 0.0)
+        );
+        assert_eq!(
+            luma_mean_and_stddev(&sharp_checkerboard(32).to_luma8()),
+            (127.5, 127.5)
+        );
+    }
+
+    #[test]
+    fn is_dead_frame_pins_the_luma_margin_thresholds() {
+        let tmp = tempfile::tempdir().unwrap();
+        let margin = DEAD_FRAME_LUMA_MARGIN as u8;
+
+        let black_at_margin = tmp.path().join("black_at_margin.png");
+        let black_past_margin = tmp.path().join("black_past_margin.png");
+        write_png(&black_at_margin, &flat_gray(32, margin));
+        write_png(&black_past_margin, &flat_gray(32, margin + 1));
+        assert!(
+            is_dead_frame(&black_at_margin).unwrap(),
+            "mean == margin is still dead (near_black uses <=)"
+        );
+        assert!(
+            !is_dead_frame(&black_past_margin).unwrap(),
+            "mean == margin + 1 is no longer dead"
+        );
+
+        let white_at_margin = tmp.path().join("white_at_margin.png");
+        let white_before_margin = tmp.path().join("white_before_margin.png");
+        write_png(&white_at_margin, &flat_gray(32, 255 - margin));
+        write_png(&white_before_margin, &flat_gray(32, 254 - margin));
+        assert!(
+            is_dead_frame(&white_at_margin).unwrap(),
+            "mean == 255 - margin is still dead (near_white uses >=)"
+        );
+        assert!(
+            !is_dead_frame(&white_before_margin).unwrap(),
+            "mean == 254 - margin is not dead"
+        );
     }
 
     #[test]
@@ -454,6 +510,46 @@ mod tests {
     }
 
     #[test]
+    fn is_transition_pins_the_min_distance_threshold_as_a_strict_greater_than() {
+        // Built directly via the crate's own public `ImageHash::from_bytes`
+        // (no need for a test-only constructor) so the Hamming distance is
+        // exact rather than incidental to a PNG fixture. `zero` is all-0-bits;
+        // `at_boundary` sets exactly DEFAULT_TRANSITION_MIN_DISTANCE bits, and
+        // `over_boundary` one more.
+        let zero =
+            ImageHash::from_bytes(&[0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]).unwrap();
+        // 16 bits (0xFF, 0xFF) + 4 bits (0x0F) = 20 = DEFAULT_TRANSITION_MIN_DISTANCE.
+        let at_boundary =
+            ImageHash::from_bytes(&[0xFF, 0xFF, 0x0F, 0x00, 0x00, 0x00, 0x00, 0x00]).unwrap();
+        // 16 bits (0xFF, 0xFF) + 5 bits (0x1F) = 21 = DEFAULT_TRANSITION_MIN_DISTANCE + 1.
+        let over_boundary =
+            ImageHash::from_bytes(&[0xFF, 0xFF, 0x1F, 0x00, 0x00, 0x00, 0x00, 0x00]).unwrap();
+
+        assert_eq!(zero.dist(&at_boundary), DEFAULT_TRANSITION_MIN_DISTANCE);
+        assert_eq!(
+            zero.dist(&over_boundary),
+            DEFAULT_TRANSITION_MIN_DISTANCE + 1
+        );
+
+        // Distance == threshold: the check is `>`, so this is NOT a transition.
+        assert!(!is_transition(
+            true,
+            Some(&zero),
+            &at_boundary,
+            Some(&zero),
+            DEFAULT_TRANSITION_MIN_DISTANCE
+        ));
+        // Distance == threshold + 1: now it IS a transition.
+        assert!(is_transition(
+            true,
+            Some(&zero),
+            &over_boundary,
+            Some(&zero),
+            DEFAULT_TRANSITION_MIN_DISTANCE
+        ));
+    }
+
+    #[test]
     fn select_diverse_keeps_everything_under_the_cap_and_prefers_spread_above_it() {
         let tmp = tempfile::tempdir().unwrap();
         let mut hashes = Vec::new();
@@ -487,5 +583,22 @@ mod tests {
         let mut sorted = picked.clone();
         sorted.sort_unstable();
         assert_eq!(picked, sorted, "returned in original order");
+    }
+
+    #[test]
+    fn select_diverse_breaks_an_exact_tie_toward_the_lower_index() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut hashes = Vec::new();
+        for i in 0..3 {
+            let p = tmp.path().join(format!("identical{i}.png"));
+            write_png(&p, &sharp_checkerboard(32));
+            hashes.push(phash_of(&p).unwrap());
+        }
+        // All three are the same picture, so every pairwise distance is 0 —
+        // a genuine tie with no "most different" frame to break it.
+        assert_eq!(hashes[0].dist(&hashes[1]), 0);
+        assert_eq!(hashes[0].dist(&hashes[2]), 0);
+
+        assert_eq!(select_diverse(&hashes, 2), vec![0, 1]);
     }
 }

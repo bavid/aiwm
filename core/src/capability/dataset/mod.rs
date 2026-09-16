@@ -30,6 +30,7 @@ pub use caption::{
     FLORENCE2_VRAM_FALLBACK_MB, QWEN_VL_VRAM_FALLBACK_MB,
 };
 pub use extract::{DEFAULT_SAMPLE_FPS, MAX_SAMPLE_FPS, MIN_SAMPLE_FPS};
+pub use filter::RejectionReason;
 pub use filter::{DEFAULT_BLUR_THRESHOLD, DEFAULT_PHASH_MAX_DISTANCE, MAX_PHASH_DISTANCE};
 
 use std::collections::BTreeMap;

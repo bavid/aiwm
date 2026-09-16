@@ -30,7 +30,7 @@ pub struct DatasetFrame {
     pub caption_engine: String,
     pub excluded: bool,
     /// `""` = kept; otherwise one of
-    /// crate::capability::dataset::filter::RejectionReason's `as_str()` values.
+    /// [`crate::capability::dataset::RejectionReason`]'s `as_str()` values.
     pub rejection_reason: String,
     /// Clip mode: the clip's length. `None` for a still frame.
     pub duration_secs: Option<f64>,
