@@ -6,11 +6,11 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use super::dto::{
-    AboutDto, AgentPermissionDto, AgentSessionDetailDto, AttachExternalDto, ColibriModelDto,
-    ConfigUpdate, DetachEngineDto, EnqueueDownloadDto, FeaturedModelDto, JobDetailDto,
-    KnownModelDto, LaunchExternalDto, LocalApiStatusDto, ModelStackDto, NewAgentDto, NewSessionDto,
-    OpenAgentSessionDto, RegisterColibriModelDto, RegistryDetailsDto, RegistryFileDto,
-    RegistrySearchDto, RuntimeStatusDto, SubmitJobDto,
+    AboutDto, AgentPermissionDto, AgentSessionDetailDto, AttachExternalDto, CivitaiSearchDto,
+    ColibriModelDto, ConfigUpdate, DetachEngineDto, EnqueueDownloadDto, FeaturedModelDto,
+    JobDetailDto, KnownModelDto, LaunchExternalDto, LocalApiStatusDto, ModelStackDto, NewAgentDto,
+    NewSessionDto, OpenAgentSessionDto, RegisterColibriModelDto, RegistryDetailsDto,
+    RegistryFileDto, RegistrySearchDto, RuntimeStatusDto, SubmitJobDto,
 };
 use crate::compat::FitVerdict;
 use crate::config::Config;
@@ -276,17 +276,23 @@ pub fn registry_status(app: &App) -> crate::registry::RegistryStatus {
 /// Write (or clear, when blank) the Hugging Face token. Takes effect on the
 /// next restart. The token lives in a machine-local file, never a backup.
 pub fn set_hf_token(app: &App, token: &str) -> Result<()> {
-    let path = app.paths.hf_token_file();
+    write_token_file(&app.paths.hf_token_file(), token)
+}
+
+/// Shared by every machine-local-file token setting (`set_hf_token`,
+/// `set_civitai_token`, …): write (or delete, when blank) `path`. Never
+/// touches `config.toml`, so the value never lands in a backup export.
+fn write_token_file(path: &std::path::Path, token: &str) -> Result<()> {
     let token = token.trim();
     if token.is_empty() {
-        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(path);
         return Ok(());
     }
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|e| CoreError::Config(format!("create {}: {e}", parent.display())))?;
     }
-    std::fs::write(&path, token).map_err(|e| CoreError::Config(format!("write hf token: {e}")))
+    std::fs::write(path, token).map_err(|e| CoreError::Config(format!("write token: {e}")))
 }
 
 /// The unified local API endpoint's bearer token, if one has been configured.
@@ -924,11 +930,11 @@ pub async fn import_backup_from_file(
     import_backup(app, &bytes).await
 }
 
-// --- model discovery (Phase 6.2) ---------------------------------------------
+// --- model discovery (Phase 6.2, + Civitai) ----------------------------------
 
-/// `GET /registry/search` — the "Discover" panel. `Fetched.freshness` tells the
-/// UI whether this is `live`, a `stale` cache (the Hub was unreachable) or an
-/// `offline` cache.
+/// `GET /registry/search` — the "Discover" panel's Hugging Face source.
+/// `Fetched.freshness` tells the UI whether this is `live`, a `stale` cache
+/// (the Hub was unreachable) or an `offline` cache.
 pub async fn registry_search(
     app: &App,
     params: RegistrySearchDto,
@@ -940,14 +946,12 @@ pub async fn registry_search(
 /// browser link and a VRAM fit verdict against the current budget + free RAM.
 pub async fn registry_details(app: &App, id: &str) -> Result<RegistryDetailsDto> {
     let fetched = app.registry.details(id).await?;
-    let budget_mb = app.scheduler.budget_mb();
-    let host = app.telemetry.latest().host;
-    let free_ram_mb = host.ram_total_mb.saturating_sub(host.ram_used_mb);
+    let (budget_mb, free_ram_mb) = fit_inputs(app);
     let d = fetched.data;
     let files = d
         .files
         .iter()
-        .map(|f| enrich_file(id, &d.revision, &d.model, f, budget_mb, free_ram_mb))
+        .map(|f| enrich_hf_file(id, &d.revision, &d.model, f, budget_mb, free_ram_mb))
         .collect();
     Ok(RegistryDetailsDto {
         model: d.model,
@@ -957,13 +961,89 @@ pub async fn registry_details(app: &App, id: &str) -> Result<RegistryDetailsDto>
     })
 }
 
-/// The GGUF / safetensors weight files, not `README.md` / `config.json`.
+/// The registry health line for the Civitai source (Diagnostics).
+pub fn civitai_status(app: &App) -> crate::registry::RegistryStatus {
+    app.civitai_registry.status()
+}
+
+/// Write (or clear, when blank) the Civitai API key. Takes effect on the next
+/// restart. Same machine-local-file treatment as [`set_hf_token`] — never in
+/// a backup. Only needed for gated/early-access Civitai content; anonymous
+/// browsing works without one.
+pub fn set_civitai_token(app: &App, token: &str) -> Result<()> {
+    write_token_file(&app.paths.civitai_token_file(), token)
+}
+
+/// `GET /civitai/search` — the "Discover" panel's Civitai source, for
+/// image/video checkpoints and LoRAs. Defaults to excluding NSFW results
+/// (`CivitaiSearchDto::nsfw` defaults `false`) — the caller must opt in.
+pub async fn civitai_search(
+    app: &App,
+    params: CivitaiSearchDto,
+) -> Result<Fetched<Vec<RemoteModel>>> {
+    app.civitai_registry.search(&params.into_query()).await
+}
+
+/// `GET /civitai/models/{id}` — one Civitai model's primary version, with
+/// every file enriched with a VRAM fit verdict *and* Civitai's own
+/// pickle/virus-scan verdicts (surfaced verbatim, never hidden — see
+/// `registry::civitai`'s module doc for why that is informational only and
+/// never a substitute for AIWM's own import-time Pickle guard).
+pub async fn civitai_details(app: &App, id: &str) -> Result<RegistryDetailsDto> {
+    let fetched = app.civitai_registry.details(id).await?;
+    let (budget_mb, free_ram_mb) = fit_inputs(app);
+    let d = fetched.data;
+    let files = d
+        .files
+        .iter()
+        .map(|f| enrich_civitai_file(&d.model, f, budget_mb, free_ram_mb))
+        .collect();
+    Ok(RegistryDetailsDto {
+        model: d.model,
+        revision: d.revision,
+        files,
+        freshness: fetched.freshness,
+    })
+}
+
+/// The GGUF / safetensors weight files, not `README.md` / `config.json`. A
+/// Civitai Pickle/unknown-format file never reaches here as "safetensors":
+/// `registry::civitai::format_of_version` only ever reports
+/// [`RemoteFormat::Safetensors`] when every real weight file in the version
+/// is actually safetensors-format.
 fn is_weight_file(model: &RemoteModel, path: &str) -> bool {
     matches!(model.format, RemoteFormat::Gguf | RemoteFormat::Safetensors)
         && (path.ends_with(".gguf") || path.ends_with(".safetensors"))
 }
 
-fn enrich_file(
+/// VRAM estimate + fit verdict for one file — shared by every source, since
+/// it depends only on the source-agnostic [`RemoteModel`] / [`RemoteFile`]
+/// fields, never on how a URL is built.
+fn weight_fit(
+    model: &RemoteModel,
+    f: &RemoteFile,
+    budget_mb: u64,
+    free_ram_mb: u64,
+) -> (Option<u64>, FitVerdict) {
+    if !is_weight_file(model, &f.path) || f.size == 0 {
+        return (None, FitVerdict::Unknown);
+    }
+    let dims = crate::compat::ModelDims {
+        size_bytes: f.size,
+        ctx_max: model.ctx_max,
+        param_count: model.param_count,
+        ..Default::default()
+    };
+    let ctx = crate::compat::effective_ctx(model.ctx_max);
+    (
+        Some(crate::compat::estimate(&dims, ctx).total_mb),
+        crate::compat::verdict(&dims, ctx, budget_mb, free_ram_mb),
+    )
+}
+
+/// Hugging Face has no per-file download URL of its own — build the
+/// `/resolve/<rev>/<path>` link from the repo id + revision.
+fn enrich_hf_file(
     id: &str,
     revision: &str,
     model: &RemoteModel,
@@ -971,23 +1051,11 @@ fn enrich_file(
     budget_mb: u64,
     free_ram_mb: u64,
 ) -> RegistryFileDto {
-    let (vram_estimate_mb, fit) = if is_weight_file(model, &f.path) && f.size > 0 {
-        let dims = crate::compat::ModelDims {
-            size_bytes: f.size,
-            ctx_max: model.ctx_max,
-            param_count: model.param_count,
-            ..Default::default()
-        };
-        let ctx = crate::compat::effective_ctx(model.ctx_max);
-        (
-            Some(crate::compat::estimate(&dims, ctx).total_mb),
-            crate::compat::verdict(&dims, ctx, budget_mb, free_ram_mb),
-        )
-    } else {
-        (None, FitVerdict::Unknown)
-    };
+    let (vram_estimate_mb, fit) = weight_fit(model, f, budget_mb, free_ram_mb);
     RegistryFileDto {
-        download_url: format!("https://huggingface.co/{id}/resolve/{revision}/{}", f.path),
+        download_url: f.download_url.clone().unwrap_or_else(|| {
+            format!("https://huggingface.co/{id}/resolve/{revision}/{}", f.path)
+        }),
         path: f.path.clone(),
         size_bytes: f.size,
         sha256: f.sha256.clone(),
@@ -995,6 +1063,32 @@ fn enrich_file(
         shard: f.shard.map(|(a, b)| [a, b]),
         vram_estimate_mb,
         fit,
+        pickle_scan_result: f.pickle_scan_result.clone(),
+        virus_scan_result: f.virus_scan_result.clone(),
+    }
+}
+
+/// Civitai always hands back its own absolute `downloadUrl` per file — never
+/// fall back to Hugging Face's `/resolve/` URL shape for a Civitai file (that
+/// would build a broken cross-source URL out of a numeric Civitai id).
+fn enrich_civitai_file(
+    model: &RemoteModel,
+    f: &RemoteFile,
+    budget_mb: u64,
+    free_ram_mb: u64,
+) -> RegistryFileDto {
+    let (vram_estimate_mb, fit) = weight_fit(model, f, budget_mb, free_ram_mb);
+    RegistryFileDto {
+        download_url: f.download_url.clone().unwrap_or_default(),
+        path: f.path.clone(),
+        size_bytes: f.size,
+        sha256: f.sha256.clone(),
+        quant: f.quant.clone(),
+        shard: f.shard.map(|(a, b)| [a, b]),
+        vram_estimate_mb,
+        fit,
+        pickle_scan_result: f.pickle_scan_result.clone(),
+        virus_scan_result: f.virus_scan_result.clone(),
     }
 }
 
@@ -1293,6 +1387,7 @@ mod tests {
     fn sample_model() -> RemoteModel {
         RemoteModel {
             id: "x/y".into(),
+            name: None,
             author: None,
             downloads: 0,
             likes: 0,
@@ -1310,6 +1405,11 @@ mod tests {
             ctx_max: None,
             precision: None,
             format: RemoteFormat::Gguf,
+            nsfw: false,
+            preview_image_url: None,
+            allow_commercial_use: vec![],
+            model_kind_hint: None,
+            base_model_family: None,
         }
     }
 }

@@ -7,9 +7,9 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 use aiwm_core::api::dto::{
-    AboutDto, AgentPermissionDto, AgentSessionDetailDto, AttachExternalDto, ColibriModelDto,
-    ConfigUpdate, EnqueueDownloadDto, FeaturedModelDto, JobDetailDto, KnownModelDto,
-    LaunchExternalDto, LocalApiStatusDto, ModelStackDto, NewAgentDto, NewSessionDto,
+    AboutDto, AgentPermissionDto, AgentSessionDetailDto, AttachExternalDto, CivitaiSearchDto,
+    ColibriModelDto, ConfigUpdate, EnqueueDownloadDto, FeaturedModelDto, JobDetailDto,
+    KnownModelDto, LaunchExternalDto, LocalApiStatusDto, ModelStackDto, NewAgentDto, NewSessionDto,
     OpenAgentSessionDto, RegisterColibriModelDto, RegistryDetailsDto, RegistrySearchDto,
     RuntimeStatusDto, SubmitJobDto,
 };
@@ -376,6 +376,32 @@ fn set_hf_token(app: tauri::State<'_, Arc<App>>, token: String) -> Result<(), St
 }
 
 #[tauri::command]
+fn civitai_status(app: tauri::State<'_, Arc<App>>) -> aiwm_core::RegistryStatus {
+    handlers::civitai_status(&app)
+}
+
+#[tauri::command]
+fn set_civitai_token(app: tauri::State<'_, Arc<App>>, token: String) -> Result<(), String> {
+    to_ipc(handlers::set_civitai_token(&app, &token))
+}
+
+#[tauri::command]
+async fn civitai_search(
+    app: tauri::State<'_, Arc<App>>,
+    params: CivitaiSearchDto,
+) -> Result<Fetched<Vec<RemoteModel>>, String> {
+    to_ipc(handlers::civitai_search(&app, params).await)
+}
+
+#[tauri::command]
+async fn civitai_model(
+    app: tauri::State<'_, Arc<App>>,
+    id: String,
+) -> Result<RegistryDetailsDto, String> {
+    to_ipc(handlers::civitai_details(&app, &id).await)
+}
+
+#[tauri::command]
 fn local_api_status(app: tauri::State<'_, Arc<App>>) -> LocalApiStatusDto {
     handlers::local_api_status(&app)
 }
@@ -576,6 +602,10 @@ fn try_run() -> anyhow::Result<()> {
             rename_model,
             registry_status,
             set_hf_token,
+            civitai_status,
+            set_civitai_token,
+            civitai_search,
+            civitai_model,
             local_api_status,
             set_local_api_token,
             external_engines,

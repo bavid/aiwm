@@ -14,7 +14,7 @@ use crate::download::DownloadManager;
 use crate::launcher::{AdapterBinaries, Launcher};
 use crate::orchestrator::JobEngine;
 use crate::paths::AppPaths;
-use crate::registry::{HuggingFaceSource, Registry};
+use crate::registry::{CivitaiSource, HuggingFaceSource, Registry};
 use crate::runtime::{
     ColibriAdapter, ComfyDirs, ComfyUiAdapter, LlamaCppAdapter, RuntimeRegistry, TtsAdapter,
 };
@@ -68,6 +68,12 @@ pub struct App {
     /// disposable cache and the same `offline` switch. `Arc` so the job engine
     /// (upgrade check, 6.7) shares it.
     pub registry: Arc<Registry>,
+    /// The Civitai source (image/video checkpoints + LoRAs) — its own
+    /// `Registry` (own disposable cache subdirectory), the same `offline`
+    /// switch. Not shared with the job engine: the upgrade-check (6.7) is a
+    /// Hugging-Face-only concept (it walks `base_model:` quant/fine-tune
+    /// chains, which Civitai has no equivalent of).
+    pub civitai_registry: Arc<Registry>,
     /// The model download queue (Phase 6.4). Its worker is spawned by
     /// [`crate::api::spawn`].
     pub downloads: Arc<DownloadManager>,
@@ -135,6 +141,15 @@ impl App {
         let registry = Arc::new(Registry::new(
             Box::new(HuggingFaceSource::new()?.with_token(hf_token)),
             paths.cache_dir().join("registry"),
+            offline.clone(),
+        ));
+        let civitai_token = std::fs::read_to_string(paths.civitai_token_file())
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+        let civitai_registry = Arc::new(Registry::new(
+            Box::new(CivitaiSource::new()?.with_token(civitai_token)),
+            paths.cache_dir().join("civitai_registry"),
             offline.clone(),
         ));
         let jobs = Arc::new(
@@ -210,6 +225,7 @@ impl App {
             hermes,
             launcher,
             registry,
+            civitai_registry,
             downloads,
             offline,
         })
@@ -223,6 +239,15 @@ impl App {
         if let Some(jobs) = Arc::get_mut(&mut self.jobs) {
             jobs.set_registry(registry);
         }
+        self
+    }
+
+    /// Swap the Civitai registry — tests point it at a fixture. Unlike
+    /// [`with_registry`](Self::with_registry), nothing else holds a copy to
+    /// re-point (no job engine integration — see the field doc on
+    /// [`civitai_registry`](Self::civitai_registry)).
+    pub fn with_civitai_registry(mut self, registry: Registry) -> Self {
+        self.civitai_registry = Arc::new(registry);
         self
     }
 

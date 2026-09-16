@@ -237,6 +237,63 @@ impl RegistrySearchDto {
             gguf_only: self.gguf,
             sort,
             limit: self.limit.unwrap_or(25),
+            ..SearchQuery::default()
+        }
+    }
+}
+
+/// `GET /civitai/search` — the "Discover" panel's Civitai source. Distinct
+/// from [`RegistrySearchDto`] because Civitai's real filters genuinely
+/// differ (a `types` enum, an NSFW toggle) rather than mapping onto Hugging
+/// Face's `base_model` / `gguf_only`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct CivitaiSearchDto {
+    /// Free-text search on the model name.
+    #[serde(default)]
+    pub q: Option<String>,
+    /// Comma-separated Civitai `types` values, e.g. `"Checkpoint,LORA"`. A
+    /// plain string (not a `Vec`) so this DTO deserializes identically from
+    /// a query string over HTTP and from a JSON body over Tauri IPC — an
+    /// array field would need repeated `types=` keys the HTTP `Query`
+    /// extractor doesn't reliably support. Empty/absent = every type.
+    #[serde(default)]
+    pub types: Option<String>,
+    /// `downloads` | `likes` | `trending` | `new`.
+    #[serde(default)]
+    pub sort: Option<String>,
+    /// Include NSFW-flagged results. **Defaults to `false`** (excluded) —
+    /// the caller must explicitly opt in; see `registry::civitai`'s module
+    /// doc for why this is never silently widened.
+    #[serde(default)]
+    pub nsfw: bool,
+    #[serde(default)]
+    pub limit: Option<u32>,
+}
+
+impl CivitaiSearchDto {
+    pub fn into_query(self) -> SearchQuery {
+        let sort = match self.sort.as_deref() {
+            Some("likes") => SearchSort::Likes,
+            Some("trending") => SearchSort::Trending,
+            Some("new") => SearchSort::RecentlyCreated,
+            _ => SearchSort::Downloads,
+        };
+        let media_types = self
+            .types
+            .as_deref()
+            .unwrap_or("")
+            .split(',')
+            .map(str::trim)
+            .filter(|t| !t.is_empty())
+            .map(str::to_string)
+            .collect();
+        SearchQuery {
+            text: self.q.filter(|s| !s.trim().is_empty()),
+            sort,
+            limit: self.limit.unwrap_or(25),
+            nsfw: self.nsfw,
+            media_types,
+            ..SearchQuery::default()
         }
     }
 }
@@ -252,11 +309,23 @@ pub struct RegistryFileDto {
     pub quant: Option<String>,
     /// `[index, total]` for a split file `…-00001-of-00003.gguf`.
     pub shard: Option<[u32; 2]>,
-    /// `https://huggingface.co/<id>/resolve/<rev>/<path>` — "Copy link".
+    /// Hugging Face: `https://huggingface.co/<id>/resolve/<rev>/<path>`.
+    /// Civitai: the file's own `downloadUrl`, verbatim. Either way — "Copy
+    /// link" / what `enqueue_download` fetches.
     pub download_url: String,
     /// `null` for non-model files (README, `config.json`).
     pub vram_estimate_mb: Option<u64>,
     pub fit: crate::compat::FitVerdict,
+    /// Civitai's own malware-scan verdicts (`"Success"`, `"Danger"`,
+    /// `"Pending"`, …), surfaced verbatim so the UI can flag anything that
+    /// isn't a clean `"Success"` — never hidden. `null` for a source with no
+    /// such concept (Hugging Face). This is informational only: it is never
+    /// a substitute for AIWM's own import-time Pickle-format guard, which
+    /// runs unconditionally regardless of what a source self-reports.
+    #[serde(default)]
+    pub pickle_scan_result: Option<String>,
+    #[serde(default)]
+    pub virus_scan_result: Option<String>,
 }
 
 /// `GET /registry/models/{id}` — the model plus every file with size, hash and
