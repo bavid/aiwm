@@ -10,6 +10,15 @@ type AnyRecord = Record<string, unknown>;
 
 const now = () => new Date().toISOString();
 
+/** Removes every matching element from `arr` in place (mock-only helper —
+ *  used to fake the real backend's cascade deletes, e.g. deleting a Story
+ *  also drops its Characters/Npcs/Locations/Scenes). */
+function removeWhere<T>(arr: T[], predicate: (item: T) => boolean): void {
+  for (let i = arr.length - 1; i >= 0; i--) {
+    if (predicate(arr[i])) arr.splice(i, 1);
+  }
+}
+
 const MODELS: AnyRecord[] = [
   mkModel("m-wan", "wan2.2_ti2v_5B_fp16", { family: "wan", roles: ["base_video"], runtimes: ["comfyui"], vram_estimate_mb: 11800 }),
   mkModel("m-umt5", "umt5_xxl_fp8_e4m3fn_scaled", { roles: ["text_encoder"], runtimes: ["comfyui"] }),
@@ -73,6 +82,78 @@ const SESSIONS: AnyRecord[] = [
 ];
 
 const DOCUMENTS: AnyRecord[] = [];
+
+// --- Story Studio (Phase 1) --------------------------------------------
+
+const STORIES: AnyRecord[] = [
+  {
+    id: "story-dev-1",
+    name: "The Salt Road",
+    setting: "bronze-age Mediterranean coast",
+    art_style: "linocut woodblock",
+    premise: "a caravan carries something it shouldn't",
+    created_at: now(),
+  },
+];
+
+const CHARACTERS: AnyRecord[] = [
+  {
+    id: "char-dev-1", story_id: "story-dev-1", name: "Nera",
+    traits: "sharp-eyed, stubborn", backstory: "grew up on the docks, trusts no one who hasn't earned it",
+    alignment: "human, wary, resourceful", portrait_job_id: "j-img-1",
+    inventory: ["rope", "dagger"], created_at: now(),
+  },
+  {
+    id: "char-dev-2", story_id: "story-dev-1", name: "Kesh",
+    traits: "gentle giant, slow to anger", backstory: "exiled from his clan for refusing a fight",
+    alignment: "orc, friendly, strong", portrait_job_id: null,
+    inventory: [], created_at: now(),
+  },
+];
+
+const CHARACTER_RELATIONSHIPS: AnyRecord[] = [
+  {
+    id: "rel-dev-1", character_id: "char-dev-1", related_character_id: "char-dev-2",
+    note: "trusts him completely, even when she won't admit it", created_at: now(),
+  },
+];
+
+const CHARACTER_LOGS: AnyRecord[] = [
+  { id: "log-dev-1", character_id: "char-dev-1", scene_id: "scene-dev-1", created_at: now(), text: "Appeared in a scene: a strange sail on the horizon" },
+  { id: "log-dev-2", character_id: "char-dev-2", scene_id: "scene-dev-1", created_at: now(), text: "Appeared in a scene: a strange sail on the horizon" },
+];
+
+const NPCS: AnyRecord[] = [
+  {
+    id: "npc-dev-1", story_id: "story-dev-1", name: "Old Tom", role: "harbourmaster",
+    location_id: "loc-dev-1", description: "knows every ship that's ever docked here",
+    created_at: now(),
+  },
+];
+
+const LOCATIONS: AnyRecord[] = [
+  {
+    id: "loc-dev-1", story_id: "story-dev-1", name: "The Salt Docks",
+    description: "a sprawling harbor thick with brine and gossip",
+    reference_job_id: "j-img-1", created_at: now(),
+  },
+];
+
+const SCENES: AnyRecord[] = [
+  {
+    id: "scene-dev-1", story_id: "story-dev-1", location_id: "loc-dev-1",
+    narrative: "Nera spots the sail before anyone else, and Kesh doesn't like what it means.",
+    redline: "a strange sail on the horizon", position: 0, created_at: now(),
+    participant_ids: ["char-dev-1", "char-dev-2"],
+    dialogue: [
+      { id: "dl-dev-1", scene_id: "scene-dev-1", character_id: "char-dev-1", position: 0, text: "There — see it?" },
+      { id: "dl-dev-2", scene_id: "scene-dev-1", character_id: "char-dev-2", position: 1, text: "That's not one of ours." },
+    ],
+    images: [
+      { id: "si-dev-1", scene_id: "scene-dev-1", job_id: "j-img-1", is_canonical: true, created_at: now() },
+    ],
+  },
+];
 
 const RUNTIMES: AnyRecord[] = [
   {
@@ -1061,6 +1142,258 @@ export function installDevMock(): void {
       case "stop_external_launch":
         DEV_LAUNCH = null;
         return null;
+
+      // --- Story Studio (Phase 1) --------------------------------------
+      case "list_stories":
+        return STORIES.map((s) => ({ ...s }));
+      case "create_story": {
+        const body = (a.body ?? {}) as AnyRecord;
+        const story = {
+          id: `story-dev-${seq++}`,
+          name: String(body.name ?? "Untitled Story"),
+          setting: String(body.setting ?? ""),
+          art_style: String(body.art_style ?? ""),
+          premise: String(body.premise ?? ""),
+          created_at: now(),
+        };
+        STORIES.unshift(story);
+        return story;
+      }
+      case "update_story": {
+        const s = STORIES.find((x) => x.id === a.id);
+        const body = (a.body ?? {}) as AnyRecord;
+        if (s) {
+          s.name = String(body.name ?? s.name);
+          s.setting = String(body.setting ?? s.setting);
+          s.art_style = String(body.art_style ?? s.art_style);
+          s.premise = String(body.premise ?? s.premise);
+        }
+        return null;
+      }
+      case "delete_story": {
+        const id = a.id;
+        removeWhere(STORIES, (x) => x.id === id);
+        removeWhere(CHARACTERS, (x) => x.story_id === id);
+        removeWhere(NPCS, (x) => x.story_id === id);
+        removeWhere(LOCATIONS, (x) => x.story_id === id);
+        removeWhere(SCENES, (x) => x.story_id === id);
+        return null;
+      }
+      case "list_characters":
+        return CHARACTERS.filter((c) => c.story_id === a.storyId).map((c) => ({ ...c }));
+      case "create_character": {
+        const body = (a.body ?? {}) as AnyRecord;
+        const character = {
+          id: `char-dev-${seq++}`, story_id: String(a.storyId ?? ""),
+          name: String(body.name ?? "Unnamed"), traits: String(body.traits ?? ""),
+          backstory: String(body.backstory ?? ""), alignment: String(body.alignment ?? ""),
+          portrait_job_id: null, inventory: [] as string[], created_at: now(),
+        };
+        CHARACTERS.push(character);
+        return character;
+      }
+      case "update_character": {
+        const c = CHARACTERS.find((x) => x.id === a.id);
+        const body = (a.body ?? {}) as AnyRecord;
+        if (c) {
+          c.name = String(body.name ?? c.name);
+          c.traits = String(body.traits ?? c.traits);
+          c.backstory = String(body.backstory ?? c.backstory);
+          c.alignment = String(body.alignment ?? c.alignment);
+        }
+        return null;
+      }
+      case "delete_character": {
+        const id = a.id;
+        removeWhere(CHARACTERS, (x) => x.id === id);
+        removeWhere(CHARACTER_RELATIONSHIPS, (x) => x.character_id === id || x.related_character_id === id);
+        return null;
+      }
+      case "set_character_portrait": {
+        const c = CHARACTERS.find((x) => x.id === a.id);
+        if (c) c.portrait_job_id = (a.jobId as string | null) ?? null;
+        return null;
+      }
+      case "set_character_inventory": {
+        const c = CHARACTERS.find((x) => x.id === a.id);
+        if (c) c.inventory = (a.items as string[]) ?? [];
+        return null;
+      }
+      case "list_character_relationships":
+        return CHARACTER_RELATIONSHIPS.filter((r) => r.character_id === a.id).map((r) => ({ ...r }));
+      case "add_character_relationship": {
+        const rel = {
+          id: `rel-dev-${seq++}`, character_id: String(a.id ?? ""),
+          related_character_id: String(a.relatedCharacterId ?? ""), note: String(a.note ?? ""),
+          created_at: now(),
+        };
+        CHARACTER_RELATIONSHIPS.push(rel);
+        return rel;
+      }
+      case "remove_character_relationship": {
+        const id = a.id;
+        removeWhere(CHARACTER_RELATIONSHIPS, (x) => x.id === id);
+        return null;
+      }
+      case "character_log":
+        return CHARACTER_LOGS.filter((l) => l.character_id === a.id).map((l) => ({ ...l }));
+      case "list_npcs":
+        return NPCS.filter((n) => n.story_id === a.storyId).map((n) => ({ ...n }));
+      case "create_npc": {
+        const body = (a.body ?? {}) as AnyRecord;
+        const npc = {
+          id: `npc-dev-${seq++}`, story_id: String(a.storyId ?? ""),
+          name: String(body.name ?? "Unnamed"), role: String(body.role ?? ""),
+          location_id: (body.location_id as string | null) ?? null,
+          description: String(body.description ?? ""), created_at: now(),
+        };
+        NPCS.push(npc);
+        return npc;
+      }
+      case "update_npc": {
+        const n = NPCS.find((x) => x.id === a.id);
+        const body = (a.body ?? {}) as AnyRecord;
+        if (n) {
+          n.name = String(body.name ?? n.name);
+          n.role = String(body.role ?? n.role);
+          n.location_id = (body.location_id as string | null) ?? null;
+          n.description = String(body.description ?? n.description);
+        }
+        return null;
+      }
+      case "delete_npc": {
+        const id = a.id;
+        removeWhere(NPCS, (x) => x.id === id);
+        return null;
+      }
+      case "list_locations":
+        return LOCATIONS.filter((l) => l.story_id === a.storyId).map((l) => ({ ...l }));
+      case "create_location": {
+        const body = (a.body ?? {}) as AnyRecord;
+        const loc = {
+          id: `loc-dev-${seq++}`, story_id: String(a.storyId ?? ""),
+          name: String(body.name ?? "Unnamed"), description: String(body.description ?? ""),
+          reference_job_id: null, created_at: now(),
+        };
+        LOCATIONS.push(loc);
+        return loc;
+      }
+      case "update_location": {
+        const l = LOCATIONS.find((x) => x.id === a.id);
+        const body = (a.body ?? {}) as AnyRecord;
+        if (l) {
+          l.name = String(body.name ?? l.name);
+          l.description = String(body.description ?? l.description);
+        }
+        return null;
+      }
+      case "delete_location": {
+        const id = a.id;
+        removeWhere(LOCATIONS, (x) => x.id === id);
+        return null;
+      }
+      case "set_location_reference": {
+        const l = LOCATIONS.find((x) => x.id === a.id);
+        if (l) l.reference_job_id = (a.jobId as string | null) ?? null;
+        return null;
+      }
+      case "list_scenes":
+        return SCENES.filter((s) => s.story_id === a.storyId)
+          .sort((x, y) => Number(x.position) - Number(y.position))
+          .map((s) => ({ ...s }));
+      case "create_scene": {
+        const body = (a.body ?? {}) as AnyRecord;
+        const storyId = String(a.storyId ?? "");
+        const position = SCENES.filter((s) => s.story_id === storyId).length;
+        const sceneId = `scene-dev-${seq++}`;
+        const dialogue = ((body.dialogue as AnyRecord[]) ?? []).map((d, i) => ({
+          id: `dl-dev-${seq++}`, scene_id: sceneId, character_id: String(d.character_id ?? ""),
+          position: i, text: String(d.text ?? ""),
+        }));
+        const participantIds = (body.participant_ids as string[]) ?? [];
+        const scene: AnyRecord = {
+          id: sceneId, story_id: storyId,
+          location_id: (body.location_id as string | null) ?? null,
+          narrative: String(body.narrative ?? ""), redline: String(body.redline ?? ""),
+          position, created_at: now(),
+          participant_ids: participantIds, dialogue, images: [],
+        };
+        SCENES.push(scene);
+        for (const cid of participantIds) {
+          CHARACTER_LOGS.push({
+            id: `log-dev-${seq++}`, character_id: cid, scene_id: sceneId, created_at: now(),
+            text: `Appeared in a scene: ${scene.redline || scene.narrative || "(untitled)"}`,
+          });
+        }
+        return scene;
+      }
+      case "update_scene": {
+        const scene = SCENES.find((x) => x.id === a.id);
+        if (!scene) throw new Error(`no such scene ${a.id}`);
+        const body = (a.body ?? {}) as AnyRecord;
+        const before = new Set((scene.participant_ids as string[]) ?? []);
+        const participantIds = (body.participant_ids as string[]) ?? [];
+        scene.location_id = (body.location_id as string | null) ?? null;
+        scene.narrative = String(body.narrative ?? "");
+        scene.redline = String(body.redline ?? "");
+        scene.participant_ids = participantIds;
+        scene.dialogue = ((body.dialogue as AnyRecord[]) ?? []).map((d, i) => ({
+          id: `dl-dev-${seq++}`, scene_id: scene.id, character_id: String(d.character_id ?? ""),
+          position: i, text: String(d.text ?? ""),
+        }));
+        for (const cid of participantIds) {
+          if (!before.has(cid)) {
+            CHARACTER_LOGS.push({
+              id: `log-dev-${seq++}`, character_id: cid, scene_id: scene.id, created_at: now(),
+              text: `Appeared in a scene: ${scene.redline || scene.narrative || "(untitled)"}`,
+            });
+          }
+        }
+        return { ...scene };
+      }
+      case "delete_scene": {
+        const id = a.id;
+        removeWhere(SCENES, (x) => x.id === id);
+        return null;
+      }
+      case "add_scene_image": {
+        const scene = SCENES.find((x) => x.id === a.sceneId);
+        if (!scene) throw new Error(`no such scene ${a.sceneId}`);
+        const images = (scene.images as AnyRecord[]) ?? [];
+        const image = {
+          id: `si-dev-${seq++}`, scene_id: scene.id, job_id: String(a.jobId ?? ""),
+          is_canonical: images.length === 0, created_at: now(),
+        };
+        images.push(image);
+        scene.images = images;
+        return image;
+      }
+      case "set_canonical_scene_image": {
+        for (const scene of SCENES) {
+          const images = (scene.images as AnyRecord[]) ?? [];
+          if (images.some((img) => img.id === a.id)) {
+            images.forEach((img) => {
+              img.is_canonical = img.id === a.id;
+            });
+            break;
+          }
+        }
+        return null;
+      }
+      case "delete_scene_image": {
+        for (const scene of SCENES) {
+          const images = (scene.images as AnyRecord[]) ?? [];
+          const i = images.findIndex((img) => img.id === a.id);
+          if (i >= 0) {
+            const wasCanonical = images[i].is_canonical;
+            images.splice(i, 1);
+            if (wasCanonical && images.length > 0) images[images.length - 1].is_canonical = true;
+            break;
+          }
+        }
+        return null;
+      }
+
       default:
         if (cmd.startsWith("plugin:")) return null; // opener plugin etc. — no-op
         console.warn("dev-mock: unhandled command", cmd);

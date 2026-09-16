@@ -7,6 +7,7 @@ import { ImageStudio } from "./features/image/Image";
 import { Jobs } from "./features/jobs/Jobs";
 import { Models } from "./features/models/Models";
 import { Settings } from "./features/settings/Settings";
+import { Stories } from "./features/stories/Stories";
 import { VideoStudio } from "./features/video/Video";
 import { Voice } from "./features/voice/Voice";
 import { CommandPalette } from "./components/CommandPalette";
@@ -20,6 +21,7 @@ type Tab =
   | "image"
   | "video"
   | "voice"
+  | "stories"
   | "jobs"
   | "agents"
   | "models"
@@ -76,6 +78,16 @@ const TABS: { id: Tab; label: string; icon: ReactNode }[] = [
       <svg viewBox="0 0 20 20">
         <path d="M10 3.2a2.6 2.6 0 0 1 2.6 2.6v4.4a2.6 2.6 0 1 1-5.2 0V5.8A2.6 2.6 0 0 1 10 3.2Z" />
         <path d="M5.2 9.4v0.8a4.8 4.8 0 0 0 9.6 0v-0.8M10 15v2" />
+      </svg>
+    ),
+  },
+  {
+    id: "stories",
+    label: "Stories",
+    icon: (
+      <svg viewBox="0 0 20 20">
+        <path d="M3 4.8c2-1 4.4-1 6.5.3v9.9c-2.1-1.3-4.5-1.3-6.5-.3Z" />
+        <path d="M17 4.8c-2-1-4.4-1-6.5.3v9.9c2.1-1.3 4.5-1.3 6.5-.3Z" />
       </svg>
     ),
   },
@@ -226,6 +238,9 @@ export default function App() {
         </div>
         <div hidden={tab !== "voice"}>
           <Voice />
+        </div>
+        <div hidden={tab !== "stories"}>
+          <Stories />
         </div>
         <div hidden={tab !== "jobs"}>
           <Jobs />

@@ -1,0 +1,791 @@
+/* Story Studio (Phase 1). Reuses the app-wide `.card` / `.card__head` /
+   `.card__sub` / `.badge` / `.muted` vocabulary (defined in dashboard.css /
+   agents.css, always loaded since every tab stays mounted) rather than
+   redefining it -- see App.tsx's "every tab stays mounted" comment. */
+
+.stories {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  max-width: 1400px;
+  margin: 0 auto;
+}
+
+.stories__toolbar {
+  display: flex;
+  justify-content: flex-start;
+}
+
+.stories__empty {
+  max-width: 640px;
+}
+
+.stories__layout {
+  display: grid;
+  grid-template-columns: 200px minmax(0, 1fr);
+  gap: var(--space-4);
+  align-items: start;
+  transition: grid-template-columns var(--dur) var(--ease);
+}
+
+.stories[data-drawer-open="true"] .stories__layout {
+  grid-template-columns: 200px minmax(0, 1fr) 340px;
+}
+
+.stories__main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+@media (max-width: 1100px) {
+  .stories__layout,
+  .stories[data-drawer-open="true"] .stories__layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* --- story picker (top toolbar) --- */
+
+.story-picker {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.story-picker select {
+  min-width: 220px;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+}
+
+.story-picker--editing {
+  flex-wrap: wrap;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2);
+}
+
+.story-picker--editing input {
+  padding: var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  min-width: 160px;
+}
+
+.story-picker__icon {
+  width: 30px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+  font-size: var(--text-md);
+  line-height: 1;
+}
+
+.story-picker__icon:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.story-picker__icon--danger:hover {
+  color: var(--load-crit);
+  border-color: color-mix(in oklab, var(--load-crit) 40%, var(--border));
+}
+
+.story-picker__save {
+  padding: var(--space-2) var(--space-4);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: var(--accent);
+  color: var(--accent-fg);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.story-picker__save:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* --- shared bits: add button, inline forms, chips, rosters, tiles --- */
+
+.section-card__add,
+.char-sheet__generate,
+.char-sheet__edit-btn {
+  align-self: flex-start;
+  padding: var(--space-2) var(--space-3);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: var(--text-sm);
+}
+
+.section-card__add:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+  border-style: solid;
+}
+
+.inline-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+  padding: var(--space-3);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.inline-form input,
+.inline-form textarea,
+.inline-form select,
+.char-sheet__edit input,
+.char-sheet__edit textarea,
+.scene-editor label input,
+.scene-editor label textarea,
+.scene-editor label select,
+.scene-editor__line input,
+.scene-editor__line select {
+  padding: var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+}
+
+.inline-form textarea,
+.char-sheet__edit textarea {
+  min-height: 4.5em;
+  resize: vertical;
+}
+
+.inline-form__actions {
+  display: flex;
+  gap: var(--space-2);
+  margin-top: var(--space-1);
+}
+
+.inline-form__actions button {
+  padding: var(--space-2) var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.inline-form__actions button:first-child {
+  background: var(--accent);
+  color: var(--accent-fg);
+  border-color: transparent;
+  font-weight: 600;
+}
+
+.inline-form__actions button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 2px var(--space-2);
+  border-radius: 999px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  font-size: var(--text-xs);
+}
+
+.chip button {
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  line-height: 1;
+}
+
+.chip--link {
+  cursor: pointer;
+  color: var(--text);
+}
+
+.chip--link:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.roster {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.roster__row {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+}
+
+.roster__row--static {
+  cursor: default;
+}
+
+.roster__row:hover,
+.roster__row--active {
+  border-color: var(--accent);
+}
+
+.roster__row--active {
+  background: color-mix(in oklab, var(--accent) 10%, var(--surface-2));
+}
+
+.roster__name {
+  font-weight: 600;
+}
+
+.roster__hint {
+  margin-left: auto;
+}
+
+.roster__desc {
+  margin: var(--space-1) 0 0 var(--space-3);
+}
+
+.tile-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: var(--space-3);
+}
+
+.tile {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: var(--surface-2);
+}
+
+.tile__image {
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  object-fit: cover;
+  display: block;
+}
+
+.tile__body {
+  padding: var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.tile__name {
+  font-weight: 600;
+}
+
+.tile__actions {
+  display: flex;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+.tile__actions button,
+.tile__delete {
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+
+.tile__delete:hover {
+  color: var(--load-crit);
+  border-color: color-mix(in oklab, var(--load-crit) 40%, var(--border));
+}
+
+/* --- job-backed image (portrait / reference / scene image) --- */
+
+.job-image {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--surface-2);
+  color: var(--faint);
+  font-size: var(--text-xs);
+  text-align: center;
+}
+
+.job-image--empty,
+.job-image--pending {
+  min-height: 120px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2);
+}
+
+/* --- World section --- */
+
+.world {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+/* --- Character Sheet drawer --- */
+
+.char-sheet {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding: var(--space-4);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 12px 32px -16px rgba(0, 0, 0, 0.35);
+  position: sticky;
+  top: var(--space-4);
+  max-height: calc(100vh - 2 * var(--space-4));
+  overflow-y: auto;
+}
+
+.char-sheet__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.char-sheet__head h3 {
+  font-family: var(--font-display);
+  font-size: var(--text-lg);
+}
+
+.char-sheet__close {
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-size: var(--text-lg);
+  line-height: 1;
+  cursor: pointer;
+}
+
+.char-sheet__close:hover {
+  color: var(--load-crit);
+}
+
+.char-sheet__portrait {
+  width: 100%;
+  aspect-ratio: 1;
+  object-fit: cover;
+  border-radius: var(--radius-sm);
+}
+
+.char-sheet__generate {
+  width: 100%;
+  text-align: center;
+}
+
+.char-sheet__body,
+.char-sheet__edit {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.char-sheet__body h4,
+.char-sheet__section h4 {
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  margin-bottom: 2px;
+}
+
+.char-sheet__body p {
+  font-size: var(--text-sm);
+  white-space: pre-wrap;
+}
+
+.char-sheet__edit label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: var(--text-xs);
+  color: var(--muted);
+}
+
+.char-sheet__edit-actions {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.char-sheet__edit-actions button {
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  cursor: pointer;
+}
+
+.char-sheet__edit-actions button:first-child {
+  background: var(--accent);
+  color: var(--accent-fg);
+  border-color: transparent;
+}
+
+.char-sheet__section {
+  border-top: 1px solid var(--border-soft);
+  padding-top: var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.char-sheet__inventory,
+.char-sheet__relationships,
+.char-sheet__log {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+
+.char-sheet__relationships,
+.char-sheet__log {
+  flex-direction: column;
+}
+
+.char-sheet__relationships li {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
+}
+
+.char-sheet__rel-target {
+  font-weight: 600;
+}
+
+.char-sheet__relationships li button {
+  margin-left: auto;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.char-sheet__log li {
+  font-size: var(--text-sm);
+  border-bottom: 1px solid var(--border-soft);
+  padding-bottom: var(--space-2);
+}
+
+.char-sheet__log p {
+  margin-top: 2px;
+}
+
+.char-sheet__add-row {
+  display: flex;
+  gap: var(--space-1);
+}
+
+.char-sheet__add-row input,
+.char-sheet__add-row select {
+  flex: 1;
+  min-width: 0;
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: var(--text-sm);
+}
+
+.char-sheet__add-row button {
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  cursor: pointer;
+}
+
+.char-sheet__delete {
+  align-self: flex-start;
+  padding: var(--space-1) var(--space-2);
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+
+.char-sheet__delete:hover {
+  color: var(--load-crit);
+}
+
+/* --- Scene editor --- */
+
+.scene-editor {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.scene-editor label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: var(--text-xs);
+  color: var(--muted);
+}
+
+.scene-editor__participants,
+.scene-editor__dialogue {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-3);
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.scene-editor__dialogue {
+  flex-direction: column;
+}
+
+.scene-editor__participants legend,
+.scene-editor__dialogue legend {
+  font-size: var(--text-xs);
+  color: var(--muted);
+  padding: 0 var(--space-1);
+}
+
+.scene-editor__checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--text-sm);
+  color: var(--text);
+}
+
+.scene-editor__line {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.scene-editor__line input {
+  flex: 1;
+}
+
+.scene-editor__line button {
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.scene-editor__add-line {
+  align-self: flex-start;
+  padding: var(--space-1) var(--space-2);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: var(--text-xs);
+}
+
+/* --- Timeline / Scene card --- */
+
+.timeline {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  max-height: 70vh;
+  overflow-y: auto;
+  padding-right: var(--space-1);
+}
+
+.scene-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  padding: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.scene-card__head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.scene-card__index {
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.scene-card__redline {
+  font-style: italic;
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+
+.scene-card__head-actions {
+  margin-left: auto;
+  display: flex;
+  gap: var(--space-2);
+}
+
+.scene-card__head-actions button {
+  padding: 2px var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+
+.scene-card__stage {
+  position: relative;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: var(--bg);
+}
+
+.scene-card__image {
+  width: 100%;
+  aspect-ratio: 16 / 10;
+  object-fit: cover;
+  display: block;
+}
+
+/* Dialogue is always UI overlay text, never baked into the image -- this is
+   the visual proof of that: a translucent panel laid over the rendered
+   frame, never touching the pixels underneath. */
+.scene-card__overlay {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: var(--space-3);
+  background: linear-gradient(to top, rgba(0, 0, 0, 0.78), rgba(0, 0, 0, 0));
+  color: #fff;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.scene-card__overlay p {
+  font-size: var(--text-sm);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
+}
+
+.scene-card__image-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.scene-card__image-actions > button {
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  cursor: pointer;
+  font-size: var(--text-sm);
+}
+
+.scene-card__alternates {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  gap: var(--space-2);
+}
+
+.scene-card__alternates li {
+  position: relative;
+}
+
+.scene-card__thumb {
+  width: 56px;
+  height: 56px;
+  object-fit: cover;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  cursor: pointer;
+}
+
+.scene-card__alternates button:first-child {
+  border: none;
+  background: none;
+  padding: 0;
+}
+
+.scene-card__thumb-delete {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  border: none;
+  background: var(--load-crit);
+  color: #fff;
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.scene-card__narrative {
+  white-space: pre-wrap;
+  font-size: var(--text-sm);
+}
+
+.scene-card__participants {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}

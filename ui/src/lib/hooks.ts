@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import {
   about,
+  characterLog,
   getRecentLogs,
   getRuntimes,
   getTelemetry,
@@ -9,11 +10,17 @@ import {
   listAgentRuntimes,
   listAgents,
   listBenchmarks,
+  listCharacterRelationships,
+  listCharacters,
   listDocuments,
   listFeaturedModels,
   listJobs,
   listKnownModels,
+  listLocations,
   listModelStacks,
+  listNpcs,
+  listScenes,
+  listStories,
   externalEngines,
   listDownloads,
   listModels,
@@ -27,6 +34,9 @@ import {
   type Agent,
   type AgentRuntime,
   type Benchmark,
+  type Character,
+  type CharacterLogEntry,
+  type CharacterRelationship,
   type Document,
   type Download,
   type ExternalEngine,
@@ -34,8 +44,12 @@ import {
   type JobState,
   type LaunchInfo,
   type LocalApiStatus,
+  type Npc,
   type RegistryStatus,
+  type SceneDetail,
   type StorageReport,
+  type Story,
+  type StoryLocation,
   type FeaturedModel,
   type KnownModel,
   type Model,
@@ -209,6 +223,54 @@ export function usePinnedModels() {
 /** Sessions for one capability (Chat/Image/Video "projects"), active first. */
 export const useSessions = (capability: SessionCapability) =>
   usePolled<Session[]>(`sessions:${capability}`, () => listSessions(capability), 3000);
+
+// --- Story Studio (Phase 1) ---------------------------------------------
+
+export const useStories = () => usePolled<Story[]>("stories", listStories, 4000);
+
+export const useCharacters = (storyId: string | null) =>
+  usePolled<Character[]>(
+    `characters:${storyId ?? ""}`,
+    () => (storyId ? listCharacters(storyId) : Promise.resolve([])),
+    4000,
+  );
+
+export const useNpcs = (storyId: string | null) =>
+  usePolled<Npc[]>(
+    `npcs:${storyId ?? ""}`,
+    () => (storyId ? listNpcs(storyId) : Promise.resolve([])),
+    4000,
+  );
+
+export const useLocations = (storyId: string | null) =>
+  usePolled<StoryLocation[]>(
+    `locations:${storyId ?? ""}`,
+    () => (storyId ? listLocations(storyId) : Promise.resolve([])),
+    4000,
+  );
+
+/** Every scene in a story's timeline, each with participants/dialogue/images. */
+export const useScenes = (storyId: string | null) =>
+  usePolled<SceneDetail[]>(
+    `scenes:${storyId ?? ""}`,
+    () => (storyId ? listScenes(storyId) : Promise.resolve([])),
+    3000,
+  );
+
+export const useCharacterRelationships = (characterId: string | null) =>
+  usePolled<CharacterRelationship[]>(
+    `char-relationships:${characterId ?? ""}`,
+    () => (characterId ? listCharacterRelationships(characterId) : Promise.resolve([])),
+    5000,
+  );
+
+/** A character's append-only Character Log, oldest first. */
+export const useCharacterLog = (characterId: string | null) =>
+  usePolled<CharacterLogEntry[]>(
+    `char-log:${characterId ?? ""}`,
+    () => (characterId ? characterLog(characterId) : Promise.resolve([])),
+    5000,
+  );
 
 /** Debounced Hugging Face search for the Discover panel. Runs when `params`
  *  change (400 ms after the last one) and `enabled`; not polled. */
