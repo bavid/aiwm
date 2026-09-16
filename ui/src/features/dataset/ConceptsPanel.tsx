@@ -1,10 +1,7 @@
 import { useId, useState } from "react";
 import { createConcept, deleteConcept, type DatasetConcept } from "../../lib/ipc";
+import { CONCEPT_REMINDER, ConceptRow } from "./ConceptRow";
 import { tokenWarning } from "./tokens";
-
-/** Below this a concept is unlikely to hold together during training — the
- *  same rule of thumb the plan documents for a per-concept frame budget. */
-const MIN_FRAMES_PER_CONCEPT = 20;
 
 type Props = {
   datasetId: string;
@@ -74,23 +71,7 @@ export function ConceptsPanel({ datasetId, concepts, onChanged }: Props) {
       {concepts.length > 0 && (
         <ul className="concepts__list">
           {concepts.map((c) => (
-            <li key={c.id} className="concepts__row">
-              <div className="concepts__row-main">
-                <span className="concepts__name">{c.name}</span>
-                <code className="concepts__token">{c.token}</code>
-                <span className="concepts__count">{c.frame_count} frame(s)</span>
-              </div>
-              {c.description && <p className="concepts__desc">{c.description}</p>}
-              {c.token_warning && <p className="concepts__warn">{c.token_warning}</p>}
-              {c.frame_count < MIN_FRAMES_PER_CONCEPT && (
-                <p className="concepts__warn">
-                  fewer than {MIN_FRAMES_PER_CONCEPT} examples — the concept may not hold.
-                </p>
-              )}
-              <button type="button" className="chip concepts__delete" onClick={() => remove(c)}>
-                Delete
-              </button>
-            </li>
+            <ConceptRow key={c.id} concept={c} onDelete={remove} />
           ))}
         </ul>
       )}
@@ -134,9 +115,7 @@ export function ConceptsPanel({ datasetId, concepts, onChanged }: Props) {
         {error && <p className="dataset__err">{error}</p>}
       </div>
 
-      <p className="concepts__reminder">
-        Wide shots teach position, close-ups teach form — mix both, and vary the backgrounds.
-      </p>
+      <p className="concepts__reminder">{CONCEPT_REMINDER}</p>
     </div>
   );
 }

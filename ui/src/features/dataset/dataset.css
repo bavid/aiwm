@@ -620,3 +620,191 @@
 .framecard__restore {
   align-self: flex-start;
 }
+
+/* --- grid / learn view toggle --- */
+
+.dataset__views {
+  display: flex;
+  gap: var(--space-2);
+}
+
+/* --- learn mode --- */
+
+.learn {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(240px, 320px);
+  gap: var(--space-4);
+  align-items: start;
+}
+
+.learn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.learn__main {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.learn__header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.learn__title {
+  margin: 0;
+}
+
+.learn__source {
+  margin: var(--space-1) 0 0;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+
+.learn__hint,
+.learn__empty {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+}
+
+.learn__status {
+  margin: 0;
+  color: var(--load-ok);
+  font-size: var(--text-sm);
+}
+
+.learn__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: var(--space-2);
+}
+
+.learn__thumb {
+  position: relative;
+  display: block;
+  aspect-ratio: 1 / 1;
+  padding: 0;
+  border: 2px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  overflow: hidden;
+  cursor: pointer;
+  transition:
+    border-color var(--dur) var(--ease),
+    transform var(--dur) var(--ease);
+}
+
+.learn__thumb:hover {
+  border-color: color-mix(in oklab, var(--accent) 40%, var(--border));
+}
+
+.learn__thumb[aria-pressed="true"] {
+  border-color: var(--accent);
+  transform: scale(0.97);
+}
+
+.learn__thumb:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.learn__thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.learn__thumb-tag {
+  position: absolute;
+  left: var(--space-1);
+  top: var(--space-1);
+  padding: 1px var(--space-2);
+  border-radius: var(--radius-sm);
+  background: color-mix(in oklab, black 55%, transparent);
+  color: #fff;
+  font-size: var(--text-xs);
+}
+
+.learn__thumb-concepts {
+  position: absolute;
+  left: var(--space-1);
+  right: var(--space-1);
+  bottom: var(--space-1);
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+
+.learn__thumb-concepts .framecard__concept {
+  background: color-mix(in oklab, black 55%, transparent);
+}
+
+.learn__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--border-soft);
+}
+
+.learn__actions .chip:disabled,
+.learn__nav .chip:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.learn__nav {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.learn__summary {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+  padding-left: var(--space-4);
+  border-left: 1px solid var(--border-soft);
+}
+
+.learn__summary-title {
+  margin: 0;
+}
+
+.learn__new {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--border-soft);
+}
+
+.learn__new-actions {
+  display: flex;
+  gap: var(--space-2);
+}
+
+@media (max-width: 1100px) {
+  .learn {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .learn__summary {
+    padding-left: 0;
+    padding-top: var(--space-3);
+    border-left: none;
+    border-top: 1px solid var(--border-soft);
+  }
+}

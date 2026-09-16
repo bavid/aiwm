@@ -27,6 +27,7 @@ import {
 import { ConceptsPanel } from "./ConceptsPanel";
 import { ExportCard, type ExportState } from "./ExportCard";
 import { FrameCard } from "./FrameCard";
+import { LearnSets } from "./LearnSets";
 import { PrepForm } from "./PrepForm";
 import { RejectionChips } from "./RejectionChips";
 import { SelectionToolbar, type AssignState } from "./SelectionToolbar";
@@ -36,6 +37,9 @@ import "./dataset.css";
 const DONE: JobState[] = ["completed", "failed", "cancelled"];
 const POLL_MS = 900;
 const PAGE_SIZE = 60;
+
+/** The curation grid, or the guided set-by-set Learn mode over the same data. */
+type ResultView = "grid" | "learn";
 
 /** One shared empty array, so a card without concepts keeps the same
  *  `conceptTokens` identity across renders and stays memoised. */
@@ -66,6 +70,7 @@ export function DatasetStudio() {
   const [pendingJobId, setPendingJobId] = useState<string | null>(null);
   const [detail, setDetail] = useState<JobDetail | null>(null);
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
+  const [view, setView] = useState<ResultView>("grid");
   const [filter, setFilter] = useState("");
   const [selectedIds, setSelectedIds] = useState<ReadonlySet<string>>(() => new Set());
   const [assignConceptId, setAssignConceptId] = useState("");
@@ -124,6 +129,16 @@ export function DatasetStudio() {
     }
     return map;
   }, [conceptMap, tokenByConceptId]);
+
+  const imageUrlFor = useCallback(
+    (frame: DatasetFrame) => (about ? frameImageUrl(about.core_api_port, frame) : ""),
+    [about],
+  );
+
+  const refetchConceptData = useCallback(() => {
+    refetchConcepts();
+    refetchConceptMap();
+  }, [refetchConcepts, refetchConceptMap]);
 
   const triggerId = useId();
 
@@ -413,17 +428,49 @@ export function DatasetStudio() {
         )}
 
         {activeDatasetId && (
+          <div className="dataset__views" role="group" aria-label="Curation view">
+            <button
+              type="button"
+              className="chip"
+              aria-pressed={view === "grid"}
+              onClick={() => setView("grid")}
+            >
+              Grid
+            </button>
+            <button
+              type="button"
+              className="chip"
+              aria-pressed={view === "learn"}
+              onClick={() => setView("learn")}
+            >
+              Learn
+            </button>
+          </div>
+        )}
+
+        {activeDatasetId && view === "grid" && (
           <ConceptsPanel
             datasetId={activeDatasetId}
             concepts={conceptList}
+            onChanged={refetchConceptData}
+          />
+        )}
+
+        {activeDatasetId && view === "learn" && (
+          <LearnSets
+            datasetId={activeDatasetId}
+            frames={frameList}
+            concepts={conceptList}
+            conceptMap={conceptMap ?? {}}
+            imageUrlFor={imageUrlFor}
             onChanged={() => {
-              refetchConcepts();
-              refetchConceptMap();
+              refetchConceptData();
+              refetchFrames();
             }}
           />
         )}
 
-        {frameList.length > 0 && (
+        {frameList.length > 0 && view === "grid" && (
           <>
             <RejectionChips frames={frameList} active={filter} onSelect={selectFilter} />
 
@@ -447,7 +494,7 @@ export function DatasetStudio() {
                 <FrameCard
                   key={frame.id}
                   frame={frame}
-                  imageUrl={about ? frameImageUrl(about.core_api_port, frame) : ""}
+                  imageUrl={imageUrlFor(frame)}
                   isSelected={selectedIds.has(frame.id)}
                   conceptTokens={tokensByFrameId[frame.id] ?? NO_TOKENS}
                   onToggleSelected={toggleSelected}
@@ -467,16 +514,19 @@ export function DatasetStudio() {
               </button>
             )}
 
-            <ExportCard
-              destDir={destDir}
-              onDestDirChange={setDestDir}
-              captionOrder={captionOrder}
-              onCaptionOrderChange={setCaptionOrder}
-              keptCount={keptCount}
-              state={exportState}
-              onExport={runExport}
-            />
           </>
+        )}
+
+        {frameList.length > 0 && (
+          <ExportCard
+            destDir={destDir}
+            onDestDirChange={setDestDir}
+            captionOrder={captionOrder}
+            onCaptionOrderChange={setCaptionOrder}
+            keptCount={keptCount}
+            state={exportState}
+            onExport={runExport}
+          />
         )}
       </div>
     </section>
