@@ -323,6 +323,30 @@ export const attachDocument = (sessionId: string, path: string) =>
   invoke<Document>("attach_document", { sessionId, path });
 export const deleteDocument = (id: string) => invoke<void>("delete_document", { id });
 
+/** A saved Dia voice-cloning identity — a reference clip + its own transcript,
+ *  set up once under a name (e.g. "Old Man Gareth") and reused across many
+ *  narration calls instead of re-picking a file and re-typing the transcript
+ *  every time. `reference_audio_path` always sits under AIWM's own data dir —
+ *  the file picked when creating it is copied there, never referenced in
+ *  place. */
+export interface VoiceIdentity {
+  id: string;
+  name: string;
+  reference_audio_path: string;
+  reference_transcript: string;
+  created_at: string;
+}
+export interface NewVoiceIdentityBody {
+  name: string;
+  /** A path on this machine, resolved by the caller (a native file picker). */
+  source_audio_path: string;
+  reference_transcript: string;
+}
+export const listVoiceIdentities = () => invoke<VoiceIdentity[]>("list_voice_identities");
+export const createVoiceIdentity = (body: NewVoiceIdentityBody) =>
+  invoke<VoiceIdentity>("create_voice_identity", { body });
+export const deleteVoiceIdentity = (id: string) => invoke<void>("delete_voice_identity", { id });
+
 export const listModels = () => invoke<Model[]>("list_models");
 
 // --- storage & cleanup (Phase 6.8) -------------------------------------

@@ -13,8 +13,9 @@ use serde::Deserialize;
 
 use super::dto::{
     AgentMessageDto, AgentPermissionDto, AttachDocumentDto, AttachExternalDto, DetachEngineDto,
-    LaunchExternalDto, NewAgentDto, NewSessionDto, OpenAgentSessionDto, RenameModelDto,
-    RenameSessionDto, SetArchivedDto, SetRolesDto, SetTagsDto, SetTokenDto, SubmitJobDto,
+    LaunchExternalDto, NewAgentDto, NewSessionDto, NewVoiceIdentityDto, OpenAgentSessionDto,
+    RenameModelDto, RenameSessionDto, SetArchivedDto, SetRolesDto, SetTagsDto, SetTokenDto,
+    SubmitJobDto,
 };
 use super::handlers;
 use crate::db::JobFilter;
@@ -39,6 +40,14 @@ pub fn router(app: Arc<App>) -> Router {
             get(list_documents).post(attach_document),
         )
         .route("/documents/{id}", axum::routing::delete(delete_document))
+        .route(
+            "/voice-identities",
+            get(list_voice_identities).post(create_voice_identity),
+        )
+        .route(
+            "/voice-identities/{id}",
+            axum::routing::delete(delete_voice_identity),
+        )
         .route("/jobs/{id}", get(job_detail).delete(delete_job))
         .route("/jobs/{id}/cancel", post(cancel_job))
         .route("/jobs/{id}/output", get(job_output))
@@ -276,6 +285,28 @@ async fn delete_document(
     Path(id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
     handlers::delete_document(&app, &id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn list_voice_identities(
+    State(app): AppState,
+) -> Result<Json<Vec<crate::db::VoiceIdentity>>, ApiError> {
+    Ok(Json(handlers::list_voice_identities(&app).await?))
+}
+
+async fn create_voice_identity(
+    State(app): AppState,
+    Json(body): Json<NewVoiceIdentityDto>,
+) -> Result<(StatusCode, Json<crate::db::VoiceIdentity>), ApiError> {
+    let identity = handlers::create_voice_identity(&app, body).await?;
+    Ok((StatusCode::CREATED, Json(identity)))
+}
+
+async fn delete_voice_identity(
+    State(app): AppState,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    handlers::delete_voice_identity(&app, &id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 

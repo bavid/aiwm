@@ -9,14 +9,14 @@ use super::dto::{
     AboutDto, AgentPermissionDto, AgentSessionDetailDto, AttachExternalDto, ColibriModelDto,
     ConfigUpdate, DetachEngineDto, EnqueueDownloadDto, FeaturedModelDto, JobDetailDto,
     KnownModelDto, LaunchExternalDto, LocalApiStatusDto, ModelStackDto, NewAgentDto, NewSessionDto,
-    OpenAgentSessionDto, RegisterColibriModelDto, RegistryDetailsDto, RegistryFileDto,
-    RegistrySearchDto, RuntimeStatusDto, SubmitJobDto,
+    NewVoiceIdentityDto, OpenAgentSessionDto, RegisterColibriModelDto, RegistryDetailsDto,
+    RegistryFileDto, RegistrySearchDto, RuntimeStatusDto, SubmitJobDto,
 };
 use crate::compat::FitVerdict;
 use crate::config::Config;
 use crate::db::{
     Agent, AgentSession, Benchmark, Download, EventLevel, Job, JobFilter, Model, NewAgent, NewJob,
-    Session,
+    Session, VoiceIdentity,
 };
 use crate::download::EnqueueRequest;
 use crate::launcher::LaunchRequest;
@@ -24,6 +24,7 @@ use crate::model::{ImportOutcome, ImportRequest};
 use crate::orchestrator::JobOutcome;
 use crate::registry::{Fetched, RemoteFile, RemoteFormat, RemoteModel};
 use crate::telemetry::SystemTelemetry;
+use crate::voice_identity::{self, CreateVoiceIdentity};
 use crate::{App, CoreError, LaunchInfo, Result};
 
 pub fn about(app: &App) -> AboutDto {
@@ -791,6 +792,36 @@ pub async fn list_documents(app: &App, session_id: &str) -> Result<Vec<crate::db
 
 pub async fn delete_document(app: &App, id: &str) -> Result<()> {
     app.db.documents().delete(id).await
+}
+
+// --- voice identities (Dia voice cloning) -----------------------------------
+
+/// `POST /voice-identities` — save a reference clip + transcript under a
+/// name, once, for reuse across many Dia narration calls. Copies the picked
+/// file into AIWM's own data dir (`voice_identity::create_voice_identity`)
+/// rather than referencing it in place.
+pub async fn create_voice_identity(app: &App, body: NewVoiceIdentityDto) -> Result<VoiceIdentity> {
+    voice_identity::create_voice_identity(
+        &app.db,
+        &app.paths.voice_identities_dir(),
+        CreateVoiceIdentity {
+            name: body.name,
+            source_audio_path: PathBuf::from(body.source_audio_path),
+            reference_transcript: body.reference_transcript,
+        },
+    )
+    .await
+}
+
+pub async fn list_voice_identities(app: &App) -> Result<Vec<VoiceIdentity>> {
+    app.db.voice_identities().list().await
+}
+
+pub async fn delete_voice_identity(app: &App, id: &str) -> Result<()> {
+    let Some(identity) = app.db.voice_identities().get(id).await? else {
+        return Ok(()); // already gone — deleting is idempotent, same as sessions/documents
+    };
+    voice_identity::delete_voice_identity(&app.db, &identity).await
 }
 
 // --- agents (Phase 5.1c) ---------------------------------------------------

@@ -67,6 +67,11 @@ pub struct TtsRequest {
     pub voice: String,
     pub speed: f64,
     pub engine: TtsEngine,
+    /// A saved [`crate::db::VoiceIdentity`] to voice-clone from (Dia only —
+    /// see the module docs on [`TtsEngine::Dia`]). When set, `run` resolves
+    /// its reference clip + transcript and hands them to the sidecar instead
+    /// of relying on `voice`'s seed-only stable-but-generic identity.
+    pub voice_identity_id: Option<String>,
 }
 
 impl TtsRequest {
@@ -104,11 +109,18 @@ impl TtsRequest {
             .get("speed")
             .and_then(Value::as_f64)
             .map_or(DEFAULT_SPEED, |v| v.clamp(MIN_SPEED, MAX_SPEED));
+        let voice_identity_id = params
+            .get("voice_identity_id")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .map(str::to_string);
         Ok(Self {
             text,
             voice,
             speed,
             engine,
+            voice_identity_id,
         })
     }
 }
@@ -203,6 +215,47 @@ async fn resolve_dia_dirs(db: &Database) -> Result<(PathBuf, PathBuf)> {
     Ok((engine_dir, codec_dir))
 }
 
+/// Resolves an optional saved [`crate::db::VoiceIdentity`] by id — `None` in,
+/// `None` out (today's seed-only Dia path, unchanged); `Some(id)` in, a clear
+/// error if that identity was deleted out from under a still-referencing job
+/// body rather than a confusing sidecar-side failure.
+async fn resolve_voice_identity(
+    db: &Database,
+    voice_identity_id: Option<&str>,
+) -> Result<Option<crate::db::VoiceIdentity>> {
+    let Some(id) = voice_identity_id else {
+        return Ok(None);
+    };
+    let identity = db.voice_identities().get(id).await?.ok_or_else(|| {
+        tts_err("the selected voice identity no longer exists — it may have been deleted")
+    })?;
+    Ok(Some(identity))
+}
+
+/// The `synthesize_speech` request body for a Dia render — a pure function so
+/// the "does a saved voice identity actually add `reference_audio_path` /
+/// `reference_transcript`?" question is testable without ever touching the
+/// sidecar client.
+fn dia_request_body(
+    req: &TtsRequest,
+    engine_dir: &Path,
+    codec_dir: &Path,
+    reference: Option<&crate::db::VoiceIdentity>,
+) -> Value {
+    let mut body = json!({
+        "engine": "dia",
+        "text": req.text,
+        "model_dir": engine_dir.to_string_lossy(),
+        "dac_dir": codec_dir.to_string_lossy(),
+        "voice": req.voice,
+    });
+    if let Some(identity) = reference {
+        body["reference_audio_path"] = json!(identity.reference_audio_path);
+        body["reference_transcript"] = json!(identity.reference_transcript);
+    }
+    body
+}
+
 /// Pulls the finished clip out of a `synthesize_speech` result, common to
 /// both engines.
 fn decode_synth_result(result: &Value) -> Result<(Vec<u8>, f64)> {
@@ -251,19 +304,10 @@ pub async fn run(
         }
         TtsEngine::Dia => {
             let (engine_dir, codec_dir) = resolve_dia_dirs(db).await?;
+            let reference = resolve_voice_identity(db, req.voice_identity_id.as_deref()).await?;
             let client = tts.client().await?;
-            client
-                .call(
-                    "synthesize_speech",
-                    json!({
-                        "engine": "dia",
-                        "text": req.text,
-                        "model_dir": engine_dir.to_string_lossy(),
-                        "dac_dir": codec_dir.to_string_lossy(),
-                        "voice": req.voice,
-                    }),
-                )
-                .await?
+            let body = dia_request_body(&req, &engine_dir, &codec_dir, reference.as_ref());
+            client.call("synthesize_speech", body).await?
         }
     };
 
@@ -343,6 +387,138 @@ mod tests {
         assert_eq!(too_fast.speed, MAX_SPEED);
         let too_slow = TtsRequest::from_params(&json!({ "text": "x", "speed": 0.01 })).unwrap();
         assert_eq!(too_slow.speed, MIN_SPEED);
+    }
+
+    #[test]
+    fn from_params_has_no_voice_identity_by_default() {
+        let r = TtsRequest::from_params(&json!({ "text": "hello", "engine": "dia" })).unwrap();
+        assert_eq!(r.voice_identity_id, None);
+    }
+
+    #[test]
+    fn from_params_keeps_an_explicit_voice_identity_id() {
+        let r = TtsRequest::from_params(&json!({
+            "text": "hello",
+            "engine": "dia",
+            "voice_identity_id": "abc-123",
+        }))
+        .unwrap();
+        assert_eq!(r.voice_identity_id.as_deref(), Some("abc-123"));
+    }
+
+    #[test]
+    fn from_params_treats_a_blank_voice_identity_id_as_absent() {
+        let r = TtsRequest::from_params(&json!({
+            "text": "hello",
+            "engine": "dia",
+            "voice_identity_id": "   ",
+        }))
+        .unwrap();
+        assert_eq!(r.voice_identity_id, None);
+    }
+
+    // --- Dia voice cloning: reference resolution --------------------------
+
+    fn a_voice_identity(id: &str) -> crate::db::VoiceIdentity {
+        crate::db::VoiceIdentity {
+            id: id.to_string(),
+            name: "Old Man Gareth".to_string(),
+            reference_audio_path: "E:\\AI\\data\\voice-identities\\x\\ref.wav".to_string(),
+            reference_transcript: "a scratchy, smokey voice".to_string(),
+            created_at: "2026-01-01T00:00:00Z".to_string(),
+        }
+    }
+
+    #[test]
+    fn dia_request_body_has_no_reference_fields_without_a_saved_identity() {
+        let req = TtsRequest::from_params(&json!({ "text": "hello", "engine": "dia" })).unwrap();
+        let body = dia_request_body(&req, Path::new("E:/engine"), Path::new("E:/codec"), None);
+        assert!(body.get("reference_audio_path").is_none());
+        assert!(body.get("reference_transcript").is_none());
+        assert_eq!(body["voice"], DEFAULT_DIA_NARRATOR);
+    }
+
+    #[test]
+    fn dia_request_body_adds_the_reference_fields_for_a_saved_identity() {
+        let req = TtsRequest::from_params(&json!({ "text": "hello", "engine": "dia" })).unwrap();
+        let identity = a_voice_identity("id-1");
+        let body = dia_request_body(
+            &req,
+            Path::new("E:/engine"),
+            Path::new("E:/codec"),
+            Some(&identity),
+        );
+        assert_eq!(
+            body["reference_audio_path"],
+            "E:\\AI\\data\\voice-identities\\x\\ref.wav"
+        );
+        assert_eq!(body["reference_transcript"], "a scratchy, smokey voice");
+    }
+
+    #[tokio::test]
+    async fn resolve_voice_identity_returns_none_when_none_is_requested() {
+        let db = Database::connect_in_memory().await.unwrap();
+        assert!(resolve_voice_identity(&db, None).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn resolve_voice_identity_reports_a_clear_error_for_an_unknown_id() {
+        let db = Database::connect_in_memory().await.unwrap();
+        let err = resolve_voice_identity(&db, Some("nonexistent"))
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("no longer exists"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn resolve_voice_identity_finds_a_saved_identity_by_id() {
+        let db = Database::connect_in_memory().await.unwrap();
+        let created = db
+            .voice_identities()
+            .create("Old Man Gareth", "path/ref.wav", "a scratchy voice")
+            .await
+            .unwrap();
+
+        let found = resolve_voice_identity(&db, Some(&created.id))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(found.id, created.id);
+        assert_eq!(found.reference_transcript, "a scratchy voice");
+    }
+
+    #[tokio::test]
+    async fn run_dia_reports_a_clear_error_when_the_voice_identity_no_longer_exists() {
+        let db = Database::connect_in_memory().await.unwrap();
+        insert_dia_files(
+            &db,
+            "dia_engine",
+            "E:\\AI\\models\\voice\\dia-engine",
+            dia_engine_file_count(),
+        )
+        .await;
+        insert_dia_files(
+            &db,
+            "dia_codec",
+            "E:\\AI\\models\\voice\\dia-codec",
+            dia_codec_file_count(),
+        )
+        .await;
+        let tts = TtsAdapter::new();
+        let req = TtsRequest::from_params(&json!({
+            "text": "hello",
+            "engine": "dia",
+            "voice_identity_id": "does-not-exist",
+        }))
+        .unwrap();
+
+        // Fails at `resolve_voice_identity`, still before `tts.client()` (and
+        // so any real process spawn) would ever run -- same reasoning as
+        // every other error case in this module's tests.
+        let err = run(&db, &tts, std::path::Path::new("/tmp/out"), "job-1", req)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("no longer exists"), "{err}");
     }
 
     // `TtsAdapter::new()` never spawns a process (or even resolves `uv`) --

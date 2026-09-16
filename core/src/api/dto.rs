@@ -130,6 +130,18 @@ pub struct AttachDocumentDto {
     pub path: String,
 }
 
+/// Body for `POST /voice-identities` / `create_voice_identity` — save a Dia
+/// voice-cloning identity (a reference clip + its transcript) under a name,
+/// e.g. "Old Man Gareth". `source_audio_path` is resolved by the caller (a
+/// native file picker in the UI); the core copies it into AIWM's own data
+/// dir and never references the original location again.
+#[derive(Debug, Clone, Deserialize)]
+pub struct NewVoiceIdentityDto {
+    pub name: String,
+    pub source_audio_path: String,
+    pub reference_transcript: String,
+}
+
 /// Body for `POST /agents` / `create_agent` — a new agent profile.
 #[derive(Debug, Clone, Deserialize)]
 pub struct NewAgentDto {

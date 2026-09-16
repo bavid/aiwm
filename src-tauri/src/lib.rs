@@ -10,13 +10,15 @@ use aiwm_core::api::dto::{
     AboutDto, AgentPermissionDto, AgentSessionDetailDto, AttachExternalDto, ColibriModelDto,
     ConfigUpdate, EnqueueDownloadDto, FeaturedModelDto, JobDetailDto, KnownModelDto,
     LaunchExternalDto, LocalApiStatusDto, ModelStackDto, NewAgentDto, NewSessionDto,
-    OpenAgentSessionDto, RegisterColibriModelDto, RegistryDetailsDto, RegistrySearchDto,
-    RuntimeStatusDto, SubmitJobDto,
+    NewVoiceIdentityDto, OpenAgentSessionDto, RegisterColibriModelDto, RegistryDetailsDto,
+    RegistrySearchDto, RuntimeStatusDto, SubmitJobDto,
 };
 use aiwm_core::api::handlers;
 use aiwm_core::config::Config;
 use aiwm_core::db::Document;
-use aiwm_core::db::{Agent, AgentSession, Benchmark, Download, Job, JobFilter, Model, Session};
+use aiwm_core::db::{
+    Agent, AgentSession, Benchmark, Download, Job, JobFilter, Model, Session, VoiceIdentity,
+};
 use aiwm_core::model::{ImportOutcome, ImportRequest};
 use aiwm_core::orchestrator::JobState;
 use aiwm_core::registry::{Fetched, RemoteModel};
@@ -253,6 +255,26 @@ async fn attach_document(
 #[tauri::command]
 async fn delete_document(app: tauri::State<'_, Arc<App>>, id: String) -> Result<(), String> {
     to_ipc(handlers::delete_document(&app, &id).await)
+}
+
+#[tauri::command]
+async fn list_voice_identities(
+    app: tauri::State<'_, Arc<App>>,
+) -> Result<Vec<VoiceIdentity>, String> {
+    to_ipc(handlers::list_voice_identities(&app).await)
+}
+
+#[tauri::command]
+async fn create_voice_identity(
+    app: tauri::State<'_, Arc<App>>,
+    body: NewVoiceIdentityDto,
+) -> Result<VoiceIdentity, String> {
+    to_ipc(handlers::create_voice_identity(&app, body).await)
+}
+
+#[tauri::command]
+async fn delete_voice_identity(app: tauri::State<'_, Arc<App>>, id: String) -> Result<(), String> {
+    to_ipc(handlers::delete_voice_identity(&app, &id).await)
 }
 
 #[tauri::command]
@@ -610,6 +632,9 @@ fn try_run() -> anyhow::Result<()> {
             list_documents,
             attach_document,
             delete_document,
+            list_voice_identities,
+            create_voice_identity,
+            delete_voice_identity,
             list_agents,
             create_agent,
             delete_agent,
