@@ -1,6 +1,6 @@
 # Trainings-Orchestrator (Teilsystem 2) — Design
 
-Datum: 2026-09-16 · Status: vom User abgenommen (Abschnitte 1–5), noch nicht umgesetzt
+Datum: 2026-09-16 · Status: vom User abgenommen (Abschnitte 1–5, plus Ergänzungen A–G aus der Nebenbesprechung), noch nicht umgesetzt
 
 ## Ziel
 
@@ -32,7 +32,10 @@ Konkrete Anwendungsfälle des Users:
 | Trainer-Backend | **ostris/ai-toolkit** (MIT). Ein Backend für Bild *und* Video. |
 | Prozessmodell | **Losgelöster Prozess** (Variante 2), nicht Job-Engine, nicht Sidecar. |
 | Automatische Aussortierung | **Stufe C**: Unschärfe + Duplikate (bestehend) + tote Frames/Übergänge + Vielfalts-Kappe pro Clip. Keine Text-/Letterbox-Erkennung (Stufe D). |
-| Captioning | **Optional**, standardmäßig aus, wenn kein Vision-Modell importiert ist. |
+| Captioning | **Optional**, standardmäßig aus, wenn kein Vision-Modell importiert ist — aber **empfohlen** für Stil-LoRAs (Begründung im UI, Abschnitt 3C). |
+| Captioner | Nicht fest verdrahtet: **Captioner-Registry** (Abschnitt 3D). Erster Slice: Florence-2 bleibt Default, WD-EVA02-Tagger kommt als zweiter dazu, JoyCaption als dritter danach; abliteriertes Qwen2.5-VL als austauschbare Eskalation. |
+| Begriffe („Concepts") | Pro Datensatz Begriff → Token, per Mehrfachauswahl Frames zugewiesen (Abschnitt 3A); geführtes Anlernen in „Lernsets" (Abschnitt 4B). |
+| Inhaltsbewertung | **Keine.** Das Tool bewertet Material nicht; die Verantwortung liegt beim User (Abschnitt 3E). |
 
 ## Verifizierte Fakten (Quellen im Anhang, nicht aus dem Gedächtnis)
 
@@ -63,6 +66,24 @@ Konkrete Anwendungsfälle des Users:
   Job-Object) ist der bestehende Präzedenzfall für Prozesse, die die App
   überleben. `capability::dataset` exportiert bereits `NNNN.png`+`NNNN.txt`;
   Captioning (Florence-2) ist dort heute Pflicht.
+- **Captioner-Kandidaten (2026-09-16 gegen echte Model-Cards geprüft):**
+  - **WD-EVA02-Large-Tagger v3** (`SmilingWolf/wd-eva02-large-tagger-v3`):
+    Apache-2.0, 0,3B Parameter, ONNX (`onnxruntime ≥ 1.17`) oder `timm`,
+    Danbooru-trainiert, liefert Rating- (inkl. explicit), Charakter- und
+    General-Tags, Schwellwert ~0,53, nicht gated. Winzig → läuft im Sidecar.
+  - **JoyCaption Beta One** (`fancyfeast/llama-joycaption-beta-one-hf-llava`):
+    Llama-3.1-Community-Lizenz (Repo enthält `LLAMA_LICENSE`), 8B-LLM +
+    SigLIP-2-Vision-Tower, laut Karte „minimal filtering, equal coverage of
+    SFW and NSFW", Prosa-Captions für Diffusions-Training, nicht gated.
+    GGUF-Quantisierungen **plus mmproj** existieren → über llama.cpp
+    fahrbar (Vision-Support seit 2025-05). Ob AIWMs `LlamaCppAdapter`
+    `--mmproj` durchreicht, ist im Plan zu prüfen; sonst transformers
+    (`LlavaForConditionalGeneration`) im Sidecar, 4-bit.
+  - **Qwen2.5-VL-7B-Instruct-abliterated** (`huihui-ai/…-abliterated`):
+    gleiche Architektur wie die heutige Eskalationsstufe, nur der Textteil
+    abliteriert → Drop-in in `vision.py`. Das Standard-Instruct-Modell kann
+    bei explizitem Material verweigern; die Eskalation muss deshalb pro
+    Datensatz austauschbar sein.
 - **locally-uncensored „Character Studio"** (AGPL, nur Ideen): eigenes venv
   pro Trainer + Import-Probe + Selbst-Reparatur vor jedem Lauf;
   Log-Parsing muss an `\r` *und* `\n` splitten (In-place-Fortschrittsbalken);
@@ -95,6 +116,10 @@ pro trainierbarer Modellfamilie. Felder:
 
 Ein Bibliotheksmodell ohne Profil ist im UI „noch nicht trainierbar
 (Familie X)". Neue Familie = neuer Eintrag + Tests, kein neues Subsystem.
+
+Zusätzlich trägt jedes Profil die **Caption-Reihenfolge beim Export**
+(`Tags zuerst` für Anime/SDXL, `Prosa zuerst` für FLUX.2) — der einzige
+Berührungspunkt zwischen Profil und der Captioner-Registry aus Abschnitt 3D.
 
 Nicht enthalten: frei editierbares YAML für den User, Full-Finetunes,
 Wan-14B-Profile.
@@ -164,10 +189,11 @@ Frames|Clips, source_root, export_dir, item_count, created_at`);
 Datensatz ist für beliebig viele Läufe wiederverwendbar.
 
 **Captioning optional:** Extraktion + Filter + Sichten laufen ohne
-Vision-Modell. Schalter „Auto-Beschriften", ausgegraut mit Hinweis, wenn
-Florence-2/Qwen nicht importiert sind. Frames ohne Caption erhalten beim
-Training nur das Trigger-Wort (`default_caption`). Captions bleiben im Grid
-editierbar.
+Vision-Modell. Schalter „Auto-Beschriften" (Begründungstext siehe 3C),
+ausgegraut mit Hinweis, wenn kein Captioner aus der Registry (3D)
+installiert ist. Frames ohne Caption erhalten beim Training das
+Trigger-Wort plus ihre zugewiesenen Begriffs-Tokens (3A) — nichts weiter
+(`default_caption`). Captions bleiben im Grid editierbar.
 
 **Filter-Stufe C** (pro Clip, in dieser Reihenfolge):
 1. *Tote Frames*: mittlere Helligkeit nahe 0 oder 255 bei niedriger Varianz.
@@ -188,8 +214,60 @@ Ausschließen per Klick; automatisch raus: nicht dekodierbar oder unter
 Mindestlänge (Default 2 s). Optional Start-/Ende-Zeitmarke pro Clip. Export
 = Clips in einen Ordner, den das Wan-Profil direkt liest.
 
-Nicht enthalten: Stufe D (Text/Letterbox), Szenenerkennung mit eigenem
-Modell, Ausschnitt-Editor.
+### 3A — Begriffe (Concepts)
+
+Pro Datensatz eine Liste **Begriff → Token**: Anzeigename („Kenji",
+„Pusemukkel", „Fuß"), Trigger-Token ohne Bedeutung im Basismodell (z. B.
+`kenji_xy`), optional eine Kurzbeschreibung, die mit eingesetzt wird
+(„bare, visible").
+
+- **Zuweisung per Mehrfachauswahl im Grid:** markierte Frames bekommen das
+  Token an ihre Caption gehängt — und nur diese; Entfernen ebenso. Chip pro
+  Begriff mit Frame-Anzahl.
+- **Datensatz-Trigger** (Stil) steht in jeder Caption; **Begriffs-Token**
+  nur, wo das Ding zu sehen ist. Für den Trainer sind beides normale
+  Caption-Bausteine.
+- **Datenmodell:** `dataset_concepts (id, dataset_id, name, token,
+  description)`, `frame_concepts (frame_id, concept_id)`. Der Export setzt
+  die Caption aus Auto-/Hand-Caption + Trigger + Tokens zusammen; die
+  Rohdaten bleiben getrennt gespeichert (die Caption wird nie „eingebacken").
+- **Token-Prüfung:** Warnung bei einem normalen Wort („anime", „foot"),
+  Vorschlag mit Suffix.
+
+### 3C — Captioning-Empfehlung statt neutralem Schalter
+
+Der Schalter „Auto-Beschriften" zeigt den Grund: *„Empfohlen für
+Stil-LoRAs: Beschriebenes bleibt steuerbar, Unbeschriebenes wird Teil des
+Stils."* Ohne installiertes Vision-Modell steht daneben, dass dann alles
+Wiederkehrende in den Trigger einfließt.
+
+### 3D — Captioner-Registry
+
+Florence-2 ist nicht fest verdrahtet, sondern ein Eintrag einer
+`Captioner`-Registry (`id, name, style: Prosa|Tags, vram_mb, license,
+roles, supports_escalation`), nach dem Muster der Trainings-Profile.
+Dropdown „Beschreiben mit" im Dataset-Tab, gefiltert auf installierte
+Captioner; jeder ist ein Katalog-Eintrag mit pinned SHA-256 und
+Ein-Klick-Download.
+
+- Tags und Prosa dürfen gemischt werden; die **Reihenfolge beim Export
+  steht im Trainings-Profil** (Anime/SDXL: Tags zuerst; FLUX.2: Prosa
+  zuerst).
+- Die Frame-X-gegen-X+5-Eskalation ist pro Captioner optional
+  (`supports_escalation`; Tagger können sie nicht). Die Eskalationsstufe
+  selbst ist ein austauschbarer Eintrag (Qwen2.5-VL-Instruct oder die
+  abliterierte Variante).
+- **Erster Slice:** Florence-2 bleibt Default; **WD-EVA02-Tagger** kommt
+  als zweiter Captioner (klein, Apache-2.0, Anime-Standard, explizite Tags
+  inklusive); **JoyCaption** als dritter im Folge-Slice (Prosa, unzensiert;
+  Laufweg llama.cpp-GGUF+mmproj bevorzugt, sonst transformers im Sidecar).
+
+### 3E — Nicht enthalten
+
+Stufe D (Text/Letterbox), Szenenerkennung mit eigenem Modell,
+Ausschnitt-Editor, **automatische Begriffs-Vorschläge per Objekterkennung**
+(Folge-Slice), und **ein eigener Inhaltsfilter** — das Tool bewertet
+Inhalte nicht; die Verantwortung für das Material liegt beim User.
 
 ## Abschnitt 4 — Bedienung
 
@@ -216,6 +294,25 @@ zeigt ein laufendes Training als GPU-Belegung.
 öffnet den Bild-/Video-Tab mit diesem LoRA vorgewählt und dem Trigger-Wort
 im Prompt.
 
+### 4B — Geführtes Lernen: „Lernsets"
+
+Das Anlernen ist explizit im Tool: es zeigt Sets von Bildern, der User
+markiert und beschreibt, wo nötig.
+
+- Nach Extraktion + Filter bietet der Dataset-Tab einen Modus **„Lernen"**:
+  Frames werden als Sets präsentiert — standardmäßig gruppiert nach Clip;
+  ein Umschalter gruppiert stattdessen nach Ähnlichkeit über den
+  vorhandenen Perceptual-Hash (nützlich, wenn dasselbe Motiv über viele
+  Clips verstreut ist) —, 20–40 pro Seite, Tastatur-Navigation.
+- Pro Set: Frames anklicken/markieren → Begriff zuweisen (bestehender oder
+  neu anlegen) → optional Beschreibung; „Alle im Set" / „Auswahl
+  umkehren"; „Weiter" zum nächsten Set.
+- **Übersicht pro Begriff:** Frame-Anzahl, Warnung unter 20 Beispielen,
+  Merksatz *„Totale lehren die Position, Nahaufnahmen die Form — beides
+  mischen, Hintergründe wechseln"*, und die Token-Prüfung aus 3A.
+- Der Modus ist optional: ohne Begriffe läuft das Training mit Trigger +
+  Auto-Captions wie in Abschnitt 3 beschrieben.
+
 Nicht enthalten: parallele Läufe, Lauf-Vergleich, Live-Parameteränderung,
 Export in fremde Ordner.
 
@@ -232,7 +329,13 @@ Abbruch zwischen Kindprozessen (Flag vor jedem Start, Baum Blätter-zuerst).
 - *Unit (Rust):* Profil-Registry; YAML-Erzeugung (exakter Inhalt);
   Log-Parser gegen **echte aufgezeichnete** ai-toolkit-Logzeilen;
   Status-Automat inkl. `interrupted`; neue Filter gegen kleine echte
-  Bilddateien.
+  Bilddateien; **Caption-Zusammensetzung** (Auto-Caption + Trigger +
+  Tokens in stabiler Reihenfolge; ohne Caption nur Trigger + Tokens;
+  Tags-vor-Prosa bzw. Prosa-vor-Tags je Profil); Captioner-Registry
+  (installiert/nicht, `supports_escalation`).
+- *Sidecar (Python), Captioning:* WD-Tagger über ein Fake-Double nach dem
+  Muster `FakeFlorence2` (Schwellwert, Rating-Tags), plus ein echter Lauf
+  gegen das kleine ONNX-Modell (0,3B ist klein genug für die Test-Umgebung).
 - *Integration (Rust):* Fixture **`aiwm-fake-trainer`** (liest YAML,
   schreibt Fortschritt/Checkpoints im echten Format, reagiert auf Signale)
   → voller Lebenszyklus ohne GPU: start → Fortschritt → „App zu" → Prozess
@@ -244,15 +347,24 @@ Abbruch zwischen Kindprozessen (Flag vor jedem Start, Baum Blätter-zuerst).
   `docs/TODO.md`. Danach 9B ausprobieren; Ergebnis ehrlich in den
   Profil-Text.
 - *UI:* live gegen `dev-mock` (Formular, Verlauf mit simuliertem
-  Fortschritt, `interrupted` → Fortsetzen), Screenshots.
+  Fortschritt, `interrupted` → Fortsetzen; **Lernset-Navigation,
+  Mehrfach-Zuweisung und -Entfernung von Begriffen, Begriffs-Übersicht mit
+  Warnungen**), Screenshots.
 
 Nicht getestet: Trainingsqualität — das ist der Blick des Users auf die
 Vorschaubilder.
 
 ## Umsetzungsreihenfolge (Vorschlag für den Plan)
 
-1. Dataset-Erweiterungen (Captioning optional, Stufe C, `datasets`-Tabelle,
-   Clip-Modus) — sofort nützlich, auch ohne Trainer.
+0. **Captioner-Verifikation** ist erledigt (siehe „Verifizierte Fakten") —
+   im Plan nur noch die zwei offenen Laufweg-Prüfungen: reicht
+   `LlamaCppAdapter` `--mmproj` durch (JoyCaption über llama.cpp), und ist
+   die abliterierte Qwen-Variante wirklich Drop-in für `vision.py`.
+1. Dataset-Erweiterungen: Captioning optional + Empfehlungstext (3C),
+   Stufe C, `datasets`-Tabelle, Clip-Modus, **Begriffe (3A), Lernsets
+   (4B), Captioner-Registry mit WD-Tagger als zweitem Captioner (3D)** —
+   sofort nützlich, auch bevor der Trainer steht; für den Anime-Fall des
+   Users der Kern.
 2. `TrainingAdapter` (Installer, Import-Probe, `env_broken`).
 3. Profil-Registry + YAML-Erzeugung + Katalog-Einträge für Basisgewichte.
 4. `training_runs` + losgelöster Lauf + Poller + `interrupted`/Resume +
@@ -273,4 +385,7 @@ Vorschaubilder.
 - ai-toolkit: https://github.com/ostris/ai-toolkit (README; `extensions_built_in/diffusion_models/flux2/flux2_klein_model.py`; `ui/src/app/jobs/new/options.tsx`; `toolkit/dataloader_mixins.py`)
 - FLUX.2-klein-base-4B: https://huggingface.co/black-forest-labs/FLUX.2-klein-base-4B
 - Fizgig (16-GB-9B-Erfahrungswerte): https://github.com/shootthesound/Fizgig
+- WD-EVA02-Large-Tagger v3: https://huggingface.co/SmilingWolf/wd-eva02-large-tagger-v3
+- JoyCaption Beta One: https://huggingface.co/fancyfeast/llama-joycaption-beta-one-hf-llava (Lizenzdatei `LLAMA_LICENSE` im Repo) · GGUF+mmproj z. B. https://huggingface.co/concedo/llama-joycaption-beta-one-hf-llava-mmproj-gguf · llama.cpp-Vision-Support: https://simonwillison.net/2025/May/10/llama-cpp-vision/
+- Qwen2.5-VL-7B-Instruct-abliterated: https://huggingface.co/huihui-ai/Qwen2.5-VL-7B-Instruct-abliterated
 - locally-uncensored Character Studio: lokaler Checkout `E:\locally-uncensored` (Muster, kein Code)
