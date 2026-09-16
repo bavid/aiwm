@@ -21,6 +21,7 @@
 //! [`export_dataset`] writes the curator's final selection to disk.
 
 mod caption;
+mod compose;
 mod extract;
 mod filter;
 mod ingest;
@@ -29,6 +30,7 @@ pub use caption::{
     DEFAULT_CONTEXT_OFFSET, DEFAULT_ESCALATE, DEFAULT_ESCALATE_EVERY_NTH,
     FLORENCE2_VRAM_FALLBACK_MB, QWEN_VL_VRAM_FALLBACK_MB,
 };
+pub use compose::{compose_caption, token_warning, CaptionOrder, CaptionStyle, ConceptPart};
 pub use extract::{DEFAULT_SAMPLE_FPS, MAX_SAMPLE_FPS, MIN_SAMPLE_FPS};
 pub use filter::RejectionReason;
 pub use filter::{DEFAULT_BLUR_THRESHOLD, DEFAULT_PHASH_MAX_DISTANCE, MAX_PHASH_DISTANCE};
