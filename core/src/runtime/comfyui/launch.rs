@@ -278,6 +278,9 @@ mod tests {
         assert!(body.contains("vae: vae/"));
         assert!(body.contains("loras: loras/"));
         assert!(body.contains("text_encoders: text_encoders/"));
+        // Story Studio Phase 2's character-consistency companions.
+        assert!(body.contains("clip_vision: clip_vision/"));
+        assert!(body.contains("ipadapter: ipadapter/"));
         // second block for the video store
         assert!(body.contains("aiwm_video:"));
         assert!(body.contains("base_path: E:/AI/models/video"));

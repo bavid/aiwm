@@ -4,12 +4,17 @@
 //! ComfyUI source at a pinned tag, then build a self-contained venv with `uv`
 //! (`uv venv` downloads Python 3.13; then the CUDA `torch` build and ComfyUI's
 //! `requirements.txt`). Everything lands under `<runtimes_dir>/comfyui/` so a
-//! "repair" is a single delete. Two custom node packs ride along, each a git
-//! source archive extracted flat into `custom_nodes/` plus its own
-//! `requirements.txt` pip-installed into the same venv: `ComfyUI-GGUF` (3.2b,
+//! "repair" is a single delete. Three custom node packs ride along, each a git
+//! source archive extracted flat into `custom_nodes/`: `ComfyUI-GGUF` (3.2b,
 //! quantized Flux/SD3.5) and `Nvidia_RTX_Nodes_ComfyUI` (7.x, the "Upscale"
 //! step's RTX Video Super Resolution node — real, official, Apache-licensed;
-//! not to be confused with the unrelated, declined "DLSS 5" tooling).
+//! not to be confused with the unrelated, declined "DLSS 5" tooling), each with
+//! its own `requirements.txt` pip-installed into the same venv, and
+//! `ComfyUI_IPAdapter_plus` (Story Studio Phase 2's SDXL character-consistency
+//! node — real, the de-facto standard IP-Adapter implementation for ComfyUI,
+//! GPL-3.0, ships **no** `requirements.txt` of its own — its base functionality
+//! needs nothing beyond what ComfyUI's own `requirements.txt` already installs;
+//! only its optional FaceID variants need `insightface`, unused here).
 //!
 //! The `uv` subprocess steps go through a [`CmdRunner`] so the orchestration is
 //! unit-tested with a recording fake; a real end-to-end run is the smoke test.
@@ -36,6 +41,7 @@ const TORCH_INDEX_URL: &str = "https://download.pytorch.org/whl/cu130";
 const COMFYUI_ARCHIVE_BASE: &str = "https://github.com/comfyanonymous/ComfyUI/archive/refs/tags";
 const GGUF_ARCHIVE_BASE: &str = "https://github.com/city96/ComfyUI-GGUF/archive";
 const RTX_ARCHIVE_BASE: &str = "https://github.com/Comfy-Org/Nvidia_RTX_Nodes_ComfyUI/archive";
+const IPADAPTER_ARCHIVE_BASE: &str = "https://github.com/cubiq/ComfyUI_IPAdapter_plus/archive";
 
 /// GGUF quantization support (ADR-018), needed to run Flux / SD3.5 on 16 GB.
 /// Pinned to a commit — the repo has no tags — and the archive SHA-256 we
@@ -57,6 +63,22 @@ const RTX_NODE_ARCHIVE: Archive<'static> = Archive {
     name: "892515e3eb9a4920a131a502a047e47adca9eb0d.zip",
     sha256: "d67e1a02934e8cd20294abab76012b15abd4515cd8238456fa4cee21516fdbfb",
     size: 96_109,
+};
+
+/// `ComfyUI_IPAdapter_plus` (Story Studio Phase 2, ADR pending): the reference
+/// IP-Adapter implementation for ComfyUI, GPL-3.0. The repo went to
+/// "maintenance only" on 2025-04-14 (its own README says so verbatim) — no
+/// active feature development, but it is still the de-facto standard, by far
+/// the most-used IP-Adapter node pack, and this pin (its last real commit) is
+/// fully functional; nothing about "maintenance only" means broken. Pinned to
+/// a commit — no tags — same caveat as [`COMFYUI_SRC`]. GPL-3.0 governs this
+/// node pack's own source only: ComfyUI runs it as a separate Python
+/// subprocess AIWM drives over HTTP, never linked into AIWM's own binary.
+const IPADAPTER_NODE_DIR: &str = "ComfyUI_IPAdapter_plus";
+const IPADAPTER_NODE_ARCHIVE: Archive<'static> = Archive {
+    name: "a0f451a5113cf9becb0847b92884cb10cbdec0ef.zip",
+    sha256: "c6c49c82aa65cb96b93bdf9f9b547f9c95310a2668a7a9aaa0285cccf4590347",
+    size: 306_422,
 };
 
 /// The GitHub source archive for [`PINNED_TAG`]. GitHub does **not** publish a
@@ -112,6 +134,13 @@ fn rtx_node_dir(runtimes_dir: &Path) -> PathBuf {
         .join(RTX_NODE_DIR)
 }
 
+/// Same tree again — `ComfyUI_IPAdapter_plus`, the third sibling node pack.
+fn ipadapter_node_dir(runtimes_dir: &Path) -> PathBuf {
+    comfy_home(runtimes_dir)
+        .join("custom_nodes")
+        .join(IPADAPTER_NODE_DIR)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum InstallPhase {
@@ -125,8 +154,11 @@ pub enum InstallPhase {
 
 /// Bytes to fetch for the toolchain — surfaced in the UI. The venv build adds
 /// gigabytes of wheels whose size we cannot know up front.
-pub const TOOLCHAIN_DOWNLOAD_BYTES: u64 =
-    UV_ARCHIVE.size + COMFYUI_SRC.size + GGUF_NODE_ARCHIVE.size + RTX_NODE_ARCHIVE.size;
+pub const TOOLCHAIN_DOWNLOAD_BYTES: u64 = UV_ARCHIVE.size
+    + COMFYUI_SRC.size
+    + GGUF_NODE_ARCHIVE.size
+    + RTX_NODE_ARCHIVE.size
+    + IPADAPTER_NODE_ARCHIVE.size;
 
 // --- the installer --------------------------------------------------------
 
@@ -137,10 +169,12 @@ struct FetchSpec<'a> {
     comfy_base: &'a str,
     gguf_base: &'a str,
     rtx_base: &'a str,
+    ipadapter_base: &'a str,
     uv: &'a Archive<'a>,
     comfy: &'a Archive<'a>,
     gguf: &'a Archive<'a>,
     rtx: &'a Archive<'a>,
+    ipadapter: &'a Archive<'a>,
 }
 
 const PINNED_SPEC: FetchSpec<'static> = FetchSpec {
@@ -148,10 +182,12 @@ const PINNED_SPEC: FetchSpec<'static> = FetchSpec {
     comfy_base: COMFYUI_ARCHIVE_BASE,
     gguf_base: GGUF_ARCHIVE_BASE,
     rtx_base: RTX_ARCHIVE_BASE,
+    ipadapter_base: IPADAPTER_ARCHIVE_BASE,
     uv: &UV_ARCHIVE,
     comfy: &COMFYUI_SRC,
     gguf: &GGUF_NODE_ARCHIVE,
     rtx: &RTX_NODE_ARCHIVE,
+    ipadapter: &IPADAPTER_NODE_ARCHIVE,
 };
 
 /// Install the pinned ComfyUI into `runtimes_dir`. Idempotent — a complete
@@ -186,11 +222,13 @@ where
     let py = venv_python(runtimes_dir);
     let gguf_marker = gguf_node_dir(runtimes_dir).join("__init__.py");
     let rtx_marker = rtx_node_dir(runtimes_dir).join("__init__.py");
+    let ipadapter_marker = ipadapter_node_dir(runtimes_dir).join("__init__.py");
 
     if py.is_file()
         && home.join("main.py").is_file()
         && gguf_marker.is_file()
         && rtx_marker.is_file()
+        && ipadapter_marker.is_file()
     {
         return Ok(()); // already installed
     }
@@ -207,13 +245,18 @@ where
         &home,
         gguf_node_dir(runtimes_dir).as_path(),
         rtx_node_dir(runtimes_dir).as_path(),
+        ipadapter_node_dir(runtimes_dir).as_path(),
         spec,
         &on_progress,
     )
     .await?;
     build_venv(&root, &uv, &home, &py, runner, &on_progress).await?;
 
-    if !py.is_file() || !gguf_marker.is_file() || !rtx_marker.is_file() {
+    if !py.is_file()
+        || !gguf_marker.is_file()
+        || !rtx_marker.is_file()
+        || !ipadapter_marker.is_file()
+    {
         return Err(comfy_install_err(
             "install finished but the venv python or a custom node is missing — the steps \
              did not complete",
@@ -224,12 +267,14 @@ where
 }
 
 /// Fetch + unpack the verified toolchain: `uv` (via [`ensure_uv`]), the ComfyUI
-/// source, and the two pinned custom nodes (GGUF, RTX Video Super Resolution).
+/// source, and the three pinned custom nodes (GGUF, RTX Video Super Resolution,
+/// IP-Adapter Plus).
 async fn fetch_sources<F>(
     root: &Path,
     home: &Path,
     gguf_dir: &Path,
     rtx_dir: &Path,
+    ipadapter_dir: &Path,
     spec: &FetchSpec<'_>,
     on_progress: &F,
 ) -> Result<()>
@@ -241,7 +286,8 @@ where
     tokio::fs::create_dir_all(&staging)
         .await
         .map_err(|e| comfy_install_err(format!("create {}: {e}", staging.display())))?;
-    let total = spec.uv.size + spec.comfy.size + spec.gguf.size + spec.rtx.size;
+    let total =
+        spec.uv.size + spec.comfy.size + spec.gguf.size + spec.rtx.size + spec.ipadapter.size;
     let mut done = 0u64;
 
     ensure_uv(spec.uv_base, spec.uv, root, |n| {
@@ -286,6 +332,19 @@ where
         )
         .await?;
         extract_zip_flat(&zip, rtx_dir).await?;
+    }
+    done += spec.rtx.size;
+
+    if !ipadapter_dir.join("__init__.py").is_file() {
+        let zip = staging.join(spec.ipadapter.name);
+        download_verified(
+            &format!("{}/{}", spec.ipadapter_base, spec.ipadapter.name),
+            spec.ipadapter,
+            &zip,
+            |n| on_progress(InstallPhase::Downloading, done + n, total),
+        )
+        .await?;
+        extract_zip_flat(&zip, ipadapter_dir).await?;
     }
 
     on_progress(InstallPhase::Extracting, total, total);
@@ -455,14 +514,16 @@ mod tests {
         src_zip: Vec<u8>,
         node_zip: Vec<u8>,
         rtx_zip: Vec<u8>,
+        ipadapter_zip: Vec<u8>,
         uv_sha: String,
         src_sha: String,
         node_sha: String,
         rtx_sha: String,
+        ipadapter_sha: String,
     }
 
     impl Fixtures {
-        /// The four archives, served from one local server. `src`/`node`/`rtx`
+        /// The five archives, served from one local server. `src`/`node`/`rtx`
         /// contents can be overridden (`None` = a valid minimal one).
         async fn serve(
             src_body: Option<Vec<u8>>,
@@ -491,11 +552,18 @@ mod tests {
                     ),
                 ])
             });
-            let (u, s, n, r) = (
+            // No requirements.txt -- matches the real ComfyUI_IPAdapter_plus,
+            // which ships none for its base (non-FaceID) functionality.
+            let ipadapter_zip = make_zip(&[(
+                "ComfyUI_IPAdapter_plus-abc/__init__.py",
+                b"NODE_CLASS_MAPPINGS = {}",
+            )]);
+            let (u, s, n, r, ip) = (
                 uv_zip.clone(),
                 src_zip.clone(),
                 node_zip.clone(),
                 rtx_zip.clone(),
+                ipadapter_zip.clone(),
             );
             let app = Router::new()
                 .route(
@@ -525,6 +593,13 @@ mod tests {
                         let b = r.clone();
                         async move { Body::from(b) }
                     }),
+                )
+                .route(
+                    "/ipadapter/ipadapter.zip",
+                    get(move || {
+                        let b = ip.clone();
+                        async move { Body::from(b) }
+                    }),
                 );
             let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
                 .await
@@ -538,19 +613,22 @@ mod tests {
                 src_sha: sha(&src_zip),
                 node_sha: sha(&node_zip),
                 rtx_sha: sha(&rtx_zip),
+                ipadapter_sha: sha(&ipadapter_zip),
                 uv_zip,
                 src_zip,
                 node_zip,
                 rtx_zip,
+                ipadapter_zip,
             }
         }
 
-        fn spec(&self) -> (String, String, String, String, [Archive<'_>; 4]) {
-            let (ub, cb, nb, rb) = (
+        fn spec(&self) -> (String, String, String, String, String, [Archive<'_>; 5]) {
+            let (ub, cb, nb, rb, ib) = (
                 format!("http://127.0.0.1:{}/uv", self.port),
                 format!("http://127.0.0.1:{}/src", self.port),
                 format!("http://127.0.0.1:{}/node", self.port),
                 format!("http://127.0.0.1:{}/rtx", self.port),
+                format!("http://127.0.0.1:{}/ipadapter", self.port),
             );
             let archives = [
                 Archive {
@@ -573,8 +651,13 @@ mod tests {
                     sha256: &self.rtx_sha,
                     size: self.rtx_zip.len() as u64,
                 },
+                Archive {
+                    name: "ipadapter.zip",
+                    sha256: &self.ipadapter_sha,
+                    size: self.ipadapter_zip.len() as u64,
+                },
             ];
-            (ub, cb, nb, rb, archives)
+            (ub, cb, nb, rb, ib, archives)
         }
     }
 
@@ -587,16 +670,18 @@ mod tests {
     where
         F: Fn(InstallPhase, u64, u64) + Send + Sync,
     {
-        let (ub, cb, nb, rb, a) = fx.spec();
+        let (ub, cb, nb, rb, ib, a) = fx.spec();
         let spec = FetchSpec {
             uv_base: &ub,
             comfy_base: &cb,
             gguf_base: &nb,
             rtx_base: &rb,
+            ipadapter_base: &ib,
             uv: &a[0],
             comfy: &a[1],
             gguf: &a[2],
             rtx: &a[3],
+            ipadapter: &a[4],
         };
         install_with(tmp, false, runner, &spec, on_progress).await
     }
@@ -621,6 +706,8 @@ mod tests {
         std::fs::write(gguf_node_dir(tmp.path()).join("__init__.py"), b"x").unwrap();
         std::fs::create_dir_all(rtx_node_dir(tmp.path())).unwrap();
         std::fs::write(rtx_node_dir(tmp.path()).join("__init__.py"), b"x").unwrap();
+        std::fs::create_dir_all(ipadapter_node_dir(tmp.path())).unwrap();
+        std::fs::write(ipadapter_node_dir(tmp.path()).join("__init__.py"), b"x").unwrap();
 
         let runner = RecordingRunner::default();
         install(tmp.path(), true, &runner, |_, _, _| {})
@@ -630,7 +717,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn full_install_fetches_all_four_then_runs_the_uv_steps_in_order() {
+    async fn full_install_fetches_all_five_then_runs_the_uv_steps_in_order() {
         let fx = Fixtures::serve(None, None, None).await;
         let tmp = tempfile::tempdir().unwrap();
         let runner = VenvCreatingRunner {
@@ -656,6 +743,13 @@ mod tests {
         assert!(
             !rtx_node_dir(tmp.path())
                 .join("Nvidia_RTX_Nodes_ComfyUI-abc")
+                .exists(),
+            "flattened"
+        );
+        assert!(ipadapter_node_dir(tmp.path()).join("__init__.py").is_file());
+        assert!(
+            !ipadapter_node_dir(tmp.path())
+                .join("ComfyUI_IPAdapter_plus-abc")
                 .exists(),
             "flattened"
         );
@@ -715,12 +809,13 @@ mod tests {
         let runner = RecordingRunner::default();
 
         // Override the source sha to a wrong one.
-        let (ub, cb, nb, rb, a) = fx.spec();
+        let (ub, cb, nb, rb, ib, a) = fx.spec();
         let spec = FetchSpec {
             uv_base: &ub,
             comfy_base: &cb,
             gguf_base: &nb,
             rtx_base: &rb,
+            ipadapter_base: &ib,
             uv: &a[0],
             comfy: &Archive {
                 name: "comfy.zip",
@@ -729,6 +824,7 @@ mod tests {
             },
             gguf: &a[2],
             rtx: &a[3],
+            ipadapter: &a[4],
         };
         let err = install_with(tmp.path(), false, &runner, &spec, |_, _, _| {})
             .await
@@ -756,9 +852,13 @@ mod tests {
         assert!(home.join("main.py").is_file());
         assert!(gguf_node_dir(tmp.path()).join("__init__.py").is_file());
         assert!(rtx_node_dir(tmp.path()).join("__init__.py").is_file());
+        assert!(ipadapter_node_dir(tmp.path()).join("__init__.py").is_file());
         // torch, the GGUF node's `gguf` dep, and the RTX node's `nvvfx` dep all
         // import (proves the wheels + Python match; not the GPU driver — that
-        // waits for a real render in 3.4 / the upscale slice).
+        // waits for a real render in 3.4 / the upscale slice). IPAdapter Plus
+        // ships no requirements.txt for its base functionality, so there's no
+        // matching import to prove here -- the real end-to-end job run is
+        // what actually proves it (Story Studio Phase 2).
         SystemRunner
             .run(
                 &venv_python(tmp.path()),

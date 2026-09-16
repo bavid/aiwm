@@ -39,6 +39,13 @@ const MAX_CFG: f64 = 30.0;
 const DEFAULT_SAMPLER: &str = "euler";
 const DEFAULT_SCHEDULER: &str = "normal";
 
+/// `IPAdapterAdvanced`'s own default is `1.0`; the node pack's README
+/// recommends lowering it ("at least 0.8") for better prompt adherence, so
+/// Story Studio's default starts there instead of at the node's own default.
+const DEFAULT_REFERENCE_WEIGHT: f64 = 0.8;
+const MIN_REFERENCE_WEIGHT: f64 = 0.0;
+const MAX_REFERENCE_WEIGHT: f64 = 2.0;
+
 /// Upper bound on one image render — a slow first checkpoint load plus a large,
 /// high-step render. Past this the job fails rather than hanging forever.
 const IMAGE_TIMEOUT: Duration = Duration::from_secs(600);
@@ -65,6 +72,19 @@ pub struct ImageRequest {
     /// instruction-based *edit* of that image (`prompt` is the instruction)
     /// rather than a fresh generation. Only FLUX.2 [klein] supports it today.
     pub source_image: Option<String>,
+    /// A finished job's id, or a path to an image file — when set, `prompt`
+    /// generates a *fresh* image whose subject/style is anchored to this
+    /// reference (Story Studio Phase 2 character consistency), instead of an
+    /// unconditioned generation. Distinct from [`Self::source_image`]: that's
+    /// an edit of the given image; this is a new image that merely looks
+    /// consistent with it. SDXL-family checkpoints and FLUX.2 [klein] support
+    /// it; plain FLUX.1 dev does not yet (see `docs/TODO.md`).
+    pub reference_image: Option<String>,
+    /// How strongly `reference_image` steers the render (SDXL: IP-Adapter's
+    /// `weight`; FLUX.2: unused today, the reference latent's pull isn't a
+    /// single scalar knob in that graph). Ignored when `reference_image` is
+    /// `None`.
+    pub reference_weight: f64,
 }
 
 impl ImageRequest {
@@ -108,6 +128,18 @@ impl ImageRequest {
             .map(str::trim)
             .filter(|s| !s.is_empty())
             .map(str::to_string);
+        let reference_image = params
+            .get("reference_image")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string);
+        let reference_weight = params
+            .get("reference_weight")
+            .and_then(Value::as_f64)
+            .map_or(DEFAULT_REFERENCE_WEIGHT, |v| {
+                v.clamp(MIN_REFERENCE_WEIGHT, MAX_REFERENCE_WEIGHT)
+            });
 
         Ok(Self {
             prompt,
@@ -121,6 +153,8 @@ impl ImageRequest {
             seed: resolve_seed(params),
             loras: parse_loras(params),
             source_image,
+            reference_image,
+            reference_weight,
         })
     }
 
@@ -141,6 +175,10 @@ impl ImageRequest {
         obj.insert("seed".into(), self.seed.into());
         if let Some(src) = &self.source_image {
             obj.insert("source_image".into(), src.clone().into());
+        }
+        if let Some(reference) = &self.reference_image {
+            obj.insert("reference_image".into(), reference.clone().into());
+            obj.insert("reference_weight".into(), self.reference_weight.into());
         }
         obj.insert(
             "loras".into(),
@@ -182,6 +220,21 @@ pub async fn run(
 
     if let Some(spec) = &req.source_image {
         return run_edit(
+            db,
+            comfyui,
+            outputs_dir,
+            job_id,
+            model,
+            model_file,
+            &req,
+            spec,
+            cancel,
+        )
+        .await;
+    }
+
+    if let Some(spec) = &req.reference_image {
+        return run_reference(
             db,
             comfyui,
             outputs_dir,
@@ -313,8 +366,37 @@ pub async fn run(
         }
     };
 
+    finish(
+        db,
+        comfyui,
+        outputs_dir,
+        job_id,
+        &workflow,
+        req.seed,
+        req.width,
+        req.height,
+        cancel,
+    )
+    .await
+}
+
+/// Submit `workflow`, wait for the image, write it under `outputs_dir`, and
+/// log the "saved" event — the common tail every generation path (plain,
+/// edit, reference-anchored) ends with.
+#[allow(clippy::too_many_arguments)]
+async fn finish(
+    db: &Database,
+    comfyui: &Arc<ComfyUiAdapter>,
+    outputs_dir: &Path,
+    job_id: &str,
+    workflow: &Value,
+    seed: i64,
+    width: u32,
+    height: u32,
+    cancel: watch::Receiver<bool>,
+) -> Result<ImageOutcome> {
     let Some(image) = comfyui
-        .generate_media(job_id, &workflow, cancel, IMAGE_TIMEOUT)
+        .generate_media(job_id, workflow, cancel, IMAGE_TIMEOUT)
         .await?
     else {
         return Ok(ImageOutcome::Cancelled);
@@ -336,9 +418,9 @@ pub async fn run(
 
     Ok(ImageOutcome::Done(ImageDone {
         output_path,
-        seed: req.seed,
-        width: req.width,
-        height: req.height,
+        seed,
+        width,
+        height,
     }))
 }
 
@@ -418,37 +500,207 @@ async fn run_edit(
         &lora_specs,
     );
 
-    let Some(image) = comfyui
-        .generate_media(job_id, &workflow, cancel, IMAGE_TIMEOUT)
-        .await?
-    else {
-        return Ok(ImageOutcome::Cancelled);
-    };
-
-    let output_path = write_output(outputs_dir, job_id, &image.extension, &image.bytes).await?;
-    db.jobs()
-        .append_event(
-            job_id,
-            EventLevel::Info,
-            &format!(
-                "saved {} ({} KB)",
-                output_path.display(),
-                image.bytes.len() / 1024
-            ),
-        )
-        .await?;
-
     // The edited output's real size follows the source image, not
     // `req.width`/`req.height` (an edit request has no dimension inputs of
     // its own) -- these are only used for a display line, not a correctness
     // path, so the slight imprecision doesn't need a second image-decode
     // just to read the real pixel size back out.
-    Ok(ImageOutcome::Done(ImageDone {
-        output_path,
-        seed: req.seed,
+    finish(
+        db,
+        comfyui,
+        outputs_dir,
+        job_id,
+        &workflow,
+        req.seed,
+        req.width,
+        req.height,
+        cancel,
+    )
+    .await
+}
+
+/// Generate a *fresh* image anchored to `reference_spec` (a finished job's
+/// image, or a path) instead of an unconditioned generation — Story Studio
+/// Phase 2 character consistency. SDXL-family checkpoints get IP-Adapter
+/// conditioning; FLUX.2 [klein] gets a `ReferenceLatent`-anchored generation
+/// (the same mechanism [`run_edit`] uses, repurposed — see
+/// [`pipeline::flux2_klein_reference_txt2img`]'s doc comment for why that only
+/// works on an edit-trained model). Plain FLUX.1 dev isn't offered this path.
+#[allow(clippy::too_many_arguments)]
+async fn run_reference(
+    db: &Database,
+    comfyui: &Arc<ComfyUiAdapter>,
+    outputs_dir: &Path,
+    job_id: &str,
+    model: &Model,
+    model_file: &str,
+    req: &ImageRequest,
+    reference_spec: &str,
+    cancel: watch::Receiver<bool>,
+) -> Result<ImageOutcome> {
+    let recipe = Recipe::for_family(model.family.as_deref(), model_file);
+    if matches!(recipe, Recipe::FluxGguf) {
+        return Err(image_err(
+            "character-consistent generation needs an SDXL checkpoint or the FLUX.2 [klein] \
+             stack \u{2014} FLUX.1 dev doesn't support it yet (see docs/TODO.md)",
+        ));
+    }
+
+    let staged =
+        super::media::stage_image(db, &comfyui.input_dir(), job_id, reference_spec).await?;
+    db.jobs()
+        .append_event(
+            job_id,
+            EventLevel::Info,
+            &format!("anchoring to reference {}", staged.source),
+        )
+        .await?;
+
+    let resolved_loras = resolve_loras(db, &req.loras).await?;
+    let lora_specs: Vec<LoraSpec> = resolved_loras
+        .iter()
+        .map(|l| LoraSpec {
+            file: &l.file,
+            strength: l.strength,
+        })
+        .collect();
+
+    let inputs = Txt2ImgInputs {
+        positive: &req.prompt,
+        negative: &req.negative,
         width: req.width,
         height: req.height,
-    }))
+        steps: req.steps,
+        cfg: req.cfg,
+        sampler: &req.sampler,
+        scheduler: &req.scheduler,
+        seed: req.seed,
+        filename_prefix: job_id,
+    };
+    let workflow = match recipe {
+        Recipe::Checkpoint => {
+            let ip = resolve_ipadapter_companions(db).await?;
+            db.jobs()
+                .append_event(
+                    job_id,
+                    EventLevel::Info,
+                    &format!(
+                        "IP-Adapter \u{201c}{}\u{201d}, CLIP vision \u{201c}{}\u{201d}",
+                        ip.ipadapter, ip.clip_vision
+                    ),
+                )
+                .await?;
+            pipeline::checkpoint_ipadapter_txt2img(
+                &inputs,
+                model_file,
+                &pipeline::IpAdapterSpec {
+                    clip_vision: &ip.clip_vision,
+                    ipadapter_model: &ip.ipadapter,
+                    reference_image: &staged.name,
+                    weight: req.reference_weight,
+                },
+                &lora_specs,
+            )
+        }
+        Recipe::Flux2KleinGguf => {
+            let c = resolve_flux2_klein_companions(db).await?;
+            db.jobs()
+                .append_event(
+                    job_id,
+                    EventLevel::Info,
+                    &format!(
+                        "FLUX.2 — text encoder \u{201c}{}\u{201d}, VAE \u{201c}{}\u{201d}",
+                        c.clip, c.vae
+                    ),
+                )
+                .await?;
+            pipeline::flux2_klein_reference_txt2img(
+                &inputs,
+                &Flux2KleinModels {
+                    unet: model_file,
+                    clip: &c.clip,
+                    vae: &c.vae,
+                },
+                &staged.name,
+                &lora_specs,
+            )
+        }
+        Recipe::Flux2KleinSafetensors => {
+            let c = resolve_flux2_klein_companions(db).await?;
+            db.jobs()
+                .append_event(
+                    job_id,
+                    EventLevel::Info,
+                    &format!(
+                        "FLUX.2 — text encoder \u{201c}{}\u{201d}, VAE \u{201c}{}\u{201d}",
+                        c.clip, c.vae
+                    ),
+                )
+                .await?;
+            pipeline::flux2_klein_reference_txt2img_safetensors(
+                &inputs,
+                &Flux2KleinModels {
+                    unet: model_file,
+                    clip: &c.clip,
+                    vae: &c.vae,
+                },
+                &staged.name,
+                &lora_specs,
+            )
+        }
+        Recipe::FluxGguf => unreachable!("checked above"),
+    };
+
+    finish(
+        db,
+        comfyui,
+        outputs_dir,
+        job_id,
+        &workflow,
+        req.seed,
+        req.width,
+        req.height,
+        cancel,
+    )
+    .await
+}
+
+/// The two files SDXL-family IP-Adapter character-consistency needs, resolved
+/// from the library by role.
+#[derive(Debug)]
+struct IpAdapterCompanionFiles {
+    clip_vision: String,
+    ipadapter: String,
+}
+
+async fn resolve_ipadapter_companions(db: &Database) -> Result<IpAdapterCompanionFiles> {
+    let clip_vision = db
+        .models()
+        .pick_for_role("clip_vision")
+        .await?
+        .ok_or_else(|| {
+            image_err(
+                "character-consistent generation needs a CLIP vision encoder — import \
+             CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors as \u{201c}CLIP vision\u{201d} on the \
+             Models tab",
+            )
+        })?;
+    let ipadapter = db
+        .models()
+        .pick_for_role("ip_adapter")
+        .await?
+        .ok_or_else(|| {
+            image_err(
+                "character-consistent generation needs an IP-Adapter model — import \
+             ip-adapter-plus_sdxl_vit-h.safetensors as \u{201c}IP-Adapter\u{201d} on the Models \
+             tab",
+            )
+        })?;
+
+    Ok(IpAdapterCompanionFiles {
+        clip_vision: file_name(&clip_vision.file_path)?.to_string(),
+        ipadapter: file_name(&ipadapter.file_path)?.to_string(),
+    })
 }
 
 /// Flux's three companion files, resolved from the library by role + name.
@@ -882,5 +1134,114 @@ mod tests {
         .await
         .unwrap_err();
         assert!(err.to_string().contains("FLUX.2"), "{err}");
+    }
+
+    #[test]
+    fn reference_image_round_trips_with_its_weight() {
+        let none = ImageRequest::from_params(&serde_json::json!({ "prompt": "x" })).unwrap();
+        assert_eq!(none.reference_image, None);
+        assert_eq!(none.reference_weight, DEFAULT_REFERENCE_WEIGHT);
+
+        let mut params = serde_json::json!({
+            "prompt": "portrait of Kira the ranger",
+            "reference_image": "  job-earlier-portrait  ",
+            "reference_weight": 5.0, // over the max
+        });
+        let r = ImageRequest::from_params(&params).unwrap();
+        assert_eq!(r.reference_image.as_deref(), Some("job-earlier-portrait"));
+        assert_eq!(r.reference_weight, MAX_REFERENCE_WEIGHT);
+        r.apply_to(&mut params);
+        assert_eq!(params["reference_image"], "job-earlier-portrait");
+        assert_eq!(params["reference_weight"], MAX_REFERENCE_WEIGHT);
+    }
+
+    #[tokio::test]
+    async fn resolve_ipadapter_companions_needs_both_files() {
+        use crate::db::{Database, NewModel};
+
+        let db = Database::connect_in_memory().await.unwrap();
+        let err = resolve_ipadapter_companions(&db).await.unwrap_err();
+        assert!(err.to_string().contains("CLIP vision"), "{err}");
+
+        db.models()
+            .insert(NewModel {
+                name: "CLIP-ViT-H-14".into(),
+                format: "safetensors".into(),
+                file_path: "E:\\AI\\models\\image\\clip_vision\\clip-h.safetensors".into(),
+                size_bytes: 1_000,
+                source: "manual".into(),
+                roles: vec!["clip_vision".into()],
+                ..NewModel::default()
+            })
+            .await
+            .unwrap();
+        let err = resolve_ipadapter_companions(&db).await.unwrap_err();
+        assert!(err.to_string().contains("IP-Adapter"), "{err}");
+
+        db.models()
+            .insert(NewModel {
+                name: "IPAdapter Plus SDXL".into(),
+                format: "safetensors".into(),
+                file_path: "E:\\AI\\models\\image\\ipadapter\\ip-plus-sdxl.safetensors".into(),
+                size_bytes: 1_000,
+                source: "manual".into(),
+                roles: vec!["ip_adapter".into()],
+                ..NewModel::default()
+            })
+            .await
+            .unwrap();
+        let ok = resolve_ipadapter_companions(&db).await.unwrap();
+        assert_eq!(ok.clip_vision, "clip-h.safetensors");
+        assert_eq!(ok.ipadapter, "ip-plus-sdxl.safetensors");
+    }
+
+    #[tokio::test]
+    async fn run_reference_refuses_plain_flux1() {
+        use crate::db::{Database, NewJob, NewModel};
+        use crate::runtime::ComfyUiAdapter;
+
+        let db = Database::connect_in_memory().await.unwrap();
+        let model = db
+            .models()
+            .insert(NewModel {
+                name: "Flux1-dev Q8".into(),
+                format: "gguf".into(),
+                file_path: "E:\\AI\\models\\image\\diffusion_models\\flux1-dev-Q8_0.gguf".into(),
+                size_bytes: 1_000,
+                source: "manual".into(),
+                family: Some("flux".into()),
+                ..NewModel::default()
+            })
+            .await
+            .unwrap();
+        let job = db.jobs().insert(NewJob::new("image")).await.unwrap();
+        let (_cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
+        let comfy = std::sync::Arc::new(ComfyUiAdapter::with_launch(
+            db.clone(),
+            None,
+            crate::runtime::ComfyDirs {
+                base: std::env::temp_dir(),
+                output: std::env::temp_dir(),
+                models_store: std::env::temp_dir(),
+            },
+        ));
+        let req = ImageRequest::from_params(&serde_json::json!({
+            "prompt": "Kira the ranger in a tavern",
+            "reference_image": "job-earlier-portrait"
+        }))
+        .unwrap();
+
+        let err = run(
+            &db,
+            &comfy,
+            std::path::Path::new("/tmp/out"),
+            &job.id,
+            &model,
+            req,
+            cancel_rx,
+        )
+        .await
+        .unwrap_err();
+        assert!(err.to_string().contains("FLUX.1"), "{err}");
     }
 }
