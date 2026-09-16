@@ -754,20 +754,202 @@ Kuratier-Grid mit Caption-Edit/Exclude, Export alle im Screenshot bestätigt).
     GPU-Speicher-Freigabe bei Eviction ist ein Folge-Thema, sobald das an
     echter Hardware gemessen wird.
 
-### Teilsystem 2 — Trainings-Orchestrator: weiterhin offen
+### Teilsystem 2 — Trainings-Orchestrator: geplant (2026-09-16), noch keine Implementierung
 
-Unverändert gegenüber der ursprünglichen Analyse: aus dem jetzt fertigen
-kuratierten Datensatz einen echten LoRA-/Fine-Tune-Lauf fahren (stundenlang),
-Fortschritt anzeigen, danach das Ergebnis ins bestehende Image/Video-
-Modell-System einhängen zum Testen. Braucht einen externen
-Trainings-Unterbau — für Bildmodelle (SDXL/Flux) existiert reife Tooling
-(z. B. kohya-ss/sd-scripts), für Video-Modelle (Wan/LTX) ist die Lage
-deutlich unreifer/unstandardisiert — beides noch nicht recherchiert/
-entschieden. Noch nicht diskutiert: ob Trainingsläufe durch den bestehenden
-Job-Scheduler laufen (Stunden-lange VRAM-Reservierung wäre ein neuer
-Anwendungsfall) oder als eigener, scheduler-externer Prozess. **Ausdrücklich
-noch keine Implementierung** — laut `brainstorming`-Skill erst Design/Spec +
-User-Freigabe, dann `writing-plans`, bevor hier Code entsteht.
+**Priorität entschieden (User, 2026-09-16):** Architektur von Anfang an
+zielart-generisch (`TrainingTarget::Image | Video`), aber der erste
+Implementierungs-Slice ist **Bild-LoRA** (SDXL/Flux) — reife Tooling-Lage,
+niedrigeres Risiko. Video-LoRA (Wan/LTX) folgt als eigener Slice, sobald das
+Harness für Bild einmal steht; die Tooling-Recherche dafür (Kandidaten
+ungeprüft: z. B. `musubi-tuner` für Wan, oder ein diffusers-basiertes
+Skript) ist noch offen und wird erst zu dem Zeitpunkt gemacht, nicht jetzt
+spekulativ vorweggenommen.
+
+**Warum kohya-ss/sd-scripts für den Bild-Pfad, nicht erst zu recherchieren:**
+Teilsystem 1's Export-Format (`NNNN.png`+`NNNN.txt`-Paare) wurde **bereits
+bewusst** nach genau dieser Konvention gebaut (siehe Export-Beschreibung
+oben) — die Dataset-Pipeline ist also faktisch schon der erste halbe Schritt
+zu einem kohya-ss-Trainingslauf, nicht nur zufällig kompatibel.
+
+**Reales technisches Risiko, das die Architektur bestimmt (2026-09-16
+gegen den echten Code geprüft):** `JobEngine::recover` (`core/src/
+orchestrator/engine.rs:268`) markiert jeden beim App-Start noch
+`running`-Job als **fehlgeschlagen** — es gibt aktuell keinerlei
+Job-Resume nach einem Neustart. Für einen stundenlangen Trainingslauf ist
+das inakzeptabel (ein Absturz/Update-Neustart darf nicht 3 Stunden GPU-Zeit
+wegwerfen). AIWM hat dafür bereits **einen** Präzedenzfall: der externe
+Agent-`Launcher` (OpenCode/Hermes) spawnt bewusst einen echten,
+unabhängigen Terminal-Prozess, **nicht** Job-Object-supervised, gerade weil
+der länger leben soll als die App selbst (siehe `launcher`-Modul-Doc). Ein
+Trainingslauf sollte diesem Muster folgen — ein `TrainingRun` ist kein
+`Job` im bestehenden Scheduler-Sinn, sondern ein eigenständiger,
+detached Subprozess mit eigenem Fortschritts-Tracking (kohya-ss schreibt
+eigene Checkpoints; AIWM muss nur den Fortschritt lesen/anzeigen, nicht die
+Resume-Logik selbst bauen) — nicht der bestehende `JobEngine`-Pfad mit
+seiner Restart=Fail-Semantik.
+
+**Architektur-Skizze (Plan, nicht gebaut):**
+- Neuer `TrainingAdapter` nach dem bestehenden `RuntimeAdapter`-Muster
+  (install/health/status), aber mit eigenem, isoliertem `uv`-venv für
+  kohya-ss/sd-scripts — getrennt vom Sidecar-venv, aus genau dem Grund, aus
+  dem der Sidecar selbst schon isoliert ist (potenziell andere
+  Torch-Version/Dependency-Baum als die Haupt-Sidecar-Umgebung).
+  Install folgt dem etablierten idempotenten Marker-Muster
+  (`runtime::comfyui::install` als Vorbild).
+- `TrainingRun` als eigene DB-Tabelle (Status/Fortschritt/Zielart/
+  Basis-Checkpoint/Ergebnis-Datei-Pfad), **nicht** in `jobs` — Grund siehe
+  oben. Der Scheduler muss trotzdem von der VRAM-Reservierung wissen
+  (ein laufendes Training blockiert GPU-Kapazität wie jeder andere
+  Runtime), auch ohne über den Job-Mechanismus zu laufen.
+- UI-Einstieg: ein "LoRA trainieren"-Button direkt im Dataset-Tab nach dem
+  Export (natürlicher nächster Schritt in der bestehenden Kuratier-UI),
+  mit sinnvollen Defaults für Rank/Alpha/Lernrate/Epochen, damit ein Laie
+  nicht jeden Trainings-Parameter verstehen muss, bevor er startet.
+- Nach Abschluss: Ergebnis-LoRA automatisch ins bestehende Modell-System
+  importieren (gleicher Import-Pfad wie ein manuell heruntergeladenes
+  LoRA), sofort in Image/Video zum Testen wählbar.
+
+**Ausdrücklich noch offen, bewusst nicht vorab entschieden:**
+Video-LoRA-Tooling-Wahl (siehe oben); ob/wie ein laufendes Training in der
+Diagnostics-/Runtimes-Übersicht neben ComfyUI/llama.cpp erscheint; wie
+Abbruch eines laufenden Trainings sauber funktioniert (kohya-ss selbst
+beenden vs. nur den Fortschritt ignorieren). **Weiterhin keine
+Implementierung** — laut `brainstorming`-Skill erst vollständiges
+Design/Spec + User-Freigabe, dann `writing-plans`, bevor hier Code
+entsteht; diese Notiz ist der Zwischenstand dieses Prozesses, kein
+fertiges Spec.
+
+## ComfyUI Workflow-Engine (geplant, 2026-09-16 — noch keine Implementierung)
+
+**Ziel laut User:** bessere Bild-/Video-Ausgabequalität, nicht nur mehr
+Optionen. **Priorität entschieden (User, 2026-09-16):** erst eine
+wiederverwendbare Workflow-Template-Schicht bauen, dann die eigentlichen
+Qualitäts-Features als Templates darauf.
+
+**Problem, das die Template-Schicht löst:** Jede Generierungs-"Lane"
+(`checkpoint_txt2img`, `flux_txt2img`, `flux2_klein_txt2img`,
+`flux2_klein_edit`, Upscale separat) ist heute eine von Hand geschriebene
+Rust-Funktion, die den ComfyUI-Graphen Node für Node neu zusammenbaut
+(`core/src/pipeline/mod.rs`). Eine neue Lane = eine neue ~100-Zeilen-
+Funktion + eigene Tests; ein neues Qualitäts-Feature (Hi-Res-Fix,
+ControlNet, Face-Restore) müsste in jede bestehende Lane einzeln von Hand
+verdrahtet werden — die Wartungskosten multiplizieren sich mit jeder
+Kombination. Schon heute duplizieren sich Checkpoint-Load/Prompt-Encode/
+KSampler-Verdrahtung leicht abgewandelt über vier Funktionen hinweg — eine
+reale, bereits sichtbare Redundanz, unabhängig von neuen Features.
+
+**Inspiration, keine Kopie (siehe unten):** Ein paralleles lokales
+AI-Studio-Projekt (`E:\locally-uncensored`, AGPL-3.0 — Idee übernommen,
+kein Code kopiert) hat einen Workflow-Graphen + eine "Parameter-Map" —
+ein fester Satz generischer Achsen (Prompt, Seed, Steps, CFG, Größe,
+Sampler, Input-Bild, Frames/FPS, Model-Loader), auf `{Node-Id,
+Input-Key}`-Paare in einem konkreten Graphen abgebildet. Eine neue Lane
+wird dort zur Konfigurations-Aktion (Graph importieren + Felder mappen),
+nicht zu neuem Pipeline-Code. AIWM soll **nicht** roh importierte
+Workflow-JSON-Dateien aus dem ComfyUI-Editor unterstützen — das würde genau
+die Node-Graph-Komplexität zurückbringen, die die App bewusst vor dem
+Nutzer versteckt (siehe Story Studio: "keine neuen Nodes, keine neue
+Capability" für Bildgenerierung). Was portiert wird, ist die **Idee**:
+Graph-Bau in kleine, benannte, komponierbare, einzeln getestete Fragmente
+zerlegen (Checkpoint laden, Prompt encodieren, KSampler-Pass,
+Latent-Upscale, ControlNet anwenden, Face-Restore-Pass, LoRA-Kette — Letzteres
+existiert als `splice_loras` bereits genau in dieser Form) statt als
+Rust-Idee 1:1 aus einer anderen Codebase übernommen.
+
+**Architektur-Skizze (Plan, nicht gebaut):**
+- **Phase A — Fragment-Schicht:** bestehende Graph-Funktionen refactorn,
+  sodass sie aus wiederverwendbaren Fragment-Buildern komponiert werden
+  statt jede ihr eigenes Boilerplate zu duplizieren. Ein "Recipe" = eine
+  geordnete Fragment-Liste + ein Parameter-Struct; das Zusammensetzen
+  erzeugt das finale Graph-JSON — genau das Muster, das `splice_loras`
+  heute schon für die eine Fragment-Art (LoRA-Kette) vormacht, nur
+  verallgemeinert.
+- **Phase B — Qualitäts-Rezepte als Fragmente**, in dieser Reihenfolge
+  (steigender Aufwand):
+  1. **Hi-Res-Fix / Mehrpass-Refinement** (niedrig auflösend generieren →
+     Latent-Upscale → zweiter Low-Denoise-KSampler-Pass) — kein neues
+     externes Modell nötig, gut verstandene SDXL/Flux-Technik, guter
+     erster Test ob sich die Fragment-Schicht lohnt.
+  2. **Face-Restoration** als Post-Process — ein dediziertes, kleines
+     Modell/Node, überschaubarer Umfang, gutes Aufwand/Nutzen-Verhältnis.
+  3. **ControlNet/Region-Conditioning** (Referenzbild-gesteuerte Pose/
+     Tiefe/Kanten-Konditionierung) — braucht einen neuen Modell-Download-
+     Weg (ControlNet-Checkpoints) und Preprocessor-Nodes, größter Aufwand,
+     zuletzt.
+
+**Ausdrücklich noch offen, bewusst nicht vorab entschieden:** welches
+ControlNet-Preprocessor-Node-Pack (braucht echte Recherche, gleiche
+Disziplin wie jede bisherige Custom-Node-Entscheidung diese Session); ob
+Hi-Res-Fix ein Per-Generation-Toggle oder eine globale Qualitätsstufe wird;
+der reale VRAM-/Zeit-Mehrkosten eines zweiten KSampler-Passes auf einer
+16-GB-Karte (an echter Hardware messen, nicht annehmen — gleiche Disziplin
+wie die VRAM-Kalibrierung oben); ob Face-Restore/ControlNet gleich gut für
+SDXL und Flux funktionieren oder pro Familie unterschiedliche Node-Packs
+brauchen (gleiche SDXL-vs-Flux-Reifegrad-Frage wie bei Story Studios
+IP-Adapter-Arbeit). **Keine Implementierung** — wie beim Trainings-
+Orchestrator erst vollständiges Design/Spec + User-Freigabe vor Code.
+
+## Ideen aus `locally-uncensored` (recherchiert 2026-09-16, kein Code übernommen)
+
+Ein paralleles lokales AI-Studio-Projekt (`E:\locally-uncensored`, AGPL-3.0)
+wurde auf UX-/Architektur-Ideen durchsucht ("Ideen/Layouts klauen, nie
+Code" — AGPL-Lizenz macht Code-Kopieren ohnehin heikel). Ergebnis unten;
+**LoRA-Stack-UI wird direkt umgesetzt** (siehe eigener Abschnitt), der Rest
+ist Backlog für spätere Slices, absteigend nach Aufwand geordnet:
+
+- **LoRA-Stack mit Pro-Item-Stärke-Regler** — ✅ wird jetzt gebaut, siehe
+  unten. Direkter, bereits heute existierender Lücke: `core::pipeline`
+  unterstützt eine LoRA-Kette mit Pro-LoRA-Stärke seit längerem
+  (`LoraSpec`/`splice_loras`), aber kein UI-Tab verdrahtet das je.
+- **Hardware-Fit-Badge im Discover-Tab** — Modelle nach VRAM-Fit in Tiers
+  einsortieren (passt/knapp/zu groß) statt nur einer binären Warnung;
+  kleiner, in sich geschlossener Slice.
+- **Kompaktions-Records für lange Chats** — statt eines einzigen
+  "Zusammenfassung ab Index N", mehrere stapelbare Kompaktions-Einträge,
+  jeweils an die **ID** der letzten ersetzten Nachricht verankert (überlebt
+  Edits/Deletes), mit Vorher/Nachher-Tokenzahl. AIWM hat aktuell keinerlei
+  Context-Folding für lange Chats — echte Lücke, aber ein eigener,
+  nicht-trivialer Slice (Chat-Verlauf-Datenmodell betroffen).
+- **Cross-Session-Memory-Store** — ein von der einzelnen Chat-Session
+  getrennter, persistenter Fakten-Speicher (typisiert, Keyword-Retrieval),
+  den jede neue Session mit einbezieht. Eigener Slice, braucht eigenes
+  Datenmodell + Retrieval-Strategie-Entscheidung.
+- **Personas** — einfache Presets (Name/Icon/System-Prompt), global aktiv +
+  Override pro Chat. Klein genug für einen direkten Port, wenn Chat mal
+  wieder dran ist.
+- **Chatbot-Import (ChatGPT/Claude/Gemini-Export) → RAG statt Chat-Verlauf**
+  — importierter Fremd-Verlauf wird als durchsuchbarer Kontext behandelt,
+  nicht als eigene Chat-Session. Braucht AIWMs Dokument-RAG-Pipeline als
+  Ziel, die schon existiert (`documents`-Tabelle) — realistischer Slice,
+  sobald Import gewünscht ist.
+- **Angedockte Galerie/3-Spalten-Layout** — ein einklappbares
+  Galerie-Panel neben dem Generierungs-Canvas (statt eines separaten
+  Result-Panels) bzw. ein 3-Spalten-Layout für den Agents-Tab
+  (Transkript + Datei-Baum + Vorschau + Plan/Approve-Karte). Reines
+  Layout-Refactoring, kein neues Backend nötig.
+- **A/B-Vergleichsmodus im Chat** — zwei Modelle parallel streamen lassen,
+  eigene Token/Zeit/Durchsatz-Stats pro Spalte. Eigener Slice.
+- **Inline-Freigabe-Leiste + geschichtetes Permission-Modell für Agents**
+  — Tool-Aufrufe nicht-modal direkt im Transkript freigeben/ablehnen, mit
+  Kategorie-Filter → Pro-Session-Override → Pro-Aufruf-Freigabe als drei
+  Schichten. Passt zum bestehenden Agents-Tab, eigener Slice.
+- **Backup/Restore-Trias gegen Updater-Datenverlust** — debounced +
+  Intervall + `beforeunload`-Backup kombiniert. Nur relevant, falls AIWM
+  je Datenverlust durch den eigenen Update-Mechanismus beobachtet — aktuell
+  kein bekanntes Problem, daher niedrige Priorität.
+- **Telefon-/Tunnel-Fernzugriff** — **verworfen**, widerspricht AIWMs
+  Loopback-only/Offline-first-Grundsatz (ADR-008/009) direkt.
+
+## LoRA-Stack-UI (2026-09-16, in Arbeit)
+
+Schließt die oben genannte Lücke direkt: `core::pipeline::LoraSpec`/
+`splice_loras` existieren bereits und werden von `checkpoint_txt2img`/
+`flux_txt2img` genutzt, aber kein UI-Tab (`Image.tsx`/`Video.tsx`) exponiert
+das je — ein Nutzer kann heute keine LoRA auswählen, geschweige denn
+mehrere stapeln. Baut eine Stack-UI (aktive LoRAs als Liste mit
+Pro-Item-Stärke-Regler 0–2, Default-Stärke 0.8, Rescan-Button gegen den
+Modell-Store, ausgeblendet für Checkpoint-Familien ohne LoRA-Seam) nach dem
+in `locally-uncensored` beobachteten (nicht kopierten) Muster.
 
 ## Offen / später zu entscheiden
 - App-Selbst-Update offline (manueller Installer + Signaturprüfung angenommen)
