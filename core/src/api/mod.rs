@@ -1174,6 +1174,82 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn cleanup_outputs_over_http_applies_a_freshly_saved_policy() {
+        let (app, _tmp) = test_app().await;
+        let outputs = app.paths.outputs_dir();
+        std::fs::create_dir_all(&outputs).unwrap();
+        let stale = outputs.join("job-stale.png");
+        std::fs::write(&stale, vec![0u8; 500]).unwrap();
+        let ancient = std::time::SystemTime::now() - std::time::Duration::from_secs(60 * 86_400);
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&stale)
+            .unwrap()
+            .set_modified(ancient)
+            .unwrap();
+
+        let server = ApiServer::bind(app, SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
+            .await
+            .unwrap();
+        let base = format!("http://{}", server.addr);
+        let http = reqwest::Client::new();
+
+        // No policy saved yet -- the endpoint must not touch anything.
+        let first: serde_json::Value = http
+            .post(format!("{base}/outputs/cleanup"))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(first["deleted_files"], 0);
+        assert!(stale.exists());
+
+        // Save a retention policy through the same `PUT /config` the Settings
+        // UI uses (a `ConfigUpdate`, not the full `Config` -- `paths` is plain
+        // strings there, not `GET /config`'s `Option<PathBuf>` shape), then
+        // trigger cleanup again -- no restart in between.
+        let cfg: serde_json::Value = http
+            .get(format!("{base}/config"))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let update = serde_json::json!({
+            "store_path": cfg["store_path"],
+            "offline_mode": cfg["offline_mode"],
+            "vram_budget_mb": cfg["vram_budget_mb"],
+            "llama": cfg["llama"],
+            "comfyui": cfg["comfyui"],
+            "models": cfg["models"],
+            "paths": { "outputs_path": "", "runtimes_path": "", "cache_path": "" },
+            "retention": { "max_age_days": 30, "max_total_mb": 0 },
+        });
+        let saved = http
+            .put(format!("{base}/config"))
+            .json(&update)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(saved.status(), 200, "{:?}", saved.text().await);
+
+        let second: serde_json::Value = http
+            .post(format!("{base}/outputs/cleanup"))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(second["deleted_files"], 1);
+        assert_eq!(second["freed_bytes"], 500);
+        assert!(!stale.exists());
+    }
+
+    #[tokio::test]
     async fn tags_registry_status_and_hf_token_over_http() {
         use crate::db::NewModel;
 

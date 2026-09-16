@@ -200,6 +200,30 @@ impl App {
             offline.clone(),
         ));
 
+        // Best-effort startup sweep (nice-to-have alongside the manual
+        // "clean up now" button + a periodic timer isn't wired up separately):
+        // only runs when a retention policy is actually configured, and never
+        // blocks or fails startup either way.
+        let retention_policy = config.retention.to_policy();
+        if retention_policy.is_active() {
+            let outputs_dir = paths.outputs_dir();
+            tokio::spawn(async move {
+                let result = tokio::task::spawn_blocking(move || {
+                    crate::cleanup::outputs::sweep(&outputs_dir, retention_policy)
+                })
+                .await;
+                match result {
+                    Ok(r) if r.deleted_files > 0 => tracing::info!(
+                        deleted = r.deleted_files,
+                        freed_bytes = r.freed_bytes,
+                        "startup output-retention sweep"
+                    ),
+                    Ok(_) => {}
+                    Err(e) => tracing::warn!(error = %e, "startup output-retention sweep panicked"),
+                }
+            });
+        }
+
         Ok(Self {
             paths,
             config,
@@ -391,6 +415,61 @@ mod tests {
             app.comfyui.output_dir(),
             app.paths.comfyui_data_dir().join("output")
         );
+    }
+
+    #[tokio::test]
+    async fn load_runs_a_best_effort_startup_retention_sweep_when_configured() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = AppPaths::rooted(tmp.path().join("aiwm"));
+        std::fs::create_dir_all(paths.root()).unwrap();
+        std::fs::write(
+            paths.config_file(),
+            "[retention]\nmax_age_days = 30\nmax_total_mb = 0\n",
+        )
+        .unwrap();
+
+        let outputs = paths.outputs_dir();
+        std::fs::create_dir_all(&outputs).unwrap();
+        let stale = outputs.join("job-ancient.png");
+        std::fs::write(&stale, b"old bytes").unwrap();
+        let ancient = std::time::SystemTime::now() - std::time::Duration::from_secs(90 * 86_400);
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&stale)
+            .unwrap()
+            .set_modified(ancient)
+            .unwrap();
+
+        let _app = App::load(paths).await.unwrap();
+        // The sweep is spawned in the background -- give it a moment.
+        for _ in 0..50 {
+            if !stale.exists() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        assert!(!stale.exists(), "startup sweep should have removed it");
+    }
+
+    #[tokio::test]
+    async fn load_never_touches_outputs_when_retention_is_not_configured() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = AppPaths::rooted(tmp.path().join("aiwm"));
+        let outputs = paths.outputs_dir();
+        std::fs::create_dir_all(&outputs).unwrap();
+        let file = outputs.join("job-a.png");
+        std::fs::write(&file, b"bytes").unwrap();
+        let ancient = std::time::SystemTime::now() - std::time::Duration::from_secs(365 * 86_400);
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&file)
+            .unwrap()
+            .set_modified(ancient)
+            .unwrap();
+
+        let _app = App::load(paths).await.unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        assert!(file.exists(), "no policy configured -- nothing should move");
     }
 
     #[tokio::test]

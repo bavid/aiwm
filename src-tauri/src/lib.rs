@@ -331,6 +331,15 @@ async fn storage_report(
     to_ipc(handlers::storage_report(&app).await)
 }
 
+/// `POST /outputs/cleanup`'s Tauri counterpart — apply the configured output
+/// retention policy right now (the Settings "Clean up now" button).
+#[tauri::command]
+async fn cleanup_outputs(
+    app: tauri::State<'_, Arc<App>>,
+) -> Result<aiwm_core::cleanup::SweepResult, String> {
+    to_ipc(handlers::cleanup_outputs(&app).await)
+}
+
 #[tauri::command]
 async fn model_tags(
     app: tauri::State<'_, Arc<App>>,
@@ -568,6 +577,7 @@ fn try_run() -> anyhow::Result<()> {
             benchmark_model,
             upgrade_check,
             storage_report,
+            cleanup_outputs,
             delete_model,
             unload_model,
             model_tags,

@@ -51,6 +51,11 @@ pub struct Config {
     /// runtime installs, cache). `None` = the portable default next to the
     /// app (see `crate::paths`).
     pub paths: PathsConfig,
+    /// Output-retention policy (age / total-size caps) for `<outputs_dir>`.
+    /// Unlike most of this struct, this is *not* startup-only: both the
+    /// manual "clean up now" trigger and an optional startup sweep re-read
+    /// `config.toml` fresh, so a saved change applies immediately.
+    pub retention: RetentionConfig,
 }
 
 /// Upper bound for `[comfyui].reserve_vram_mb` — reserving more than this on a
@@ -167,6 +172,29 @@ impl LlamaConfig {
     }
 }
 
+/// The `[retention]` table — automatic cleanup of `<outputs_dir>` (images and
+/// video clips), a Settings control + a manual "clean up now" trigger. Either
+/// field `0` disables that rule; both `0` (the default) disables retention
+/// entirely, matching the historical "outputs live forever" behaviour.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct RetentionConfig {
+    /// Delete output files last modified more than this many days ago.
+    pub max_age_days: u64,
+    /// Keep the outputs folder's total size under this many MB, oldest
+    /// deleted first, applied after the age rule.
+    pub max_total_mb: u64,
+}
+
+impl RetentionConfig {
+    pub fn to_policy(self) -> crate::cleanup::RetentionPolicy {
+        crate::cleanup::RetentionPolicy {
+            max_age_days: self.max_age_days,
+            max_total_mb: self.max_total_mb,
+        }
+    }
+}
+
 /// The `[models]` table — how `Auto` picks a model for a role (Phase 6.6).
 /// Applied at startup; a change needs a restart.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -207,6 +235,7 @@ impl Default for Config {
             comfyui: ComfyConfig::default(),
             models: ModelsConfig::default(),
             paths: PathsConfig::default(),
+            retention: RetentionConfig::default(),
         }
     }
 }
@@ -650,6 +679,37 @@ mod tests {
             Some(Path::new("E:\\fast\\runtimes"))
         );
         assert_eq!(reloaded.paths.cache_path, None);
+    }
+
+    #[test]
+    fn config_without_a_retention_table_still_loads_disabled() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = AppPaths::rooted(tmp.path());
+        std::fs::write(paths.config_file(), "vram_budget_mb = 8000\n").unwrap();
+
+        let cfg = Config::load(&paths).unwrap();
+        assert_eq!(cfg.retention, RetentionConfig::default());
+        assert!(!cfg.retention.to_policy().is_active());
+    }
+
+    #[test]
+    fn retention_table_round_trips_through_save_and_read() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = AppPaths::rooted(tmp.path());
+        let cfg = Config {
+            retention: RetentionConfig {
+                max_age_days: 30,
+                max_total_mb: 20_000,
+            },
+            ..Config::default()
+        };
+
+        cfg.save(&paths).unwrap();
+        let reloaded = Config::read_from(&paths).unwrap();
+
+        assert_eq!(reloaded.retention.max_age_days, 30);
+        assert_eq!(reloaded.retention.max_total_mb, 20_000);
+        assert!(reloaded.retention.to_policy().is_active());
     }
 
     #[test]

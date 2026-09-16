@@ -378,6 +378,7 @@ const CONFIG: AnyRecord = {
   comfyui: { vram_mode: "auto", reserve_vram_mb: 0, extra_args: "" },
   models: { auto_preference: "balanced" },
   paths: { outputs_path: null, runtimes_path: null, cache_path: null },
+  retention: { max_age_days: 0, max_total_mb: 0 },
 };
 
 const KNOWN_MOCK: AnyRecord[] = [
@@ -717,6 +718,17 @@ export function installDevMock(): void {
         const i = DOCUMENTS.findIndex((d) => d.id === a.id);
         if (i >= 0) DOCUMENTS.splice(i, 1);
         return null;
+      }
+      case "cleanup_outputs": {
+        // Stand-in for `cleanup::outputs::sweep` -- no real filesystem to
+        // scan here, so just report a plausible result reflecting whether a
+        // policy is actually configured (mirrors the real no-op-until-saved
+        // behavior for the "clean up now" button).
+        const retention = (CONFIG.retention ?? {}) as AnyRecord;
+        const active = Number(retention.max_age_days ?? 0) > 0 || Number(retention.max_total_mb ?? 0) > 0;
+        return active
+          ? { deleted_files: 2, freed_bytes: 734_003_200, errors: [] }
+          : { deleted_files: 0, freed_bytes: 0, errors: [] };
       }
       case "storage_report": {
         const kindOf = (m: AnyRecord): string => {

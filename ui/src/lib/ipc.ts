@@ -70,6 +70,19 @@ export interface PathsUpdate {
   cache_path: string;
 }
 
+/** The `[retention]` table — automatic cleanup of `<outputs_dir>`. Either
+ *  field `0` disables that rule; both `0` (the default) disables retention
+ *  entirely. Unlike most of `AppConfig`, this applies immediately — no
+ *  restart needed — both the manual "clean up now" trigger and an optional
+ *  startup sweep re-read `config.toml` fresh. */
+export interface RetentionConfig {
+  /** Delete output files last modified more than this many days ago. */
+  max_age_days: number;
+  /** Keep the outputs folder's total size under this many MB, oldest deleted
+   *  first, applied after the age rule. */
+  max_total_mb: number;
+}
+
 /** The full config.toml as the core sees it. */
 export interface AppConfig {
   store_path: string;
@@ -82,6 +95,7 @@ export interface AppConfig {
   comfyui: ComfyConfig;
   models: ModelsConfig;
   paths: PathsConfig;
+  retention: RetentionConfig;
 }
 
 /** The user-editable subset the Settings tab sends back. */
@@ -93,6 +107,7 @@ export interface ConfigUpdate {
   comfyui: ComfyConfig;
   models: ModelsConfig;
   paths: PathsUpdate;
+  retention: RetentionConfig;
 }
 
 export interface GpuProcess {
@@ -372,6 +387,17 @@ export interface DeleteOutcome {
 }
 
 export const storageReport = () => invoke<StorageReport>("storage_report");
+
+/** What one output-retention sweep did (`POST /outputs/cleanup`). */
+export interface SweepResult {
+  deleted_files: number;
+  freed_bytes: number;
+  errors: string[];
+}
+/** Apply the currently-saved retention policy to `<outputs_dir>` right now —
+ *  the Settings "Clean up now" button. A no-op (`deleted_files: 0`) when no
+ *  policy is configured (both fields `0`); save one via `saveConfig` first. */
+export const cleanupOutputs = () => invoke<SweepResult>("cleanup_outputs");
 /** Delete a model — its file, links and DB rows. Permanent; refused while
  *  the model is loaded. */
 export const deleteModel = (id: string) => invoke<DeleteOutcome>("delete_model", { id });
