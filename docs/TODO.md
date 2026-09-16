@@ -459,7 +459,7 @@ Assembly (Auswahl aus Scenes+Images fürs Bündeln/Export). Geplante Phasen:
 LoRA/ControlNet-Stretch.
 
 **Phase 1 (text + plain image, keine Konsistenz-Maschinerie) ist gebaut:**
-- Datenmodell komplett: `core/migrations/0012_stories.sql` +
+- Datenmodell komplett: `core/migrations/0013_stories.sql` +
   `core/src/db/stories/{mod,characters,npcs,locations,scenes,scene_images}.rs`
   — Story/Character/Npc/Location/Scene/SceneImage, normalisierte
   `character_relationships` und ein append-only `character_logs` (auto-append
