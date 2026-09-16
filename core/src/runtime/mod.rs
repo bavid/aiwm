@@ -19,6 +19,7 @@ mod llamacpp;
 mod registry;
 mod supervisor;
 pub mod tts;
+mod version_check;
 
 pub use colibri::install as colibri_install;
 pub use colibri::{
@@ -34,6 +35,7 @@ pub use llamacpp::{GenerationEvent, InstallState, LlamaCppAdapter, LlamaServerOp
 pub use registry::RuntimeRegistry;
 pub use supervisor::{RuntimeSupervisor, SupervisorState};
 pub use tts::TtsAdapter;
+pub use version_check::{check_versions, ToolVersionCheck, UpdateStatus};
 
 use std::net::{Ipv4Addr, TcpListener};
 use std::path::PathBuf;
