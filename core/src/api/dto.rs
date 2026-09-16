@@ -127,22 +127,105 @@ pub struct SetArchivedDto {
 }
 
 /// Body for `PUT /jobs/{id}/dataset-frames/{frame_id}` — a curator's edit to
-/// one frame. Both fields optional so the curation UI can send just the one
+/// one frame. Every field optional so the curation UI can send just the one
 /// thing that changed (a caption edit vs. an exclude toggle) rather than the
 /// whole row every time.
+///
+/// `restore: true` clears a rejection, putting an auto-dropped frame back into
+/// the kept set. The clip bounds are three-valued: absent keeps the stored
+/// bound, an explicit `null` clears it (back to the clip's natural start/end),
+/// a number sets it — see [`deserialize_optional_nullable`].
 #[derive(Debug, Clone, Deserialize)]
 pub struct UpdateDatasetFrameDto {
     #[serde(default)]
     pub caption: Option<String>,
     #[serde(default)]
     pub excluded: Option<bool>,
+    #[serde(default)]
+    pub restore: Option<bool>,
+    #[serde(default, deserialize_with = "deserialize_optional_nullable")]
+    pub clip_start_secs: Option<Option<f64>>,
+    #[serde(default, deserialize_with = "deserialize_optional_nullable")]
+    pub clip_end_secs: Option<Option<f64>>,
 }
 
-/// Body for `POST /jobs/{id}/dataset-export` — write the curated dataset to
-/// `dest_dir` as `NNNN.png` + `NNNN.txt` pairs.
+/// Tells an absent JSON field apart from an explicit `null` one.
+///
+/// `#[serde(default)]` alone is not enough: serde hands a `null` to
+/// `Option<Option<T>>`'s own impl, which answers the *outer* `None` — exactly
+/// what an absent field produces, so "clear this bound" would be
+/// indistinguishable from "leave it alone". serde only calls a
+/// `deserialize_with` when the key is actually present, so wrapping the inner
+/// `Option<T>` here keeps the two apart: absent -> `None` (from `default`),
+/// `null` -> `Some(None)`, a value -> `Some(Some(v))`.
+fn deserialize_optional_nullable<'de, D, T>(
+    d: D,
+) -> std::result::Result<Option<Option<T>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<T>::deserialize(d).map(Some)
+}
+
+/// Body for `POST /jobs/{id}/dataset-export` and `POST /datasets/{id}/export` —
+/// write the curated dataset to `dest_dir` as `NNNN.<ext>` + `NNNN.txt` pairs.
+///
+/// `caption_order` is new in this slice; the job-keyed route predates it and
+/// older clients that omit it keep the prose-first wording they had.
 #[derive(Debug, Clone, Deserialize)]
 pub struct ExportDatasetDto {
     pub dest_dir: String,
+    #[serde(default = "default_caption_order")]
+    pub caption_order: crate::capability::dataset::CaptionOrder,
+}
+
+fn default_caption_order() -> crate::capability::dataset::CaptionOrder {
+    crate::capability::dataset::CaptionOrder::ProseFirst
+}
+
+/// Body for `PUT /datasets/{id}` — today only the trigger word is editable.
+#[derive(Debug, Clone, Deserialize)]
+pub struct UpdateDatasetDto {
+    #[serde(default)]
+    pub trigger_word: Option<String>,
+}
+
+/// Body for `POST /datasets/{id}/concepts` and `PUT /concepts/{id}` — one
+/// concept the dataset teaches (spec 3A).
+#[derive(Debug, Clone, Deserialize)]
+pub struct ConceptBodyDto {
+    pub name: String,
+    pub token: String,
+    #[serde(default)]
+    pub description: String,
+}
+
+/// Body for `POST`/`DELETE /concepts/{id}/frames` — the frames to attach to
+/// or detach from one concept ("Alle im Set" sends the whole visible page).
+#[derive(Debug, Clone, Deserialize)]
+pub struct ConceptFramesDto {
+    pub frame_ids: Vec<String>,
+}
+
+/// Response of `POST /concepts/{id}/frames`: how many of the requested frames
+/// were newly attached (the rest were already assigned or belong to another
+/// dataset).
+#[derive(Debug, Clone, Serialize)]
+pub struct AssignedDto {
+    pub requested: usize,
+    pub attached: u64,
+}
+
+/// `GET /datasets/{id}/concepts` — a concept plus its frame count and a
+/// warning when its token reads as an ordinary word the base model already
+/// knows.
+#[derive(Debug, Clone, Serialize)]
+pub struct ConceptSummaryDto {
+    #[serde(flatten)]
+    pub concept: crate::db::DatasetConcept,
+    pub frame_count: usize,
+    pub token_warning: Option<String>,
 }
 
 /// Body for `POST /sessions/{id}/documents` — attach a document to a chat
@@ -660,4 +743,47 @@ pub struct LocalApiStatusDto {
     /// `http://127.0.0.1:<core_api_port>/v1` — what an external tool points at.
     pub endpoint: String,
     pub token_set: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The clip-bound fields of [`UpdateDatasetFrameDto`] are three-valued, and
+    /// the difference between "keep" and "clear" is the whole point of the
+    /// clip in/out editor: a curator who clears the out-point must get the
+    /// clip's natural end back, not silently keep the old trim.
+    #[test]
+    fn clip_bounds_distinguish_absent_null_and_a_number() {
+        let absent: UpdateDatasetFrameDto = serde_json::from_str("{}").unwrap();
+        assert_eq!(absent.clip_start_secs, None);
+        assert_eq!(absent.clip_end_secs, None);
+
+        let cleared: UpdateDatasetFrameDto =
+            serde_json::from_str(r#"{"clip_end_secs": null}"#).unwrap();
+        assert_eq!(cleared.clip_start_secs, None, "absent stays absent");
+        assert_eq!(cleared.clip_end_secs, Some(None), "explicit null = clear");
+
+        let set: UpdateDatasetFrameDto =
+            serde_json::from_str(r#"{"clip_start_secs": 1.5}"#).unwrap();
+        assert_eq!(set.clip_start_secs, Some(Some(1.5)));
+    }
+
+    /// The job-keyed export route predates `caption_order`; a body without it
+    /// must still deserialize, prose-first.
+    #[test]
+    fn export_body_defaults_to_prose_first() {
+        let body: ExportDatasetDto = serde_json::from_str(r#"{"dest_dir": "E:\\out"}"#).unwrap();
+        assert_eq!(
+            body.caption_order,
+            crate::capability::dataset::CaptionOrder::ProseFirst
+        );
+        let tags: ExportDatasetDto =
+            serde_json::from_str(r#"{"dest_dir": "E:\\out", "caption_order": "tags_first"}"#)
+                .unwrap();
+        assert_eq!(
+            tags.caption_order,
+            crate::capability::dataset::CaptionOrder::TagsFirst
+        );
+    }
 }

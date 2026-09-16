@@ -13,11 +13,11 @@ use serde::Deserialize;
 
 use super::dto::{
     AddSceneImageDto, AgentMessageDto, AgentPermissionDto, AttachDocumentDto, AttachExternalDto,
-    CharacterBodyDto, DetachEngineDto, ExportDatasetDto, LaunchExternalDto, LocationBodyDto,
-    NewAgentDto, NewRelationshipDto, NewSessionDto, NewVoiceIdentityDto, NpcBodyDto,
-    OpenAgentSessionDto, RenameModelDto, RenameSessionDto, SceneBodyDto, SceneDetailDto,
-    SetArchivedDto, SetInventoryDto, SetReferenceJobDto, SetRolesDto, SetTagsDto, SetTokenDto,
-    StoryBodyDto, SubmitJobDto, UpdateDatasetFrameDto,
+    CharacterBodyDto, ConceptBodyDto, ConceptFramesDto, DetachEngineDto, ExportDatasetDto,
+    LaunchExternalDto, LocationBodyDto, NewAgentDto, NewRelationshipDto, NewSessionDto,
+    NewVoiceIdentityDto, NpcBodyDto, OpenAgentSessionDto, RenameModelDto, RenameSessionDto,
+    SceneBodyDto, SceneDetailDto, SetArchivedDto, SetInventoryDto, SetReferenceJobDto, SetRolesDto,
+    SetTagsDto, SetTokenDto, StoryBodyDto, SubmitJobDto, UpdateDatasetDto, UpdateDatasetFrameDto,
 };
 use super::handlers;
 use crate::db::JobFilter;
@@ -107,6 +107,31 @@ pub fn router(app: Arc<App>) -> Router {
             get(dataset_frame_image),
         )
         .route("/jobs/{id}/dataset-export", post(export_dataset))
+        .route("/captioners", get(list_captioners))
+        .route("/datasets", get(list_datasets))
+        .route(
+            "/datasets/{id}",
+            get(get_dataset).put(update_dataset).delete(delete_dataset),
+        )
+        .route(
+            "/datasets/{id}/frames",
+            get(list_dataset_frames_for_dataset),
+        )
+        .route(
+            "/datasets/{id}/frames/{frame_id}/image",
+            get(dataset_frame_image_by_dataset),
+        )
+        .route("/datasets/{id}/frame-concepts", get(frame_concept_map))
+        .route(
+            "/datasets/{id}/concepts",
+            get(list_concepts).post(create_concept),
+        )
+        .route("/datasets/{id}/export", post(export_dataset_by_id))
+        .route("/concepts/{id}", put(update_concept).delete(delete_concept))
+        .route(
+            "/concepts/{id}/frames",
+            post(assign_concept).delete(unassign_concept),
+        )
         .route("/models", get(list_models).post(import_model))
         .route("/models/known", get(known_models))
         .route("/models/stacks", get(model_stacks))
@@ -697,13 +722,12 @@ async fn clean_audio(
     Ok(Json(serde_json::json!({ "duration_secs": duration_secs })))
 }
 
-/// Serve one curated frame's still image. Loopback only (ADR-008); the
-/// curation grid points an `<img>` here, same shape as `job_output`.
-async fn dataset_frame_image(
-    State(app): AppState,
-    Path((_job_id, frame_id)): Path<(String, String)>,
-) -> Result<Response, ApiError> {
-    let Some(path) = handlers::dataset_frame_image_path(&app, &frame_id).await? else {
+/// Serve one curated frame's still image by id. Loopback only (ADR-008); the
+/// curation grid points an `<img>` here, same shape as `job_output`. Shared by
+/// the job-keyed and the dataset-keyed route — only the id in the path
+/// matters, the prefix is what the caller happens to have on hand.
+async fn serve_dataset_frame_image(app: &crate::App, frame_id: &str) -> Result<Response, ApiError> {
+    let Some(path) = handlers::dataset_frame_image_path(app, frame_id).await? else {
         return Ok((
             StatusCode::NOT_FOUND,
             Json(serde_json::json!({ "error": "no such frame" })),
@@ -724,6 +748,22 @@ async fn dataset_frame_image(
         bytes,
     )
         .into_response())
+}
+
+async fn dataset_frame_image(
+    State(app): AppState,
+    Path((_job_id, frame_id)): Path<(String, String)>,
+) -> Result<Response, ApiError> {
+    serve_dataset_frame_image(&app, &frame_id).await
+}
+
+/// The dataset-keyed twin — what the curation grid uses now that a frame's
+/// `job_id` can be `None` (a frame outlives its prep job).
+async fn dataset_frame_image_by_dataset(
+    State(app): AppState,
+    Path((_dataset_id, frame_id)): Path<(String, String)>,
+) -> Result<Response, ApiError> {
+    serve_dataset_frame_image(&app, &frame_id).await
 }
 
 async fn list_dataset_frames(
@@ -751,6 +791,119 @@ async fn export_dataset(
     Ok(Json(
         handlers::export_dataset(&app, &id, &body.dest_dir).await?,
     ))
+}
+
+async fn list_captioners(
+    State(app): AppState,
+) -> Result<Json<Vec<crate::capability::dataset::CaptionerStatus>>, ApiError> {
+    Ok(Json(handlers::list_captioners(&app).await?))
+}
+
+async fn list_datasets(State(app): AppState) -> Result<Json<Vec<crate::db::Dataset>>, ApiError> {
+    Ok(Json(handlers::list_datasets(&app).await?))
+}
+
+async fn get_dataset(State(app): AppState, Path(id): Path<String>) -> Result<Response, ApiError> {
+    match handlers::get_dataset(&app, &id).await? {
+        Some(dataset) => Ok(Json(dataset).into_response()),
+        None => Ok((
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "no such dataset" })),
+        )
+            .into_response()),
+    }
+}
+
+async fn update_dataset(
+    State(app): AppState,
+    Path(id): Path<String>,
+    Json(body): Json<UpdateDatasetDto>,
+) -> Result<Json<crate::db::Dataset>, ApiError> {
+    Ok(Json(handlers::update_dataset(&app, &id, body).await?))
+}
+
+async fn delete_dataset(
+    State(app): AppState,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    handlers::delete_dataset(&app, &id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn list_dataset_frames_for_dataset(
+    State(app): AppState,
+    Path(id): Path<String>,
+) -> Result<Json<Vec<crate::db::DatasetFrame>>, ApiError> {
+    Ok(Json(
+        handlers::list_dataset_frames_for_dataset(&app, &id).await?,
+    ))
+}
+
+async fn frame_concept_map(
+    State(app): AppState,
+    Path(id): Path<String>,
+) -> Result<Json<std::collections::HashMap<String, Vec<String>>>, ApiError> {
+    Ok(Json(handlers::frame_concept_map(&app, &id).await?))
+}
+
+async fn list_concepts(
+    State(app): AppState,
+    Path(id): Path<String>,
+) -> Result<Json<Vec<super::dto::ConceptSummaryDto>>, ApiError> {
+    Ok(Json(handlers::list_concepts(&app, &id).await?))
+}
+
+async fn create_concept(
+    State(app): AppState,
+    Path(id): Path<String>,
+    Json(body): Json<ConceptBodyDto>,
+) -> Result<(StatusCode, Json<crate::db::DatasetConcept>), ApiError> {
+    Ok((
+        StatusCode::CREATED,
+        Json(handlers::create_concept(&app, &id, body).await?),
+    ))
+}
+
+async fn update_concept(
+    State(app): AppState,
+    Path(id): Path<String>,
+    Json(body): Json<ConceptBodyDto>,
+) -> Result<StatusCode, ApiError> {
+    handlers::update_concept(&app, &id, body).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn delete_concept(
+    State(app): AppState,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    handlers::delete_concept(&app, &id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn assign_concept(
+    State(app): AppState,
+    Path(id): Path<String>,
+    Json(body): Json<ConceptFramesDto>,
+) -> Result<Json<super::dto::AssignedDto>, ApiError> {
+    Ok(Json(handlers::assign_concept(&app, &id, body).await?))
+}
+
+async fn unassign_concept(
+    State(app): AppState,
+    Path(id): Path<String>,
+    Json(body): Json<ConceptFramesDto>,
+) -> Result<StatusCode, ApiError> {
+    handlers::unassign_concept(&app, &id, body).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn export_dataset_by_id(
+    State(app): AppState,
+    Path(id): Path<String>,
+    Json(body): Json<ExportDatasetDto>,
+) -> Result<Json<crate::capability::dataset::ExportSummary>, ApiError> {
+    Ok(Json(handlers::export_dataset_by_id(&app, &id, body).await?))
 }
 
 async fn list_models(State(app): AppState) -> Result<Json<Vec<crate::db::Model>>, ApiError> {

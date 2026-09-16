@@ -743,13 +743,83 @@ export async function downloadJobOutput(
   await saveJobOutput(job.id, dest);
 }
 
+/** Whether a dataset's items are still frames or whole (trimmed) clips. */
+export type DatasetMode = "frames" | "clips";
+
+/** How a composed caption is worded: tags first (Anime/SDXL) or prose first
+ *  (FLUX.2). Chosen per export, not per dataset. */
+export type CaptionOrder = "tags_first" | "prose_first";
+
+/** What a captioner produces: a sentence or a comma-separated tag list. */
+export type CaptionStyle = "prose" | "tags";
+
+/** A curation set as a first-class object — it outlives the `dataset_prep`
+ *  job that produced it (`prep_job_id` can dangle once that job is deleted). */
+export interface Dataset {
+  id: string;
+  name: string;
+  mode: DatasetMode;
+  source_root: string;
+  /** Prepended to every composed caption at export; `""` when unset. */
+  trigger_word: string;
+  prep_job_id: string | null;
+  /** Where it was last exported to, for the "again, same folder" button. */
+  export_dir: string | null;
+  created_at: string;
+}
+
+/** One entry of the captioner registry plus whether its files are in the
+ *  model library — what the "Beschreiben mit" dropdown filters on. */
+export interface Captioner {
+  id: string;
+  name: string;
+  style: CaptionStyle;
+  /** Model-library role its files are imported under. */
+  role: string;
+  /** 0 for a CPU-only onnxruntime tagger. */
+  vram_mb: number;
+  license: string;
+  /** Whether frame-X-vs-X+N temporal escalation applies on top of it. */
+  supports_escalation: boolean;
+  required_files: string[];
+  installed: boolean;
+}
+
+/** A concept the dataset teaches, with its frame count and the inline warning
+ *  shown when the token is an ordinary word the base model already knows. */
+export interface DatasetConcept {
+  id: string;
+  dataset_id: string;
+  name: string;
+  token: string;
+  description: string;
+  created_at: string;
+  frame_count: number;
+  token_warning: string | null;
+}
+
+/** How much of an "Alle im Set" batch actually landed — frames already
+ *  carrying the concept, and frames from another dataset, are skipped. */
+export interface AssignedSummary {
+  requested: number;
+  attached: number;
+}
+
 /** The parameters of a `job_type=dataset_prep` job — the dataset-prep
  *  pipeline (ingest -> ffmpeg frame extraction -> blur/duplicate filtering ->
- *  Florence-2/Qwen2.5-VL captioning). Only `root` is required; the rest fall
- *  back to the Rust side's own defaults. */
+ *  captioning). Only `root` is required; the rest fall back to the Rust
+ *  side's own defaults. */
 export interface DatasetPrepParams {
   /** Folder tree root — each immediate subfolder becomes a tag. */
   root: string;
+  /** Still frames (default) or whole clips as the dataset's items. */
+  mode?: DatasetMode;
+  /** Captioner id (see {@link listCaptioners}); `null` skips captioning. */
+  captioner?: string | null;
+  /** Clips mode: cap on frames sampled per clip for its caption. */
+  max_frames_per_clip?: number;
+  /** Clips mode: shorter clips are dropped. */
+  min_clip_secs?: number;
   /** Frames sampled per second of video (default ~1.5). */
   sample_fps?: number;
   /** Variance-of-Laplacian cutoff below which a frame is dropped as blurry. */
@@ -762,21 +832,33 @@ export interface DatasetPrepParams {
   context_offset?: number;
 }
 
-/** One frame from a `dataset_prep` job's curation set (`GET /jobs/{id}/
- *  dataset-frames`). */
+/** One item of a curation set (`GET /datasets/{id}/frames`) — a still frame,
+ *  or in clips mode the clip itself. */
 export interface DatasetFrame {
   id: string;
-  job_id: string;
-  /** The folder name this frame's source lived under. */
+  /** The prep job that produced it; `null` once that job has been deleted —
+   *  the item lives on with its dataset. */
+  job_id: string | null;
+  dataset_id: string | null;
+  /** The folder name this item's source lived under. */
   tag: string;
   source_path: string;
   frame_path: string;
   /** Position within the source video; `null` for a plain image file. */
   timestamp_secs: number | null;
   caption: string;
-  /** `"florence2"` | `"qwen2.5-vl"` | `""` (not captioned yet, or hand-edited). */
+  /** `"florence2"` | `"wd-eva02-tagger-v3"` | `"qwen2.5-vl"` | `""` (not
+   *  captioned yet, or hand-edited). */
   caption_engine: string;
   excluded: boolean;
+  /** `""` = kept; otherwise why the pipeline dropped it (`"blur"`, …). A
+   *  rejected item stays visible so the curator can put it back. */
+  rejection_reason: string;
+  /** Clips mode: the clip's own length; `null` for a still frame. */
+  duration_secs: number | null;
+  /** Curator-set in/out points; `null` means the clip's natural bound. */
+  clip_start_secs: number | null;
+  clip_end_secs: number | null;
   created_at: string;
 }
 
@@ -784,13 +866,31 @@ export const listDatasetFrames = (jobId: string) =>
   invoke<DatasetFrame[]>("list_dataset_frames", { jobId });
 
 /** URL the loopback core serves one curated frame's still image from — same
- *  shape as {@link jobOutputUrl}. */
+ *  shape as {@link jobOutputUrl}. Job-keyed, so only usable while the item
+ *  still has a `job_id`; prefer {@link datasetFrameImageUrlByDataset}. */
 export const datasetFrameImageUrl = (coreApiPort: number, jobId: string, frameId: string) =>
   `http://127.0.0.1:${coreApiPort}/jobs/${jobId}/dataset-frames/${frameId}/image`;
 
+/** The dataset-keyed still image — what the curation grid uses now that
+ *  `frame.job_id` can be `null` (an item outlives its prep job). */
+export const datasetFrameImageUrlByDataset = (
+  coreApiPort: number,
+  datasetId: string,
+  frameId: string,
+) => `http://127.0.0.1:${coreApiPort}/datasets/${datasetId}/frames/${frameId}/image`;
+
 export const updateDatasetFrame = (
   frameId: string,
-  body: { caption?: string; excluded?: boolean },
+  body: {
+    caption?: string;
+    excluded?: boolean;
+    /** Clear an automatic rejection — "doch behalten". */
+    restore?: boolean;
+    /** Omit to keep the stored bound, `null` to clear it back to the clip's
+     *  natural start/end, a number to set it. */
+    clip_start_secs?: number | null;
+    clip_end_secs?: number | null;
+  },
 ) => invoke<DatasetFrame>("update_dataset_frame", { frameId, body });
 
 export interface ExportDatasetSummary {
@@ -800,6 +900,57 @@ export interface ExportDatasetSummary {
 
 export const exportDataset = (jobId: string, destDir: string) =>
   invoke<ExportDatasetSummary>("export_dataset", { jobId, destDir });
+
+export const listCaptioners = () => invoke<Captioner[]>("list_captioners");
+
+export const listDatasets = () => invoke<Dataset[]>("list_datasets");
+
+export const getDataset = (id: string) => invoke<Dataset | null>("get_dataset", { id });
+
+export const updateDataset = (id: string, body: { trigger_word?: string }) =>
+  invoke<Dataset>("update_dataset", { id, body });
+
+export const deleteDataset = (id: string) => invoke<void>("delete_dataset", { id });
+
+export const listDatasetFramesForDataset = (datasetId: string) =>
+  invoke<DatasetFrame[]>("list_dataset_frames_for_dataset", { datasetId });
+
+/** frame id -> concept ids; items without a concept are simply absent. */
+export const frameConceptMap = (datasetId: string) =>
+  invoke<Record<string, string[]>>("frame_concept_map", { datasetId });
+
+export const listConcepts = (datasetId: string) =>
+  invoke<DatasetConcept[]>("list_concepts", { datasetId });
+
+export const createConcept = (
+  datasetId: string,
+  body: { name: string; token: string; description?: string },
+) => invoke<DatasetConcept>("create_concept", { datasetId, body });
+
+export const updateConcept = (
+  id: string,
+  body: { name: string; token: string; description?: string },
+) => invoke<void>("update_concept", { id, body });
+
+export const deleteConcept = (id: string) => invoke<void>("delete_concept", { id });
+
+export const assignConcept = (conceptId: string, frameIds: string[]) =>
+  invoke<AssignedSummary>("assign_concept", { conceptId, body: { frame_ids: frameIds } });
+
+export const unassignConcept = (conceptId: string, frameIds: string[]) =>
+  invoke<void>("unassign_concept", { conceptId, body: { frame_ids: frameIds } });
+
+/** The full export: composed captions in the chosen order, and in clips mode
+ *  the trimmed source clips. */
+export const exportDatasetById = (
+  datasetId: string,
+  destDir: string,
+  captionOrder: CaptionOrder,
+) =>
+  invoke<ExportDatasetSummary>("export_dataset_by_id", {
+    datasetId,
+    body: { dest_dir: destDir, caption_order: captionOrder },
+  });
 
 /** What kind of file is being imported. `chat` → GGUF LLM for llama.cpp; the
  *  rest are ComfyUI image / video models routed to their typed store folder. */
@@ -818,6 +969,10 @@ export type ModelType =
    *  path needs (`core::model::ModelKind::ClipVision`/`IpAdapter`). */
   | "clip_vision"
   | "ip_adapter"
+  /** The WD EVA02 tagger's `model.onnx` + `selected_tags.csv` — the
+   *  Danbooru-tag captioner the Dataset tab offers alongside Florence-2
+   *  (`core::model::ModelKind::WdTagger`). */
+  | "wd_tagger"
   /** One file of the Dia narrator engine or its separate DAC audio codec —
    *  see `core::model::ModelKind::DiaEngine`/`DiaCodec`. Each lands in its
    *  own fixed subdirectory under its original Hugging Face filename;

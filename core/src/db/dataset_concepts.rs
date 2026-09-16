@@ -130,10 +130,15 @@ impl<'a> ConceptRepo<'a> {
     /// A frame that doesn't belong to the concept's own dataset is silently
     /// skipped (the join-table FK alone only checks the frame exists, not
     /// which dataset it's in). All frames succeed or none do.
-    pub async fn assign(&self, concept_id: &str, frame_ids: &[String]) -> Result<()> {
+    ///
+    /// Returns how many pairs were *newly* created — the already-assigned and
+    /// the foreign-dataset ids contribute nothing, so the caller can tell the
+    /// user how much of its batch actually landed.
+    pub async fn assign(&self, concept_id: &str, frame_ids: &[String]) -> Result<u64> {
+        let mut attached = 0u64;
         let mut tx = self.pool.begin().await?;
         for frame_id in frame_ids {
-            sqlx::query(
+            let res = sqlx::query(
                 "INSERT OR IGNORE INTO frame_concepts (frame_id, concept_id) \
                  SELECT $1, $2 WHERE EXISTS ( \
                      SELECT 1 FROM dataset_frames df JOIN dataset_concepts c ON c.id = $2 \
@@ -144,9 +149,10 @@ impl<'a> ConceptRepo<'a> {
             .bind(concept_id)
             .execute(&mut *tx)
             .await?;
+            attached += res.rows_affected();
         }
         tx.commit().await?;
-        Ok(())
+        Ok(attached)
     }
 
     /// A 40-frame "Alle im Set" unassign is all-or-nothing too.
@@ -444,6 +450,66 @@ mod tests {
         assert_eq!(
             db.concepts().counts_for_dataset(&ds_a).await.unwrap()[&concept_a.id],
             1
+        );
+    }
+
+    /// The number `assign` reports is what the UI echoes back as "N Frames
+    /// zugewiesen", so it must count the pairs actually created — not the ids
+    /// the caller happened to send.
+    #[tokio::test]
+    async fn assign_reports_only_newly_attached_frames() {
+        let (db, ds_a, frames_a) = fixture().await;
+        let job_b = db.jobs().insert(NewJob::new("dataset_prep")).await.unwrap();
+        let ds_b = db
+            .datasets()
+            .create(NewDataset {
+                name: "U".into(),
+                mode: DatasetMode::Frames,
+                source_root: "y".into(),
+                prep_job_id: Some(job_b.id.clone()),
+            })
+            .await
+            .unwrap();
+        let frame_b = db
+            .dataset_frames()
+            .insert(NewDatasetFrame {
+                job_id: job_b.id.clone(),
+                dataset_id: Some(ds_b.id.clone()),
+                tag: "B".into(),
+                source_path: "clip.mp4".into(),
+                frame_path: "b0.png".into(),
+                timestamp_secs: Some(0.0),
+                rejection_reason: String::new(),
+                duration_secs: None,
+            })
+            .await
+            .unwrap();
+        let c = db
+            .concepts()
+            .create(NewConcept {
+                dataset_id: ds_a.clone(),
+                name: "A".into(),
+                token: "a_xy".into(),
+                description: String::new(),
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(
+            db.concepts()
+                .assign(&c.id, std::slice::from_ref(&frames_a[0]))
+                .await
+                .unwrap(),
+            1
+        );
+
+        // frames_a[0] is already attached and frame_b belongs to another
+        // dataset, so only frames_a[1] is genuinely new.
+        let mixed = vec![frames_a[0].clone(), frames_a[1].clone(), frame_b.id.clone()];
+        assert_eq!(db.concepts().assign(&c.id, &mixed).await.unwrap(), 1);
+        assert_eq!(
+            db.concepts().counts_for_dataset(&ds_a).await.unwrap()[&c.id],
+            2
         );
     }
 

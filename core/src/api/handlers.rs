@@ -6,13 +6,14 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use super::dto::{
-    AboutDto, AgentPermissionDto, AgentSessionDetailDto, AttachExternalDto, CharacterBodyDto,
-    CivitaiSearchDto, ColibriModelDto, ConfigUpdate, DetachEngineDto, DialogueLineDto,
-    EnqueueDownloadDto, FeaturedModelDto, JobDetailDto, KnownModelDto, LaunchExternalDto,
+    AboutDto, AgentPermissionDto, AgentSessionDetailDto, AssignedDto, AttachExternalDto,
+    CharacterBodyDto, CivitaiSearchDto, ColibriModelDto, ConceptBodyDto, ConceptFramesDto,
+    ConceptSummaryDto, ConfigUpdate, DetachEngineDto, DialogueLineDto, EnqueueDownloadDto,
+    ExportDatasetDto, FeaturedModelDto, JobDetailDto, KnownModelDto, LaunchExternalDto,
     LocalApiStatusDto, LocationBodyDto, ModelStackDto, NewAgentDto, NewSessionDto,
     NewVoiceIdentityDto, NpcBodyDto, OpenAgentSessionDto, RegisterColibriModelDto,
     RegistryDetailsDto, RegistryFileDto, RegistrySearchDto, RuntimeStatusDto, SceneBodyDto,
-    SceneDetailDto, StoryBodyDto, SubmitJobDto, UpdateDatasetFrameDto,
+    SceneDetailDto, StoryBodyDto, SubmitJobDto, UpdateDatasetDto, UpdateDatasetFrameDto,
 };
 use crate::compat::FitVerdict;
 use crate::config::Config;
@@ -278,7 +279,8 @@ pub async fn list_dataset_frames(app: &App, job_id: &str) -> Result<Vec<crate::d
 }
 
 /// `PUT /jobs/{id}/dataset-frames/{frame_id}` — a curator's edit: a caption
-/// rewrite, an exclude toggle, or both in one call.
+/// rewrite, an exclude toggle, a "doch behalten" on an auto-rejected frame, a
+/// clip in/out trim, or any combination in one call.
 pub async fn update_dataset_frame(
     app: &App,
     frame_id: &str,
@@ -298,6 +300,29 @@ pub async fn update_dataset_frame(
             .set_caption(frame_id, caption, "")
             .await?;
     }
+    if body.restore == Some(true) {
+        // An empty reason *is* "kept" — see `DatasetFrame::rejection_reason`.
+        app.db
+            .dataset_frames()
+            .set_rejection_reason(frame_id, "")
+            .await?;
+    }
+    if body.clip_start_secs.is_some() || body.clip_end_secs.is_some() {
+        // `set_clip_range` writes both columns, so a one-sided edit has to
+        // read the stored row and carry the untouched bound through.
+        let current = app
+            .db
+            .dataset_frames()
+            .get(frame_id)
+            .await?
+            .ok_or_else(|| CoreError::Config(format!("no such dataset frame {frame_id}")))?;
+        let start = body.clip_start_secs.unwrap_or(current.clip_start_secs);
+        let end = body.clip_end_secs.unwrap_or(current.clip_end_secs);
+        app.db
+            .dataset_frames()
+            .set_clip_range(frame_id, start, end)
+            .await?;
+    }
     app.db
         .dataset_frames()
         .get(frame_id)
@@ -308,8 +333,10 @@ pub async fn update_dataset_frame(
 /// `POST /jobs/{id}/dataset-export` — write the curator's final, non-excluded
 /// selection to `dest_dir` as `NNNN.png` + `NNNN.txt` pairs.
 ///
-/// Exports prose-first via the dataset this job produced; the dataset-keyed
-/// route (with a caller-chosen caption order) is the richer entry point.
+/// Always prose-first: this shim keeps the pre-dataset-object clients working
+/// and `export_dataset_for_job` takes no caption order, so a `caption_order`
+/// in the body is accepted and ignored here. The dataset-keyed
+/// [`export_dataset_by_id`] is the route that honours it.
 pub async fn export_dataset(
     app: &App,
     job_id: &str,
@@ -319,6 +346,203 @@ pub async fn export_dataset(
         &app.db,
         job_id,
         std::path::Path::new(dest_dir),
+    )
+    .await
+}
+
+// --- datasets as objects, concepts, captioners (spec 3A/3D) ----------------
+
+/// `GET /captioners` — the captioner registry plus whether each one's files
+/// are in the model library; the "Beschreiben mit" dropdown filters on it.
+pub async fn list_captioners(
+    app: &App,
+) -> Result<Vec<crate::capability::dataset::CaptionerStatus>> {
+    crate::capability::dataset::captioner_statuses(&app.db).await
+}
+
+/// `GET /datasets` — every dataset, newest prep run included; a dataset
+/// outlives the `dataset_prep` job that produced it.
+pub async fn list_datasets(app: &App) -> Result<Vec<crate::db::Dataset>> {
+    app.db.datasets().list().await
+}
+
+/// `GET /datasets/{id}` — `None` when there is no such dataset (the route
+/// answers 404).
+pub async fn get_dataset(app: &App, id: &str) -> Result<Option<crate::db::Dataset>> {
+    app.db.datasets().get(id).await
+}
+
+/// `PUT /datasets/{id}` — today only the trigger word; returns the stored row
+/// so the caller never has to guess how it was normalised.
+pub async fn update_dataset(
+    app: &App,
+    id: &str,
+    body: UpdateDatasetDto,
+) -> Result<crate::db::Dataset> {
+    if let Some(trigger_word) = &body.trigger_word {
+        app.db.datasets().set_trigger_word(id, trigger_word).await?;
+    }
+    app.db
+        .datasets()
+        .get(id)
+        .await?
+        .ok_or_else(|| CoreError::Config(format!("no such dataset {id}")))
+}
+
+/// `DELETE /datasets/{id}` — drops the dataset, its frames and its concepts
+/// (SQLite cascade); the files on disk are untouched.
+pub async fn delete_dataset(app: &App, id: &str) -> Result<()> {
+    app.db.datasets().delete(id).await
+}
+
+/// `GET /datasets/{id}/frames` — the dataset-keyed curation set. Unlike the
+/// job-keyed list this still works once the prep job has been deleted.
+pub async fn list_dataset_frames_for_dataset(
+    app: &App,
+    dataset_id: &str,
+) -> Result<Vec<crate::db::DatasetFrame>> {
+    app.db.dataset_frames().list_for_dataset(dataset_id).await
+}
+
+/// `GET /datasets/{id}/concepts` — each concept with the number of frames
+/// carrying it and a token warning when the token is an ordinary word.
+pub async fn list_concepts(app: &App, dataset_id: &str) -> Result<Vec<ConceptSummaryDto>> {
+    let concepts = app.db.concepts().list_for_dataset(dataset_id).await?;
+    let counts = app.db.concepts().counts_for_dataset(dataset_id).await?;
+    Ok(concepts
+        .into_iter()
+        .map(|c| ConceptSummaryDto {
+            frame_count: counts.get(&c.id).copied().unwrap_or(0),
+            token_warning: crate::capability::dataset::token_warning(&c.token),
+            concept: c,
+        })
+        .collect())
+}
+
+/// The empty-field and duplicate-token checks both `create_concept` and
+/// `update_concept` run. `exclude_id` is the row being edited, which must not
+/// clash with itself.
+async fn check_concept_body(
+    app: &App,
+    dataset_id: &str,
+    body: &ConceptBodyDto,
+    exclude_id: Option<&str>,
+) -> Result<()> {
+    if body.name.trim().is_empty() || body.token.trim().is_empty() {
+        return Err(CoreError::Config(
+            "concept name and token must not be empty".into(),
+        ));
+    }
+    // A duplicate token is a user mistake, not a server fault: the UNIQUE
+    // (dataset_id, token) violation would otherwise surface as a DB error
+    // -> HTTP 500. Pre-check and answer 400. Compared trimmed, because that
+    // is how `ConceptRepo` stores it.
+    let token = body.token.trim();
+    if app
+        .db
+        .concepts()
+        .list_for_dataset(dataset_id)
+        .await?
+        .iter()
+        .any(|c| c.token == token && Some(c.id.as_str()) != exclude_id)
+    {
+        return Err(CoreError::Config(format!(
+            "token {token:?} is already used by another concept in this dataset"
+        )));
+    }
+    Ok(())
+}
+
+/// `POST /datasets/{id}/concepts` — add one concept the dataset teaches.
+pub async fn create_concept(
+    app: &App,
+    dataset_id: &str,
+    body: ConceptBodyDto,
+) -> Result<crate::db::DatasetConcept> {
+    check_concept_body(app, dataset_id, &body, None).await?;
+    app.db
+        .concepts()
+        .create(crate::db::NewConcept {
+            dataset_id: dataset_id.to_string(),
+            name: body.name,
+            token: body.token,
+            description: body.description,
+        })
+        .await
+}
+
+/// `PUT /concepts/{id}` — rewrite name, token and description in one go.
+pub async fn update_concept(app: &App, id: &str, body: ConceptBodyDto) -> Result<()> {
+    let current = app
+        .db
+        .concepts()
+        .get(id)
+        .await?
+        .ok_or_else(|| CoreError::Config(format!("no such concept {id}")))?;
+    check_concept_body(app, &current.dataset_id, &body, Some(id)).await?;
+    app.db
+        .concepts()
+        .update(id, &body.name, &body.token, &body.description)
+        .await
+}
+
+/// `DELETE /concepts/{id}` — the assignments go with it (cascade).
+pub async fn delete_concept(app: &App, id: &str) -> Result<()> {
+    app.db.concepts().delete(id).await
+}
+
+/// `POST /concepts/{id}/frames` — attach frames. Already-assigned ids and ids
+/// from another dataset are skipped, so `attached` can be lower than
+/// `requested`; the UI reports the difference rather than claiming success
+/// for frames that never moved.
+pub async fn assign_concept(
+    app: &App,
+    concept_id: &str,
+    body: ConceptFramesDto,
+) -> Result<AssignedDto> {
+    let attached = app
+        .db
+        .concepts()
+        .assign(concept_id, &body.frame_ids)
+        .await?;
+    Ok(AssignedDto {
+        requested: body.frame_ids.len(),
+        attached,
+    })
+}
+
+/// `DELETE /concepts/{id}/frames` — detach frames; unknown pairs are no-ops.
+pub async fn unassign_concept(app: &App, concept_id: &str, body: ConceptFramesDto) -> Result<()> {
+    app.db
+        .concepts()
+        .unassign(concept_id, &body.frame_ids)
+        .await
+}
+
+/// `GET /datasets/{id}/frame-concepts` — frame id -> concept ids, for the
+/// curation grid's per-frame concept chips. Frames without a concept are
+/// simply absent.
+pub async fn frame_concept_map(
+    app: &App,
+    dataset_id: &str,
+) -> Result<std::collections::HashMap<String, Vec<String>>> {
+    app.db.concepts().map_for_dataset(dataset_id).await
+}
+
+/// `POST /datasets/{id}/export` — the full export: composed captions, the
+/// caller's caption order, and in clips mode the trimmed source clips.
+pub async fn export_dataset_by_id(
+    app: &App,
+    dataset_id: &str,
+    body: ExportDatasetDto,
+) -> Result<crate::capability::dataset::ExportSummary> {
+    crate::capability::dataset::export_dataset(
+        &app.db,
+        &crate::capability::dataset::ExportRequest {
+            dataset_id: dataset_id.to_string(),
+            dest_dir: PathBuf::from(body.dest_dir),
+            caption_order: body.caption_order,
+        },
     )
     .await
 }
@@ -1650,6 +1874,236 @@ mod tests {
     use super::*;
     use crate::registry::SearchSort;
     use crate::runtime::RuntimeAdapter;
+
+    /// A live `App` on a throwaway data dir, plus one dataset and two frames
+    /// in it — the shape every dataset/concept handler test needs. The
+    /// returned `TempDir` must outlive the `App` (it backs its data dir).
+    async fn dataset_fixture() -> (std::sync::Arc<App>, tempfile::TempDir, String, Vec<String>) {
+        let tmp = tempfile::tempdir().unwrap();
+        let app = std::sync::Arc::new(
+            App::load(crate::AppPaths::rooted(tmp.path()))
+                .await
+                .unwrap(),
+        );
+        let job = app
+            .db
+            .jobs()
+            .insert(NewJob::new("dataset_prep"))
+            .await
+            .unwrap();
+        let ds = app
+            .db
+            .datasets()
+            .create(crate::db::NewDataset {
+                name: "Demo".into(),
+                mode: crate::db::DatasetMode::Clips,
+                source_root: "E:\\Data\\Demo".into(),
+                prep_job_id: Some(job.id.clone()),
+            })
+            .await
+            .unwrap();
+        let mut frames = Vec::new();
+        for i in 0..2 {
+            let f = app
+                .db
+                .dataset_frames()
+                .insert(crate::db::NewDatasetFrame {
+                    job_id: job.id.clone(),
+                    dataset_id: Some(ds.id.clone()),
+                    tag: "Ghibli".into(),
+                    source_path: "clip.mp4".into(),
+                    frame_path: format!("clip_{i}.png"),
+                    timestamp_secs: Some(f64::from(i)),
+                    rejection_reason: String::new(),
+                    duration_secs: Some(6.0),
+                })
+                .await
+                .unwrap();
+            frames.push(f.id);
+        }
+        (app, tmp, ds.id, frames)
+    }
+
+    fn frame_edit() -> UpdateDatasetFrameDto {
+        UpdateDatasetFrameDto {
+            caption: None,
+            excluded: None,
+            restore: None,
+            clip_start_secs: None,
+            clip_end_secs: None,
+        }
+    }
+
+    /// `set_clip_range` writes *both* bounds, so a one-sided edit has to read
+    /// the row first and carry the other bound through — otherwise clearing
+    /// the out-point would silently throw the in-point away too.
+    #[tokio::test]
+    async fn clearing_one_clip_bound_leaves_the_other_one_alone() {
+        let (app, _tmp, _ds, frames) = dataset_fixture().await;
+
+        let both = update_dataset_frame(
+            &app,
+            &frames[0],
+            UpdateDatasetFrameDto {
+                clip_start_secs: Some(Some(1.5)),
+                clip_end_secs: Some(Some(4.0)),
+                ..frame_edit()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            (both.clip_start_secs, both.clip_end_secs),
+            (Some(1.5), Some(4.0))
+        );
+
+        let cleared = update_dataset_frame(
+            &app,
+            &frames[0],
+            UpdateDatasetFrameDto {
+                clip_end_secs: Some(None),
+                ..frame_edit()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(cleared.clip_start_secs, Some(1.5), "in-point survives");
+        assert_eq!(cleared.clip_end_secs, None, "out-point cleared");
+    }
+
+    /// "Doch behalten" on an auto-rejected frame: the rejection goes away and
+    /// the frame rejoins the kept set.
+    #[tokio::test]
+    async fn restore_clears_the_rejection_reason() {
+        let (app, _tmp, _ds, frames) = dataset_fixture().await;
+        app.db
+            .dataset_frames()
+            .set_rejection_reason(&frames[0], "blur")
+            .await
+            .unwrap();
+
+        let restored = update_dataset_frame(
+            &app,
+            &frames[0],
+            UpdateDatasetFrameDto {
+                restore: Some(true),
+                ..frame_edit()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(restored.rejection_reason, "");
+    }
+
+    fn concept_body(name: &str, token: &str) -> ConceptBodyDto {
+        ConceptBodyDto {
+            name: name.into(),
+            token: token.into(),
+            description: String::new(),
+        }
+    }
+
+    /// Two concepts in one dataset sharing a token is a user mistake, not a
+    /// server fault: without the pre-check the UNIQUE (dataset_id, token)
+    /// violation would surface as `CoreError::Db` -> HTTP 500.
+    #[tokio::test]
+    async fn creating_a_concept_with_a_taken_token_is_a_config_error() {
+        let (app, _tmp, ds, _frames) = dataset_fixture().await;
+        create_concept(&app, &ds, concept_body("Kenji", "kenji_xy"))
+            .await
+            .unwrap();
+
+        let dup = create_concept(&app, &ds, concept_body("Other", " kenji_xy ")).await;
+        assert!(matches!(dup, Err(CoreError::Config(_))), "got: {dup:?}");
+
+        let blank = create_concept(&app, &ds, concept_body("Kenji", "  ")).await;
+        assert!(matches!(blank, Err(CoreError::Config(_))), "got: {blank:?}");
+    }
+
+    /// Renaming a concept to its *own* token must stay legal — the duplicate
+    /// pre-check has to exclude the row being edited.
+    #[tokio::test]
+    async fn updating_a_concept_allows_its_own_token_but_not_a_sibling_s() {
+        let (app, _tmp, ds, _frames) = dataset_fixture().await;
+        let kenji = create_concept(&app, &ds, concept_body("Kenji", "kenji_xy"))
+            .await
+            .unwrap();
+        create_concept(&app, &ds, concept_body("Mira", "mira_xy"))
+            .await
+            .unwrap();
+
+        update_concept(&app, &kenji.id, concept_body("Kenji R.", "kenji_xy"))
+            .await
+            .unwrap();
+        assert_eq!(
+            app.db
+                .concepts()
+                .get(&kenji.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .name,
+            "Kenji R."
+        );
+
+        let clash = update_concept(&app, &kenji.id, concept_body("Kenji", "mira_xy")).await;
+        assert!(matches!(clash, Err(CoreError::Config(_))), "got: {clash:?}");
+    }
+
+    /// "Alle im Set" sends the whole visible page; the response tells the user
+    /// how much of it actually landed.
+    #[tokio::test]
+    async fn assigning_reports_requested_and_newly_attached_separately() {
+        let (app, _tmp, ds, frames) = dataset_fixture().await;
+        let c = create_concept(&app, &ds, concept_body("Kenji", "kenji_xy"))
+            .await
+            .unwrap();
+        assign_concept(
+            &app,
+            &c.id,
+            ConceptFramesDto {
+                frame_ids: vec![frames[0].clone()],
+            },
+        )
+        .await
+        .unwrap();
+
+        // frames[0] again, frames[1] new, and an id that is not a frame at all.
+        let got = assign_concept(
+            &app,
+            &c.id,
+            ConceptFramesDto {
+                frame_ids: vec![frames[0].clone(), frames[1].clone(), "nope".into()],
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!((got.requested, got.attached), (3, 1));
+
+        let summaries = list_concepts(&app, &ds).await.unwrap();
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(summaries[0].frame_count, 2);
+        assert_eq!(summaries[0].token_warning, None, "kenji_xy is a good token");
+    }
+
+    /// An ordinary word as a token trains nothing new — the summary carries
+    /// the warning the Concepts panel shows inline.
+    #[tokio::test]
+    async fn a_common_word_token_comes_back_with_a_warning() {
+        let (app, _tmp, ds, _frames) = dataset_fixture().await;
+        create_concept(&app, &ds, concept_body("Anime look", "anime"))
+            .await
+            .unwrap();
+        let summaries = list_concepts(&app, &ds).await.unwrap();
+        assert!(
+            summaries[0]
+                .token_warning
+                .as_deref()
+                .is_some_and(|w| w.contains("anime")),
+            "got: {:?}",
+            summaries[0].token_warning
+        );
+    }
 
     /// Bare-minimum ComfyUI stand-in — just enough for `attach` + `health` to
     /// succeed, mirroring `runtime::comfyui`'s own test fixture.

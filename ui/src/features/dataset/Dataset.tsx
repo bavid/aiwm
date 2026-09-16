@@ -4,6 +4,7 @@ import { useAbout, useDatasetFrames, useJobs } from "../../lib/hooks";
 import {
   cancelJob,
   datasetFrameImageUrl,
+  datasetFrameImageUrlByDataset,
   exportDataset,
   jobDetail,
   submitJob,
@@ -25,6 +26,16 @@ const DEFAULT_BLUR_THRESHOLD = 100;
 const DEFAULT_PHASH_MAX_DISTANCE = 6;
 const DEFAULT_ESCALATE_EVERY_NTH = 20;
 const DEFAULT_CONTEXT_OFFSET = 5;
+
+/** Prefer the dataset-keyed image route: an item outlives its prep job, so
+ *  `job_id` can be `null`. The job-keyed URL stays as the fallback for rows
+ *  written before datasets became objects. */
+function frameImageUrl(coreApiPort: number, frame: DatasetFrame): string {
+  if (frame.dataset_id) {
+    return datasetFrameImageUrlByDataset(coreApiPort, frame.dataset_id, frame.id);
+  }
+  return frame.job_id ? datasetFrameImageUrl(coreApiPort, frame.job_id, frame.id) : "";
+}
 
 function datasetParamsOf(job: Job): Partial<DatasetPrepParams> {
   const p = job.params;
@@ -344,9 +355,7 @@ export function DatasetStudio() {
                 <FrameCard
                   key={frame.id}
                   frame={frame}
-                  imageUrl={
-                    about ? datasetFrameImageUrl(about.core_api_port, frame.job_id, frame.id) : ""
-                  }
+                  imageUrl={about ? frameImageUrl(about.core_api_port, frame) : ""}
                   onCaptionCommit={(caption) => editCaption(frame, caption)}
                   onToggleExcluded={() => toggleExcluded(frame)}
                 />
