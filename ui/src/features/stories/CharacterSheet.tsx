@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useCharacterLog, useCharacterRelationships } from "../../lib/hooks";
 import {
   addCharacterRelationship,
@@ -22,12 +22,20 @@ export function CharacterSheet({
   character,
   story,
   characters,
+  initialEditing = false,
   onClose,
   onChanged,
 }: {
   character: Character | null;
   story: Story | null;
   characters: Character[];
+  /** Open straight into the edit form instead of the read-only view --
+   *  used when the character was opened via the roster's "Edit" control
+   *  rather than by just clicking its row. Only read once at mount time
+   *  (see the `key={...}` on this component in Stories.tsx, which remounts
+   *  it per character so this stays a stable initial value, not a prop
+   *  that needs to be watched for changes). */
+  initialEditing?: boolean;
   onClose: () => void;
   onChanged: () => void;
 }) {
@@ -36,12 +44,33 @@ export function CharacterSheet({
   );
   const { data: log } = useCharacterLog(character?.id ?? null);
 
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState<CharacterBody | null>(null);
+  const [editing, setEditing] = useState(initialEditing);
+  const [draft, setDraft] = useState<CharacterBody | null>(() =>
+    initialEditing && character
+      ? {
+          name: character.name,
+          traits: character.traits,
+          backstory: character.backstory,
+          alignment: character.alignment,
+        }
+      : null,
+  );
   const [newItem, setNewItem] = useState("");
   const [relTargetId, setRelTargetId] = useState("");
   const [relNote, setRelNote] = useState("");
   const [generating, setGenerating] = useState(false);
+  const sheetRef = useRef<HTMLElement | null>(null);
+
+  // The drawer renders in normal document flow (it drops below the section
+  // content on narrow windows -- see `.stories__layout`'s <1100px
+  // breakpoint in stories.css), so opening it can otherwise leave it below
+  // the fold with no visual cue that anything happened. Bring it into view
+  // whenever a character is opened, regardless of viewport width.
+  useEffect(() => {
+    if (character?.id) {
+      sheetRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }
+  }, [character?.id]);
 
   if (!character) return null;
 
@@ -116,7 +145,7 @@ export function CharacterSheet({
   const nameOf = (id: string) => characters.find((c) => c.id === id)?.name ?? "(unknown)";
 
   return (
-    <aside className="char-sheet" aria-label={`${character.name} — Character Sheet`}>
+    <aside ref={sheetRef} className="char-sheet" aria-label={`${character.name} — Character Sheet`}>
       <header className="char-sheet__head">
         <h3>{character.name}</h3>
         <button type="button" className="char-sheet__close" onClick={onClose} aria-label="Close character sheet">

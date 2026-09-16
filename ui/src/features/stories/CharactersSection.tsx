@@ -11,12 +11,18 @@ export function CharactersSection({
   characters,
   selectedId,
   onSelect,
+  onEdit,
   onChanged,
 }: {
   storyId: string;
   characters: Character[];
   selectedId: string | null;
   onSelect: (id: string) => void;
+  /** Opens the character sheet straight into its edit form. Exposed as its
+   *  own control (not just "click the row, then find the edit button in the
+   *  drawer") so editing an existing character is obvious from the roster
+   *  itself. */
+  onEdit: (id: string) => void;
   onChanged: () => void;
 }) {
   const [creating, setCreating] = useState(false);
@@ -45,7 +51,7 @@ export function CharactersSection({
 
       <ul className="roster">
         {characters.map((c) => (
-          <li key={c.id}>
+          <li key={c.id} className="roster__item">
             <button
               type="button"
               className={c.id === selectedId ? "roster__row roster__row--active" : "roster__row"}
@@ -54,6 +60,15 @@ export function CharactersSection({
               <span className="roster__name">{c.name}</span>
               {c.alignment && <span className="badge badge--soft">{c.alignment}</span>}
               {!c.portrait_job_id && <span className="muted roster__hint">no portrait yet</span>}
+            </button>
+            <button
+              type="button"
+              className="roster__edit"
+              onClick={() => onEdit(c.id)}
+              aria-label={`Edit ${c.name}`}
+              title="Edit character"
+            >
+              ✎
             </button>
           </li>
         ))}
