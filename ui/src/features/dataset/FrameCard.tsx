@@ -1,4 +1,4 @@
-import { useEffect, useId, useState } from "react";
+import { memo, useEffect, useId, useState } from "react";
 import type { DatasetFrame } from "../../lib/ipc";
 import { rejectionLabel } from "./rejection";
 
@@ -8,13 +8,16 @@ type Props = {
   isSelected: boolean;
   /** Concept tokens this item carries, for the chips under the thumbnail. */
   conceptTokens: string[];
-  onToggleSelected: () => void;
-  onCaptionCommit: (caption: string) => void;
-  onToggleExcluded: () => void;
-  onRestore: () => void;
+  onToggleSelected: (frame: DatasetFrame) => void;
+  onCaptionCommit: (frame: DatasetFrame, caption: string) => void;
+  onToggleExcluded: (frame: DatasetFrame) => void;
+  onRestore: (frame: DatasetFrame) => void;
 };
 
-export function FrameCard({
+/** One item of the curation grid. Memoised: the container hands it stable
+ *  handlers (and a memoised token array), so a card only re-renders when its
+ *  own row, selection or tokens change -- not on every keystroke elsewhere. */
+export const FrameCard = memo(function FrameCard({
   frame,
   imageUrl,
   isSelected,
@@ -36,7 +39,7 @@ export function FrameCard({
 
   const commitCaption = () => {
     setIsDirty(false);
-    onCaptionCommit(caption);
+    onCaptionCommit(frame, caption);
   };
 
   const captionId = useId();
@@ -49,7 +52,11 @@ export function FrameCard({
             caption, falling back to the folder tag before it is captioned. */}
         {imageUrl && <img src={imageUrl} alt={frame.caption || frame.tag} loading="lazy" />}
         <label className="framecard__select" title="Select for concept assignment">
-          <input type="checkbox" checked={isSelected} onChange={onToggleSelected} />
+          <input
+            type="checkbox"
+            checked={isSelected}
+            onChange={() => onToggleSelected(frame)}
+          />
           <span className="framecard__select-label">Select</span>
         </label>
         <span className="framecard__tag">{frame.tag}</span>
@@ -94,15 +101,19 @@ export function FrameCard({
       />
 
       {isRejected ? (
-        <button type="button" className="chip framecard__restore" onClick={onRestore}>
+        <button type="button" className="chip framecard__restore" onClick={() => onRestore(frame)}>
           Restore
         </button>
       ) : (
         <label className="framecard__exclude">
-          <input type="checkbox" checked={frame.excluded} onChange={onToggleExcluded} />
+          <input
+            type="checkbox"
+            checked={frame.excluded}
+            onChange={() => onToggleExcluded(frame)}
+          />
           <span>Exclude</span>
         </label>
       )}
     </div>
   );
-}
+});

@@ -1,8 +1,6 @@
-import { useEffect, useId, useMemo, useRef, useState } from "react";
-import { open } from "@tauri-apps/plugin-dialog";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import {
   useAbout,
-  useCaptioners,
   useConcepts,
   useDatasetFramesForDataset,
   useDatasets,
@@ -22,14 +20,16 @@ import {
   updateDatasetFrame,
   type CaptionOrder,
   type DatasetFrame,
-  type DatasetMode,
   type DatasetPrepParams,
   type JobDetail,
   type JobState,
 } from "../../lib/ipc";
 import { ConceptsPanel } from "./ConceptsPanel";
+import { ExportCard, type ExportState } from "./ExportCard";
 import { FrameCard } from "./FrameCard";
+import { PrepForm } from "./PrepForm";
 import { RejectionChips } from "./RejectionChips";
+import { SelectionToolbar, type AssignState } from "./SelectionToolbar";
 import { tokenWarning } from "./tokens";
 import "./dataset.css";
 
@@ -37,13 +37,9 @@ const DONE: JobState[] = ["completed", "failed", "cancelled"];
 const POLL_MS = 900;
 const PAGE_SIZE = 60;
 
-const DEFAULT_SAMPLE_FPS = 1.5;
-const DEFAULT_BLUR_THRESHOLD = 100;
-const DEFAULT_PHASH_MAX_DISTANCE = 6;
-const DEFAULT_ESCALATE_EVERY_NTH = 20;
-const DEFAULT_CONTEXT_OFFSET = 5;
-const DEFAULT_MAX_FRAMES_PER_CLIP = 40;
-const DEFAULT_MIN_CLIP_SECS = 2;
+/** One shared empty array, so a card without concepts keeps the same
+ *  `conceptTokens` identity across renders and stays memoised. */
+const NO_TOKENS: string[] = [];
 
 /** Prefer the dataset-keyed image route: an item outlives its prep job, so
  *  `job_id` can be `null`. The job-keyed URL stays as the fallback for rows
@@ -55,50 +51,14 @@ function frameImageUrl(coreApiPort: number, frame: DatasetFrame): string {
   return frame.job_id ? datasetFrameImageUrl(coreApiPort, frame.job_id, frame.id) : "";
 }
 
-type ExportState =
-  | { kind: "idle" }
-  | { kind: "busy" }
-  | { kind: "done"; exported: number; destDir: string }
-  | { kind: "error"; message: string };
-
-type AssignState = { kind: "idle" } | { kind: "done"; text: string } | { kind: "error"; text: string };
-
 export function DatasetStudio() {
   const about = useAbout();
   const { data: jobs, refetch: refetchJobs } = useJobs({ limit: 50 });
-  const { data: captioners } = useCaptioners();
   const { data: datasets, refetch: refetchDatasets } = useDatasets();
 
   const datasetList = useMemo(() => datasets ?? [], [datasets]);
-  const installed = useMemo(
-    () => (captioners ?? []).filter((c) => c.installed),
-    [captioners],
-  );
 
-  // --- form -------------------------------------------------------------
-  const [root, setRoot] = useState("");
-  const [mode, setMode] = useState<DatasetMode>("frames");
-  const [sampleFps, setSampleFps] = useState(DEFAULT_SAMPLE_FPS);
-  const [blurThreshold, setBlurThreshold] = useState(DEFAULT_BLUR_THRESHOLD);
-  const [phashMaxDistance, setPhashMaxDistance] = useState(DEFAULT_PHASH_MAX_DISTANCE);
-  const [maxFramesPerClip, setMaxFramesPerClip] = useState(DEFAULT_MAX_FRAMES_PER_CLIP);
-  const [minClipSecs, setMinClipSecs] = useState(DEFAULT_MIN_CLIP_SECS);
-  const [escalate, setEscalate] = useState(true);
-  const [escalateEveryNth, setEscalateEveryNth] = useState(DEFAULT_ESCALATE_EVERY_NTH);
-  const [contextOffset, setContextOffset] = useState(DEFAULT_CONTEXT_OFFSET);
   const [sendError, setSendError] = useState<string | null>(null);
-
-  // Captioning is on by default, but only ever resolves to a captioner that is
-  // actually installed -- with an empty library it stays off (and the checkbox
-  // is disabled). Derived during render rather than synced by an effect, so
-  // unchecking cannot be undone by the next captioner poll.
-  const [captionWanted, setCaptionWanted] = useState(true);
-  const [pickedCaptioner, setPickedCaptioner] = useState<string | null>(null);
-  const captionerId = captionWanted
-    ? (installed.find((c) => c.id === pickedCaptioner)?.id ?? installed[0]?.id ?? null)
-    : null;
-  const captionOn = captionerId !== null;
-  const chosenCaptioner = installed.find((c) => c.id === captionerId) ?? null;
 
   // --- selection --------------------------------------------------------
   const [activeDatasetId, setActiveDatasetId] = useState<string | null>(null);
@@ -154,12 +114,18 @@ export function DatasetStudio() {
     return map;
   }, [conceptList]);
 
-  const modeId = useId();
-  const captionerSelectId = useId();
+  /** frame id -> its concept tokens, resolved once per poll so each card gets
+   *  a stable array instead of a fresh one on every container render. */
+  const tokensByFrameId = useMemo(() => {
+    const map: Record<string, string[]> = {};
+    for (const [frameId, ids] of Object.entries(conceptMap ?? {})) {
+      const tokens = ids.map((id) => tokenByConceptId[id]).filter((t): t is string => !!t);
+      if (tokens.length > 0) map[frameId] = tokens;
+    }
+    return map;
+  }, [conceptMap, tokenByConceptId]);
+
   const triggerId = useId();
-  const orderId = useId();
-  const destDirId = useId();
-  const assignSelectId = useId();
 
   // Land on the newest dataset when the tab opens, unless a freshly submitted
   // run is still waiting for its own dataset row.
@@ -196,15 +162,6 @@ export function DatasetStudio() {
     };
   }, [liveJobId, isRunning]);
 
-  const browseInto = async (set: (path: string) => void) => {
-    try {
-      const picked = await open({ directory: true, multiple: false });
-      if (typeof picked === "string") set(picked);
-    } catch {
-      // Not running inside Tauri (e.g. the browser dev preview) -- no-op.
-    }
-  };
-
   const selectDataset = (id: string) => {
     setActiveDatasetId(id);
     setDetail(null);
@@ -227,26 +184,8 @@ export function DatasetStudio() {
     setAssignState({ kind: "idle" });
   };
 
-  const start = async () => {
-    const path = root.trim();
-    if (!path) return;
+  const start = async (params: DatasetPrepParams) => {
     setSendError(null);
-
-    const params: DatasetPrepParams = {
-      root: path,
-      mode,
-      captioner: captionerId,
-      max_frames_per_clip: maxFramesPerClip,
-      min_clip_secs: minClipSecs,
-      sample_fps: sampleFps,
-      blur_threshold: blurThreshold,
-      phash_max_distance: phashMaxDistance,
-      // Temporal escalation rides on top of a captioner that supports it.
-      escalate: escalate && !!chosenCaptioner?.supports_escalation,
-      escalate_every_nth: escalateEveryNth,
-      context_offset: contextOffset,
-    };
-
     try {
       const job = await submitJob({ job_type: "dataset_prep", params });
       setPendingJobId(job.id);
@@ -295,41 +234,54 @@ export function DatasetStudio() {
     }
   };
 
-  const editCaption = async (frame: DatasetFrame, caption: string) => {
-    if (caption === frame.caption) return;
-    try {
-      await updateDatasetFrame(frame.id, { caption });
-      refetchFrames();
-    } catch (e) {
-      setGridError(`Could not save the caption: ${e}`);
-    }
-  };
+  // The grid's per-card handlers are stable so `FrameCard`'s memoisation
+  // holds: each takes the frame it acts on instead of closing over it.
+  const editCaption = useCallback(
+    async (frame: DatasetFrame, caption: string) => {
+      if (caption === frame.caption) return;
+      try {
+        await updateDatasetFrame(frame.id, { caption });
+        refetchFrames();
+      } catch (e) {
+        setGridError(`Could not save the caption: ${e}`);
+      }
+    },
+    [refetchFrames],
+  );
 
-  const toggleExcluded = async (frame: DatasetFrame) => {
-    try {
-      await updateDatasetFrame(frame.id, { excluded: !frame.excluded });
-      refetchFrames();
-    } catch (e) {
-      setGridError(`Could not change the exclude flag: ${e}`);
-    }
-  };
+  const toggleExcluded = useCallback(
+    async (frame: DatasetFrame) => {
+      try {
+        await updateDatasetFrame(frame.id, { excluded: !frame.excluded });
+        refetchFrames();
+      } catch (e) {
+        setGridError(`Could not change the exclude flag: ${e}`);
+      }
+    },
+    [refetchFrames],
+  );
 
-  const restore = async (frame: DatasetFrame) => {
-    try {
-      await updateDatasetFrame(frame.id, { restore: true });
-      refetchFrames();
-    } catch (e) {
-      setGridError(`Could not restore the frame: ${e}`);
-    }
-  };
+  const restore = useCallback(
+    async (frame: DatasetFrame) => {
+      try {
+        await updateDatasetFrame(frame.id, { restore: true });
+        refetchFrames();
+      } catch (e) {
+        setGridError(`Could not restore the frame: ${e}`);
+      }
+    },
+    [refetchFrames],
+  );
 
-  const toggleSelected = (frameId: string) => {
+  const toggleSelected = useCallback((frame: DatasetFrame) => {
     setSelectedIds((cur) => {
       const next = new Set(cur);
-      if (!next.delete(frameId)) next.add(frameId);
+      if (!next.delete(frame.id)) next.add(frame.id);
       return next;
     });
-  };
+  }, []);
+
+  const clearSelection = useCallback(() => setSelectedIds(new Set()), []);
 
   const runAssign = async (attach: boolean) => {
     if (!assignConceptId || selectedIds.size === 0) return;
@@ -378,192 +330,7 @@ export function DatasetStudio() {
           tag/style, ready for any external LoRA trainer. This does not train anything itself.
         </p>
 
-        <div className="datasetform">
-          <label className="datasetform__field">
-            <span>Root folder</span>
-            <div className="datasetform__row">
-              <input
-                type="text"
-                value={root}
-                onChange={(e) => setRoot(e.target.value)}
-                placeholder="E:\Data\MyArtStyle"
-              />
-              <button type="button" className="chip" onClick={() => browseInto(setRoot)}>
-                Browse…
-              </button>
-            </div>
-          </label>
-
-          <label className="datasetform__field" htmlFor={modeId}>
-            <span>Mode</span>
-            <select
-              id={modeId}
-              value={mode}
-              onChange={(e) => setMode(e.target.value as DatasetMode)}
-            >
-              <option value="frames">Frames (stills from video + images)</option>
-              <option value="clips">Clips (whole videos, for video models)</option>
-            </select>
-          </label>
-
-          <div className="datasetform__grid">
-            <label className="datasetform__field">
-              <span>Sample rate (fps)</span>
-              <input
-                type="number"
-                min={0.1}
-                max={10}
-                step={0.1}
-                value={sampleFps}
-                onChange={(e) => setSampleFps(Number(e.target.value))}
-              />
-            </label>
-            <label className="datasetform__field">
-              <span>Blur threshold</span>
-              <input
-                type="number"
-                min={0}
-                max={10000}
-                step={5}
-                value={blurThreshold}
-                onChange={(e) => setBlurThreshold(Number(e.target.value))}
-              />
-            </label>
-            <label className="datasetform__field">
-              <span>Duplicate distance</span>
-              <input
-                type="number"
-                min={0}
-                max={64}
-                step={1}
-                value={phashMaxDistance}
-                onChange={(e) => setPhashMaxDistance(Number(e.target.value))}
-              />
-            </label>
-            <label className="datasetform__field">
-              <span>Max frames per clip (0 = all)</span>
-              <input
-                type="number"
-                min={0}
-                max={500}
-                step={1}
-                value={maxFramesPerClip}
-                onChange={(e) => setMaxFramesPerClip(Number(e.target.value))}
-              />
-            </label>
-            {mode === "clips" && (
-              <label className="datasetform__field">
-                <span>Min clip length (s)</span>
-                <input
-                  type="number"
-                  min={0}
-                  max={600}
-                  step={0.5}
-                  value={minClipSecs}
-                  onChange={(e) => setMinClipSecs(Number(e.target.value))}
-                />
-              </label>
-            )}
-          </div>
-
-          <fieldset className="datasetform__captioning">
-            <legend>Auto-caption</legend>
-            <label className="datasetform__check">
-              <input
-                type="checkbox"
-                checked={captionOn}
-                disabled={installed.length === 0}
-                onChange={(e) => setCaptionWanted(e.target.checked)}
-              />
-              <span>
-                Describe every kept frame automatically.{" "}
-                <em>
-                  Recommended for style LoRAs: what is described stays controllable, what is not
-                  becomes part of the style.
-                </em>
-              </span>
-            </label>
-
-            {installed.length === 0 && (
-              <p className="datasetform__hint">
-                No captioner installed — import Florence-2 or the WD tagger on the Models tab.
-                Without one, everything recurring in your frames flows into the trigger word.
-              </p>
-            )}
-
-            {captionOn && (
-              <label
-                className="datasetform__field datasetform__field--inline"
-                htmlFor={captionerSelectId}
-              >
-                <span>Describe with</span>
-                <select
-                  id={captionerSelectId}
-                  value={captionerId ?? ""}
-                  onChange={(e) => setPickedCaptioner(e.target.value)}
-                >
-                  {installed.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.name} {c.style === "tags" ? "· tags" : "· prose"}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            )}
-
-            {captionOn && chosenCaptioner?.supports_escalation && (
-              <>
-                <label className="datasetform__check">
-                  <input
-                    type="checkbox"
-                    checked={escalate}
-                    onChange={(e) => setEscalate(e.target.checked)}
-                  />
-                  <span>
-                    Escalate uncertain captions to Qwen2.5-VL with temporal context (frame vs. a
-                    later frame)
-                  </span>
-                </label>
-                {escalate && (
-                  <>
-                    <label className="datasetform__field datasetform__field--inline">
-                      <span>Escalate every Nth frame too</span>
-                      <input
-                        type="number"
-                        min={0}
-                        max={500}
-                        step={1}
-                        value={escalateEveryNth}
-                        onChange={(e) => setEscalateEveryNth(Number(e.target.value))}
-                      />
-                    </label>
-                    <label className="datasetform__field datasetform__field--inline">
-                      <span>Context offset (frames)</span>
-                      <input
-                        type="number"
-                        min={1}
-                        max={50}
-                        step={1}
-                        value={contextOffset}
-                        onChange={(e) => setContextOffset(Number(e.target.value))}
-                      />
-                    </label>
-                  </>
-                )}
-              </>
-            )}
-          </fieldset>
-
-          <button
-            type="button"
-            className="datasetform__go"
-            onClick={start}
-            disabled={!root.trim() || isRunning}
-          >
-            {isRunning ? "Pipeline running…" : "Run pipeline"}
-          </button>
-          {sendError && <p className="dataset__err">{sendError}</p>}
-        </div>
+        <PrepForm isRunning={isRunning} error={sendError} onStart={start} />
 
         {datasetList.length > 0 && (
           <div className="dataset__history">
@@ -663,52 +430,16 @@ export function DatasetStudio() {
             {gridError && <p className="dataset__err">{gridError}</p>}
 
             {selectedIds.size > 0 && (
-              <div className="card dataset__toolbar">
-                <span className="dataset__toolbar-count">{selectedIds.size} selected</span>
-                <label
-                  className="datasetform__field datasetform__field--inline"
-                  htmlFor={assignSelectId}
-                >
-                  <span className="dataset__toolbar-label">Concept</span>
-                  <select
-                    id={assignSelectId}
-                    value={assignConceptId}
-                    onChange={(e) => setAssignConceptId(e.target.value)}
-                  >
-                    <option value="">Choose a concept…</option>
-                    {conceptList.map((c) => (
-                      <option key={c.id} value={c.id}>
-                        {c.name} ({c.token})
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <button
-                  type="button"
-                  className="chip"
-                  disabled={!assignConceptId}
-                  onClick={() => runAssign(true)}
-                >
-                  Assign to concept
-                </button>
-                <button
-                  type="button"
-                  className="chip"
-                  disabled={!assignConceptId}
-                  onClick={() => runAssign(false)}
-                >
-                  Remove from concept
-                </button>
-                <button type="button" className="chip" onClick={() => setSelectedIds(new Set())}>
-                  Clear selection
-                </button>
-                {assignState.kind === "done" && (
-                  <span className="dataset__toolbar-status">{assignState.text}</span>
-                )}
-                {assignState.kind === "error" && (
-                  <span className="dataset__err">{assignState.text}</span>
-                )}
-              </div>
+              <SelectionToolbar
+                selectedCount={selectedIds.size}
+                concepts={conceptList}
+                conceptId={assignConceptId}
+                onConceptIdChange={setAssignConceptId}
+                onAssign={() => runAssign(true)}
+                onRemove={() => runAssign(false)}
+                onClear={clearSelection}
+                state={assignState}
+              />
             )}
 
             <div className="dataset__grid">
@@ -718,13 +449,11 @@ export function DatasetStudio() {
                   frame={frame}
                   imageUrl={about ? frameImageUrl(about.core_api_port, frame) : ""}
                   isSelected={selectedIds.has(frame.id)}
-                  conceptTokens={(conceptMap?.[frame.id] ?? [])
-                    .map((id) => tokenByConceptId[id])
-                    .filter((t): t is string => !!t)}
-                  onToggleSelected={() => toggleSelected(frame.id)}
-                  onCaptionCommit={(caption) => editCaption(frame, caption)}
-                  onToggleExcluded={() => toggleExcluded(frame)}
-                  onRestore={() => restore(frame)}
+                  conceptTokens={tokensByFrameId[frame.id] ?? NO_TOKENS}
+                  onToggleSelected={toggleSelected}
+                  onCaptionCommit={editCaption}
+                  onToggleExcluded={toggleExcluded}
+                  onRestore={restore}
                 />
               ))}
             </div>
@@ -738,49 +467,15 @@ export function DatasetStudio() {
               </button>
             )}
 
-            <div className="card dataset__export">
-              <h3>Export</h3>
-              <label className="datasetform__field" htmlFor={destDirId}>
-                <span>Destination folder</span>
-                <div className="datasetform__row">
-                  <input
-                    id={destDirId}
-                    type="text"
-                    value={destDir}
-                    onChange={(e) => setDestDir(e.target.value)}
-                    placeholder="Where to write NNNN.png + NNNN.txt pairs"
-                  />
-                  <button type="button" className="chip" onClick={() => browseInto(setDestDir)}>
-                    Browse…
-                  </button>
-                </div>
-              </label>
-              <label className="datasetform__field datasetform__field--inline" htmlFor={orderId}>
-                <span>Caption order</span>
-                <select
-                  id={orderId}
-                  value={captionOrder}
-                  onChange={(e) => setCaptionOrder(e.target.value as CaptionOrder)}
-                >
-                  <option value="prose_first">Prose first (FLUX.2)</option>
-                  <option value="tags_first">Tags first (Anime/SDXL)</option>
-                </select>
-              </label>
-              <button
-                type="button"
-                className="datasetform__go"
-                onClick={runExport}
-                disabled={!destDir.trim() || exportState.kind === "busy" || keptCount === 0}
-              >
-                {exportState.kind === "busy" ? "Exporting…" : `Export ${keptCount} item(s)`}
-              </button>
-              {exportState.kind === "done" && (
-                <p className="dataset__done">
-                  Exported {exportState.exported} item(s) to {exportState.destDir}.
-                </p>
-              )}
-              {exportState.kind === "error" && <p className="dataset__err">{exportState.message}</p>}
-            </div>
+            <ExportCard
+              destDir={destDir}
+              onDestDirChange={setDestDir}
+              captionOrder={captionOrder}
+              onCaptionOrderChange={setCaptionOrder}
+              keptCount={keptCount}
+              state={exportState}
+              onExport={runExport}
+            />
           </>
         )}
       </div>
