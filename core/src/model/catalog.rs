@@ -620,6 +620,41 @@ pub const KNOWN_MODELS: &[KnownModel] = &[
         is_default: false,
         media: "voice",
     },
+    KnownModel {
+        id: "wd-eva02-large-tagger-v3-model",
+        name: "WD EVA02-Large Tagger v3 — model",
+        kind: "wd_tagger",
+        family: None,
+        publisher: "SmilingWolf",
+        repo: "SmilingWolf/wd-eva02-large-tagger-v3",
+        file: "model.onnx",
+        url: "https://huggingface.co/SmilingWolf/wd-eva02-large-tagger-v3/resolve/main/model.onnx",
+        sha256: "9e768793060c7939b277ccb382783e8670e8a042d29d77aa736be0c8cc898bfc",
+        size_bytes: 1_260_435_999,
+        license: "Apache-2.0",
+        note: "Danbooru-style tag captioner (rating, character and general tags, explicit \
+               tags included) for anime/illustration datasets. 0.3B parameters, runs on the \
+               CPU via onnxruntime. Needs the tag list below in the same folder.",
+        is_default: false,
+        media: "image",
+    },
+    KnownModel {
+        id: "wd-eva02-large-tagger-v3-tags",
+        name: "WD EVA02-Large Tagger v3 — tag list",
+        kind: "wd_tagger",
+        family: None,
+        publisher: "SmilingWolf",
+        repo: "SmilingWolf/wd-eva02-large-tagger-v3",
+        file: "selected_tags.csv",
+        url: "https://huggingface.co/SmilingWolf/wd-eva02-large-tagger-v3/resolve/main/selected_tags.csv",
+        sha256: "298633d94d0031d2081c0893f29c82eab7f0df00b08483ba8f29d1e979441217",
+        size_bytes: 308_468,
+        license: "Apache-2.0",
+        note: "The tag vocabulary the tagger's outputs map onto. Required companion of the \
+               model above.",
+        is_default: false,
+        media: "image",
+    },
 ];
 
 /// The catalogue entry whose file matches `sha256`, if any.

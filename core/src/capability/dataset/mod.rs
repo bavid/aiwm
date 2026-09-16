@@ -21,6 +21,7 @@
 //! [`export_dataset`] writes the curator's final selection to disk.
 
 mod caption;
+mod captioner;
 mod compose;
 mod extract;
 mod filter;
@@ -29,6 +30,10 @@ mod ingest;
 pub use caption::{
     DEFAULT_CONTEXT_OFFSET, DEFAULT_ESCALATE, DEFAULT_ESCALATE_EVERY_NTH,
     FLORENCE2_VRAM_FALLBACK_MB, QWEN_VL_VRAM_FALLBACK_MB,
+};
+pub use captioner::{
+    captioner_statuses, find_captioner, Captioner, CaptionerStatus, CAPTIONERS, FLORENCE2_ID,
+    WD_TAGGER_ID,
 };
 pub use compose::{compose_caption, token_warning, CaptionOrder, CaptionStyle, ConceptPart};
 pub use extract::{DEFAULT_SAMPLE_FPS, MAX_SAMPLE_FPS, MIN_SAMPLE_FPS};

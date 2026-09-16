@@ -66,6 +66,10 @@ pub enum ModelKind {
     /// Studio Phase 2 character consistency, paired with a
     /// [`ClipVision`](Self::ClipVision) encoder.
     IpAdapter,
+    /// SmilingWolf's WD Danbooru tagger — `model.onnx` + `selected_tags.csv`,
+    /// co-located, consumed by the Python sidecar (`vision.tag_frame`).
+    /// Never a ComfyUI model.
+    WdTagger,
 }
 
 impl ModelKind {
@@ -85,6 +89,7 @@ impl ModelKind {
             "dia_codec" => Self::DiaCodec,
             "clip_vision" | "clip_vision_model" => Self::ClipVision,
             "ip_adapter" | "ipadapter" => Self::IpAdapter,
+            "wd_tagger" => Self::WdTagger,
             _ => return None,
         })
     }
@@ -116,6 +121,7 @@ impl ModelKind {
             // safetensors weight shards -- both real extensions, in the same
             // directory, for both the Dia engine and its DAC codec.
             Self::DiaEngine | Self::DiaCodec => ext == "json" || ext == "safetensors",
+            Self::WdTagger => ext == "onnx" || ext == "csv",
         }
     }
 
@@ -146,6 +152,7 @@ impl ModelKind {
             Self::DiaCodec => Some("dia_codec"),
             Self::ClipVision => Some("clip_vision"),
             Self::IpAdapter => Some("ip_adapter"),
+            Self::WdTagger => Some("vision_wd_tagger"),
         }
     }
 
@@ -169,6 +176,7 @@ impl ModelKind {
             Self::DiaCodec => "voice/dia-codec",
             Self::ClipVision => "image/clip_vision",
             Self::IpAdapter => "image/ipadapter",
+            Self::WdTagger => "vision/wd-tagger",
         }
     }
 
@@ -177,9 +185,12 @@ impl ModelKind {
     /// (an LLM for llama.cpp, or a voice file for the Python sidecar).
     pub fn comfy_folder(self) -> Option<&'static str> {
         Some(match self {
-            Self::Chat | Self::VoiceModel | Self::VoiceData | Self::DiaEngine | Self::DiaCodec => {
-                return None
-            }
+            Self::Chat
+            | Self::VoiceModel
+            | Self::VoiceData
+            | Self::DiaEngine
+            | Self::DiaCodec
+            | Self::WdTagger => return None,
             Self::Checkpoint => "checkpoints",
             Self::DiffusionModel | Self::VideoModel => "diffusion_models",
             Self::Vae => "vae",
@@ -205,6 +216,7 @@ impl ModelKind {
             Self::DiaCodec => "dia_codec",
             Self::ClipVision => "clip_vision",
             Self::IpAdapter => "ip_adapter",
+            Self::WdTagger => "wd_tagger",
         }
     }
 
@@ -407,6 +419,19 @@ mod tests {
             ModelKind::from_hint("ipadapter"),
             Some(ModelKind::IpAdapter)
         );
+    }
+
+    #[test]
+    fn wd_tagger_is_a_sidecar_kind_with_its_own_folder() {
+        assert_eq!(ModelKind::WdTagger.default_role(), Some("vision_wd_tagger"));
+        assert_eq!(ModelKind::WdTagger.store_subdir(), "vision/wd-tagger");
+        assert_eq!(ModelKind::WdTagger.comfy_folder(), None);
+        assert_eq!(ModelKind::WdTagger.as_str(), "wd_tagger");
+        assert_eq!(ModelKind::from_hint("wd_tagger"), Some(ModelKind::WdTagger));
+        assert!(ModelKind::WdTagger.accepts_ext("onnx"));
+        assert!(ModelKind::WdTagger.accepts_ext("csv"));
+        assert!(!ModelKind::WdTagger.accepts_ext("safetensors"));
+        assert!(!ModelKind::WdTagger.is_llm());
     }
 
     #[test]
