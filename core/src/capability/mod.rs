@@ -8,11 +8,16 @@
 //! - [`upscale`] — `job_type=upscale`, NVIDIA RTX Video Super Resolution on an
 //!   already-finished image/video job's output, also on ComfyUI (7.x)
 //! - [`agent`] — long-running agent sessions; its own subsystem, not a job (5.1c)
+//! - [`dataset`] — `job_type=dataset_prep`, the "bring your own dataset" prep
+//!   pipeline (ingest → ffmpeg extraction → blur/duplicate filtering →
+//!   Florence-2/Qwen2.5-VL captioning) that turns a folder tree of video/
+//!   images into a curated, captioned LoRA-trainer-ready dataset
 
 pub mod agent;
 pub mod audio_clean;
 pub mod chat;
 pub mod colibri;
+pub mod dataset;
 pub mod image;
 mod media;
 pub mod tts;

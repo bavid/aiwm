@@ -19,6 +19,7 @@ mod llamacpp;
 mod registry;
 mod supervisor;
 pub mod tts;
+pub mod vision;
 
 pub use colibri::install as colibri_install;
 pub use colibri::{
@@ -34,6 +35,7 @@ pub use llamacpp::{GenerationEvent, InstallState, LlamaCppAdapter, LlamaServerOp
 pub use registry::RuntimeRegistry;
 pub use supervisor::{RuntimeSupervisor, SupervisorState};
 pub use tts::TtsAdapter;
+pub use vision::VisionAdapter;
 
 use std::net::{Ipv4Addr, TcpListener};
 use std::path::PathBuf;
@@ -66,6 +68,9 @@ pub enum RuntimeKind {
     ComfyUi,
     Colibri,
     Tts,
+    /// The Florence-2 / Qwen2.5-VL captioning pipeline for `job_type=
+    /// dataset_prep` — see [`vision::VisionAdapter`].
+    Vision,
     Fake,
 }
 
