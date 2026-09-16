@@ -1,6 +1,6 @@
 //! Captioner registry (spec 3D): Florence-2 is one entry, not the pipeline.
 //! Each captioner is resolved from the model library by role, exactly like
-//! `caption::resolve_florence2_dir` always did; `installed` is what the
+//! `caption::resolve_captioner_dir` does for every entry; `installed` is what the
 //! Dataset tab's "Beschreiben mit" dropdown filters on.
 
 use std::path::{Path, PathBuf};

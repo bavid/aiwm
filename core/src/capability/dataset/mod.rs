@@ -26,6 +26,11 @@
 //! a preview still. [`export_dataset`] writes the curator's final selection
 //! to disk, composing each caption from the dataset trigger, the frame's
 //! concepts and its own caption (see [`compose`]).
+//!
+//! A cancelled run keeps every frame and caption written before the cancel,
+//! and a failed one keeps them too — a partial dataset is safe to curate and
+//! export. Only a dataset that never received a single frame is discarded
+//! again (see [`run`]).
 
 mod caption;
 mod captioner;
@@ -286,6 +291,22 @@ async fn cancelled(cancel: &watch::Receiver<bool>) -> bool {
     *cancel.borrow()
 }
 
+/// Delete `dataset_id` again when nothing was ever filed under it — the
+/// cleanup half of [`run`]'s "never an empty dataset" rule. Best-effort on
+/// purpose: it runs while an error is already on its way out, so a failure
+/// here is logged rather than allowed to mask the real one.
+async fn discard_empty_dataset(db: &Database, dataset_id: &str) {
+    match db.dataset_frames().list_for_dataset(dataset_id).await {
+        Ok(frames) if frames.is_empty() => {
+            if let Err(e) = db.datasets().delete(dataset_id).await {
+                tracing::warn!(dataset_id, error = %e, "could not discard the empty dataset");
+            }
+        }
+        Ok(_) => {}
+        Err(e) => tracing::warn!(dataset_id, error = %e, "could not check the dataset for frames"),
+    }
+}
+
 /// Run the whole pipeline for `req`, writing extracted frames under
 /// `work_dir/<job_id>/raw/` and persisting kept, captioned frames to the
 /// `dataset_frames` table. The vision runtime's model is already loaded by
@@ -293,6 +314,16 @@ async fn cancelled(cancel: &watch::Receiver<bool>) -> bool {
 /// as every other capability) — this function only ever calls
 /// `vision.client()` to talk to the already-running sidecar, never
 /// `load_model` itself.
+///
+/// A dataset is never left behind without frames: if the run fails after the
+/// `datasets` row was created but before anything was filed under it, the row
+/// is deleted again. A failed run that already stored frames *keeps* them —
+/// the job's failure stays visible through `prep_job_id`, and a partial
+/// dataset is still worth curating.
+///
+/// Cancellation works the same way: whatever frames and captions were written
+/// before the cancel are kept, so the dataset is safe to curate and export
+/// partially.
 pub async fn run(
     db: &Database,
     vision: &VisionAdapter,
@@ -352,24 +383,28 @@ pub async fn run(
         })
         .await?;
 
-    let tag_count: std::collections::BTreeSet<&String> = items.iter().map(|i| &i.tag).collect();
-    db.jobs()
-        .append_event(
-            job_id,
-            EventLevel::Info,
-            &format!(
-                "found {} tag folder(s), {} source file(s)",
-                tag_count.len(),
-                items.len()
-            ),
-        )
-        .await?;
+    // Everything past this point has a `datasets` row to clean up on the way
+    // out, so it lives in one block whose single result is checked below.
+    let outcome: Result<DatasetPrepOutcome> = async {
+        let tag_count: std::collections::BTreeSet<&String> =
+            items.iter().map(|i| &i.tag).collect();
+        db.jobs()
+            .append_event(
+                job_id,
+                EventLevel::Info,
+                &format!(
+                    "found {} tag folder(s), {} source file(s)",
+                    tag_count.len(),
+                    items.len()
+                ),
+            )
+            .await?;
 
-    if req.mode == DatasetMode::Clips {
-        return run_clip_mode(db, work_dir, job_id, &dataset.id, &items, &req, cancel).await;
-    }
+        if req.mode == DatasetMode::Clips {
+            return run_clip_mode(db, work_dir, job_id, &dataset.id, &items, &req, &cancel).await;
+        }
 
-    let raw_dir = work_dir.join(job_id).join("raw");
+        let raw_dir = work_dir.join(job_id).join("raw");
     let mut groups: Vec<CandidateGroup> = Vec::new();
     for item in &items {
         if cancelled(&cancel).await {
@@ -443,7 +478,7 @@ pub async fn run(
         // Every candidate is stored, kept or not: the curation grid filters
         // on `rejection_reason` and can restore an individual frame, which
         // is only possible if the rejected rows exist at all.
-        let mut kept_records: Vec<DatasetFrame> = Vec::new();
+        let mut kept_records: Vec<DatasetFrame> = Vec::with_capacity(group.frames.len());
         for (cand, reason) in &group.frames {
             let row = db
                 .dataset_frames()
@@ -499,10 +534,17 @@ pub async fn run(
         }
     }
 
-    Ok(DatasetPrepOutcome::Done(DatasetPrepDone {
-        frame_count,
-        tag_counts,
-    }))
+        Ok(DatasetPrepOutcome::Done(DatasetPrepDone {
+            frame_count,
+            tag_counts,
+        }))
+    }
+    .await;
+
+    if outcome.is_err() {
+        discard_empty_dataset(db, &dataset.id).await;
+    }
+    outcome
 }
 
 /// Clip mode's one judgement call: a video whose duration ffprobe could not
@@ -511,6 +553,40 @@ pub async fn run(
 /// testable without ffmpeg installed.
 fn clip_is_usable(duration: Option<f64>, min_secs: f64) -> bool {
     duration.is_some_and(|d| d >= min_secs)
+}
+
+/// What clip mode decided about one video, and what (if anything) the job log
+/// should say about it.
+#[derive(Debug, PartialEq)]
+struct ClipVerdict {
+    usable: bool,
+    /// `Some` only when something went wrong that the curator should see; a
+    /// clip that is simply too short is an expected outcome, not a warning.
+    warning: Option<String>,
+}
+
+/// Fold the two things that can disqualify one clip into a single verdict:
+/// it is too short (or undecodable), or its preview still could not be
+/// written. The second is deliberately *not* fatal to the run — one clip
+/// ffmpeg cannot seek into should not throw away every other clip's work —
+/// so it comes back as a warning to log alongside the `Unusable` row.
+fn clip_verdict(duration: Option<f64>, min_secs: f64, preview: Result<()>) -> ClipVerdict {
+    if !clip_is_usable(duration, min_secs) {
+        return ClipVerdict {
+            usable: false,
+            warning: None,
+        };
+    }
+    match preview {
+        Ok(()) => ClipVerdict {
+            usable: true,
+            warning: None,
+        },
+        Err(e) => ClipVerdict {
+            usable: false,
+            warning: Some(format!("no preview still \u{2014} {e}")),
+        },
+    }
 }
 
 /// Clip mode (spec 3): no frame extraction at all — each source *video*
@@ -524,7 +600,7 @@ async fn run_clip_mode(
     dataset_id: &str,
     items: &[ingest::IngestItem],
     req: &DatasetPrepRequest,
-    cancel: watch::Receiver<bool>,
+    cancel: &watch::Receiver<bool>,
 ) -> Result<DatasetPrepOutcome> {
     let ffmpeg = extract::resolve_ffmpeg().ok_or_else(|| {
         dataset_err("ffmpeg was not found on PATH \u{2014} install it to work with clips")
@@ -536,19 +612,31 @@ async fn run_clip_mode(
     let mut tag_counts: BTreeMap<String, usize> = BTreeMap::new();
     let mut kept = 0usize;
     for item in items.iter().filter(|i| i.kind == ingest::IngestKind::Video) {
-        if cancelled(&cancel).await {
+        if cancelled(cancel).await {
             return Ok(DatasetPrepOutcome::Cancelled);
         }
         let duration = extract::probe_duration_secs(&ffprobe, &item.path).await?;
-        let usable = clip_is_usable(duration, req.min_clip_secs);
         let preview = preview_dir
             .join(&item.tag)
             .join(format!("{}.png", video_stem(&item.path)));
-        if usable {
+        let preview_result = if clip_is_usable(duration, req.min_clip_secs) {
             // One second in, or the very start for a clip barely that long —
             // the first frame of a cut is often a fade.
             let at = duration.unwrap_or(0.0).min(1.0);
-            extract::extract_preview_still(&ffmpeg, &item.path, &preview, at).await?;
+            extract::extract_preview_still(&ffmpeg, &item.path, &preview, at).await
+        } else {
+            Ok(())
+        };
+        let ClipVerdict { usable, warning } =
+            clip_verdict(duration, req.min_clip_secs, preview_result);
+        if let Some(warning) = warning {
+            db.jobs()
+                .append_event(
+                    job_id,
+                    EventLevel::Warn,
+                    &format!("{}: {warning}", item.path.display()),
+                )
+                .await?;
         }
         db.dataset_frames()
             .insert(NewDatasetFrame {
@@ -1416,6 +1504,83 @@ mod tests {
             .filter(|(_, v)| *v == Some(filter::RejectionReason::Cap))
             .count();
         assert_eq!(capped, 1, "the second survivor is dropped by the cap");
+    }
+
+    #[tokio::test]
+    async fn discard_empty_dataset_only_deletes_one_that_never_got_a_frame() {
+        let db = Database::connect_in_memory().await.unwrap();
+        let src = tempfile::tempdir().unwrap();
+
+        let (_job, empty) = frames_dataset(&db).await;
+        discard_empty_dataset(&db, &empty.id).await;
+        assert!(db.datasets().get(&empty.id).await.unwrap().is_none());
+
+        let (job_id, with_frames) = frames_dataset(&db).await;
+        insert_frame(&db, &job_id, &with_frames.id, src.path(), 0, "").await;
+        discard_empty_dataset(&db, &with_frames.id).await;
+        assert!(
+            db.datasets().get(&with_frames.id).await.unwrap().is_some(),
+            "a failed run that already stored frames keeps them"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failed_run_never_leaves_an_empty_dataset_behind() {
+        let db = Database::connect_in_memory().await.unwrap();
+        let vision = VisionAdapter::new();
+        let job = new_job(&db).await;
+        let work = tempfile::tempdir().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let tag_dir = root.path().join("MyStyle");
+        std::fs::create_dir_all(&tag_dir).unwrap();
+        // A file the filter stage cannot decode: the run fails *after* the
+        // dataset row exists but before a single frame is stored.
+        std::fs::write(tag_dir.join("broken.png"), b"not a png").unwrap();
+
+        // Failing *before* the row is created leaves nothing behind either.
+        let needs_model = DatasetPrepRequest::from_params(&serde_json::json!({
+            "root": root.path().to_string_lossy(), "captioner": "florence2"
+        }))
+        .unwrap();
+        let (_tx, rx) = watch::channel(false);
+        let err = run(&db, &vision, work.path(), &job, needs_model, rx)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("Florence-2"), "{err}");
+        assert!(db.datasets().list().await.unwrap().is_empty());
+
+        let req = DatasetPrepRequest::from_params(
+            &serde_json::json!({ "root": root.path().to_string_lossy() }),
+        )
+        .unwrap();
+        let (_tx, rx) = watch::channel(false);
+        let err = run(&db, &vision, work.path(), &job, req, rx)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("dead-frame check"), "{err}");
+        assert!(
+            db.datasets().list().await.unwrap().is_empty(),
+            "the dataset row was rolled back"
+        );
+    }
+
+    #[test]
+    fn clip_verdict_rejects_short_clips_and_survives_a_preview_failure() {
+        let short = clip_verdict(Some(1.0), 2.0, Ok(()));
+        assert!(!short.usable);
+        assert_eq!(short.warning, None, "too short is not worth a warning");
+
+        let good = clip_verdict(Some(30.0), 2.0, Ok(()));
+        assert!(good.usable);
+        assert_eq!(good.warning, None);
+
+        let no_preview = clip_verdict(Some(30.0), 2.0, Err(dataset_err("ffmpeg preview failed")));
+        assert!(
+            !no_preview.usable,
+            "a clip without a preview still cannot be curated"
+        );
+        let warning = no_preview.warning.unwrap();
+        assert!(warning.contains("ffmpeg preview failed"), "{warning}");
     }
 
     #[test]
