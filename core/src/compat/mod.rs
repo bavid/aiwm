@@ -111,11 +111,37 @@ pub fn verdict_from_total_mb(total_mb: u64, vram_budget_mb: u64, free_ram_mb: u6
 }
 
 /// Flat VRAM overhead for the CUDA context, cuBLAS workspace and compute graph.
-const RUNTIME_OVERHEAD_MB: u64 = 650;
+///
+/// Calibrated (2026-09-16) against a real `llama-server` load on this
+/// project's actual RTX 4080 Super (16 GB), `-ngl 999` (full GPU offload):
+/// Mistral-Small-3.2-24B-Instruct, IQ3_M GGUF (10650964832 bytes on disk),
+/// 40 layers / 5120 hidden / 32 heads / 8 KV heads, served at the 8192-token
+/// chat-default context. The old 650 MB predicted 12407 MB total (weights
+/// 10157 + KV 1600 + 650); NVML showed the process's actual VRAM delta
+/// (idle-desktop baseline 909 MB \u{2192} peak 12599 MB while resident) was
+/// only 11690 MB \u{2014} weights + KV alone (11757 MB) already slightly
+/// *exceed* what was actually used, so the true fixed overhead for this run
+/// was near zero, not 650 MB. Lowered to 350 MB: still a real, positive
+/// safety margin (roughly a CUDA context's worth) rather than 0, but closes
+/// most of the 717 MB gap the old constant left on the table. Single
+/// real-hardware sample — the other real GGUF chat model on this machine
+/// (Qwen2.5-7B-Instruct, F16) doesn't fit this card at all (needs ~15.3 GB of
+/// 16 GB), so it couldn't be used as a second data point here. Recalibrate
+/// further as more real loads (different quant/arch) become available.
+const RUNTIME_OVERHEAD_MB: u64 = 350;
 
 /// KV-cache guess per 1K context tokens when the GGUF lacks architecture dims.
 /// Generous on purpose — a dense-attention 13B sits near this; GQA models are
 /// well under it.
+///
+/// **Not calibrated against a real measurement**: both real GGUF chat models
+/// available on this machine (Qwen2.5-7B-Instruct, Mistral-Small-3.2-24B)
+/// carry full architecture metadata (`n_layers`/`n_embd`/`n_heads`/
+/// `n_kv_heads`), so every real load in this session hit the *precise*
+/// `kv_bytes_per_token` path (see [`ModelDims::kv_bytes_per_token`]), never
+/// this rough fallback — it only fires for a GGUF whose header is missing
+/// those fields, which none of the imported models are. Left as-is; would
+/// need a real model with a stripped/incomplete header to calibrate honestly.
 const KV_ROUGH_MB_PER_1K_CTX: u64 = 160;
 
 const MIB: u64 = 1024 * 1024;
@@ -261,6 +287,53 @@ mod tests {
             n_heads: Some(28),
             n_kv_heads: Some(4),
         }
+    }
+
+    /// The real machine + real model this session's `RUNTIME_OVERHEAD_MB`
+    /// recalibration is based on: Mistral-Small-3.2-24B-Instruct, IQ3_M GGUF,
+    /// on the project's actual RTX 4080 Super (see the constant's doc comment
+    /// for the full real-measurement writeup).
+    fn mistral_small_3_2_24b_iq3_m() -> ModelDims {
+        ModelDims {
+            size_bytes: 10_650_964_832,
+            ctx_max: Some(131_072),
+            param_count: Some(23_572_403_200),
+            n_layers: Some(40),
+            n_embd: Some(5120),
+            n_heads: Some(32),
+            n_kv_heads: Some(8),
+        }
+    }
+
+    #[test]
+    fn real_mistral_load_pins_the_recalibrated_overhead_and_stays_above_measured_actual() {
+        // effective_ctx caps the 131K trained context at the 8192 chat default,
+        // exactly what actually served the real chat job this was measured on.
+        let ctx = effective_ctx(mistral_small_3_2_24b_iq3_m().ctx_max);
+        let est = estimate(&mistral_small_3_2_24b_iq3_m(), ctx);
+
+        assert!(!est.kv_is_rough);
+        assert_eq!(est.weights_mb, 10_157);
+        assert_eq!(est.kv_cache_mb, 1_600);
+        assert_eq!(est.overhead_mb, RUNTIME_OVERHEAD_MB);
+        assert_eq!(est.total_mb, 10_157 + 1_600 + RUNTIME_OVERHEAD_MB);
+
+        // NVML measured this real load's actual VRAM delta at 11 690 MB
+        // (idle-desktop baseline 909 MB -> peak 12 599 MB while resident).
+        // The estimate must stay conservative (>= actual) so the scheduler
+        // never under-reserves, while no longer overshooting by the old
+        // constant's 717 MB.
+        const REAL_MEASURED_ACTUAL_MB: u64 = 11_690;
+        assert!(
+            est.total_mb >= REAL_MEASURED_ACTUAL_MB,
+            "estimate {} must not under-predict the real measured {REAL_MEASURED_ACTUAL_MB} MB",
+            est.total_mb
+        );
+        let overshoot = est.total_mb - REAL_MEASURED_ACTUAL_MB;
+        assert!(
+            overshoot < 500,
+            "expected the recalibrated overhead to overshoot by well under the old 717 MB gap, got {overshoot}"
+        );
     }
 
     #[test]

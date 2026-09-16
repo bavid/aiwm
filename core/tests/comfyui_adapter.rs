@@ -11,7 +11,9 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use aiwm_core::db::Database;
-use aiwm_core::runtime::{ComfyDirs, ComfyLaunch, ComfyUiAdapter, Health, RuntimeAdapter};
+use aiwm_core::runtime::{
+    ComfyDirs, ComfyLaunch, ComfyOptions, ComfyUiAdapter, Health, RuntimeAdapter, VramMode,
+};
 
 fn fake_comfy_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_aiwm-fake-comfy"))
@@ -109,6 +111,80 @@ async fn waits_out_a_slow_cold_start() {
         "should have waited out the cold start"
     );
     assert_eq!(a.health().await, Health::Healthy);
+    a.stop().await.unwrap();
+}
+
+/// `detail()` always renders the port right after `verb :`
+/// (`format!("{verb} :{port}")`) — pull it back out to prove a restart landed
+/// on a genuinely new process rather than just updating in-memory state.
+fn port_from_detail(detail: &str) -> u16 {
+    let after_colon = detail
+        .split_once(':')
+        .expect("detail should contain a port")
+        .1;
+    after_colon
+        .chars()
+        .take_while(char::is_ascii_digit)
+        .collect::<String>()
+        .parse()
+        .expect("port digits")
+}
+
+#[tokio::test]
+async fn set_options_restarts_a_managed_server_with_the_new_vram_mode() {
+    let tmp = tempfile::tempdir().unwrap();
+    let a = adapter(tmp.path()).await;
+
+    a.load_model("sdxl", 7_000).await.unwrap();
+    let before = a.detail().unwrap();
+    assert!(!before.contains("lowvram"), "{before}");
+    let port_before = port_from_detail(&before);
+
+    a.set_options(ComfyOptions {
+        vram_mode: VramMode::LowVram,
+        extra_args: Vec::new(),
+    })
+    .await
+    .unwrap();
+
+    // A real restart: new process, new port, still healthy.
+    let after = a.detail().unwrap();
+    let port_after = port_from_detail(&after);
+    assert_ne!(
+        port_before, port_after,
+        "expected a real restart on a new port, got {after}"
+    );
+    assert!(after.contains("lowvram"), "{after}");
+    assert_eq!(a.health().await, Health::Healthy);
+
+    // The resident model bookkeeping survives the restart -- it tracks the
+    // VRAM budget, not literal GPU state (ComfyUI reloads the checkpoint
+    // lazily on the next render either way, restart or not).
+    let loaded = a.loaded_models();
+    assert_eq!(loaded.len(), 1);
+    assert_eq!(loaded[0].model_id, "sdxl");
+
+    a.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn set_options_on_a_down_but_installed_server_applies_to_the_next_start() {
+    let tmp = tempfile::tempdir().unwrap();
+    let a = adapter(tmp.path()).await;
+    assert_eq!(a.detail().as_deref(), Some("installed \u{b7} idle"));
+
+    a.set_options(ComfyOptions {
+        vram_mode: VramMode::LowVram,
+        extra_args: Vec::new(),
+    })
+    .await
+    .unwrap();
+    // Nothing running yet -- no restart to do, still down.
+    assert_eq!(a.detail().as_deref(), Some("installed \u{b7} idle"));
+
+    a.load_model("sdxl", 7_000).await.unwrap();
+    assert!(a.detail().unwrap().contains("lowvram"));
+
     a.stop().await.unwrap();
 }
 

@@ -165,7 +165,7 @@ async fn save_config(
     State(app): AppState,
     Json(update): Json<super::dto::ConfigUpdate>,
 ) -> Result<Json<crate::config::Config>, ApiError> {
-    Ok(Json(handlers::save_config(&app, update)?))
+    Ok(Json(handlers::save_config(&app, update).await?))
 }
 
 async fn settings(State(app): AppState) -> Result<Json<serde_json::Value>, ApiError> {

@@ -150,7 +150,7 @@ export function Settings() {
       setForm(f);
       setStatus({
         kind: "ok",
-        text: "Saved. Offline mode applies now; store path, data locations, VRAM budget, model selection, llama.cpp and ComfyUI options take effect after a restart.",
+        text: "Saved. Offline mode and ComfyUI options apply now; store path, data locations, VRAM budget, model selection and llama.cpp options take effect after a restart.",
       });
     } catch (e) {
       setStatus({ kind: "err", text: e instanceof Error ? e.message : String(e) });
@@ -433,7 +433,9 @@ export function Settings() {
               <section className="card set-group">
                 <header className="card__head">
                   <h2>ComfyUI</h2>
-                  <span className="card__sub">restart to apply</span>
+                  <span className="card__sub">
+                    applies live — restarts a running server for you
+                  </span>
                 </header>
                 <label className="set-field">
                   <span>

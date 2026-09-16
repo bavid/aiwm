@@ -64,7 +64,7 @@ async fn save_config(
     app: tauri::State<'_, Arc<App>>,
     update: ConfigUpdate,
 ) -> Result<Config, String> {
-    to_ipc(handlers::save_config(&app, update))
+    to_ipc(handlers::save_config(&app, update).await)
 }
 
 #[tauri::command]

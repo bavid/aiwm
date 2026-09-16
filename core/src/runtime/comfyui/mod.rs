@@ -89,6 +89,18 @@ pub struct GeneratedMedia {
 /// ComfyUI's VRAM-management mode — the `--<mode>vram` flag. `Auto` passes no
 /// flag and lets ComfyUI decide from the detected card; `LowVram` offloads more
 /// aggressively (useful for Flux on 16 GB).
+///
+/// `NormalVram` is **not** a real CLI flag — verified against the pinned
+/// v0.34.0 `comfy/cli_args.py`: the `vram_group` mutually-exclusive set is only
+/// `--gpu-only` / `--highvram` / `--lowvram` / `--novram` / `--cpu`. "Normal" is
+/// just ComfyUI's own default (`VRAMState.NORMAL_VRAM`) when none of those are
+/// passed — the same no-flag behaviour as `Auto`. A prior version of this enum
+/// mapped it to `--normalvram`, which doesn't exist: passing it made the real
+/// `main.py` exit immediately with `error: unrecognized arguments: --normalvram`
+/// before binding a port, so `ComfyUiAdapter` would crash-loop until the
+/// supervisor gave up (confirmed live against the real install). The variant
+/// stays (the Settings UI lists "Normal VRAM" as an explicit choice, distinct
+/// from "Auto — let ComfyUI decide") but its flag is `None`, same as `Auto`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum VramMode {
     #[default]
@@ -121,11 +133,13 @@ impl VramMode {
         }
     }
 
+    /// The CLI flag this mode passes, or `None` for a mode ComfyUI has no flag
+    /// for (`Auto` and `NormalVram` both fall through to ComfyUI's own
+    /// default — see the type doc comment).
     fn flag(self) -> Option<&'static str> {
         match self {
-            Self::Auto => None,
+            Self::Auto | Self::NormalVram => None,
             Self::HighVram => Some("--highvram"),
-            Self::NormalVram => Some("--normalvram"),
             Self::LowVram => Some("--lowvram"),
             Self::NoVram => Some("--novram"),
         }
@@ -133,7 +147,12 @@ impl VramMode {
 }
 
 /// Launch options for the ComfyUI server. The Settings UI exposes `vram_mode`
-/// via the `[comfyui]` table; a change needs an app restart (ADR-017).
+/// via the `[comfyui]` table. [`ComfyUiAdapter::set_options`] applies a change
+/// live (a managed graceful restart) instead of needing a full app restart —
+/// ComfyUI itself has no live-reconfigure endpoint; every one of these is read
+/// once at process startup (confirmed against the pinned v0.34.0 source: the
+/// vram/reserve-vram globals in `comfy/model_management.py` are set once from
+/// `cli_args.args` at import time, no HTTP route touches them again).
 #[derive(Debug, Clone, Default)]
 pub struct ComfyOptions {
     pub vram_mode: VramMode,
@@ -179,7 +198,9 @@ enum Server {
 pub struct ComfyUiAdapter {
     launch: LaunchSource,
     dirs: ComfyDirs,
-    opts: ComfyOptions,
+    /// `set_options` swaps this live; the current server (if any) keeps
+    /// running with whatever it was launched with until restarted.
+    opts: Mutex<ComfyOptions>,
     #[allow(dead_code)] // model-name lookups land with capability::image (3.4)
     db: Database,
     client: ComfyClient,
@@ -213,7 +234,7 @@ impl ComfyUiAdapter {
         Self {
             launch,
             dirs,
-            opts: ComfyOptions::default(),
+            opts: Mutex::new(ComfyOptions::default()),
             db,
             client: ComfyClient::new(),
             server: Mutex::new(Server::Down),
@@ -225,12 +246,18 @@ impl ComfyUiAdapter {
         }
     }
 
-    /// Set the server launch options (VRAM mode, extra args). Applies on the
-    /// next server start.
+    /// Set the server launch options (VRAM mode, extra args) before the
+    /// adapter is shared — the initial value for a fresh construction. Once
+    /// the adapter is running, use [`set_options`](Self::set_options) instead,
+    /// which applies live.
     #[must_use]
-    pub fn with_options(mut self, opts: ComfyOptions) -> Self {
-        self.opts = opts;
+    pub fn with_options(self, opts: ComfyOptions) -> Self {
+        *self.opts.lock().unwrap_or_else(PoisonError::into_inner) = opts;
         self
+    }
+
+    fn opts(&self) -> std::sync::MutexGuard<'_, ComfyOptions> {
+        self.opts.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     fn stats(&self) -> std::sync::MutexGuard<'_, Option<SystemStats>> {
@@ -440,7 +467,7 @@ impl ComfyUiAdapter {
         let install_dir = launch.main.as_deref().and_then(Path::parent);
         self.dirs.ensure(install_dir)?;
         let port = free_loopback_port()?;
-        let spec = build_spawn_spec(&launch, port, &self.dirs, &self.opts);
+        let spec = build_spawn_spec(&launch, port, &self.dirs, &self.opts());
 
         let supervisor = RuntimeSupervisor::start(RUNTIME_ID, spec)?;
         *self.server() = Server::Starting;
@@ -514,6 +541,55 @@ impl ComfyUiAdapter {
         }
         Ok(())
     }
+
+    /// Apply new launch options (VRAM mode, extra args). When we manage a
+    /// running server this restarts it — gracefully, via the same
+    /// `RuntimeSupervisor::stop` + `ensure_server_locked` path `stop`/
+    /// `load_model` already use — so the new flags take effect immediately
+    /// instead of only on the next full app restart (3.7's known gap).
+    ///
+    /// ComfyUI has no live-reconfigure endpoint: `--<mode>vram` and friends are
+    /// read once at process startup (see the [`ComfyOptions`] doc comment), so
+    /// a restart is the only way to actually change them. A server we merely
+    /// *attached* to isn't ours to restart — the new options are recorded and
+    /// take effect the next time *we* start a server, same as when nothing is
+    /// running yet.
+    ///
+    /// Restarting drops whatever ComfyUI had loaded in its own process
+    /// memory, but deliberately leaves the scheduler's `resident` bookkeeping
+    /// alone: [`load_model`](RuntimeAdapter::load_model)'s contract is already
+    /// that residency here tracks the VRAM *budget*, not literal GPU state
+    /// (ComfyUI loads the checkpoint lazily when a workflow runs) — the next
+    /// render just reloads it, exactly as it would after any other restart.
+    /// A render already in flight when this is called will fail against the
+    /// now-dead port; callers should prefer applying this between jobs.
+    pub async fn set_options(&self, opts: ComfyOptions) -> Result<()> {
+        let _op = self.op_lock.lock().await;
+        *self.opts() = opts;
+
+        let managed_and_up = matches!(
+            &*self.server(),
+            Server::Up {
+                supervisor: Some(_),
+                ..
+            }
+        );
+        if !managed_and_up {
+            return Ok(());
+        }
+
+        tracing::info!("restarting ComfyUI to apply new launch options");
+        let taken = std::mem::take(&mut *self.server());
+        if let Server::Up {
+            supervisor: Some(mut sup),
+            ..
+        } = taken
+        {
+            sup.stop().await?;
+        }
+        self.ensure_server_locked().await?;
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -528,7 +604,7 @@ impl RuntimeAdapter for ComfyUiAdapter {
 
     fn spawn_spec(&self) -> Option<SpawnSpec> {
         let launch = self.server_launch()?;
-        Some(build_spawn_spec(&launch, 0, &self.dirs, &self.opts))
+        Some(build_spawn_spec(&launch, 0, &self.dirs, &self.opts()))
     }
 
     async fn health(&self) -> Health {
@@ -632,8 +708,9 @@ impl RuntimeAdapter for ComfyUiAdapter {
                 if let Some(v) = self.stats().as_ref().and_then(|s| s.version.as_deref()) {
                     line.push_str(&format!(" · ComfyUI {v}"));
                 }
-                if self.opts.vram_mode != VramMode::Auto {
-                    line.push_str(&format!(" · {}", self.opts.vram_mode.as_str()));
+                let vram_mode = self.opts().vram_mode;
+                if vram_mode != VramMode::Auto {
+                    line.push_str(&format!(" · {}", vram_mode.as_str()));
                 }
                 if self.resident().is_some() {
                     line.push_str(" · model reserved");
@@ -749,5 +826,60 @@ mod tests {
 
         a.unload_model("something-else").await.unwrap();
         assert_eq!(a.loaded_models()[0].model_id, "sdxl");
+    }
+
+    /// Real, live-verified against the pinned v0.34.0 `comfy/cli_args.py`: the
+    /// `vram_group` mutually-exclusive set is only `--gpu-only` / `--highvram`
+    /// / `--lowvram` / `--novram` / `--cpu` — there is no `--normalvram`.
+    /// Running the real `main.py --normalvram` exits immediately with
+    /// `error: unrecognized arguments: --normalvram`. `NormalVram` must pass
+    /// no flag (ComfyUI's own default), same as `Auto`.
+    #[test]
+    fn normal_vram_and_auto_both_pass_no_cli_flag() {
+        assert_eq!(VramMode::Auto.flag(), None);
+        assert_eq!(VramMode::NormalVram.flag(), None);
+        assert_eq!(VramMode::HighVram.flag(), Some("--highvram"));
+        assert_eq!(VramMode::LowVram.flag(), Some("--lowvram"));
+        assert_eq!(VramMode::NoVram.flag(), Some("--novram"));
+    }
+
+    #[tokio::test]
+    async fn set_options_on_a_down_server_just_updates_the_stored_options() {
+        let (a, _tmp) = adapter(None).await;
+        assert_eq!(a.detail().as_deref(), Some("not installed"));
+
+        a.set_options(ComfyOptions {
+            vram_mode: VramMode::LowVram,
+            extra_args: Vec::new(),
+        })
+        .await
+        .unwrap();
+
+        // No server to restart -- still down, opts just apply to the next start.
+        assert_eq!(a.detail().as_deref(), Some("not installed"));
+    }
+
+    #[tokio::test]
+    async fn set_options_leaves_an_attached_server_alone() {
+        let port = mock_comfy().await;
+        let (a, _tmp) = adapter(None).await;
+        a.attach(port).await.unwrap();
+        a.load_model("sdxl", 7_000).await.unwrap();
+
+        a.set_options(ComfyOptions {
+            vram_mode: VramMode::LowVram,
+            extra_args: Vec::new(),
+        })
+        .await
+        .unwrap();
+
+        // Not ours to restart -- same port, still healthy, model still
+        // reserved. The new option is recorded (shows in `detail`) but only
+        // takes effect the next time *we* start a server.
+        let d = a.detail().unwrap();
+        assert!(d.starts_with(&format!("attached to :{port}")), "{d}");
+        assert!(d.contains("lowvram"), "{d}");
+        assert_eq!(a.health().await, Health::Healthy);
+        assert_eq!(a.loaded_models().len(), 1);
     }
 }
