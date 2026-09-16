@@ -599,10 +599,101 @@ unterstützt das aber bereits ohne Restrukturierung.
   Dialog → Bild-Gen → Narration, mit Redo/Regenerate pro Schritt), statt
   das Schritt-für-Schritt-Sequencing selbst zu bauen? Noch nicht evaluiert;
   für Phase 1 nicht nötig gewesen (nur ein einzelner Image-Job pro Schritt).
-- Für Phase 2/3 offen: IP-Adapter-Node-Pack-Auswahl, Assembly-Format-
-  Priorität (HTML-Scroll zuerst vs. PDF/CBZ), ob/wie ein Reorder-Endpoint
-  für die Timeline gebraucht wird, sobald Nutzer:innen wirklich Szenen
-  nachträglich umsortieren wollen.
+- Für Phase 3 weiterhin offen: Assembly-Format-Priorität (HTML-Scroll zuerst
+  vs. PDF/CBZ), ob/wie ein Reorder-Endpoint für die Timeline gebraucht wird,
+  sobald Nutzer:innen wirklich Szenen nachträglich umsortieren wollen. Die
+  IP-Adapter-Node-Pack-Auswahl (unten offen gelassen) ist jetzt entschieden
+  und umgesetzt.
+
+## Story Studio Phase 2 — Charakter-Konsistenz, erster Schnitt (2026-09-16)
+Phase 1 (oben) hat jedes Charakter-/Location-/Szenenbild als unabhängigen
+`job_type=image`-Job ohne jede Konsistenz-Maschinerie erzeugt — dieselbe
+Figur sah in jedem Bild anders aus. Phase 2 verankert eine Generierung an
+einem vorhandenen Referenzbild (`portrait_job_id`/`reference_job_id`), statt
+unabhängig zu generieren, sobald eines existiert.
+
+**Recherche zuerst** (Auftrag: "Recherche, keine Vermutung" — Repo-Quellen
+real gelesen, nicht aus dem Gedächtnis):
+- `cubiq/ComfyUI_IPAdapter_plus` (GPL-3.0, 6,1k Stars) ist der De-facto-
+  Standard für SDXL-IP-Adapter — seit 2025-04-14 laut eigenem README
+  offiziell "maintenance only", aber vollständig funktionsfähig und mit
+  Abstand am meisten genutzt. Kein eigenes `requirements.txt` für die
+  Basisfunktion (nur die FaceID-Varianten brauchen `insightface`, hier
+  ungenutzt) — der Install braucht also nur den Node selbst, keinen
+  zusätzlichen pip-Schritt.
+- Für Flux gibt es kein vergleichbar aktives/reifes Äquivalent
+  (`XLabs-AI/x-flux-comfyui`: letzter Push Ende 2024; `cubiq`s PuLID-Repos:
+  ebenfalls "maintenance only"). **Aber**: FLUX.2 [klein] ist bereits ein
+  Edit-trainiertes Modell — Phase 1 nutzt dafür schon ComfyUIs Core-Node
+  `ReferenceLatent` (`flux2_klein_edit`) — und genau dieser Mechanismus
+  liefert "Kontext-Style" Referenz-Konditionierung für eine *neue*
+  Generierung ganz ohne neuen Custom-Node oder neue Gewichte. Plain
+  FLUX.1-dev ist dagegen *nicht* Edit-trainiert — `ReferenceLatent` würde
+  dort nichts bewirken (steht wörtlich im Node-Docstring: "for an edit
+  model"). Das reale Äquivalent für FLUX.1 wäre Flux Redux
+  (`StyleModelApply`/`CLIPVisionEncode`, ebenfalls Core-Nodes, aber neue
+  Gewichte nötig) — bewusst nicht in diesem Schnitt, siehe unten.
+
+**Umgesetzt:**
+- SDXL-Familie: `checkpoint_ipadapter_txt2img` (`core/src/pipeline/mod.rs`)
+  — `CLIPVisionLoader` + `IPAdapterModelLoader` (explizite Dateinamen, nicht
+  der namens-Pattern-abhängige `IPAdapterUnifiedLoader`) + `LoadImage` →
+  `IPAdapterAdvanced`, vor den Sampler geschaltet; LoRAs patchen zuerst,
+  IPAdapter danach.
+- FLUX.2 [klein]: `flux2_klein_reference_txt2img` (GGUF) und
+  `flux2_klein_reference_txt2img_safetensors` (safetensors) — beide nötig,
+  ein echter Bug wurde beim Live-Smoke-Test gefunden und gefixt: die
+  safetensors-Datei über den GGUF-only-Loader zu schicken scheitert am
+  `/prompt`-Endpoint mit `unet_name: '...' not in [...]`
+  (`UnetLoaderGGUF` listet nur `.gguf`-Dateien).
+- Zwei neue `ModelKind`-Varianten (`ClipVision`, `IpAdapter`) — volle
+  Library-Bürger wie jede andere Modellart (eigener Store-Unterordner,
+  eigene `extra_model_paths.yaml`-Zeile, eigene Rolle, jetzt auch im
+  Models-Tab-Importer wählbar).
+- Neuer Custom-Node-Install (`core/src/runtime/comfyui/install.rs`):
+  `ComfyUI_IPAdapter_plus`, gleiches idempotentes Pinned-Archiv-Muster wie
+  GGUF/RTX, echt heruntergeladen und mit selbst berechnetem SHA-256 gepinnt.
+- UI: Character Sheet zeigt ein "Consistency-anchored"-Badge sobald ein
+  Portrait existiert; Regenerate-Buttons (Character/Location/Solo-Charakter-
+  Szene) heißen dann "… (anchored)". Szenen mit mehreren Teilnehmern ankern
+  bewusst NICHT (ein Referenzbild kann nicht mehrere Charaktere gleichzeitig
+  führen — bräuchte mehrere IPAdapter-Durchläufe, Phase-3+-Erweiterung).
+
+**Echt Ende-zu-Ende gegengeprüft** (nicht nur Unit-Tests) via `aiwm-cored`
+gegen die reale ComfyUI-Installation, echte heruntergeladene Gewichte
+(`CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors`, ~2,5 GB;
+`ip-adapter-plus_sdxl_vit-h.safetensors`, ~848 MB — beide mit selbst
+berechnetem SHA-256 importiert) und das reale SDXL-Base-Checkpoint:
+derselbe Prompt/Seed einmal ohne und einmal mit Referenzbild gerendert
+zeigt sichtbar konsistentere Haar-/Augenfarbe und Kapuzen-Zustand als zwei
+unabhängige Phase-1-Renderings desselben Prompts. Gleicher Vergleich für
+FLUX.2 [klein] wiederholt (unabhängig vs. referenz-verankert, andere Szene,
+gleicher Charakter) — deutlich konsistentere Haarfarbe/Sommersprossen.
+Test-Jobs/-Bilder danach wieder gelöscht, Node-Install und importierte
+Gewichte bleiben (echte, wiederverwendbare Library-Einträge).
+
+`cargo fmt`/`clippy --workspace --all-targets -D warnings`/
+`test --workspace` grün (749 lib-Tests, 2 absichtlich ignorierte
+Netzwerktests). `pnpm typecheck`/`lint`/`build` grün. UI live gegen
+dev-mock verifiziert (Character Sheet mit/ohne Portrait — Badge und
+"(anchored)"-Label erscheinen korrekt nur wenn ein Portrait existiert).
+
+**Bewusst NICHT gebaut (Phase-2-Scope-Cuts, dokumentiert statt
+stillschweigend weggelassen):**
+- Plain FLUX.1-dev bleibt ohne Charakter-Konsistenz — `ReferenceLatent`
+  wirkt dort nicht (nicht Edit-trainiert). Nächster Schritt wäre Flux Redux
+  (`flux1-redux-dev.safetensors` + SigLIP-Vision-Encoder, beides neue
+  Downloads, aber nur Core-ComfyUI-Nodes — kein neuer Custom-Node-Pack).
+- Mehrfach-Charakter-Szenen ankern an keinen Teilnehmer (s.o.) — bräuchte
+  verkettete IPAdapter-Anwendungen, eine pro Charakter, mit eigener Masken-/
+  Regionslogik.
+- FaceID-/PuLID-artige, gesichtsspezifische Konditionierung (stärkerer
+  Identitäts-Lock als der hier verwendete "plus"-Subject-Transfer) nicht
+  evaluiert — eigener Recherche-Aufwand (InsightFace-Abhängigkeit, eigene
+  LoRA pro Modell).
+- Kein Gewicht/Stärke-Slider in der UI (nur ein Server-Default von 0,8) —
+  die Story-Studio-Oberfläche hat bewusst keine Bildparameter-Feinsteuerung,
+  wie schon in Phase 1.
 
 ## Lokale KI-Trainings-Engine (Teilsystem 1 ✅ umgesetzt — 2026-09-16, Teilsystem 2 offen)
 User-Leitprinzip (2026-09-15, wörtlich wichtig): AIWM soll ein **lokales
