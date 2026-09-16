@@ -24,6 +24,7 @@ import {
   listScenes,
   listStories,
   externalEngines,
+  jobProgressWsUrl,
   listDownloads,
   listModels,
   listSessions,
@@ -45,6 +46,7 @@ import {
   type Download,
   type ExternalEngine,
   type Job,
+  type JobProgress,
   type JobState,
   type LaunchInfo,
   type LocalApiStatus,
@@ -82,6 +84,48 @@ export function useTelemetry() {
   }, []);
 
   return { telemetry, error };
+}
+
+/** Real per-step render progress for one in-flight job, straight from
+ *  ComfyUI's own `/ws` (`core::progress` -> `GET /ws/jobs/{id}`) — connects a
+ *  plain `WebSocket` to the loopback server, the same way the `<img>`/
+ *  `<video>` output URLs hit it directly, no Tauri IPC involved. `null` while
+ *  nothing has streamed yet: an earlier render phase ComfyUI doesn't report
+ *  progress for (checkpoint load, VAE decode), or the connection failed —
+ *  the dev-mock browser preview has no real core to connect to, so it always
+ *  stays `null` there; the caller's own last-log-line fallback still shows. */
+export function useJobProgress(port: number | null, jobId: string | null) {
+  const [progress, setProgress] = useState<JobProgress | null>(null);
+
+  useEffect(() => {
+    setProgress(null);
+    if (port == null || jobId == null) return;
+    let live = true;
+    let ws: WebSocket;
+    try {
+      ws = new WebSocket(jobProgressWsUrl(port, jobId));
+    } catch {
+      return; // no WebSocket in this environment
+    }
+    ws.onmessage = (e) => {
+      if (!live) return;
+      try {
+        setProgress(JSON.parse(String(e.data)) as JobProgress);
+      } catch {
+        /* a malformed frame -- ignore it, keep the last good reading */
+      }
+    };
+    ws.onerror = () => {
+      /* connection refused (dev-mock, or the core isn't up yet) -- the
+       * caller's own fallback display covers this, nothing to surface here */
+    };
+    return () => {
+      live = false;
+      ws.close();
+    };
+  }, [port, jobId]);
+
+  return progress;
 }
 
 export function useAbout() {

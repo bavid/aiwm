@@ -70,6 +70,19 @@ export interface PathsUpdate {
   cache_path: string;
 }
 
+/** The `[retention]` table — automatic cleanup of `<outputs_dir>`. Either
+ *  field `0` disables that rule; both `0` (the default) disables retention
+ *  entirely. Unlike most of `AppConfig`, this applies immediately — no
+ *  restart needed — both the manual "clean up now" trigger and an optional
+ *  startup sweep re-read `config.toml` fresh. */
+export interface RetentionConfig {
+  /** Delete output files last modified more than this many days ago. */
+  max_age_days: number;
+  /** Keep the outputs folder's total size under this many MB, oldest deleted
+   *  first, applied after the age rule. */
+  max_total_mb: number;
+}
+
 /** The full config.toml as the core sees it. */
 export interface AppConfig {
   store_path: string;
@@ -82,6 +95,7 @@ export interface AppConfig {
   comfyui: ComfyConfig;
   models: ModelsConfig;
   paths: PathsConfig;
+  retention: RetentionConfig;
 }
 
 /** The user-editable subset the Settings tab sends back. */
@@ -93,6 +107,7 @@ export interface ConfigUpdate {
   comfyui: ComfyConfig;
   models: ModelsConfig;
   paths: PathsUpdate;
+  retention: RetentionConfig;
 }
 
 export interface GpuProcess {
@@ -423,6 +438,17 @@ export interface DeleteOutcome {
 }
 
 export const storageReport = () => invoke<StorageReport>("storage_report");
+
+/** What one output-retention sweep did (`POST /outputs/cleanup`). */
+export interface SweepResult {
+  deleted_files: number;
+  freed_bytes: number;
+  errors: string[];
+}
+/** Apply the currently-saved retention policy to `<outputs_dir>` right now —
+ *  the Settings "Clean up now" button. A no-op (`deleted_files: 0`) when no
+ *  policy is configured (both fields `0`); save one via `saveConfig` first. */
+export const cleanupOutputs = () => invoke<SweepResult>("cleanup_outputs");
 /** Delete a model — its file, links and DB rows. Permanent; refused while
  *  the model is loaded. */
 export const deleteModel = (id: string) => invoke<DeleteOutcome>("delete_model", { id });
@@ -661,6 +687,61 @@ export const jobOutputUrl = (coreApiPort: number, jobId: string) =>
   `http://127.0.0.1:${coreApiPort}/jobs/${jobId}/output`;
 /** @deprecated use {@link jobOutputUrl} */
 export const imageOutputUrl = jobOutputUrl;
+
+// --- live render progress (real ComfyUI /ws, not polling) -----------------
+
+/** One reading of a job's render progress, sourced straight from ComfyUI's
+ *  own `/ws` (`core::progress`). In-memory on the core side only -- it exists
+ *  purely to watch a render in flight, not to look up after the fact. */
+export interface JobProgress {
+  job_id: string;
+  /** 0..100 when ComfyUI's `progress` event carried both a value and a max. */
+  percent: number | null;
+  step: number | null;
+  steps_total: number | null;
+  /** The node ComfyUI is currently executing, when it has reported one. */
+  node: string | null;
+}
+
+/** `ws://127.0.0.1:<port>/ws/jobs/<jobId>` — the loopback server's real
+ *  per-job progress stream (`GET /ws/jobs/{id}`). Connected directly from the
+ *  webview with a plain `WebSocket`, the same way the `<img>`/`<video>`
+ *  output URLs hit the loopback server directly — there is no Tauri command
+ *  for this. */
+export const jobProgressWsUrl = (coreApiPort: number, jobId: string) =>
+  `ws://127.0.0.1:${coreApiPort}/ws/jobs/${jobId}`;
+
+// --- gallery: save-to-disk (Tauri sandbox needs a real save dialog) -------
+
+/** Copy a finished job's output file to `destPath` on disk (the save dialog
+ *  already picked it). `<a download>` is inert inside Tauri's webview
+ *  sandbox, so the actual byte-copy happens here, Rust-side. */
+export const saveJobOutput = (id: string, destPath: string) =>
+  invoke<void>("save_job_output", { id, destPath });
+
+/** Download a finished job's output: opens the native save dialog, then
+ *  copies the bytes there via [`saveJobOutput`]. Resolves quietly — no
+ *  thrown error — when the user cancels the dialog, or when there is no
+ *  Tauri dialog plugin to call at all (e.g. the browser dev-mock preview),
+ *  mirroring how the existing "Browse…" file pickers treat that case. */
+export async function downloadJobOutput(
+  job: Pick<Job, "id" | "job_type" | "output_path">,
+): Promise<void> {
+  const ext =
+    job.output_path?.split(".").pop()?.toLowerCase() || (job.job_type === "video" ? "mp4" : "png");
+  let dest: string | null;
+  try {
+    const { save } = await import("@tauri-apps/plugin-dialog");
+    dest = await save({
+      defaultPath: `${job.id}.${ext}`,
+      filters: [{ name: ext.toUpperCase(), extensions: [ext] }],
+    });
+  } catch {
+    return; // not running inside Tauri (or the plugin refused) — no-op
+  }
+  if (!dest) return; // user cancelled the dialog
+  await saveJobOutput(job.id, dest);
+}
 
 /** What kind of file is being imported. `chat` → GGUF LLM for llama.cpp; the
  *  rest are ComfyUI image / video models routed to their typed store folder. */

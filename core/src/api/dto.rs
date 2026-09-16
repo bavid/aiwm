@@ -4,7 +4,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::agent::{HermesInstallStatus, PermissionDecision};
-use crate::config::{ComfyConfig, LlamaConfig, ModelsConfig};
+use crate::config::{ComfyConfig, LlamaConfig, ModelsConfig, RetentionConfig};
 use crate::db::{AgentSession, AgentSessionEvent, Job, JobEvent};
 use crate::registry::{Freshness, RemoteModel, SearchQuery, SearchSort};
 use crate::runtime::{Health, RuntimeKind};
@@ -48,6 +48,10 @@ pub struct ConfigUpdate {
     /// slice; older clients that omit it leave existing overrides untouched.
     #[serde(default)]
     pub paths: PathsUpdateDto,
+    /// Output-retention policy. New in this slice; older clients that omit it
+    /// keep retention disabled (both rules `0`).
+    #[serde(default)]
+    pub retention: RetentionConfig,
 }
 
 /// The `paths` slice of [`ConfigUpdate`] — plain strings from the Settings

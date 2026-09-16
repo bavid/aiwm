@@ -314,7 +314,7 @@ pub async fn run(
     };
 
     let Some(image) = comfyui
-        .generate_media(&workflow, cancel, IMAGE_TIMEOUT)
+        .generate_media(job_id, &workflow, cancel, IMAGE_TIMEOUT)
         .await?
     else {
         return Ok(ImageOutcome::Cancelled);
@@ -419,7 +419,7 @@ async fn run_edit(
     );
 
     let Some(image) = comfyui
-        .generate_media(&workflow, cancel, IMAGE_TIMEOUT)
+        .generate_media(job_id, &workflow, cancel, IMAGE_TIMEOUT)
         .await?
     else {
         return Ok(ImageOutcome::Cancelled);

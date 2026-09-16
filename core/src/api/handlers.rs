@@ -91,6 +91,7 @@ pub async fn save_config(app: &App, update: ConfigUpdate) -> Result<Config> {
     cfg.paths.outputs_path = non_empty_path(&update.paths.outputs_path);
     cfg.paths.runtimes_path = non_empty_path(&update.paths.runtimes_path);
     cfg.paths.cache_path = non_empty_path(&update.paths.cache_path);
+    cfg.retention = update.retention;
     cfg.save(&app.paths)?;
     app.set_offline(cfg.offline_mode);
 
@@ -387,6 +388,21 @@ pub async fn unload_model(app: &App, model_id: &str) -> Result<()> {
             "model {model_id} is not currently loaded"
         ))),
     }
+}
+
+/// `POST /outputs/cleanup` — apply the configured output-retention policy to
+/// `<outputs_dir>` right now (the Settings "Clean up now" button). Reads
+/// `config.toml` fresh rather than the startup snapshot, so a policy change
+/// just saved via `save_config` applies immediately, no restart needed. See
+/// `cleanup::outputs`'s module doc for why this only ever deletes files, never
+/// a job's DB row.
+pub async fn cleanup_outputs(app: &App) -> Result<crate::cleanup::SweepResult> {
+    let cfg = Config::read_from(&app.paths)?;
+    let policy = cfg.retention.to_policy();
+    let dir = app.paths.outputs_dir();
+    tokio::task::spawn_blocking(move || crate::cleanup::outputs::sweep(&dir, policy))
+        .await
+        .map_err(|e| CoreError::Config(format!("cleanup task did not finish: {e}")))
 }
 
 /// Storage overview + the "safe to delete" reports (Phase 6.8).
@@ -1610,6 +1626,7 @@ mod tests {
             comfyui: app.config.comfyui.clone(),
             models: app.config.models,
             paths: Default::default(),
+            retention: Default::default(),
         };
         update.comfyui.vram_mode = "lowvram".to_string();
 
@@ -1648,6 +1665,7 @@ mod tests {
             comfyui: app.config.comfyui.clone(), // unchanged
             models: app.config.models,
             paths: Default::default(),
+            retention: Default::default(),
         };
 
         let saved = save_config(&app, update).await.unwrap();
@@ -1727,6 +1745,58 @@ mod tests {
 
         let err = clean_audio(&app, &job.id).await.unwrap_err();
         assert!(err.to_string().contains("only narration clips"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn cleanup_outputs_is_a_noop_until_a_policy_is_saved() {
+        let tmp = tempfile::tempdir().unwrap();
+        let app = crate::App::load(crate::AppPaths::rooted(tmp.path()))
+            .await
+            .unwrap();
+        let outputs = app.paths.outputs_dir();
+        std::fs::create_dir_all(&outputs).unwrap();
+        let old_file = outputs.join("job-old.png");
+        std::fs::write(&old_file, b"stale bytes").unwrap();
+        let ancient = std::time::SystemTime::now() - std::time::Duration::from_secs(90 * 86_400);
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&old_file)
+            .unwrap()
+            .set_modified(ancient)
+            .unwrap();
+
+        // No retention configured yet -- the file must survive.
+        let result = cleanup_outputs(&app).await.unwrap();
+        assert_eq!(result.deleted_files, 0);
+        assert!(old_file.exists());
+
+        // Save a policy through the same path the Settings UI uses, then the
+        // very next cleanup call (no restart) picks it up and removes it.
+        let mut cfg = config(&app).unwrap();
+        cfg.retention = crate::config::RetentionConfig {
+            max_age_days: 30,
+            max_total_mb: 0,
+        };
+        save_config(
+            &app,
+            ConfigUpdate {
+                store_path: cfg.store_path.display().to_string(),
+                offline_mode: cfg.offline_mode,
+                vram_budget_mb: cfg.vram_budget_mb,
+                llama: cfg.llama,
+                comfyui: cfg.comfyui,
+                models: cfg.models,
+                paths: crate::api::dto::PathsUpdateDto::default(),
+                retention: cfg.retention,
+            },
+        )
+        .await
+        .unwrap();
+
+        let result = cleanup_outputs(&app).await.unwrap();
+        assert_eq!(result.deleted_files, 1);
+        assert_eq!(result.freed_bytes, "stale bytes".len() as u64);
+        assert!(!old_file.exists(), "the stale output should be gone");
     }
 
     #[tokio::test]

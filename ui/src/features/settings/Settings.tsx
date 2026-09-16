@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { useAbout, useCivitaiStatus, useLocalApiStatus, useRegistryStatus } from "../../lib/hooks";
 import {
+  cleanupOutputs,
   getConfig,
   saveConfig,
   setCivitaiToken,
@@ -14,6 +15,8 @@ import {
   type LlamaConfig,
   type ModelsConfig,
   type PathsUpdate,
+  type RetentionConfig,
+  type SweepResult,
 } from "../../lib/ipc";
 import { SectionNav, type NavSection } from "../../components/SectionNav";
 import { getTheme, setTheme, type Theme } from "../../lib/theme";
@@ -67,6 +70,7 @@ const toForm = (c: AppConfig): Form => ({
     runtimes_path: orEmpty(c.paths.runtimes_path),
     cache_path: orEmpty(c.paths.cache_path),
   },
+  retention: { ...c.retention },
 });
 
 const sameForm = (a: Form, b: Form): boolean =>
@@ -85,7 +89,9 @@ const sameForm = (a: Form, b: Form): boolean =>
   a.models.auto_preference === b.models.auto_preference &&
   a.paths.outputs_path === b.paths.outputs_path &&
   a.paths.runtimes_path === b.paths.runtimes_path &&
-  a.paths.cache_path === b.paths.cache_path;
+  a.paths.cache_path === b.paths.cache_path &&
+  a.retention.max_age_days === b.retention.max_age_days &&
+  a.retention.max_total_mb === b.retention.max_total_mb;
 
 export function Settings() {
   const about = useAbout();
@@ -96,6 +102,9 @@ export function Settings() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [status, setStatus] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
+  const [cleaning, setCleaning] = useState(false);
+  const [cleanupResult, setCleanupResult] = useState<SweepResult | null>(null);
+  const [cleanupError, setCleanupError] = useState<string | null>(null);
 
   useEffect(() => {
     getConfig()
@@ -135,6 +144,8 @@ export function Settings() {
     patch({ models: { ...form.models, ...next } });
   const patchPaths = (next: Partial<PathsUpdate>) =>
     patch({ paths: { ...form.paths, ...next } });
+  const patchRetention = (next: Partial<RetentionConfig>) =>
+    patch({ retention: { ...form.retention, ...next } });
 
   const chooseTheme = (t: Theme) => {
     setTheme(t);
@@ -159,6 +170,24 @@ export function Settings() {
       setSaving(false);
     }
   };
+
+  /** Apply the *saved* retention policy right now. Cleanup always reads
+   *  `config.toml` fresh on the Rust side, so an unsaved edit in the form
+   *  above is not what runs here — save first if you just changed it. */
+  const handleCleanup = async () => {
+    setCleaning(true);
+    setCleanupError(null);
+    setCleanupResult(null);
+    try {
+      setCleanupResult(await cleanupOutputs());
+    } catch (e) {
+      setCleanupError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setCleaning(false);
+    }
+  };
+
+  const retentionActive = loaded.retention.max_age_days > 0 || loaded.retention.max_total_mb > 0;
 
   return (
     <div className="settings">
@@ -274,7 +303,7 @@ export function Settings() {
               <section className="card set-group">
                 <header className="card__head">
                   <h2>Generated media</h2>
-                  <span className="card__sub">read-only</span>
+                  <span className="card__sub">retention applies immediately, no restart</span>
                 </header>
                 <dl className="set-kv">
                   <dt>Folder</dt>
@@ -295,9 +324,62 @@ export function Settings() {
                 </dl>
                 <p className="muted">
                   Images and video clips are kept until you delete them — video files are
-                  large and this folder grows fast. Automatic cleanup / retention limits
-                  come later; for now, open the folder and prune it yourself.
+                  large and this folder grows fast. Set an age and/or size limit below to
+                  have old outputs pruned automatically; both at <code>0</code> keeps
+                  everything forever (the previous behaviour).
                 </p>
+                <label className="set-field">
+                  <span>Delete outputs older than (days, 0 = no age limit)</span>
+                  <input
+                    type="number"
+                    min={0}
+                    step={1}
+                    value={form.retention.max_age_days}
+                    onChange={(e) =>
+                      patchRetention({ max_age_days: Math.max(0, Number(e.target.value) || 0) })
+                    }
+                  />
+                </label>
+                <label className="set-field">
+                  <span>Keep total size under (MB, 0 = no size limit)</span>
+                  <input
+                    type="number"
+                    min={0}
+                    step={100}
+                    value={form.retention.max_total_mb}
+                    onChange={(e) =>
+                      patchRetention({ max_total_mb: Math.max(0, Number(e.target.value) || 0) })
+                    }
+                  />
+                </label>
+                {dirty && (
+                  <p className="muted">Save below before "Clean up now" uses the new limits.</p>
+                )}
+                <div className="set-cleanup">
+                  <button
+                    type="button"
+                    className="set-cleanup__go"
+                    disabled={cleaning || !retentionActive}
+                    title={
+                      retentionActive
+                        ? "Delete files the saved policy no longer allows, right now"
+                        : "Set an age or size limit above (and save) to enable this"
+                    }
+                    onClick={handleCleanup}
+                  >
+                    {cleaning ? "Cleaning up…" : "Clean up now"}
+                  </button>
+                  {cleanupResult && (
+                    <span className="muted numeric">
+                      {cleanupResult.deleted_files === 0
+                        ? "nothing to remove"
+                        : `removed ${cleanupResult.deleted_files} file(s), freed ${gb(cleanupResult.freed_bytes)}`}
+                      {cleanupResult.errors.length > 0 &&
+                        ` — ${cleanupResult.errors.length} could not be removed`}
+                    </span>
+                  )}
+                  {cleanupError && <span className="settings__err">{cleanupError}</span>}
+                </div>
               </section>
             </>
           )}

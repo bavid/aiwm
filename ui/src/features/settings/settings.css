@@ -265,3 +265,32 @@
   color: var(--load-crit);
   font-size: var(--text-sm);
 }
+
+.set-cleanup {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  margin-top: var(--space-2);
+}
+
+.set-cleanup__go {
+  padding: var(--space-2) var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text);
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color var(--dur) var(--ease), opacity var(--dur) var(--ease);
+}
+
+.set-cleanup__go:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.set-cleanup__go:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}

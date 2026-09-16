@@ -195,6 +195,25 @@ async fn delete_job(app: tauri::State<'_, Arc<App>>, id: String) -> Result<(), S
     to_ipc(handlers::delete_job(&app, &id).await)
 }
 
+/// Copy a finished job's output file to `dest_path` — the write-side
+/// counterpart of the existing "Browse…" `@tauri-apps/plugin-dialog` load
+/// flow. `<a download>` is inert inside Tauri's webview sandbox, so the
+/// gallery's Download button opens a native save dialog on the JS side, then
+/// calls this to actually place the bytes there.
+#[tauri::command]
+async fn save_job_output(
+    app: tauri::State<'_, Arc<App>>,
+    id: String,
+    dest_path: String,
+) -> Result<(), String> {
+    let source = handlers::job_output_path(&app, &id)
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "no output for this job".to_string())?;
+    std::fs::copy(&source, &dest_path).map_err(|e| format!("saving to {dest_path}: {e}"))?;
+    Ok(())
+}
+
 #[tauri::command]
 async fn clean_audio(app: tauri::State<'_, Arc<App>>, id: String) -> Result<f64, String> {
     to_ipc(handlers::clean_audio(&app, &id).await)
@@ -595,6 +614,15 @@ async fn storage_report(
     to_ipc(handlers::storage_report(&app).await)
 }
 
+/// `POST /outputs/cleanup`'s Tauri counterpart — apply the configured output
+/// retention policy right now (the Settings "Clean up now" button).
+#[tauri::command]
+async fn cleanup_outputs(
+    app: tauri::State<'_, Arc<App>>,
+) -> Result<aiwm_core::cleanup::SweepResult, String> {
+    to_ipc(handlers::cleanup_outputs(&app).await)
+}
+
 #[tauri::command]
 async fn model_tags(
     app: tauri::State<'_, Arc<App>>,
@@ -859,6 +887,7 @@ fn try_run() -> anyhow::Result<()> {
             benchmark_model,
             upgrade_check,
             storage_report,
+            cleanup_outputs,
             delete_model,
             unload_model,
             model_tags,
@@ -894,6 +923,7 @@ fn try_run() -> anyhow::Result<()> {
             import_backup,
             cancel_job,
             delete_job,
+            save_job_output,
             clean_audio,
             submit_job,
             job_detail,

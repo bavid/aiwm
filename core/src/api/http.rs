@@ -124,6 +124,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/external-engines/attach", post(attach_external_engine))
         .route("/external-engines/detach", post(detach_engine))
         .route("/storage", get(storage_report))
+        .route("/outputs/cleanup", post(cleanup_outputs))
         .route("/models/{id}/benchmark", post(benchmark_model))
         .route("/models/{id}/benchmarks", get(model_benchmarks))
         .route("/models/{id}/upgrade-check", post(upgrade_check))
@@ -166,6 +167,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/import", post(import_backup))
         .route("/logs", get(logs))
         .route("/ws", get(ws_upgrade))
+        .route("/ws/jobs/{id}", get(job_progress_ws))
         .with_state(app)
 }
 
@@ -707,6 +709,12 @@ async fn storage_report(
     Ok(Json(handlers::storage_report(&app).await?))
 }
 
+async fn cleanup_outputs(
+    State(app): AppState,
+) -> Result<Json<crate::cleanup::SweepResult>, ApiError> {
+    Ok(Json(handlers::cleanup_outputs(&app).await?))
+}
+
 async fn model_tags(
     State(app): AppState,
 ) -> Result<Json<std::collections::BTreeMap<String, Vec<String>>>, ApiError> {
@@ -1236,4 +1244,50 @@ async fn telemetry_stream(mut socket: WebSocket, app: Arc<App>) {
             return; // sampler stopped
         }
     }
+}
+
+// --- websocket: per-job render progress -----------------------------------
+
+/// `GET /ws/jobs/{id}` — real per-step render progress for one job, sourced
+/// from ComfyUI's own `/ws` (`ComfyUiAdapter::generate_media` ->
+/// `App::progress`). Replaces polling `jobDetail` and eyeballing the last log
+/// line for Image/Video's progress bar. Sends whatever reading is already
+/// known immediately (the render may already be underway), then one message
+/// per update; closes on its own once the job stops publishing (terminal
+/// state clears the reading) or the client disconnects.
+async fn job_progress_ws(
+    State(app): AppState,
+    Path(id): Path<String>,
+    ws: WebSocketUpgrade,
+) -> Response {
+    ws.on_upgrade(move |socket| job_progress_stream(socket, app, id))
+}
+
+async fn job_progress_stream(mut socket: WebSocket, app: Arc<App>, job_id: String) {
+    if let Some(p) = app.progress.get(&job_id) {
+        if send_job_progress(&mut socket, &p).await.is_err() {
+            return;
+        }
+    }
+    let mut rx = app.progress.subscribe();
+    loop {
+        match rx.recv().await {
+            Ok(p) if p.job_id == job_id => {
+                if send_job_progress(&mut socket, &p).await.is_err() {
+                    return;
+                }
+            }
+            Ok(_) => continue, // another job's reading -- not ours to forward
+            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+            Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
+        }
+    }
+}
+
+async fn send_job_progress(
+    socket: &mut WebSocket,
+    progress: &crate::progress::JobProgress,
+) -> std::result::Result<(), axum::Error> {
+    let payload = serde_json::to_string(progress).unwrap_or_default();
+    socket.send(Message::Text(payload.into())).await
 }

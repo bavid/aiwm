@@ -1,22 +1,33 @@
 import { useEffect, useMemo, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
+import { Lightbox } from "../../components/Lightbox";
 import { LoraPicker } from "../../components/LoraPicker";
+import { Meter } from "../../components/Meter";
 import { NumField } from "../../components/NumField";
 import { PromptAssistant } from "../../components/PromptAssistant";
 import { PromptPresetPicker } from "../../components/PromptPresetPicker";
 import { QueueList } from "../../components/QueueList";
 import { SessionSwitcher } from "../../components/SessionSwitcher";
 import { VramEstimateHint } from "../../components/VramEstimateHint";
-import { useAbout, useJobs, useModels, useRuntimes, useTelemetry } from "../../lib/hooks";
+import {
+  useAbout,
+  useJobProgress,
+  useJobs,
+  useModels,
+  useRuntimes,
+  useTelemetry,
+} from "../../lib/hooks";
 import {
   cancelJob,
   deleteJob,
+  downloadJobOutput,
   jobDetail,
   jobOutputUrl,
   submitJob,
   type Job,
   type JobDetail,
   type JobEvent,
+  type JobProgress,
   type JobState,
   type LoraParam,
   type UpscaleParams,
@@ -26,6 +37,7 @@ import "./video.css";
 
 const DONE: JobState[] = ["completed", "failed", "cancelled"];
 const POLL_MS = 900;
+const GALLERY_PAGE_SIZE = 24;
 
 const MIN_DIM = 128;
 const MAX_DIM = 1280;
@@ -108,6 +120,10 @@ export function VideoStudio() {
   const [pendingId, setPendingId] = useState<string | null>(null);
   const [detail, setDetail] = useState<JobDetail | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  // Real per-step progress straight from ComfyUI's own `/ws`, layered on top
+  // of the `jobDetail` poll below (state/output/events) -- see
+  // `core::progress` / `GET /ws/jobs/{id}`.
+  const liveProgress = useJobProgress(about?.core_api_port ?? null, pendingId);
 
   useEffect(() => {
     if (!pendingId) return;
@@ -138,6 +154,19 @@ export function VideoStudio() {
       j.output_path &&
       j.session_id === sessionId,
   );
+
+  const [galleryPage, setGalleryPage] = useState(0);
+  const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
+  const pageCount = Math.max(1, Math.ceil(gallery.length / GALLERY_PAGE_SIZE));
+  const clampedPage = Math.min(galleryPage, pageCount - 1);
+  const pagedGallery = gallery.slice(
+    clampedPage * GALLERY_PAGE_SIZE,
+    clampedPage * GALLERY_PAGE_SIZE + GALLERY_PAGE_SIZE,
+  );
+  useEffect(() => {
+    setGalleryPage(0);
+    setLightboxIndex(null);
+  }, [sessionId]);
 
   const selected =
     (detail?.job.id === selectedId ? detail.job : null) ??
@@ -239,6 +268,25 @@ export function VideoStudio() {
       setPendingId(job.id);
       setSelectedId(job.id);
       setDetail({ job, events: [] });
+    } catch (err) {
+      setSendError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  /** "Erneut versuchen" — resubmit a failed job's own `params` as a brand new
+   *  job (never mutates the failed one). Mirrors `generate()`/`handleUpscale`. */
+  const handleRetry = async (job: Job) => {
+    setSendError(null);
+    try {
+      const fresh = await submitJob({
+        job_type: job.job_type,
+        model_id: job.model_id ?? undefined,
+        session_id: job.session_id ?? sessionId ?? undefined,
+        params: job.params,
+      });
+      setPendingId(fresh.id);
+      setSelectedId(fresh.id);
+      setDetail({ job: fresh, events: [] });
     } catch (err) {
       setSendError(err instanceof Error ? err.message : String(err));
     }
@@ -456,8 +504,12 @@ export function VideoStudio() {
             events={selectedEvents}
             port={about?.core_api_port ?? null}
             modelNames={modelNames}
+            progress={liveProgress}
             onCancel={selected ? () => cancelJob(selected.id) : undefined}
             onDelete={selected ? () => handleDelete(selected.id) : undefined}
+            onRetry={
+              selected && selected.state === "failed" ? () => handleRetry(selected) : undefined
+            }
             onUpscale={
               selected && selected.state === "completed" && selected.job_type !== "upscale"
                 ? () => handleUpscale(selected.id)
@@ -476,56 +528,108 @@ export function VideoStudio() {
         {gallery.length === 0 ? (
           <p className="muted">Rendered clips show up here.</p>
         ) : (
-          <div className="gallery">
-            {gallery.map((j) => (
-              <div
-                key={j.id}
-                className={
-                  j.id === selectedId
-                    ? "gallery__item video-item gallery__item--selected"
-                    : "gallery__item video-item"
-                }
-              >
-                <button
-                  type="button"
-                  className="gallery__item-select"
-                  onClick={() => {
-                    setSelectedId(j.id);
-                    setDetail(null);
-                  }}
+          <>
+            <div className="gallery">
+              {pagedGallery.map((j, i) => (
+                <div
+                  key={j.id}
+                  className={
+                    j.id === selectedId
+                      ? "gallery__item video-item gallery__item--selected"
+                      : "gallery__item video-item"
+                  }
                 >
-                  {about && (
-                    <span className="video-item__frame">
-                      <video
-                        src={jobOutputUrl(about.core_api_port, j.id)}
-                        muted
-                        preload="metadata"
-                        playsInline
-                      />
-                      <span className="video-item__play" aria-hidden="true">
-                        ▶
+                  <button
+                    type="button"
+                    className="gallery__item-select"
+                    onClick={() => {
+                      setSelectedId(j.id);
+                      setDetail(null);
+                    }}
+                  >
+                    {about && (
+                      <span className="video-item__frame">
+                        <video
+                          src={jobOutputUrl(about.core_api_port, j.id)}
+                          muted
+                          preload="metadata"
+                          playsInline
+                        />
+                        <span className="video-item__play" aria-hidden="true">
+                          ▶
+                        </span>
                       </span>
-                    </span>
-                  )}
-                  <span className="gallery__cap">{asVideoParams(j.params).prompt ?? "video"}</span>
-                </button>
+                    )}
+                    <span className="gallery__cap">{asVideoParams(j.params).prompt ?? "video"}</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="gallery__zoom"
+                    title="Zoom"
+                    aria-label="Zoom this video"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setLightboxIndex(i);
+                    }}
+                  >
+                    ⤢
+                  </button>
+                  <button
+                    type="button"
+                    className="gallery__delete"
+                    title="Delete"
+                    aria-label="Delete this video"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleDelete(j.id);
+                    }}
+                  >
+                    ×
+                  </button>
+                </div>
+              ))}
+            </div>
+            {pageCount > 1 && (
+              <div className="gallery__pager">
                 <button
                   type="button"
-                  className="gallery__delete"
-                  title="Delete"
-                  aria-label="Delete this video"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    handleDelete(j.id);
-                  }}
+                  className="chip"
+                  disabled={clampedPage === 0}
+                  onClick={() => setGalleryPage((p) => Math.max(0, p - 1))}
                 >
-                  ×
+                  ← Prev
+                </button>
+                <span className="muted numeric">
+                  Page {clampedPage + 1} / {pageCount}
+                </span>
+                <button
+                  type="button"
+                  className="chip"
+                  disabled={clampedPage >= pageCount - 1}
+                  onClick={() => setGalleryPage((p) => Math.min(pageCount - 1, p + 1))}
+                >
+                  Next →
                 </button>
               </div>
-            ))}
-          </div>
+            )}
+          </>
         )}
       </section>
+
+      {lightboxIndex != null && about && pagedGallery[lightboxIndex] && (
+        <Lightbox
+          kind="video"
+          src={jobOutputUrl(about.core_api_port, pagedGallery[lightboxIndex].id)}
+          caption={asVideoParams(pagedGallery[lightboxIndex].params).prompt}
+          onClose={() => setLightboxIndex(null)}
+          onPrev={lightboxIndex > 0 ? () => setLightboxIndex(lightboxIndex - 1) : undefined}
+          onNext={
+            lightboxIndex < pagedGallery.length - 1
+              ? () => setLightboxIndex(lightboxIndex + 1)
+              : undefined
+          }
+        />
+      )}
     </div>
   );
 }
@@ -557,8 +661,10 @@ function Result({
   events,
   port,
   modelNames,
+  progress,
   onCancel,
   onDelete,
+  onRetry,
   onUpscale,
   onReuseSeed,
 }: {
@@ -566,8 +672,14 @@ function Result({
   events: JobEvent[];
   port: number | null;
   modelNames: Map<string, string>;
+  /** Real per-step progress from ComfyUI's own `/ws`, when this job is the
+   *  one currently streaming it. */
+  progress?: JobProgress | null;
   onCancel?: () => void;
   onDelete?: () => void;
+  /** Resubmit this failed job's own params as a fresh job. Only offered for
+   *  `state === "failed"`. */
+  onRetry?: () => void;
   onUpscale?: () => void;
   onReuseSeed: (seed: string) => void;
 }) {
@@ -578,7 +690,8 @@ function Result({
   const up = asUpscaleParams(job.params);
   const running = !DONE.includes(job.state);
   const modelName = job.model_id ? (modelNames.get(job.model_id) ?? job.model_id) : "—";
-  const progress = latestProgress(events);
+  const logLine = latestProgress(events);
+  const live = progress && progress.job_id === job.id ? progress : null;
   const secs = p.length && p.fps ? (p.length / p.fps).toFixed(1) : null;
 
   return (
@@ -602,12 +715,15 @@ function Result({
           </span>
         ) : (
           <span className="result__spin">
-            {progress ?? `${job.state}…`}
+            {live?.node ? `${live.node}…` : (logLine ?? `${job.state}…`)}
             <br />
             <span className="muted">This can take several minutes.</span>
           </span>
         )}
       </div>
+      {running && live?.steps_total != null && (
+        <Meter label="Rendering" value={live.step ?? 0} max={live.steps_total} unit="steps" />
+      )}
       <dl className="result__meta">
         {isUpscale ? (
           <>
@@ -665,21 +781,37 @@ function Result({
           </>
         )}
       </dl>
-      {job.state === "completed" && onUpscale && (
-        <button type="button" className="result__cancel" onClick={onUpscale}>
-          Upscale
-        </button>
-      )}
-      {running && onCancel && (
-        <button type="button" className="result__cancel" onClick={onCancel}>
-          Stop
-        </button>
-      )}
-      {!running && onDelete && (
-        <button type="button" className="result__cancel" onClick={onDelete}>
-          Delete
-        </button>
-      )}
+      <div className="result__actions">
+        {job.state === "completed" && onUpscale && (
+          <button type="button" className="result__cancel" onClick={onUpscale}>
+            Upscale
+          </button>
+        )}
+        {job.state === "completed" && (
+          <button
+            type="button"
+            className="result__cancel"
+            onClick={() => downloadJobOutput(job)}
+          >
+            Download
+          </button>
+        )}
+        {job.state === "failed" && onRetry && (
+          <button type="button" className="result__cancel" onClick={onRetry}>
+            Erneut versuchen
+          </button>
+        )}
+        {running && onCancel && (
+          <button type="button" className="result__cancel" onClick={onCancel}>
+            Stop
+          </button>
+        )}
+        {!running && onDelete && (
+          <button type="button" className="result__cancel" onClick={onDelete}>
+            Delete
+          </button>
+        )}
+      </div>
     </div>
   );
 }
