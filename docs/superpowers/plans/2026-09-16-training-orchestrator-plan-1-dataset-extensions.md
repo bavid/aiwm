@@ -2255,7 +2255,7 @@ In `from_params`, after `root`:
 
 ```rust
     pub fn vram_estimate_mb(&self) -> u64 {
-        let Some(c) = self.captioner.as_deref().and_then(captioner::find) else {
+        let Some(c) = self.captioner.as_deref().and_then(captioner::find_captioner) else {
             return 0;
         };
         c.vram_mb + if self.escalate && c.supports_escalation { caption::QWEN_VL_VRAM_FALLBACK_MB } else { 0 }
@@ -2319,7 +2319,7 @@ pub async fn run(
     // Resolve the captioner (and its escalation partner) *before* touching
     // the disk, so a missing model fails fast — but only when one was asked
     // for. Extraction/filtering/curation never need a model.
-    let captioner = req.captioner.as_deref().and_then(captioner::find);
+    let captioner = req.captioner.as_deref().and_then(captioner::find_captioner);
     let captioner_dir = match captioner {
         Some(c) => Some(caption::resolve_captioner_dir(db, c).await?),
         None => None,
