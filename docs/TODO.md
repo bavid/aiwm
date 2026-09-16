@@ -39,10 +39,29 @@ hierher, damit nichts verloren geht.
   gebraucht wird)
 - ~~Phase-2-Abschluss: durchgehender End-to-End-Test Modell-Wechsel~~ → ✅
   `core/tests/model_swap.rs`
-- `core::compat` (2.6): die 650-MB-Overhead-Konstante + die grobe KV-Reserve
-  (`160 MB / 1K ctx`) gegen echte `nvidia-smi`-Messungen kalibrieren (Phase 6,
-  [BENCHMARKS.md](BENCHMARKS.md)). Auch: KV-Cache-Quantisierung (`-ctk`/`-ctv`
-  q8/q4) senkt den Bedarf — als Option erwägen
+- ✅ **`core::compat` (2.6): `RUNTIME_OVERHEAD_MB` gegen eine echte
+  `llama-server`-Ladung kalibriert** (2026-09-16): echter Chat-Job auf der
+  echten RTX 4080 Super — Mistral-Small-3.2-24B-Instruct, IQ3_M-GGUF
+  (10650964832 Bytes, 40 Layer/5120 Hidden/32 Heads/8 KV-Heads), 8192-Token
+  Chat-Default-Kontext, `-ngl 999` (volles GPU-Offload). Per NVML gemessen:
+  Idle-Desktop-Baseline 909 MB → Peak 12599 MB während der Ladung, also echtes
+  Delta 11690 MB. Die alte 650-MB-Konstante sagte 12407 MB voraus (Gewichte
+  10157 + KV 1600 + 650) — **717 MB zu konservativ**: Gewichte+KV allein
+  (11757 MB) lagen schon über dem tatsächlichen Verbrauch, der reale feste
+  Overhead war also nahe null, nicht 650 MB. Auf **350 MB** gesenkt (reale,
+  positive Sicherheitsmarge in Höhe eines typischen CUDA-Kontexts, aber ohne
+  den alten 717-MB-Puffer). Einzelner Realwert — das einzige zweite echte
+  GGUF-Chat-Modell auf dieser Maschine (Qwen2.5-7B-Instruct, F16) passt mit
+  ~15,3 GB gar nicht erst auf die 16-GB-Karte und lieferte daher keinen
+  zweiten Datenpunkt. Test `real_mistral_load_pins_the_recalibrated_overhead_
+  and_stays_above_measured_actual` pinnt beides (Schätzung bleibt ≥ real
+  gemessen, Overshoot deutlich unter den alten 717 MB). **Nicht kalibriert:**
+  `KV_ROUGH_MB_PER_1K_CTX` (die grobe `160 MB/1K ctx`-Reserve) — beide echten
+  GGUF-Modelle auf dieser Maschine tragen vollständige Arch-Metadaten
+  (`n_layers`/`n_embd`/`n_heads`/`n_kv_heads`) und trafen daher immer den
+  präzisen `kv_bytes_per_token`-Pfad, nie den groben Fallback; der bräuchte
+  ein echtes Modell mit unvollständigem GGUF-Header, das hier nicht verfügbar
+  war. KV-Cache-Quantisierung (`-ctk`/`-ctv` q8/q4) weiterhin offen als Option.
 - ~~Blockierte Jobs automatisch neu einreihen, wenn VRAM frei wird ohne dass
   ein anderer Job evictet~~ → **geprüft (2026-09-13), kein echter Bug**:
   `run_job_loop` pollt ohnehin ungebremst (`JOB_LOOP_IDLE` 250ms,
@@ -177,6 +196,24 @@ hierher, damit nichts verloren geht.
   `sysinfo::available_memory`, ein Schwellwert für alle Video-Modelle. Der echte
   Offload-Footprint hängt von `vram_mode`, Encoder-Größe, Auflösung/Länge ab —
   an echten Wan/LTX-Läufen (4.0) kalibrieren; evtl. pro Familie/Modell.
+  **Real gegengeprüft, aber nicht angepasst (2026-09-16):** echte Wan-2.2-
+  TI2V-5B- und LTX-Video-2B-Renders auf der echten RTX 4080 Super liefen
+  beide durch (128×128, 5/9 Frames, 4 Steps, ~30–48 s) und die Warnung feuerte
+  korrekt bei echter RAM-Knappheit („~12454 MB short" / „~5953 MB short"). Die
+  `VIDEO_RAM_SLACK_MB`-Konstante selbst ließ sich auf dieser Maschine aber
+  **nicht sauber kalibrieren**: `sysinfo`/NVML messen System-weites RAM, und
+  diese Dev-Maschine hatte parallel eine eigene Claude-Code-Session, Cargo-
+  Builds, Browser etc. laufen — der `ram_used_mb`-Median schwankte um
+  ±2 GB in 10-Sekunden-Fenstern allein durch fremde Prozesse, weit über dem
+  Signal, das ein einzelnes Video-Modell beisteuert. Anders als beim VRAM
+  (praktisch exklusiv durch AIWMs eigene Prozesse belegt, siehe die
+  `core::compat`-Kalibrierung oben) lässt sich der Modell-eigene RAM-Anteil
+  aus Gesamt-System-Telemetrie auf einer geteilten, ausgelasteten Maschine
+  nicht verlässlich isolieren — die Konstante unverändert gelassen, statt sie
+  ins Blaue zu raten. Bräuchte entweder eine ruhige Maschine ohne
+  Fremdlast, oder Pro-Prozess-RSS-Messung (RSS von `python.exe`/ComfyUI statt
+  `sysinfo::available_memory()`), um den echten Modell-Footprint sauber vom
+  Rest des Systems zu trennen.
 - **Output-Retention (4.5 macht sie nur sichtbar):** `about.outputs_bytes` +
   „reveal"-Knopf sind da, aber es gibt weiter **kein** automatisches Aufräumen,
   Größenlimit oder „X löschen"-Knopf. Eigene kleine Slice bei Bedarf (mit dem
@@ -226,12 +263,33 @@ hierher, damit nichts verloren geht.
 - **`lib/dev-mock.ts` (4.3)** ist minimal — nur die Kommandos, die die Studios
   brauchen. Wenn mehr Tabs im Browser getestet werden sollen, die fehlenden
   Kommandos ergänzen (es warnt in der Konsole bei unbehandelten).
-- ComfyUI-Optionen (3.7): nur `vram_mode` ist exponiert. Weitere sinnvolle
-  Flags (`--reserve-vram`, `--fast`, `--use-split-cross-attention`) + ein
-  „extra args"-Feld könnten dazu, wenn echte Flux-Läufe zeigen was fehlt.
-  `vram_mode` ändert die **laufende** Runtime nicht (Neustart) — ein
-  `ComfyUiAdapter::set_options` + Server-Neustart wäre der saubere Live-Weg,
-  analog zum offenen `LlamaServerOptions`-Live-Apply.
+- ComfyUI-Optionen (3.7): weitere sinnvolle Flags (`--fast`,
+  `--use-split-cross-attention`) könnten dazu, wenn echte Flux-Läufe zeigen
+  was fehlt. ~~`vram_mode` ändert die **laufende** Runtime nicht (Neustart) —
+  ein `ComfyUiAdapter::set_options` + Server-Neustart wäre der saubere
+  Live-Weg~~ → ✅ **`ComfyUiAdapter::set_options` (2026-09-16)**: ein
+  `[comfyui]`-Config-Save löst jetzt einen echten, verwalteten Neustart aus
+  (denselben `RuntimeSupervisor::stop` + `ensure_server_locked`-Pfad, den
+  `load_model`/`stop` schon nutzen) statt nur `config.toml` zu überschreiben
+  und auf den nächsten App-Neustart zu warten — ComfyUI selbst hat kein
+  Live-Reconfigure (`--<mode>vram` & Co. werden einmalig beim Start gelesen,
+  gegen den echten v0.34.0-Quellcode geprüft: `comfy/model_management.py`
+  setzt `vram_state`/`set_vram_to` einmalig aus `cli_args.args`, keine
+  HTTP-Route rührt sie danach an). Ein Server, den wir nur *attached* haben,
+  wird nicht angefasst (nicht unser Prozess) — dort greifen die neuen
+  Optionen erst beim nächsten selbst gestarteten Server. Dabei **einen
+  echten, live-verifizierten Bug gefunden**: `VramMode::NormalVram` mappte
+  auf `--normalvram` — dieses Flag **existiert nicht** in ComfyUI (weder
+  v0.34.0 noch aktuell; die echte `vram_group` kennt nur `--gpu-only` /
+  `--highvram` / `--lowvram` / `--novram` / `--cpu`). Ein echter Start mit
+  `--normalvram` lässt `main.py` sofort mit `error: unrecognized arguments:
+  --normalvram` abbrechen (gegen den echten, installierten v0.34.0 verifiziert)
+  — hätte also jeden `NormalVram`-Start crash-loopen lassen, bis der
+  Supervisor aufgibt. Gefixt: `NormalVram` gibt jetzt kein Flag mehr aus
+  (= ComfyUIs eigener Default, wie `Auto`). `LlamaServerOptions`-Live-Apply
+  (llama.cpp-Pendant) bleibt weiterhin offen — siehe „`LlamaServerOptions`
+  über die Settings-UI konfigurierbar machen" oben; kein Analogie-Fix hier,
+  da noch keine `set_options`-Grundlage auf der llama.cpp-Seite existiert.
 - `GET /jobs/{id}/output` (3.5) liest die ganze Datei in den RAM und serviert
   sie am Stück — ok für einzelne SDXL-PNGs (~1–3 MB); mit Video (4.1, `mp4` /
   `webm` Content-Type ist da) auf `tokio_util::io::ReaderStream` +
