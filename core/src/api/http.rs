@@ -12,9 +12,11 @@ use axum::{Json, Router};
 use serde::Deserialize;
 
 use super::dto::{
-    AgentMessageDto, AgentPermissionDto, AttachDocumentDto, AttachExternalDto, DetachEngineDto,
-    LaunchExternalDto, NewAgentDto, NewSessionDto, OpenAgentSessionDto, RenameModelDto,
-    RenameSessionDto, SetArchivedDto, SetRolesDto, SetTagsDto, SetTokenDto, SubmitJobDto,
+    AddSceneImageDto, AgentMessageDto, AgentPermissionDto, AttachDocumentDto, AttachExternalDto,
+    CharacterBodyDto, DetachEngineDto, LaunchExternalDto, LocationBodyDto, NewAgentDto,
+    NewRelationshipDto, NewSessionDto, NpcBodyDto, OpenAgentSessionDto, RenameModelDto,
+    RenameSessionDto, SceneBodyDto, SceneDetailDto, SetArchivedDto, SetInventoryDto,
+    SetReferenceJobDto, SetRolesDto, SetTagsDto, SetTokenDto, StoryBodyDto, SubmitJobDto,
 };
 use super::handlers;
 use crate::db::JobFilter;
@@ -39,6 +41,49 @@ pub fn router(app: Arc<App>) -> Router {
             get(list_documents).post(attach_document),
         )
         .route("/documents/{id}", axum::routing::delete(delete_document))
+        .route("/stories", get(list_stories).post(create_story))
+        .route("/stories/{id}", put(update_story).delete(delete_story))
+        .route(
+            "/stories/{id}/characters",
+            get(list_characters).post(create_character),
+        )
+        .route(
+            "/characters/{id}",
+            put(update_character).delete(delete_character),
+        )
+        .route("/characters/{id}/portrait", put(set_character_portrait))
+        .route("/characters/{id}/inventory", put(set_character_inventory))
+        .route(
+            "/characters/{id}/relationships",
+            get(list_character_relationships).post(add_character_relationship),
+        )
+        .route(
+            "/character-relationships/{id}",
+            axum::routing::delete(remove_character_relationship),
+        )
+        .route("/characters/{id}/log", get(character_log))
+        .route("/stories/{id}/npcs", get(list_npcs).post(create_npc))
+        .route("/npcs/{id}", put(update_npc).delete(delete_npc))
+        .route(
+            "/stories/{id}/locations",
+            get(list_locations).post(create_location),
+        )
+        .route(
+            "/locations/{id}",
+            put(update_location).delete(delete_location),
+        )
+        .route("/locations/{id}/reference", put(set_location_reference))
+        .route("/stories/{id}/scenes", get(list_scenes).post(create_scene))
+        .route("/scenes/{id}", put(update_scene).delete(delete_scene))
+        .route("/scenes/{id}/images", post(add_scene_image))
+        .route(
+            "/scene-images/{id}/canonical",
+            put(set_canonical_scene_image),
+        )
+        .route(
+            "/scene-images/{id}",
+            axum::routing::delete(delete_scene_image),
+        )
         .route("/jobs/{id}", get(job_detail).delete(delete_job))
         .route("/jobs/{id}/cancel", post(cancel_job))
         .route("/jobs/{id}/output", get(job_output))
@@ -276,6 +321,264 @@ async fn delete_document(
     Path(id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
     handlers::delete_document(&app, &id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+// --- Story Studio (Phase 1: text + plain image, docs/TODO.md) -------------
+
+async fn list_stories(State(app): AppState) -> Result<Json<Vec<crate::db::Story>>, ApiError> {
+    Ok(Json(handlers::list_stories(&app).await?))
+}
+
+async fn create_story(
+    State(app): AppState,
+    Json(body): Json<StoryBodyDto>,
+) -> Result<(StatusCode, Json<crate::db::Story>), ApiError> {
+    Ok((
+        StatusCode::CREATED,
+        Json(handlers::create_story(&app, body).await?),
+    ))
+}
+
+async fn update_story(
+    State(app): AppState,
+    Path(id): Path<String>,
+    Json(body): Json<StoryBodyDto>,
+) -> Result<StatusCode, ApiError> {
+    handlers::update_story(&app, &id, body).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn delete_story(
+    State(app): AppState,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    handlers::delete_story(&app, &id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn list_characters(
+    State(app): AppState,
+    Path(story_id): Path<String>,
+) -> Result<Json<Vec<crate::db::Character>>, ApiError> {
+    Ok(Json(handlers::list_characters(&app, &story_id).await?))
+}
+
+async fn create_character(
+    State(app): AppState,
+    Path(story_id): Path<String>,
+    Json(body): Json<CharacterBodyDto>,
+) -> Result<(StatusCode, Json<crate::db::Character>), ApiError> {
+    Ok((
+        StatusCode::CREATED,
+        Json(handlers::create_character(&app, &story_id, body).await?),
+    ))
+}
+
+async fn update_character(
+    State(app): AppState,
+    Path(id): Path<String>,
+    Json(body): Json<CharacterBodyDto>,
+) -> Result<StatusCode, ApiError> {
+    handlers::update_character(&app, &id, body).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn delete_character(
+    State(app): AppState,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    handlers::delete_character(&app, &id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn set_character_portrait(
+    State(app): AppState,
+    Path(id): Path<String>,
+    Json(body): Json<SetReferenceJobDto>,
+) -> Result<StatusCode, ApiError> {
+    handlers::set_character_portrait(&app, &id, body.job_id.as_deref()).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn set_character_inventory(
+    State(app): AppState,
+    Path(id): Path<String>,
+    Json(body): Json<SetInventoryDto>,
+) -> Result<StatusCode, ApiError> {
+    handlers::set_character_inventory(&app, &id, &body.items).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn list_character_relationships(
+    State(app): AppState,
+    Path(id): Path<String>,
+) -> Result<Json<Vec<crate::db::CharacterRelationship>>, ApiError> {
+    Ok(Json(
+        handlers::list_character_relationships(&app, &id).await?,
+    ))
+}
+
+async fn add_character_relationship(
+    State(app): AppState,
+    Path(id): Path<String>,
+    Json(body): Json<NewRelationshipDto>,
+) -> Result<(StatusCode, Json<crate::db::CharacterRelationship>), ApiError> {
+    let rel =
+        handlers::add_character_relationship(&app, &id, &body.related_character_id, &body.note)
+            .await?;
+    Ok((StatusCode::CREATED, Json(rel)))
+}
+
+async fn remove_character_relationship(
+    State(app): AppState,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    handlers::remove_character_relationship(&app, &id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn character_log(
+    State(app): AppState,
+    Path(id): Path<String>,
+) -> Result<Json<Vec<crate::db::CharacterLogEntry>>, ApiError> {
+    Ok(Json(handlers::character_log(&app, &id).await?))
+}
+
+async fn list_npcs(
+    State(app): AppState,
+    Path(story_id): Path<String>,
+) -> Result<Json<Vec<crate::db::Npc>>, ApiError> {
+    Ok(Json(handlers::list_npcs(&app, &story_id).await?))
+}
+
+async fn create_npc(
+    State(app): AppState,
+    Path(story_id): Path<String>,
+    Json(body): Json<NpcBodyDto>,
+) -> Result<(StatusCode, Json<crate::db::Npc>), ApiError> {
+    Ok((
+        StatusCode::CREATED,
+        Json(handlers::create_npc(&app, &story_id, body).await?),
+    ))
+}
+
+async fn update_npc(
+    State(app): AppState,
+    Path(id): Path<String>,
+    Json(body): Json<NpcBodyDto>,
+) -> Result<StatusCode, ApiError> {
+    handlers::update_npc(&app, &id, body).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn delete_npc(State(app): AppState, Path(id): Path<String>) -> Result<StatusCode, ApiError> {
+    handlers::delete_npc(&app, &id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn list_locations(
+    State(app): AppState,
+    Path(story_id): Path<String>,
+) -> Result<Json<Vec<crate::db::Location>>, ApiError> {
+    Ok(Json(handlers::list_locations(&app, &story_id).await?))
+}
+
+async fn create_location(
+    State(app): AppState,
+    Path(story_id): Path<String>,
+    Json(body): Json<LocationBodyDto>,
+) -> Result<(StatusCode, Json<crate::db::Location>), ApiError> {
+    Ok((
+        StatusCode::CREATED,
+        Json(handlers::create_location(&app, &story_id, body).await?),
+    ))
+}
+
+async fn update_location(
+    State(app): AppState,
+    Path(id): Path<String>,
+    Json(body): Json<LocationBodyDto>,
+) -> Result<StatusCode, ApiError> {
+    handlers::update_location(&app, &id, body).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn delete_location(
+    State(app): AppState,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    handlers::delete_location(&app, &id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn set_location_reference(
+    State(app): AppState,
+    Path(id): Path<String>,
+    Json(body): Json<SetReferenceJobDto>,
+) -> Result<StatusCode, ApiError> {
+    handlers::set_location_reference(&app, &id, body.job_id.as_deref()).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn list_scenes(
+    State(app): AppState,
+    Path(story_id): Path<String>,
+) -> Result<Json<Vec<SceneDetailDto>>, ApiError> {
+    Ok(Json(handlers::list_scenes(&app, &story_id).await?))
+}
+
+async fn create_scene(
+    State(app): AppState,
+    Path(story_id): Path<String>,
+    Json(body): Json<SceneBodyDto>,
+) -> Result<(StatusCode, Json<SceneDetailDto>), ApiError> {
+    Ok((
+        StatusCode::CREATED,
+        Json(handlers::create_scene(&app, &story_id, body).await?),
+    ))
+}
+
+async fn update_scene(
+    State(app): AppState,
+    Path(id): Path<String>,
+    Json(body): Json<SceneBodyDto>,
+) -> Result<Json<SceneDetailDto>, ApiError> {
+    Ok(Json(handlers::update_scene(&app, &id, body).await?))
+}
+
+async fn delete_scene(
+    State(app): AppState,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    handlers::delete_scene(&app, &id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn add_scene_image(
+    State(app): AppState,
+    Path(scene_id): Path<String>,
+    Json(body): Json<AddSceneImageDto>,
+) -> Result<(StatusCode, Json<crate::db::SceneImage>), ApiError> {
+    Ok((
+        StatusCode::CREATED,
+        Json(handlers::add_scene_image(&app, &scene_id, &body.job_id).await?),
+    ))
+}
+
+async fn set_canonical_scene_image(
+    State(app): AppState,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    handlers::set_canonical_scene_image(&app, &id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn delete_scene_image(
+    State(app): AppState,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    handlers::delete_scene_image(&app, &id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 

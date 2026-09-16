@@ -1365,6 +1365,128 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn story_studio_full_flow_over_http() {
+        let (app, _tmp) = test_app().await;
+        let server = ApiServer::bind(app.clone(), SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
+            .await
+            .unwrap();
+        let base = format!("http://{}", server.addr);
+        let http = reqwest::Client::new();
+
+        let story: serde_json::Value = http
+            .post(format!("{base}/stories"))
+            .json(&serde_json::json!({
+                "name": "The Salt Road",
+                "setting": "bronze-age coast",
+                "art_style": "linocut",
+                "premise": "a caravan carries something it shouldn't",
+            }))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let story_id = story["id"].as_str().unwrap().to_string();
+
+        let character: serde_json::Value = http
+            .post(format!("{base}/stories/{story_id}/characters"))
+            .json(&serde_json::json!({ "name": "Nera", "traits": "sharp-eyed" }))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let character_id = character["id"].as_str().unwrap().to_string();
+
+        // Portrait must be a real job (FK-enforced).
+        let job = app
+            .db
+            .jobs()
+            .insert(crate::db::NewJob::new("image"))
+            .await
+            .unwrap();
+        let portrait_resp = http
+            .put(format!("{base}/characters/{character_id}/portrait"))
+            .json(&serde_json::json!({ "job_id": job.id }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(portrait_resp.status(), 204);
+
+        let scene: serde_json::Value = http
+            .post(format!("{base}/stories/{story_id}/scenes"))
+            .json(&serde_json::json!({
+                "narrative": "Nera spots the sail before anyone else.",
+                "redline": "a strange sail on the horizon",
+                "participant_ids": [character_id],
+                "dialogue": [{ "character_id": character_id, "text": "There -- see it?" }],
+            }))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let scene_id = scene["id"].as_str().unwrap().to_string();
+        assert_eq!(scene["participant_ids"], serde_json::json!([character_id]));
+        assert_eq!(scene["dialogue"].as_array().unwrap().len(), 1);
+
+        // The Scene's Character Log auto-append shows up on the character.
+        let log: serde_json::Value = reqwest::get(format!("{base}/characters/{character_id}/log"))
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(log.as_array().unwrap().len(), 1);
+        assert_eq!(log[0]["scene_id"], scene_id);
+
+        let scenes: serde_json::Value = reqwest::get(format!("{base}/stories/{story_id}/scenes"))
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(scenes.as_array().unwrap().len(), 1);
+
+        // Attach a scene image (also FK-enforced against a real job).
+        let img_job = app
+            .db
+            .jobs()
+            .insert(crate::db::NewJob::new("image"))
+            .await
+            .unwrap();
+        let scene_image: serde_json::Value = http
+            .post(format!("{base}/scenes/{scene_id}/images"))
+            .json(&serde_json::json!({ "job_id": img_job.id }))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(scene_image["is_canonical"], true);
+
+        let deleted = http
+            .delete(format!("{base}/stories/{story_id}"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(deleted.status(), 204);
+
+        let scenes_after: serde_json::Value =
+            reqwest::get(format!("{base}/stories/{story_id}/scenes"))
+                .await
+                .unwrap()
+                .json()
+                .await
+                .unwrap();
+        assert!(scenes_after.as_array().unwrap().is_empty());
+    }
+
+    #[tokio::test]
     async fn external_engines_over_http_returns_an_array() {
         let (app, _tmp) = test_app().await;
         let server = ApiServer::bind(app, SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
