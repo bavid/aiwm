@@ -2703,6 +2703,15 @@ pub struct ConceptFramesDto {
     pub frame_ids: Vec<String>,
 }
 
+/// Response of `POST /concepts/{id}/frames`: how many of the requested
+/// frames were newly attached (the rest were already assigned or belong to
+/// another dataset).
+#[derive(Debug, Clone, Serialize)]
+pub struct AssignedDto {
+    pub requested: usize,
+    pub attached: u64,
+}
+
 /// Extends the frame edit: `restore: true` clears a rejection.
 #[derive(Debug, Clone, Deserialize)]
 pub struct UpdateDatasetFrameDto {
@@ -2824,8 +2833,16 @@ pub async fn delete_concept(app: &App, id: &str) -> Result<()> {
     app.db.concepts().delete(id).await
 }
 
-pub async fn assign_concept(app: &App, concept_id: &str, body: ConceptFramesDto) -> Result<()> {
-    app.db.concepts().assign(concept_id, &body.frame_ids).await
+/// Returns how many frames were newly attached (Task 3 review decision):
+/// already-assigned frames and frames from another dataset are silently
+/// skipped by the repo, so the UI can say "18 of 20 assigned" instead of
+/// pretending. First change `ConceptRepo::assign` to `Result<u64>` by summing
+/// `rows_affected()` over the per-frame inserts inside its transaction (add a
+/// mixed-batch test: in-dataset + already-assigned + other-dataset frames in
+/// one call → count equals only the genuinely new ones).
+pub async fn assign_concept(app: &App, concept_id: &str, body: ConceptFramesDto) -> Result<AssignedDto> {
+    let attached = app.db.concepts().assign(concept_id, &body.frame_ids).await?;
+    Ok(AssignedDto { requested: body.frame_ids.len(), attached })
 }
 
 pub async fn unassign_concept(app: &App, concept_id: &str, body: ConceptFramesDto) -> Result<()> {
@@ -2934,8 +2951,12 @@ export const createConcept = (datasetId: string, body: { name: string; token: st
 export const updateConcept = (id: string, body: { name: string; token: string; description?: string }) =>
   invoke<void>("update_concept", { id, body });
 export const deleteConcept = (id: string) => invoke<void>("delete_concept", { id });
+export interface AssignedSummary {
+  requested: number;
+  attached: number;
+}
 export const assignConcept = (conceptId: string, frameIds: string[]) =>
-  invoke<void>("assign_concept", { conceptId, body: { frame_ids: frameIds } });
+  invoke<AssignedSummary>("assign_concept", { conceptId, body: { frame_ids: frameIds } });
 export const unassignConcept = (conceptId: string, frameIds: string[]) =>
   invoke<void>("unassign_concept", { conceptId, body: { frame_ids: frameIds } });
 /** Dataset-keyed still image — replaces `datasetFrameImageUrl(port, frame.job_id, id)`
