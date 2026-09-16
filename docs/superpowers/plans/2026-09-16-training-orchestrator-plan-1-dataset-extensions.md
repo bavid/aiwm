@@ -396,6 +396,24 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 
 ### Task 2: Frames belong to datasets; rejected frames and clip fields
 
+> **Amendment after Task 1 review (2026-09-16):** the quality review proved that
+> `dataset_frames.job_id ON DELETE CASCADE` (from 0014) silently deleted every
+> frame of a dataset when its prep job was deleted, leaving an empty `datasets`
+> row. Migration 0015 now *rebuilds* `dataset_frames` with `job_id TEXT
+> REFERENCES jobs(id) ON DELETE SET NULL` (nullable) and `dataset_id ... ON
+> DELETE CASCADE`: **a frame's lifecycle is governed by its dataset, not the
+> producing job.** Consequences for this task: `DatasetFrame.job_id` becomes
+> `Option<String>`; `NewDatasetFrame.job_id` stays `String` (always set at
+> insert); `list_for_job` is unchanged; every caller that reads `frame.job_id`
+> (the `GET /jobs/{id}/dataset-frames/{frame_id}/image` handler, the UI's
+> `datasetFrameImageUrl(port, frame.job_id, frame.id)`) must handle `None` —
+> Task 11 adds a dataset-keyed image route `GET /datasets/{id}/frames/{frame_id}/image`
+> and the UI switches to it; until then treat `job_id == None` as "serve by
+> frame id only". Add a test: a frame with both ids set survives job deletion
+> with `job_id == None` and is removed when its dataset is deleted (Task 1
+> already has this scenario in `datasets.rs`; move the assertion on the frame's
+> `job_id` here once the field is optional).
+
 **Files:**
 - Modify: `core/src/db/dataset.rs`
 
@@ -2802,6 +2820,7 @@ Extend the existing `update_dataset_frame` handler: `if body.restore == Some(tru
         .route("/datasets", get(list_datasets))
         .route("/datasets/{id}", get(get_dataset).put(update_dataset).delete(delete_dataset))
         .route("/datasets/{id}/frames", get(list_dataset_frames_for_dataset))
+        .route("/datasets/{id}/frames/{frame_id}/image", get(dataset_frame_image))
         .route("/datasets/{id}/frame-concepts", get(frame_concept_map))
         .route("/datasets/{id}/concepts", get(list_concepts).post(create_concept))
         .route("/datasets/{id}/export", post(export_dataset_by_id))
@@ -2873,6 +2892,12 @@ export const assignConcept = (conceptId: string, frameIds: string[]) =>
   invoke<void>("assign_concept", { conceptId, body: { frame_ids: frameIds } });
 export const unassignConcept = (conceptId: string, frameIds: string[]) =>
   invoke<void>("unassign_concept", { conceptId, body: { frame_ids: frameIds } });
+/** Dataset-keyed still image — replaces `datasetFrameImageUrl(port, frame.job_id, id)`
+ *  now that `frame.job_id` can be null (a frame outlives its prep job). The
+ *  existing job-keyed route stays for old callers. */
+export const datasetFrameImageUrlByDataset = (coreApiPort: number, datasetId: string, frameId: string) =>
+  `http://127.0.0.1:${coreApiPort}/datasets/${datasetId}/frames/${frameId}/image`;
+
 export const exportDatasetById = (datasetId: string, destDir: string, captionOrder: CaptionOrder) =>
   invoke<ExportDatasetSummary>("export_dataset_by_id", { datasetId, body: { dest_dir: destDir, caption_order: captionOrder } });
 ```
