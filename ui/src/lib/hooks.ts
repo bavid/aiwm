@@ -14,6 +14,7 @@ import {
   listBenchmarks,
   listCharacterRelationships,
   listCharacters,
+  listDatasetFrames,
   listDocuments,
   listFeaturedModels,
   listJobs,
@@ -42,6 +43,7 @@ import {
   type CharacterLogEntry,
   type CharacterRelationship,
   type CivitaiSearchParams,
+  type DatasetFrame,
   type Document,
   type Download,
   type ExternalEngine,
@@ -199,6 +201,16 @@ function usePolled<T>(key: string, fetcher: () => Promise<T>, intervalMs: number
   const refetch = () => setNonce((n) => n + 1);
   return { data, error, refetch };
 }
+
+/** A `dataset_prep` job's curation set, polled while the job is running so
+ *  the grid fills in as the pipeline works through the tree; `null` disables
+ *  polling (no job selected yet). */
+export const useDatasetFrames = (jobId: string | null) =>
+  usePolled<DatasetFrame[]>(
+    `dataset-frames:${jobId ?? ""}`,
+    () => (jobId ? listDatasetFrames(jobId) : Promise.resolve([])),
+    1500,
+  );
 
 export const useJobs = (opts?: { states?: JobState[]; limit?: number }) =>
   usePolled<Job[]>(

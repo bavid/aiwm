@@ -12,7 +12,7 @@ use super::dto::{
     LocalApiStatusDto, LocationBodyDto, ModelStackDto, NewAgentDto, NewSessionDto,
     NewVoiceIdentityDto, NpcBodyDto, OpenAgentSessionDto, RegisterColibriModelDto,
     RegistryDetailsDto, RegistryFileDto, RegistrySearchDto, RuntimeStatusDto, SceneBodyDto,
-    SceneDetailDto, StoryBodyDto, SubmitJobDto,
+    SceneDetailDto, StoryBodyDto, SubmitJobDto, UpdateDatasetFrameDto,
 };
 use crate::compat::FitVerdict;
 use crate::config::Config;
@@ -250,6 +250,70 @@ pub async fn clean_audio(app: &App, id: &str) -> Result<f64> {
         .append_event(id, EventLevel::Info, "cleaned")
         .await?;
     Ok(duration_secs)
+}
+
+// --- dataset prep (Lokale KI-Trainings-Engine, dataset-prep half) ----------
+
+/// The on-disk file behind one curated frame (`GET /jobs/{id}/dataset-
+/// frames/{frame_id}/image` serves it). Unlike `job_output_path`, this does
+/// *not* confine the result to `outputs_dir`: a frame's path was written
+/// entirely by our own ingest/extraction code (`capability::dataset`), never
+/// taken from the HTTP request itself, and legitimately points anywhere on
+/// disk the user's dataset root lives — a plain image file the user already
+/// had is referenced in place, not copied into `outputs_dir` first.
+pub async fn dataset_frame_image_path(app: &App, frame_id: &str) -> Result<Option<PathBuf>> {
+    let Some(frame) = app.db.dataset_frames().get(frame_id).await? else {
+        return Ok(None);
+    };
+    let path = PathBuf::from(&frame.frame_path);
+    Ok(if path.is_file() { Some(path) } else { None })
+}
+
+/// `GET /jobs/{id}/dataset-frames` — every frame a `dataset_prep` job has
+/// produced so far, for the curation grid. Safe to poll while the job is
+/// still running (rows land incrementally, per-source, as the pipeline
+/// works through the tree).
+pub async fn list_dataset_frames(app: &App, job_id: &str) -> Result<Vec<crate::db::DatasetFrame>> {
+    app.db.dataset_frames().list_for_job(job_id).await
+}
+
+/// `PUT /jobs/{id}/dataset-frames/{frame_id}` — a curator's edit: a caption
+/// rewrite, an exclude toggle, or both in one call.
+pub async fn update_dataset_frame(
+    app: &App,
+    frame_id: &str,
+    body: UpdateDatasetFrameDto,
+) -> Result<crate::db::DatasetFrame> {
+    if let Some(excluded) = body.excluded {
+        app.db
+            .dataset_frames()
+            .set_excluded(frame_id, excluded)
+            .await?;
+    }
+    if let Some(caption) = &body.caption {
+        // An empty engine name records this as a hand-written edit, distinct
+        // from `"florence2"`/`"qwen2.5-vl"` — see `DatasetFrameRepo::set_caption`.
+        app.db
+            .dataset_frames()
+            .set_caption(frame_id, caption, "")
+            .await?;
+    }
+    app.db
+        .dataset_frames()
+        .get(frame_id)
+        .await?
+        .ok_or_else(|| CoreError::Config(format!("no such dataset frame {frame_id}")))
+}
+
+/// `POST /jobs/{id}/dataset-export` — write the curator's final, non-excluded
+/// selection to `dest_dir` as `NNNN.png` + `NNNN.txt` pairs.
+pub async fn export_dataset(
+    app: &App,
+    job_id: &str,
+    dest_dir: &str,
+) -> Result<crate::capability::dataset::ExportSummary> {
+    crate::capability::dataset::export_dataset(&app.db, job_id, std::path::Path::new(dest_dir))
+        .await
 }
 
 pub async fn list_models(app: &App) -> Result<Vec<Model>> {

@@ -126,6 +126,25 @@ pub struct SetArchivedDto {
     pub archived: bool,
 }
 
+/// Body for `PUT /jobs/{id}/dataset-frames/{frame_id}` — a curator's edit to
+/// one frame. Both fields optional so the curation UI can send just the one
+/// thing that changed (a caption edit vs. an exclude toggle) rather than the
+/// whole row every time.
+#[derive(Debug, Clone, Deserialize)]
+pub struct UpdateDatasetFrameDto {
+    #[serde(default)]
+    pub caption: Option<String>,
+    #[serde(default)]
+    pub excluded: Option<bool>,
+}
+
+/// Body for `POST /jobs/{id}/dataset-export` — write the curated dataset to
+/// `dest_dir` as `NNNN.png` + `NNNN.txt` pairs.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ExportDatasetDto {
+    pub dest_dir: String,
+}
+
 /// Body for `POST /sessions/{id}/documents` — attach a document to a chat
 /// session for local RAG (7.x). `path` is resolved by the caller (a native
 /// file picker in the UI); the core reads, chunks, and stores it.

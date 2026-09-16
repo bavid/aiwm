@@ -13,13 +13,16 @@ use aiwm_core::api::dto::{
     ModelStackDto, NewAgentDto, NewSessionDto, NewVoiceIdentityDto, NpcBodyDto,
     OpenAgentSessionDto, RegisterColibriModelDto, RegistryDetailsDto, RegistrySearchDto,
     RuntimeStatusDto, SceneBodyDto, SceneDetailDto, StoryBodyDto, SubmitJobDto,
+    UpdateDatasetFrameDto,
 };
 use aiwm_core::api::handlers;
+use aiwm_core::capability::dataset::ExportSummary;
 use aiwm_core::config::Config;
 use aiwm_core::db::Document;
 use aiwm_core::db::{
-    Agent, AgentSession, Benchmark, Character, CharacterLogEntry, CharacterRelationship, Download,
-    Job, JobFilter, Location, Model, Npc, SceneImage, Session, Story, VoiceIdentity,
+    Agent, AgentSession, Benchmark, Character, CharacterLogEntry, CharacterRelationship,
+    DatasetFrame, Download, Job, JobFilter, Location, Model, Npc, SceneImage, Session, Story,
+    VoiceIdentity,
 };
 use aiwm_core::model::{ImportOutcome, ImportRequest};
 use aiwm_core::orchestrator::JobState;
@@ -278,6 +281,32 @@ async fn attach_document(
     path: String,
 ) -> Result<Document, String> {
     to_ipc(handlers::attach_document(&app, &session_id, &path).await)
+}
+
+#[tauri::command]
+async fn list_dataset_frames(
+    app: tauri::State<'_, Arc<App>>,
+    job_id: String,
+) -> Result<Vec<DatasetFrame>, String> {
+    to_ipc(handlers::list_dataset_frames(&app, &job_id).await)
+}
+
+#[tauri::command]
+async fn update_dataset_frame(
+    app: tauri::State<'_, Arc<App>>,
+    frame_id: String,
+    body: UpdateDatasetFrameDto,
+) -> Result<DatasetFrame, String> {
+    to_ipc(handlers::update_dataset_frame(&app, &frame_id, body).await)
+}
+
+#[tauri::command]
+async fn export_dataset(
+    app: tauri::State<'_, Arc<App>>,
+    job_id: String,
+    dest_dir: String,
+) -> Result<ExportSummary, String> {
+    to_ipc(handlers::export_dataset(&app, &job_id, &dest_dir).await)
 }
 
 #[tauri::command]
@@ -968,6 +997,9 @@ fn try_run() -> anyhow::Result<()> {
             add_scene_image,
             set_canonical_scene_image,
             delete_scene_image,
+            list_dataset_frames,
+            update_dataset_frame,
+            export_dataset,
             list_agents,
             create_agent,
             delete_agent,

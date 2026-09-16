@@ -18,6 +18,7 @@ use crate::progress::ProgressHub;
 use crate::registry::{CivitaiSource, HuggingFaceSource, Registry};
 use crate::runtime::{
     ColibriAdapter, ComfyDirs, ComfyUiAdapter, LlamaCppAdapter, RuntimeRegistry, TtsAdapter,
+    VisionAdapter,
 };
 use crate::scheduler::HybridScheduler;
 use crate::telemetry::{GpuStatus, Sampler};
@@ -57,6 +58,9 @@ pub struct App {
     /// ComfyUI's own `/ws`), shared with `comfyui` so `api::http`'s
     /// `GET /ws/jobs/{id}` route reads the same readings it publishes.
     pub progress: Arc<ProgressHub>,
+    /// The dataset-prep captioning pipeline's runtime (Florence-2/Qwen2.5-VL)
+    /// — same lazy-sidecar shape as `tts`, but tracks real (non-zero) VRAM.
+    pub vision: Arc<VisionAdapter>,
     pub scheduler: Arc<HybridScheduler>,
     pub jobs: Arc<JobEngine>,
     /// Long-running agent sessions (Phase 5.1c) — its own subsystem, not a job.
@@ -137,6 +141,8 @@ impl App {
         runtimes.register(colibri.clone());
         let tts = Arc::new(TtsAdapter::new());
         runtimes.register(tts.clone());
+        let vision = Arc::new(VisionAdapter::new());
+        runtimes.register(vision.clone());
         let budget = resolve_vram_budget(&config, &telemetry);
         let scheduler = Arc::new(HybridScheduler::new(runtimes.clone(), budget));
         let auto_pref = config.models.auto_preference;
@@ -172,7 +178,8 @@ impl App {
             .with_auto_preference(auto_pref)
             .with_registry(registry.clone())
             .with_colibri(colibri.clone())
-            .with_tts(tts.clone()),
+            .with_tts(tts.clone())
+            .with_vision(vision.clone()),
         );
         let coding = Arc::new(LlamaCodingRuntime::new(
             runtimes.clone(),
@@ -250,6 +257,7 @@ impl App {
             colibri,
             tts,
             progress,
+            vision,
             scheduler,
             jobs,
             agents,

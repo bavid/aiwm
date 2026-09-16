@@ -604,7 +604,7 @@ unterstützt das aber bereits ohne Restrukturierung.
   für die Timeline gebraucht wird, sobald Nutzer:innen wirklich Szenen
   nachträglich umsortieren wollen.
 
-## Lokale KI-Trainings-Engine (noch nicht begonnen, in Brainstorming)
+## Lokale KI-Trainings-Engine (Teilsystem 1 ✅ umgesetzt — 2026-09-16, Teilsystem 2 offen)
 User-Leitprinzip (2026-09-15, wörtlich wichtig): AIWM soll ein **lokales
 All-in-one-Tool** bleiben — eigenes Training auf **eigenen Daten, jeder Art**
 soll genauso leicht zugänglich sein wie die bestehenden Image/Video/Chat-
@@ -648,17 +648,126 @@ bauen dass Teilsystem 1 auch ohne Teilsystem 2 nützlich ist:
 - **Offene Frage vom Assistenten an User (gestellt 2026-09-15, unbeantwortet):**
   Priorität zuerst auf Bild-LoRA-Training (reife Tooling-Lage) oder
   Video-LoRA-Training (Kernwunsch laut Beispiel, aber unreifere Tooling-Lage),
-  oder soll die Dataset-Pipeline von Tag 1 an beide Zielarten bedienen?
-- Noch nicht diskutiert: welches lokale VLM für Captioning, ob/wie das
-  Vision-Runtime-Konzept sich in die bestehende `RuntimeAdapter`-Architektur
-  einfügt (analog zu llama.cpp/ComfyUI/Colibri/TTS), Umfang der Kuratier-UI
-  (reine Text-Edits vs. Bild-Grid mit Batch-Aktionen), ob Trainingsläufe
-  durch den bestehenden Job-Scheduler laufen (Stunden-lange VRAM-Reservierung
-  wäre ein neuer Anwendungsfall für den Scheduler) oder als eigener,
-  scheduler-externer Prozess.
-- **Ausdrücklich noch keine Implementierung** — laut `brainstorming`-Skill
-  erst Design/Spec + User-Freigabe, dann `writing-plans`. Dieser Eintrag ist
-  nur der Parkplatz-Anker, falls das Brainstorming-Gespräch unterbrochen wird.
+  oder soll die Dataset-Pipeline von Tag 1 an beide Zielarten bedienen? — für
+  Teilsystem 1 irrelevant geworden (die Pipeline bedient beide Zielarten
+  gleichermaßen, siehe unten), bleibt aber offen für Teilsystem 2.
+
+### Teilsystem 1 — Dataset-Prep-Pipeline: ✅ umgesetzt (2026-09-16)
+
+Vollständig gebaut und getestet, alle Gates grün (`cargo fmt`/`clippy -D
+warnings`/`test` sauber, sidecar `pytest`/`ruff` sauber, UI `tsc`/`eslint`
+sauber, live im Browser gegen den dev-mock verifiziert — Pipeline-Lauf,
+Kuratier-Grid mit Caption-Edit/Exclude, Export alle im Screenshot bestätigt).
+
+- **Ingest** (`core/src/capability/dataset/ingest.rs`): `walk_dataset_root`
+  läuft rekursiv über den Root-Ordner; jeder *unmittelbare* Unterordner wird
+  zum Tag; `.mp4` (Video) und `.png`/`.jpg`/`.jpeg`/`.webp` (bereits Frame)
+  werden erkannt, deterministisch sortiert.
+- **Frame-Extraktion** (`extract.rs`): `ffmpeg` (Auflösung analog
+  `sidecar::resolve_uv` — PATH, dann WinGet-Links) sampled Video auf
+  konfigurierbare fps (Default 1.5, Bereich 0.1–10). Ein Standbild braucht
+  keine Extraktion — es ist bereits ein Frame (Nutzer-Prinzip "jede Art
+  Daten"). `ffmpeg` selbst war noch keine Abhängigkeit irgendwo im Repo,
+  ist aber auf dieser Maschine bereits vorhanden (WinGet) und wird auch von
+  ComfyUIs eigenem `SaveVideo`-Node vorausgesetzt (siehe 4.0-Eintrag oben).
+- **Qualitätsfilter** (`filter.rs`): Unschärfe via Varianz-des-Laplace
+  (Standard-Technik, **von Hand implementiert statt über `imageproc::filter::
+  filter3x3`** — dessen Output-Clamping auf den Ziel-Pixeltyp hätte negative
+  Laplace-Werte auf 0 abgeschnitten und die Varianz systematisch verzerrt,
+  siehe Modul-Dokkommentar); Near-Duplicate-Erkennung via `image_hasher`
+  (gepflegter Nachfolger von `img_hash`, echtes Crate von crates.io, kein
+  Selbstbau) mit Hamming-Distanz gegen den zuletzt behaltenen Frame pro
+  Quelle (O(n), nicht O(n²) — Duplikate sind laut Videokohärenz ohnehin
+  konsekutiv).
+- **Captioning** (`caption.rs` + neues `sidecar/src/aiwm_sidecar/vision.py`):
+  - **Florence-2** (Microsoft, **MIT-Lizenz**, 230M/770M Parameter — Lizenz
+    und Parameterzahl live gegen die aktuelle Hugging-Face-Model-Card von
+    `microsoft/Florence-2-large` verifiziert, nicht aus dem Training
+    geraten) captioned jeden behaltenen Frame per Task-Prompt
+    (`<DETAILED_CAPTION>`). Braucht `trust_remote_code=True` (eigene
+    Modeling-Datei im HF-Repo) plus `timm`/`einops` (DaViT-Vision-Backbone) —
+    neue Sidecar-Deps.
+  - **Qwen2.5-VL-7B-Instruct** (Alibaba, **Apache-2.0**, 7B Parameter, echtes
+    Multi-Image-Prompting bestätigt — ebenfalls live gegen die aktuelle
+    Model-Card verifiziert) übernimmt die Eskalation: wirkt eine
+    Florence-2-Caption unsicher (Heuristik unten), wird der Frame zusammen
+    mit einem späteren Frame aus derselben Quelle (Default-Offset 5 behaltene
+    Frames — der User nannte wörtlich "Frame X gegen X+5") neu captioned, mit
+    der festen Frage "was passiert zwischen diesen beiden Bildern". Lädt
+    standardmäßig **4-bit über `bitsandbytes`** (fp16 allein wären ~14 GB
+    Gewichte — auf einer 16-GB-Karte neben allem anderen, was AIWM sonst
+    lädt, nicht vertretbar); `quantization: "4bit"|"8bit"|"none"` bleibt ein
+    Parameter für größere Karten. Nutzt `qwen_vl_utils.process_vision_info`
+    (Alibabas eigenes Multi-Image-Chat-Template-Hilfsmittel).
+  - **Eskalations-Heuristik** (`is_low_confidence_caption`, dokumentiert im
+    Modul): eskaliert bei (1) auffällig kurzer Caption (< 4 Wörter), (2)
+    Hedging-Sprache ("unclear", "hard to tell", …), oder (3) jedem N-ten
+    Frame (Default 20) als periodisches Sicherheitsnetz gegen einen
+    selbstsicher-aber-falschen Fall, den (1)/(2) nicht fangen. Eskalation
+    gilt nur für Video-Frames (ein Standbild hat keinen zeitlichen Nachbarn).
+  - Beide Modelle nur mit Fake-Doubles getestet (`FakeFlorence2`/`FakeQwenVl`
+    in `sidecar/tests/test_vision_captioning.py`, exakt nach dem Muster von
+    `FakeKokoro`/`FakeDia`) — **kein echter Multi-GB-Modell-Load in dieser
+    Umgebung verifiziert** (kein GPU-Zugriff hier), die Implementierung folgt
+    aber genau den dokumentierten Model-Card-Usage-Snippets.
+- **Neuer Runtime-Typ** `VisionAdapter` (`core/src/runtime/vision.rs`,
+  `RuntimeKind::Vision`): gleiche Sidecar-Client-Form wie `TtsAdapter`, aber
+  **bewusst nicht** dessen Zero-VRAM-Annahme — `loaded_models()` trackt
+  echte, anfragen-abhängige VRAM-Zahlen (Florence-2 immer, + Qwen bei
+  Eskalation), damit der Scheduler bei Bedarf tatsächlich evicten kann.
+- **Neuer Job-Typ** `dataset_prep` (`orchestrator::engine`): synthetische
+  Modell-Id fürs Scheduler-Ledger (`DATASET_VISION_MODEL_ID`, gleiche
+  Begründung wie beim Upscale-Job — kein einzelnes Library-`Model` dahinter),
+  reale (anfragenabhängige) VRAM-Reservierung statt Fallback-Konstante.
+- **Neue Tabelle** `dataset_frames` (Migration `0014_dataset_frames.sql` —
+  **Namenskollision**: ein parallel arbeitender Story-Studio-Agent hat
+  ebenfalls eine `0012_*.sql` angelegt; beim Zusammenführen der Branches muss
+  eine der beiden auf `0013` umnummeriert werden, noch nicht gelöst),
+  cascade-delete mit ihrem Job (gleiche Begründung wie `documents`/Sessions).
+- **Kuratier-UI** (`ui/src/features/dataset/Dataset.tsx`, neuer "Dataset"-Tab):
+  Root-Ordner-Picker + Pipeline-Parameter → Job-Start → Live-Fortschritt
+  (Event-Zeile, Frame-Zähler) → Grid mit Thumbnail, Tag-Chip, editierbarer
+  Caption (Freitext überschreibt die Auto-Caption, `caption_engine` wird
+  dabei geleert — markiert "von Hand"), Exclude-Checkbox, Qwen-Badge bei
+  eskalierten Frames. **Export**-Button schreibt die kuratierte Auswahl als
+  `NNNN.png`/`NNNN.txt`-Paare (die Standard-Sidecar-Konvention, die
+  kohya-ss/sd-scripts & Co. erwarten) in einen Zielordner — export-only,
+  kein Trainingslauf.
+- Neue HTTP-Routen (`api/http.rs`) + Tauri-Commands (`src-tauri/src/lib.rs`):
+  `GET /jobs/{id}/dataset-frames`, `PUT .../dataset-frames/{frame_id}`,
+  `GET .../dataset-frames/{frame_id}/image`, `POST /jobs/{id}/dataset-export`
+  — Job-Start selbst braucht keine neue Route, `submit_job` mit
+  `job_type=dataset_prep` reicht (generischer Mechanismus).
+- **Noch offen / bewusst nicht gebaut:**
+  - Kein `KNOWN_MODELS`-Katalogeintrag für Florence-2/Qwen2.5-VL (kein
+    Ein-Klick-Download über den Models-Tab) — Import läuft über den
+    bestehenden generischen "Ordner zeigen + Rolle zuweisen"-Weg
+    (`vision_florence2`/`vision_qwen2_5_vl`-Rollen), analog zu Dias
+    `dia_engine`/`dia_codec`. Ein Katalogeintrag ist ein sauberer Folge-Slice.
+  - Kein echter End-to-End-Lauf mit echten Modellgewichten/echtem Video
+    verifiziert (keine GPU/Testdaten in dieser Umgebung) — nur Unit-Tests
+    (Rust, reale kleine PNGs für Blur/Hash-Tests) + Sidecar-Fake-Doubles +
+    Browser-Verifikation gegen den dev-mock.
+  - `VisionAdapter.unload_model` räumt nur die Rust-seitige Buchführung auf,
+    nicht den Python-seitigen Modell-Cache im Sidecar-Prozess selbst (gleiche
+    Lücke wie bei den anderen Sidecar-gestützten Adaptern) — reale
+    GPU-Speicher-Freigabe bei Eviction ist ein Folge-Thema, sobald das an
+    echter Hardware gemessen wird.
+
+### Teilsystem 2 — Trainings-Orchestrator: weiterhin offen
+
+Unverändert gegenüber der ursprünglichen Analyse: aus dem jetzt fertigen
+kuratierten Datensatz einen echten LoRA-/Fine-Tune-Lauf fahren (stundenlang),
+Fortschritt anzeigen, danach das Ergebnis ins bestehende Image/Video-
+Modell-System einhängen zum Testen. Braucht einen externen
+Trainings-Unterbau — für Bildmodelle (SDXL/Flux) existiert reife Tooling
+(z. B. kohya-ss/sd-scripts), für Video-Modelle (Wan/LTX) ist die Lage
+deutlich unreifer/unstandardisiert — beides noch nicht recherchiert/
+entschieden. Noch nicht diskutiert: ob Trainingsläufe durch den bestehenden
+Job-Scheduler laufen (Stunden-lange VRAM-Reservierung wäre ein neuer
+Anwendungsfall) oder als eigener, scheduler-externer Prozess. **Ausdrücklich
+noch keine Implementierung** — laut `brainstorming`-Skill erst Design/Spec +
+User-Freigabe, dann `writing-plans`, bevor hier Code entsteht.
 
 ## Offen / später zu entscheiden
 - App-Selbst-Update offline (manueller Installer + Signaturprüfung angenommen)

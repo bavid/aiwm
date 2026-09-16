@@ -13,11 +13,11 @@ use serde::Deserialize;
 
 use super::dto::{
     AddSceneImageDto, AgentMessageDto, AgentPermissionDto, AttachDocumentDto, AttachExternalDto,
-    CharacterBodyDto, DetachEngineDto, LaunchExternalDto, LocationBodyDto, NewAgentDto,
-    NewRelationshipDto, NewSessionDto, NewVoiceIdentityDto, NpcBodyDto, OpenAgentSessionDto,
-    RenameModelDto, RenameSessionDto, SceneBodyDto, SceneDetailDto, SetArchivedDto,
-    SetInventoryDto, SetReferenceJobDto, SetRolesDto, SetTagsDto, SetTokenDto, StoryBodyDto,
-    SubmitJobDto,
+    CharacterBodyDto, DetachEngineDto, ExportDatasetDto, LaunchExternalDto, LocationBodyDto,
+    NewAgentDto, NewRelationshipDto, NewSessionDto, NewVoiceIdentityDto, NpcBodyDto,
+    OpenAgentSessionDto, RenameModelDto, RenameSessionDto, SceneBodyDto, SceneDetailDto,
+    SetArchivedDto, SetInventoryDto, SetReferenceJobDto, SetRolesDto, SetTagsDto, SetTokenDto,
+    StoryBodyDto, SubmitJobDto, UpdateDatasetFrameDto,
 };
 use super::handlers;
 use crate::db::JobFilter;
@@ -97,6 +97,16 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/jobs/{id}/cancel", post(cancel_job))
         .route("/jobs/{id}/output", get(job_output))
         .route("/jobs/{id}/clean-audio", post(clean_audio))
+        .route("/jobs/{id}/dataset-frames", get(list_dataset_frames))
+        .route(
+            "/jobs/{id}/dataset-frames/{frame_id}",
+            put(update_dataset_frame),
+        )
+        .route(
+            "/jobs/{id}/dataset-frames/{frame_id}/image",
+            get(dataset_frame_image),
+        )
+        .route("/jobs/{id}/dataset-export", post(export_dataset))
         .route("/models", get(list_models).post(import_model))
         .route("/models/known", get(known_models))
         .route("/models/stacks", get(model_stacks))
@@ -685,6 +695,62 @@ async fn clean_audio(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let duration_secs = handlers::clean_audio(&app, &id).await?;
     Ok(Json(serde_json::json!({ "duration_secs": duration_secs })))
+}
+
+/// Serve one curated frame's still image. Loopback only (ADR-008); the
+/// curation grid points an `<img>` here, same shape as `job_output`.
+async fn dataset_frame_image(
+    State(app): AppState,
+    Path((_job_id, frame_id)): Path<(String, String)>,
+) -> Result<Response, ApiError> {
+    let Some(path) = handlers::dataset_frame_image_path(&app, &frame_id).await? else {
+        return Ok((
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "no such frame" })),
+        )
+            .into_response());
+    };
+    let bytes = tokio::fs::read(&path).await.map_err(CoreError::Io)?;
+    let content_type = match path.extension().and_then(|e| e.to_str()) {
+        Some("jpg" | "jpeg") => "image/jpeg",
+        Some("webp") => "image/webp",
+        _ => "image/png",
+    };
+    Ok((
+        [
+            (axum::http::header::CONTENT_TYPE, content_type),
+            (axum::http::header::CACHE_CONTROL, "no-store"),
+        ],
+        bytes,
+    )
+        .into_response())
+}
+
+async fn list_dataset_frames(
+    State(app): AppState,
+    Path(id): Path<String>,
+) -> Result<Json<Vec<crate::db::DatasetFrame>>, ApiError> {
+    Ok(Json(handlers::list_dataset_frames(&app, &id).await?))
+}
+
+async fn update_dataset_frame(
+    State(app): AppState,
+    Path((_job_id, frame_id)): Path<(String, String)>,
+    Json(body): Json<UpdateDatasetFrameDto>,
+) -> Result<Json<crate::db::DatasetFrame>, ApiError> {
+    Ok(Json(
+        handlers::update_dataset_frame(&app, &frame_id, body).await?,
+    ))
+}
+
+async fn export_dataset(
+    State(app): AppState,
+    Path(id): Path<String>,
+    Json(body): Json<ExportDatasetDto>,
+) -> Result<Json<crate::capability::dataset::ExportSummary>, ApiError> {
+    Ok(Json(
+        handlers::export_dataset(&app, &id, &body.dest_dir).await?,
+    ))
 }
 
 async fn list_models(State(app): AppState) -> Result<Json<Vec<crate::db::Model>>, ApiError> {

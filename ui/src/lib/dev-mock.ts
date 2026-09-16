@@ -173,6 +173,59 @@ const SCENES: AnyRecord[] = [
   },
 ];
 
+const DATASET_FRAMES: AnyRecord[] = [];
+const DATASET_TAGS = ["Ghibli", "Cyberpunk"];
+const DATASET_MOCK_TOTAL_FRAMES = 18;
+
+function mkDatasetFrame(id: string, jobId: string, tag: string, over: AnyRecord): AnyRecord {
+  return {
+    id,
+    job_id: jobId,
+    tag,
+    source_path: `E:\\Data\\Demo\\${tag}\\clip.mp4`,
+    frame_path: `E:\\Data\\Demo\\${tag}\\clip_0001.png`,
+    timestamp_secs: 0,
+    caption: "",
+    caption_engine: "",
+    excluded: false,
+    created_at: now(),
+    ...over,
+  };
+}
+
+/** Grows a running `dataset_prep` job's curation set by one frame per tick
+ *  (mirrors how the real pipeline lands rows incrementally, per source, as
+ *  ffmpeg/captioning works through the tree), then completes the job once
+ *  the mock target is reached. No real image bytes exist here -- the
+ *  curation grid's `<img>` tags will 404 in the dev preview, same caveat as
+ *  every other job type's `output_path` (see the module doc). */
+function progressDatasetJobs(): void {
+  for (const j of JOBS) {
+    if (j.job_type !== "dataset_prep" || j.state !== "running") continue;
+    const jobId = String(j.id);
+    const existing = DATASET_FRAMES.filter((f) => f.job_id === jobId);
+    if (existing.length >= DATASET_MOCK_TOTAL_FRAMES) {
+      j.state = "completed";
+      j.finished_at = now();
+      continue;
+    }
+    const idx = existing.length + 1;
+    const tag = DATASET_TAGS[existing.length % DATASET_TAGS.length];
+    const escalated = idx % 6 === 0;
+    DATASET_FRAMES.push(
+      mkDatasetFrame(`${jobId}-f${idx}`, jobId, tag, {
+        source_path: `E:\\Data\\Demo\\${tag}\\clip.mp4`,
+        frame_path: `E:\\Data\\Demo\\${tag}\\clip_${String(idx).padStart(4, "0")}.png`,
+        timestamp_secs: idx * 0.7,
+        caption: escalated
+          ? `${tag} scene, dev-mock: the figure turns and walks toward the doorway`
+          : `${tag} scene, dev-mock caption ${idx}`,
+        caption_engine: escalated ? "qwen2.5-vl" : "florence2",
+      }),
+    );
+  }
+}
+
 const RUNTIMES: AnyRecord[] = [
   {
     id: "llamacpp", kind: "llama_cpp", health: "healthy", vram_used_mb: 6400,
@@ -777,6 +830,7 @@ export function installDevMock(): void {
         progressRecommendJobs();
         progressTtsJobs();
         progressUpscaleJobs();
+        progressDatasetJobs();
         // Fresh array — `usePolled` needs a changed reference to re-render.
         return JOBS.map((j) => ({ ...j }));
       case "get_config":
@@ -792,7 +846,14 @@ export function installDevMock(): void {
         return ["dev-mock: no real logs"];
       case "job_detail": {
         const job = JOBS.find((j) => j.id === a.id);
-        return job ? { job, events: [{ ts: now(), level: "info", message: "rendering 832×480 video, 81 frames @ 24 fps (~3.4s), 30 steps, cfg 5, seed 4212981 — wan2.2_ti2v_5B_fp16" }] } : null;
+        if (!job) return null;
+        const message =
+          job.job_type === "dataset_prep"
+            ? job.state === "completed"
+              ? "dataset ready"
+              : `found 2 tag folder(s), 2 source file(s) — captioning frames`
+            : "rendering 832×480 video, 81 frames @ 24 fps (~3.4s), 30 steps, cfg 5, seed 4212981 — wan2.2_ti2v_5B_fp16";
+        return { job, events: [{ ts: now(), level: "info", message }] };
       }
       case "submit_job": {
         const body = (a.body ?? {}) as AnyRecord;
@@ -934,6 +995,27 @@ export function installDevMock(): void {
         return active
           ? { deleted_files: 2, freed_bytes: 734_003_200, errors: [] }
           : { deleted_files: 0, freed_bytes: 0, errors: [] };
+      }
+      case "list_dataset_frames":
+        progressDatasetJobs();
+        return DATASET_FRAMES.filter((f) => f.job_id === a.jobId).map((f) => ({ ...f }));
+      case "update_dataset_frame": {
+        const frame = DATASET_FRAMES.find((f) => f.id === a.frameId);
+        if (!frame) throw new Error(`no such dataset frame ${a.frameId}`);
+        const body = (a.body ?? {}) as AnyRecord;
+        if (typeof body.excluded === "boolean") frame.excluded = body.excluded;
+        if (typeof body.caption === "string") {
+          frame.caption = body.caption;
+          frame.caption_engine = "";
+        }
+        return { ...frame };
+      }
+      case "export_dataset": {
+        const kept = DATASET_FRAMES.filter((f) => f.job_id === a.jobId && !f.excluded);
+        if (kept.length === 0) {
+          throw new Error("nothing to export — every frame is excluded from this dataset");
+        }
+        return { exported: kept.length, dest_dir: String(a.destDir ?? "") };
       }
       case "storage_report": {
         const kindOf = (m: AnyRecord): string => {

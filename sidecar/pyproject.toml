@@ -12,6 +12,19 @@ dependencies = [
     "accelerate>=0.34",
     "noisereduce>=3.0",
     "scipy>=1.11",
+    # Dataset-prep captioning (WP: Lokale KI-Trainings-Engine). Florence-2's
+    # `trust_remote_code` modeling file needs timm (its DaViT vision
+    # backbone) and einops directly, not just via transformers. `pillow` is
+    # used explicitly (`aiwm_sidecar.vision` opens frames with PIL directly,
+    # not only through a transformers image processor).
+    "pillow>=10",
+    "timm>=1.0",
+    "einops>=0.8",
+    # Qwen2.5-VL's vendor-published multi-image chat-template helper.
+    "qwen-vl-utils>=0.0.8",
+    # 4-bit/8-bit loading for Qwen2.5-VL-7B-Instruct -- the only way a 7B VLM
+    # comfortably shares a 16 GB card with everything else AIWM already runs.
+    "bitsandbytes>=0.43",
 ]
 # More deps land later: huggingface_hub (Phase 6), gguf/safetensors readers (Phase 2).
 

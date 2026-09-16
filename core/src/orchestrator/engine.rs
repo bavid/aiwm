@@ -25,6 +25,7 @@ use crate::bench::{self, BenchOutcome};
 use crate::capability;
 use crate::capability::chat::{self, ChatOutcome};
 use crate::capability::colibri::ColibriOutcome;
+use crate::capability::dataset::{self, DatasetPrepOutcome, DatasetPrepRequest};
 use crate::capability::image::{self, ImageOutcome, ImageRequest};
 use crate::capability::upscale::{self, UpscaleOutcome, UpscaleRequest};
 use crate::capability::video::{self, VideoOutcome, VideoRequest};
@@ -32,7 +33,7 @@ use crate::compat::{self, VramEstimate};
 use crate::db::{EventLevel, Job, JobPatch, Model, NewJob};
 use crate::registry::Registry;
 use crate::runtime::{
-    ColibriAdapter, ComfyUiAdapter, LlamaCppAdapter, RuntimeRegistry, TtsAdapter,
+    ColibriAdapter, ComfyUiAdapter, LlamaCppAdapter, RuntimeRegistry, TtsAdapter, VisionAdapter,
 };
 use crate::scheduler::{Decision, PlanRequest, Scheduler};
 use crate::telemetry::{GpuStatus, SystemTelemetry};
@@ -44,6 +45,7 @@ const LLAMACPP: &str = "llamacpp";
 const COMFYUI: &str = "comfyui";
 const COLIBRI: &str = "colibri";
 const TTS: &str = "tts";
+const VISION: &str = "vision";
 /// Fallback VRAM reservation for a ComfyUI model whose import estimate is
 /// missing — enough for SDXL on a 16 GB card.
 const IMAGE_VRAM_FALLBACK_MB: u64 = 8192;
@@ -60,6 +62,13 @@ const UPSCALE_VRAM_FALLBACK_MB: u64 = 2048;
 /// a fixed label the scheduler's single-VRAM-slot bookkeeping can key on.
 const UPSCALE_MODEL_ID: &str = "rtx-video-super-resolution";
 const UPSCALE_MODEL_NAME: &str = "RTX Video Super Resolution";
+/// Synthetic `model_id` for a `dataset_prep` job's [`Target`] — same
+/// reasoning as `UPSCALE_MODEL_ID`: the captioning stage may use one or two
+/// underlying checkpoints (Florence-2, optionally Qwen2.5-VL) depending on
+/// the request, so there is no single library `Model` row to point at; the
+/// scheduler still needs one id to key its VRAM ledger on for the job.
+const DATASET_VISION_MODEL_ID: &str = "dataset-vision-pipeline";
+const DATASET_VISION_MODEL_NAME: &str = "Dataset captioning (Florence-2 / Qwen2.5-VL)";
 /// The job "shape" `media_headroom_mb`'s per-family constants were sized for
 /// (matches the UI's own "getting heavy" cutoff — `EASY_PIXELS`/`EASY_FRAMES`
 /// in `ui/src/features/video/Video.tsx`, and `Image.tsx`'s 1024×1024 default).
@@ -112,6 +121,11 @@ pub struct JobEngine {
     /// `colibri`: optional, a clear config error rather than a panic if a
     /// `job_type=tts` job is submitted without one.
     tts: Option<Arc<TtsAdapter>>,
+    /// Set only when the dataset-prep captioning pipeline is wired up
+    /// (`with_vision`) — same shape as `colibri`/`tts`: optional, a clear
+    /// config error rather than a panic if a `job_type=dataset_prep` job is
+    /// submitted without one.
+    vision: Option<Arc<VisionAdapter>>,
     /// Where image jobs write their output (`<job_id>.png`).
     outputs_dir: PathBuf,
     /// Latest system reading — a `bench` job samples the VRAM / RAM peak from it.
@@ -141,6 +155,7 @@ impl JobEngine {
             comfyui,
             colibri: None,
             tts: None,
+            vision: None,
             outputs_dir,
             telemetry: frozen_telemetry(),
             auto_preference: crate::select::AutoPreference::default(),
@@ -186,6 +201,14 @@ impl JobEngine {
     #[must_use]
     pub fn with_tts(mut self, tts: Arc<TtsAdapter>) -> Self {
         self.tts = Some(tts);
+        self
+    }
+
+    /// Wire up the dataset captioning pipeline so `job_type=dataset_prep`
+    /// jobs can run. Optional, same reasoning as `with_tts`.
+    #[must_use]
+    pub fn with_vision(mut self, vision: Arc<VisionAdapter>) -> Self {
+        self.vision = Some(vision);
         self
     }
 
@@ -338,6 +361,26 @@ impl JobEngine {
                 model_id: "kokoro".into(),
                 model_name: "Kokoro narrator".into(),
                 vram_mb: 0,
+                estimate: None,
+            });
+        }
+        // Same "no single library Model" shape as upscale above, but unlike
+        // upscale/tts this one is *not* zero-VRAM: Florence-2 (always) and
+        // Qwen2.5-VL (only when the request asks for temporal-context
+        // escalation) are real GPU-resident models, so the reservation is
+        // read straight from the request instead of a flat constant — see
+        // `DatasetPrepRequest::vram_estimate_mb`'s own doc comment.
+        if job.job_type == "dataset_prep" {
+            let req = DatasetPrepRequest::from_params(&job.params)?;
+            self.db
+                .jobs()
+                .assign(&job.id, VISION, DATASET_VISION_MODEL_ID)
+                .await?;
+            return Ok(Target {
+                runtime_id: VISION.into(),
+                model_id: DATASET_VISION_MODEL_ID.into(),
+                model_name: DATASET_VISION_MODEL_NAME.into(),
+                vram_mb: job.vram_needed_mb().max(req.vram_estimate_mb()),
                 estimate: None,
             });
         }
@@ -1170,6 +1213,53 @@ impl JobEngine {
                 )
                 .await?;
             output_path = Some(done.output_path.to_string_lossy().into_owned());
+        } else if job.job_type == "dataset_prep" {
+            if runtime_id != VISION {
+                return Err(CoreError::Runtime {
+                    runtime: runtime_id.clone(),
+                    message: "dataset_prep jobs run on the vision captioning pipeline".into(),
+                });
+            }
+            let vision = self.vision.clone().ok_or_else(|| {
+                CoreError::Config(
+                    "the dataset captioning pipeline is not configured on this app".into(),
+                )
+            })?;
+            let req = DatasetPrepRequest::from_params(&job.params)?;
+            let work_dir = self.outputs_dir.join("datasets");
+            match dataset::run(&self.db, &vision, &work_dir, &job.id, req, cancel).await? {
+                DatasetPrepOutcome::Done(done) => {
+                    self.db
+                        .jobs()
+                        .append_event(
+                            &job.id,
+                            EventLevel::Info,
+                            &format!(
+                                "dataset ready \u{2014} {} frame(s) across {} tag(s)",
+                                done.frame_count,
+                                done.tag_counts.len()
+                            ),
+                        )
+                        .await?;
+                }
+                DatasetPrepOutcome::Cancelled => {
+                    self.db
+                        .jobs()
+                        .append_event(&job.id, EventLevel::Warn, "cancelled during dataset prep")
+                        .await?;
+                    self.to(
+                        &mut job,
+                        JobState::Cancelled,
+                        JobPatch {
+                            error_text: Some(CANCEL_REASON.into()),
+                            set_finished_at: true,
+                            ..Default::default()
+                        },
+                    )
+                    .await?;
+                    return Ok(JobOutcome::Cancelled { job_id: job.id });
+                }
+            }
         }
 
         self.to(&mut job, JobState::Post, JobPatch::default())

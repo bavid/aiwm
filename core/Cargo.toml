@@ -36,6 +36,10 @@ zip.workspace = true
 # ComfyUI's own `/ws` progress stream (`runtime::comfyui` -> `progress`), plus
 # the loopback `/ws` telemetry + job-progress routes' tests below.
 tokio-tungstenite = "0.30"
+image = { version = "0.25.9", default-features = false, features = ["png", "jpeg", "webp", "rayon"] }
+imageproc = "0.25.1"
+image_hasher = "3.0.0"
+walkdir = "2.5.0"
 
 [target.'cfg(windows)'.dependencies]
 win32job = "2"
