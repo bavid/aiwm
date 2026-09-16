@@ -137,18 +137,42 @@ hierher, damit nichts verloren geht.
   **nächsten** ComfyUI-Start in der laufenden Runtime. Bei laufendem Server nach
   einer Store-Pfad-Änderung wäre ein Neu-Schreiben + `POST /free` oder ein
   Server-Neustart sauberer — für den MVP ok (Settings sagt „Neustart nötig").
-- Bild-Job (3.4/3.5): MVP pollt `/history` (750 ms) + die UI pollt `jobDetail`
+- ~~Bild-Job (3.4/3.5): MVP pollt `/history` (750 ms) + die UI pollt `jobDetail`
   (700 ms). `/ws`-Fortschritt (`progress` / `executing` / `executed`) an die UI
-  streamen → echter Fortschrittsbalken statt nur „preparing…". Auch:
-  SDXL-Refiner-Pass, Batch-Größe > 1.
-- Image-UI (3.5): Galerie hat keine Paginierung / kein Löschen / keinen
+  streamen → echter Fortschrittsbalken statt nur „preparing…".~~ → ✅
+  `core::progress::ProgressHub` + `ComfyUiAdapter::generate_media` verbindet
+  sich zusätzlich zum bestehenden `/history`-Poll (der weiter die eigentliche
+  Fertigstellung erkennt) auf ComfyUIs eigenes `/ws?clientId=…` und published
+  `progress`/`executing`-Events dorthin; `GET /ws/jobs/{id}` (real, kein
+  Polling) streamt sie an die UI weiter, die per rohem `WebSocket` direkt auf
+  den Loopback-Server verbindet (kein Tauri-IPC nötig, wie schon bei den
+  `<img>`/`<video>`-Output-URLs). Bild **und** Video zeigen jetzt einen
+  echten Fortschrittsbalken (Schritt/Gesamt, Prozent) statt nur der letzten
+  Log-Zeile, wenn ComfyUI das Event liefert. Offen bleiben SDXL-Refiner-Pass
+  und Batch-Größe > 1 (unverändert vertagt).
+- ~~Image-UI (3.5): Galerie hat keine Paginierung / kein Löschen / keinen
   Download-Button, kein Bild-Zoom/Lightbox, keine Prompt-History, keine
   Style-Presets. Der Download-Button ist heikel im Tauri-Sandbox (`<a download>`
-  inert) — bräuchte einen `save`-Dialog-Command. Alles eigene kleine Slices bei
+  inert) — bräuchte einen `save`-Dialog-Command.~~ → ✅ Paginierung (24/Seite),
+  ein `Lightbox`-Zoom (Esc/Backdrop/×, ◀/▶) und ein echter Download-Button
+  (neuer `save_job_output`-Tauri-Command kopiert die Bytes, nachdem
+  `@tauri-apps/plugin-dialog`s `save()` das Ziel gewählt hat — das Schreib-
+  Gegenstück zum bestehenden `open()`-„Browse…"-Ladepfad) sind jetzt für
+  **Bild und Video** da. Löschen gab es schon (`gallery__delete`).
+  Prompt-History und Style-Presets bleiben offen — eigene kleine Slices bei
   Bedarf.
-- Output-Retention (3.7 zeigt nur einen Hinweis): automatisches Aufräumen /
-  Größenlimit / „Ordner öffnen"-Button für `<local_root>/outputs`. Mit Video
-  (4.1) dringlicher — Clips sind groß (4.5 hat den Retention-Hinweis).
+- Output-Retention (3.7 zeigt nur einen Hinweis): ~~automatisches Aufräumen /
+  Größenlimit / „Ordner öffnen"-Button für `<local_root>/outputs`.~~ → ✅
+  `core::cleanup::outputs` (Alters-Tage und/oder Gesamt-MB-Limit, beide `0` =
+  aus) + `POST /outputs/cleanup` (liest `config.toml` frisch, kein Neustart
+  nötig) + ein bewusst best-effort Sweep beim Start, wenn eine Policy gesetzt
+  ist. Settings → „Generated media" hat die zwei Felder + einen „Clean up
+  now"-Knopf (ausgegraut ohne gespeicherte Policy). **Bewusste Entscheidung**
+  (dokumentiert in `cleanup::outputs`' Moduldoc): ein Sweep löscht nur die
+  Datei, nie die Job-DB-Zeile — `job_output_path` behandelt eine fehlende
+  Datei bereits als „kein Output" (identisch zu einer von Hand gelöschten
+  Datei heute), das ist das einfachere/sicherere Verhalten als zusätzlich
+  Zeilen unter einer evtl. offenen Detailansicht zu löschen.
 - **Video-Job gegen die echte ComfyUI verproben (4.0):** (a) `SaveVideo` +
   `av>=17` sind wirklich in der Installer-venv; (b) der reale `/history`-
   Output-Key für Video (`videos` / `images` / `gifs` — `collect_media` prüft
@@ -177,10 +201,11 @@ hierher, damit nichts verloren geht.
   `sysinfo::available_memory`, ein Schwellwert für alle Video-Modelle. Der echte
   Offload-Footprint hängt von `vram_mode`, Encoder-Größe, Auflösung/Länge ab —
   an echten Wan/LTX-Läufen (4.0) kalibrieren; evtl. pro Familie/Modell.
-- **Output-Retention (4.5 macht sie nur sichtbar):** `about.outputs_bytes` +
+- ~~**Output-Retention (4.5 macht sie nur sichtbar):** `about.outputs_bytes` +
   „reveal"-Knopf sind da, aber es gibt weiter **kein** automatisches Aufräumen,
-  Größenlimit oder „X löschen"-Knopf. Eigene kleine Slice bei Bedarf (mit dem
-  `GET /jobs/{id}/output`-Streaming zusammen).
+  Größenlimit oder „X löschen"-Knopf.~~ → ✅ siehe der Output-Retention-Eintrag
+  weiter oben (`core::cleanup::outputs`, `POST /outputs/cleanup`, Settings-UI).
+  Das `GET /jobs/{id}/output`-RAM-Streaming-Thema unten bleibt separat offen.
 - **`[comfyui] extra_args` (4.5)** wird roh an die ComfyUI-Kommandozeile
   angehängt (whitespace-gesplittet). Für den loopback-only-MVP + „Power-User"-
   Feld ok; die Werte sind ungefiltert. Kein Shell-Risiko (`SpawnSpec` übergibt
@@ -215,14 +240,19 @@ hierher, damit nichts verloren geht.
   `steps` 1–60, `cfg` 1–15). ~~Die UI (4.3) muss dieselben Grenzen + eine
   „größer/länger = viel langsamer, kann OOM"-Warnung zeigen.~~ → ✅ 4.3
   (`Video.tsx` klemmt/snappt clientseitig, Warn-Notiz ab > 480p / 81 Frames).
-- **Video-UI-Politur (4.3):** (a) echter Prozentbalken statt letzter
+- **Video-UI-Politur (4.3):** ~~(a) echter Prozentbalken statt letzter
   Event-Zeile — braucht `/ws`-Fortschritt vom Core (`progress`/`executing`),
-  gleiche Baustelle wie beim Bild (3.4/3.5); (b) echtes Poster-Frame (erstes
-  Frame per ffmpeg/`av` extrahieren und als `poster=` setzen) statt
-  `<video preload=metadata>`; (c) die Minuten-Schätzung ist eine grobe Formel
+  gleiche Baustelle wie beim Bild (3.4/3.5);~~ → ✅ siehe den Bild-Job-Eintrag
+  oben (`core::progress`, `GET /ws/jobs/{id}`) — gilt für Bild und Video
+  gleichermaßen. (b) echtes Poster-Frame (erstes Frame per ffmpeg/`av`
+  extrahieren und als `poster=` setzen) statt `<video preload=metadata>`
+  bleibt offen; (c) die Minuten-Schätzung ist eine grobe Formel
   (`frames × steps × pixel`) — nach 4.0 an echten Wan-Läufen kalibrieren;
-  (d) Galerie: Lightbox, Download-Knopf (Tauri-`save`-Dialog), Retention /
-  Löschen, Paginierung — wie bei der Bild-Galerie offen.
+  ~~(d) Galerie: Lightbox, Download-Knopf (Tauri-`save`-Dialog), Retention /
+  Löschen, Paginierung — wie bei der Bild-Galerie offen.~~ → ✅ siehe den
+  Image-UI-Eintrag oben — `Lightbox`/Download/Paginierung sind für Bild
+  **und** Video erledigt, Retention ist global pro `<outputs_dir>` (nicht
+  pro Studio), Löschen gab es schon.
 - **`lib/dev-mock.ts` (4.3)** ist minimal — nur die Kommandos, die die Studios
   brauchen. Wenn mehr Tabs im Browser getestet werden sollen, die fehlenden
   Kommandos ergänzen (es warnt in der Konsole bei unbehandelten).
