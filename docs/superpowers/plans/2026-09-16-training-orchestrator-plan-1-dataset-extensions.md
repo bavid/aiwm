@@ -1711,7 +1711,7 @@ def test_tag_frame_is_dispatched_over_json_rpc(
     monkeypatch: pytest.MonkeyPatch, image_file: str, model_dir: str
 ) -> None:
     monkeypatch.setattr(vision, "_load_wd_tagger", lambda _dir: FakeWdTagger())
-    response = main.handle_request(
+    response = main.handle(
         {
             "jsonrpc": "2.0",
             "id": 7,
@@ -1732,7 +1732,7 @@ def test_preprocess_produces_448_bgr_float_batch(image_file: str) -> None:
     assert batch[0, 224, 224, 2] == pytest.approx(200.0)
 ```
 
-(If `main.handle_request` is not the actual name of the sidecar's request dispatcher, use the function the existing `test_vision_captioning.py` dispatch test calls — search that file for `"method": "caption_frame"` and mirror it exactly.)
+(If `main.handle` is not the actual name of the sidecar's request dispatcher, use the function the existing `test_vision_captioning.py` dispatch test calls — search that file for `"method": "caption_frame"` and mirror it exactly.)
 
 - [ ] **Step 2: Run** `cd sidecar && uv run pytest tests/test_wd_tagger.py -q` → fails: `vision` has no attribute `_wd_tagger_cache` / `tag_frame`.
 
@@ -1885,33 +1885,39 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 ```rust
     #[tokio::test]
     async fn resolve_captioner_dir_uses_the_registry_role() {
+        use super::super::captioner::{find_captioner, FLORENCE2_ID, WD_TAGGER_ID};
         let db = empty_db().await;
-        db.models()
-            .insert(NewModel {
-                name: "model.onnx".into(),
-                format: "onnx".into(),
-                file_path: "E:\\AI\\models\\vision\\wd-tagger\\model.onnx".into(),
-                size_bytes: 1,
-                source: "manual".into(),
-                roles: vec!["vision_wd_tagger".into()],
-                ..NewModel::default()
-            })
-            .await
-            .unwrap();
-        let c = super::super::captioner::find(super::super::captioner::WD_TAGGER_ID).unwrap();
+        // Both companion files must be present (Task 6 review decision):
+        // the tag list alone is "not installed".
+        for (name, format) in [("selected_tags.csv", "csv"), ("model.onnx", "onnx")] {
+            db.models()
+                .insert(NewModel {
+                    name: name.into(),
+                    format: format.into(),
+                    file_path: format!("E:\\AI\\models\\vision\\wd-tagger\\{name}"),
+                    size_bytes: 1,
+                    source: "manual".into(),
+                    roles: vec![crate::model::WD_TAGGER_ROLE.into()],
+                    ..NewModel::default()
+                })
+                .await
+                .unwrap();
+        }
+        let c = find_captioner(WD_TAGGER_ID).unwrap();
         let dir = resolve_captioner_dir(&db, c).await.unwrap();
         assert!(dir.to_string_lossy().replace('\\', "/").ends_with("vision/wd-tagger"));
 
-        let florence = super::super::captioner::find(super::super::captioner::FLORENCE2_ID).unwrap();
+        let florence = find_captioner(FLORENCE2_ID).unwrap();
         let err = resolve_captioner_dir(&db, florence).await.unwrap_err();
         assert!(err.to_string().contains("Florence-2"), "{err}");
     }
 
     #[test]
     fn rpc_method_and_engine_label_follow_the_captioner() {
-        let wd = super::super::captioner::find(super::super::captioner::WD_TAGGER_ID).unwrap();
+        use super::super::captioner::{find_captioner, FLORENCE2_ID, WD_TAGGER_ID};
+        let wd = find_captioner(WD_TAGGER_ID).unwrap();
         assert_eq!(rpc_method_for(wd), "tag_frame");
-        let fl = super::super::captioner::find(super::super::captioner::FLORENCE2_ID).unwrap();
+        let fl = find_captioner(FLORENCE2_ID).unwrap();
         assert_eq!(rpc_method_for(fl), "caption_frame");
     }
 ```
@@ -1924,7 +1930,21 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 use super::captioner::{Captioner, FLORENCE2_ID};
 
 pub async fn resolve_captioner_dir(db: &Database, c: &Captioner) -> Result<std::path::PathBuf> {
-    resolve_model_dir(db, c.role, c.name.split(" (").next().unwrap_or(c.name)).await
+    // Task 6 review decision: "installed" means every `required_files` entry
+    // sits in one directory (tagger: model.onnx + selected_tags.csv), so the
+    // resolver wraps `installed_captioner_dir` instead of taking the first
+    // row carrying the role. Keep the same error wording as
+    // `resolve_model_dir` (label = name up to " (", e.g. "Florence-2").
+    let label = c.name.split(" (").next().unwrap_or(c.name);
+    super::captioner::installed_captioner_dir(db, c)
+        .await?
+        .ok_or_else(|| {
+            vision_err(format!(
+                "no {label} imported — import it on the Models tab (Add models \u{2192} point at \
+                 its downloaded snapshot folder \u{2192} role \u{201c}{}\u{201d})",
+                c.role
+            ))
+        })
 }
 
 /// Which sidecar JSON-RPC method serves this captioner.
@@ -2215,7 +2235,7 @@ In `from_params`, after `root`:
         let captioner = match params.get("captioner").and_then(Value::as_str).map(str::trim) {
             None | Some("") => None,
             Some(id) => {
-                captioner::find(id).ok_or_else(|| dataset_err(format!("unknown captioner {id:?}")))?;
+                captioner::find_captioner(id).ok_or_else(|| dataset_err(format!("unknown captioner {id:?}")))?;
                 Some(id.to_string())
             }
         };
@@ -2617,7 +2637,7 @@ pub async fn export_dataset(db: &Database, req: &ExportRequest) -> Result<Export
             .get(&frame.id)
             .map(|ids| ids.iter().filter_map(|id| by_id.get(id.as_str())).map(|c| compose::ConceptPart { token: &c.token, description: &c.description }).collect())
             .unwrap_or_default();
-        let style = captioner::find(&frame.caption_engine).map_or(compose::CaptionStyle::Prose, |c| c.style);
+        let style = captioner::find_captioner(&frame.caption_engine).map_or(compose::CaptionStyle::Prose, |c| c.style);
         let caption = compose::compose_caption(req.caption_order, &dataset.trigger_word, &parts, &frame.caption, style);
 
         let src = if dataset.mode == DatasetMode::Clips { &frame.source_path } else { &frame.frame_path };
@@ -2753,7 +2773,7 @@ pub struct ConceptSummaryDto {
 
 ```rust
 pub async fn list_captioners(app: &App) -> Result<Vec<crate::capability::dataset::CaptionerStatus>> {
-    crate::capability::dataset::captioner::statuses(&app.db).await
+    crate::capability::dataset::captioner::captioner_statuses(&app.db).await
 }
 
 pub async fn list_datasets(app: &App) -> Result<Vec<crate::db::Dataset>> {
@@ -3164,4 +3184,4 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 
 - **Spec coverage:** 3 (datasets table, rejection reasons, optional captioning, filter C, clip mode) → Tasks 1, 2, 4, 10, 14; 3A concepts → Tasks 3, 11, 12; 3C recommendation text → Task 12; 3D registry + WD tagger + order-by-profile → Tasks 6, 7, 8, 5 (order is a request field now; Plan 2 wires the profile default); 3E not-included → recorded in Task 14 docs; 4B learn sets → Task 13 (similarity grouping by real hash deferred and recorded); 5 tests → every task has failing-first tests, Task 11 has the HTTP integration test, Task 7 Step 5 is the one real tagger run.
 - **Placeholders:** the only `<paste …>` markers are in Task 6 Step 3 and are the deliberate "compute the hash, never guess it" instruction; every other code block is complete.
-- **Type consistency:** `DatasetMode` (db) is reused by the request; `RejectionReason::as_str` values match the migration comment and the UI chip labels; `CaptionOrder` serialises as `tags_first`/`prose_first` on both sides; `Captioner.style: CaptionStyle` is the same enum `compose_caption` takes; `caption_with` returns the engine label that `captioner::find(&frame.caption_engine)` looks up at export (`"florence2"` and `"wd-eva02-tagger-v3"` are the registry ids, and the sidecar returns exactly those).
+- **Type consistency:** `DatasetMode` (db) is reused by the request; `RejectionReason::as_str` values match the migration comment and the UI chip labels; `CaptionOrder` serialises as `tags_first`/`prose_first` on both sides; `Captioner.style: CaptionStyle` is the same enum `compose_caption` takes; `caption_with` returns the engine label that `captioner::find_captioner(&frame.caption_engine)` looks up at export (`"florence2"` and `"wd-eva02-tagger-v3"` are the registry ids, and the sidecar returns exactly those).
