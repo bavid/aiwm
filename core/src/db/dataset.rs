@@ -29,8 +29,8 @@ pub struct DatasetFrame {
     /// `"florence2"` | `"wd-eva02-tagger-v3"` | `"qwen2.5-vl"` | `""` (not captioned / hand-edited).
     pub caption_engine: String,
     pub excluded: bool,
-    /// `""` = kept; otherwise one of the pipeline's rejection reasons
-    /// (`black` | `transition` | `blur` | `duplicate` | `cap` | `unusable`).
+    /// `""` = kept; otherwise one of
+    /// crate::capability::dataset::filter::RejectionReason's `as_str()` values.
     pub rejection_reason: String,
     /// Clip mode: the clip's length. `None` for a still frame.
     pub duration_secs: Option<f64>,
