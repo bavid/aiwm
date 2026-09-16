@@ -2155,6 +2155,9 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 **Files:**
 - Modify: `core/src/capability/dataset/mod.rs`
 - Modify: `core/src/orchestrator/engine.rs` (VRAM already reads the request; only the `run` call changes if its signature does — it does not)
+- Modify: `core/src/api/handlers.rs` — ONLY the existing job-keyed `export_dataset` handler (~line 310), which must call `export_dataset_for_job` once Step 6 changes `export_dataset`'s signature; otherwise the crate does not compile. (Task 11 adds the dataset-keyed handler.) Also the `db/dataset.rs` doc link to `export_dataset` (~line 173) stays valid because the function keeps its name.
+
+Note (Task 9 review): there is no existing engine test for the `dataset_prep` target; Step 7 writes the first one by calling the private `resolve_target` from inside `engine.rs`'s own test module (same-module tests can reach private methods), building the engine the way the neighbouring tests do.
 
 This is the integration task; keep each step's tests green before the next.
 
