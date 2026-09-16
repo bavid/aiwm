@@ -25,7 +25,12 @@ import numpy as np
 
 from aiwm_sidecar import PROTOCOL_VERSION, __version__
 
-CAPABILITIES: list[str] = ["synthesize_speech", "clean_audio"]
+CAPABILITIES: list[str] = [
+    "synthesize_speech",
+    "clean_audio",
+    "caption_frame",
+    "caption_frame_pair",
+]
 
 _METHOD_NOT_FOUND = -32601
 _INVALID_PARAMS = -32602
@@ -328,6 +333,24 @@ def handle(req: dict[str, Any]) -> dict[str, Any] | None:
             return _error(req_id, _INVALID_PARAMS, str(e))
         except Exception as e:  # pragma: no cover - unexpected engine failure
             return _error(req_id, _INTERNAL_ERROR, f"cleanup failed: {e}")
+    elif method == "caption_frame":
+        from aiwm_sidecar.vision import caption_frame
+
+        try:
+            result = caption_frame(params)
+        except ValueError as e:
+            return _error(req_id, _INVALID_PARAMS, str(e))
+        except Exception as e:  # pragma: no cover - unexpected engine failure
+            return _error(req_id, _INTERNAL_ERROR, f"captioning failed: {e}")
+    elif method == "caption_frame_pair":
+        from aiwm_sidecar.vision import caption_frame_pair
+
+        try:
+            result = caption_frame_pair(params)
+        except ValueError as e:
+            return _error(req_id, _INVALID_PARAMS, str(e))
+        except Exception as e:  # pragma: no cover - unexpected engine failure
+            return _error(req_id, _INTERNAL_ERROR, f"captioning failed: {e}")
     elif method in _PLANNED:
         return _error(req_id, _NOT_IMPLEMENTED, f"{method} is not implemented yet")
     else:
