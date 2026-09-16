@@ -343,7 +343,7 @@ pub async fn run(
         .await?;
 
     let Some(media) = comfyui
-        .generate_media(&workflow, cancel, VIDEO_TIMEOUT)
+        .generate_media(job_id, &workflow, cancel, VIDEO_TIMEOUT)
         .await?
     else {
         return Ok(VideoOutcome::Cancelled);

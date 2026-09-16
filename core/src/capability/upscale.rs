@@ -187,7 +187,7 @@ async fn run_image(
     let workflow = pipeline::rtx_upscale_image(&inputs);
 
     let Some(image) = comfyui
-        .generate_media(&workflow, cancel, UPSCALE_TIMEOUT)
+        .generate_media(job_id, &workflow, cancel, UPSCALE_TIMEOUT)
         .await?
     else {
         return Ok(UpscaleOutcome::Cancelled);
@@ -240,7 +240,7 @@ async fn run_video(
     let workflow = pipeline::rtx_upscale_video(&inputs);
 
     let Some(media) = comfyui
-        .generate_media(&workflow, cancel, UPSCALE_TIMEOUT)
+        .generate_media(job_id, &workflow, cancel, UPSCALE_TIMEOUT)
         .await?
     else {
         return Ok(UpscaleOutcome::Cancelled);

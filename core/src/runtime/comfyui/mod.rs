@@ -18,7 +18,7 @@ mod install;
 mod launch;
 
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
@@ -34,6 +34,7 @@ use super::{
     SpawnSpec, SupervisorState,
 };
 use crate::db::{runtime_state, Database};
+use crate::progress::ProgressHub;
 use crate::{CoreError, Result};
 
 use serde::Serialize;
@@ -69,6 +70,37 @@ pub(super) fn comfy_err(msg: impl std::fmt::Display) -> CoreError {
     CoreError::Runtime {
         runtime: RUNTIME_ID.into(),
         message: msg.to_string(),
+    }
+}
+
+/// Translate one raw ComfyUI websocket message into a [`ProgressHub`] update.
+/// Every other message type (`status`, `executed`, …) is silently ignored —
+/// `executing`/`progress` are the only two the UI's percentage needs.
+fn apply_comfy_event(progress: &ProgressHub, job_id: &str, event: &serde_json::Value) {
+    let Some(kind) = event.get("type").and_then(serde_json::Value::as_str) else {
+        return;
+    };
+    let data = event.get("data");
+    match kind {
+        "progress" => {
+            let value = data
+                .and_then(|d| d.get("value"))
+                .and_then(serde_json::Value::as_u64);
+            let max = data
+                .and_then(|d| d.get("max"))
+                .and_then(serde_json::Value::as_u64);
+            if let (Some(value), Some(max)) = (value, max) {
+                progress.step(job_id, value as u32, max as u32);
+            }
+        }
+        "executing" => {
+            let node = data
+                .and_then(|d| d.get("node"))
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string);
+            progress.executing(job_id, node);
+        }
+        _ => {}
     }
 }
 
@@ -189,6 +221,11 @@ pub struct ComfyUiAdapter {
     install: Mutex<InstallState>,
     /// Held for the duration of an install.
     install_lock: AsyncMutex<()>,
+    /// Live per-job render progress, fed by ComfyUI's own `/ws` inside
+    /// [`generate_media`](Self::generate_media). Shared with `App` (and from
+    /// there, `api::http`'s `/ws/jobs/{id}` route) via [`with_progress`]
+    /// rather than owned outright, so both sides see the same readings.
+    progress: Arc<ProgressHub>,
 }
 
 impl ComfyUiAdapter {
@@ -217,6 +254,7 @@ impl ComfyUiAdapter {
             op_lock: AsyncMutex::new(()),
             install: Mutex::new(InstallState::Idle),
             install_lock: AsyncMutex::new(()),
+            progress: Arc::new(ProgressHub::new()),
         }
     }
 
@@ -225,6 +263,16 @@ impl ComfyUiAdapter {
     #[must_use]
     pub fn with_options(mut self, opts: ComfyOptions) -> Self {
         self.opts = opts;
+        self
+    }
+
+    /// Share a [`ProgressHub`] with the rest of the app (`App::progress`)
+    /// instead of the adapter's own private default, so `api::http`'s
+    /// `/ws/jobs/{id}` route sees the same readings [`generate_media`]
+    /// publishes.
+    #[must_use]
+    pub fn with_progress(mut self, progress: Arc<ProgressHub>) -> Self {
+        self.progress = progress;
         self
     }
 
@@ -374,8 +422,16 @@ impl ComfyUiAdapter {
     /// mid-render — the workflow was interrupted. The server and its resident
     /// model stay up. `timeout` bounds one render (image: minutes; video: much
     /// longer).
+    ///
+    /// While the render runs, this also connects to ComfyUI's own
+    /// `/ws?clientId=...` and publishes every `progress` / `executing` event it
+    /// emits to `job_id` on [`self.progress`](Self::progress) — best-effort: a
+    /// connect failure only means no live percentage, never a failed render
+    /// (the `GET /history` poll below is the real completion signal either
+    /// way). The reading is cleared once this returns, however it returns.
     pub async fn generate_media(
         &self,
+        job_id: &str,
         workflow: &serde_json::Value,
         mut cancel: watch::Receiver<bool>,
         timeout: Duration,
@@ -384,10 +440,26 @@ impl ComfyUiAdapter {
             .up_port()
             .ok_or_else(|| comfy_err("the ComfyUI server is not running"))?;
         let client_id = uuid::Uuid::now_v7().to_string();
-        let prompt_id = self
-            .client
-            .submit_prompt(port, workflow, &client_id)
-            .await?;
+        let listener = self.spawn_progress_listener(port, &client_id, job_id);
+
+        let result = self
+            .run_and_poll(port, &client_id, workflow, &mut cancel, timeout)
+            .await;
+
+        listener.abort();
+        self.progress.clear(job_id);
+        result
+    }
+
+    async fn run_and_poll(
+        &self,
+        port: u16,
+        client_id: &str,
+        workflow: &serde_json::Value,
+        cancel: &mut watch::Receiver<bool>,
+        timeout: Duration,
+    ) -> Result<Option<GeneratedMedia>> {
+        let prompt_id = self.client.submit_prompt(port, workflow, client_id).await?;
 
         let deadline = Instant::now() + timeout;
         loop {
@@ -420,6 +492,41 @@ impl ComfyUiAdapter {
             }
             tokio::time::sleep(MEDIA_POLL_INTERVAL).await;
         }
+    }
+
+    /// Connect to ComfyUI's own websocket and forward `progress`/`executing`
+    /// events to `self.progress` until the socket closes or the caller aborts
+    /// the returned task (`generate_media` does both once the render finishes).
+    /// A connect failure just returns immediately — a task that exits at once
+    /// is a harmless no-op for `abort()` to call on later.
+    fn spawn_progress_listener(
+        &self,
+        port: u16,
+        client_id: &str,
+        job_id: &str,
+    ) -> tokio::task::JoinHandle<()> {
+        let url = format!("ws://127.0.0.1:{port}/ws?clientId={client_id}");
+        let progress = self.progress.clone();
+        let job_id = job_id.to_string();
+        tokio::spawn(async move {
+            use futures_util::StreamExt;
+            let Ok((mut socket, _)) = tokio_tungstenite::connect_async(&url).await else {
+                tracing::debug!(
+                    url,
+                    "ComfyUI progress websocket did not connect — no live %"
+                );
+                return;
+            };
+            while let Some(Ok(msg)) = socket.next().await {
+                let tokio_tungstenite::tungstenite::Message::Text(text) = msg else {
+                    continue;
+                };
+                let Ok(event) = serde_json::from_str::<serde_json::Value>(&text) else {
+                    continue;
+                };
+                apply_comfy_event(&progress, &job_id, &event);
+            }
+        })
     }
 
     /// Start the supervised process if it is down and wait for `/system_stats`.
@@ -744,5 +851,188 @@ mod tests {
 
         a.unload_model("something-else").await.unwrap();
         assert_eq!(a.loaded_models()[0].model_id, "sdxl");
+    }
+
+    /// A full fake ComfyUI: `/prompt` + `/history` + `/view` for the render
+    /// itself, plus a `/ws` route that scripts the same `executing`/`progress`
+    /// events a real ComfyUI emits during a render.
+    async fn mock_comfy_with_ws() -> u16 {
+        use axum::extract::ws::{Message as WsMessage, WebSocketUpgrade};
+        use axum::response::Response;
+
+        async fn ws_handler(ws: WebSocketUpgrade) -> Response {
+            ws.on_upgrade(|mut socket| async move {
+                let _ = socket
+                    .send(WsMessage::Text(
+                        serde_json::json!({ "type": "executing", "data": { "node": "KSampler" } })
+                            .to_string()
+                            .into(),
+                    ))
+                    .await;
+                let _ = socket
+                    .send(WsMessage::Text(
+                        serde_json::json!({ "type": "progress", "data": { "value": 3, "max": 12 } })
+                            .to_string()
+                            .into(),
+                    ))
+                    .await;
+                // Stay open a bit so the client has time to read both frames
+                // before `/history` reports done and `generate_media` aborts us.
+                tokio::time::sleep(Duration::from_millis(300)).await;
+            })
+        }
+
+        let router = Router::new()
+            .route(
+                "/system_stats",
+                get(|| async {
+                    Json(serde_json::json!({
+                        "system": { "comfyui_version": "0.34.0" },
+                        "devices": [{ "name": "cuda:0 test", "vram_total": 1u64, "vram_free": 1u64 }]
+                    }))
+                }),
+            )
+            .route("/free", post(|| async { axum::http::StatusCode::OK }))
+            .route("/interrupt", post(|| async { axum::http::StatusCode::OK }))
+            .route(
+                "/prompt",
+                post(|| async {
+                    Json(serde_json::json!({ "prompt_id": "p-1", "node_errors": {} }))
+                }),
+            )
+            .route(
+                "/history/{id}",
+                get(|| async {
+                    Json(serde_json::json!({
+                        "p-1": {
+                            "status": { "status_str": "success", "completed": true },
+                            "outputs": { "9": { "images": [
+                                { "filename": "job-abc.png", "subfolder": "", "type": "output" }
+                            ]}}
+                        }
+                    }))
+                }),
+            )
+            .route("/view", get(|| async { [0x89u8, 0x50, 0x4e, 0x47].to_vec() }))
+            .route("/ws", get(ws_handler));
+
+        let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+            .await
+            .unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            axum::serve(listener, router).await.unwrap();
+        });
+        port
+    }
+
+    #[tokio::test]
+    async fn generate_media_publishes_progress_from_comfyuis_own_websocket() {
+        let port = mock_comfy_with_ws().await;
+        let (a, _tmp) = adapter(None).await;
+        a.attach(port).await.unwrap();
+
+        let mut rx = a.progress.subscribe();
+        let (_cancel_tx, cancel_rx) = watch::channel(false);
+
+        let workflow = serde_json::json!({});
+        let media = a.generate_media("job-abc", &workflow, cancel_rx, Duration::from_secs(5));
+        let readings = async {
+            let mut got = Vec::new();
+            for _ in 0..2 {
+                match tokio::time::timeout(Duration::from_secs(2), rx.recv()).await {
+                    Ok(Ok(p)) => got.push(p),
+                    _ => break,
+                }
+            }
+            got
+        };
+        let (result, readings) = tokio::join!(media, readings);
+
+        let media = result.unwrap();
+        assert!(media.is_some(), "expected a real render result");
+
+        assert_eq!(readings.len(), 2, "{readings:?}");
+        assert_eq!(readings[0].job_id, "job-abc");
+        assert_eq!(readings[0].node.as_deref(), Some("KSampler"));
+        assert_eq!(readings[1].step, Some(3));
+        assert_eq!(readings[1].steps_total, Some(12));
+        assert_eq!(readings[1].percent, Some(25.0));
+
+        // Cleared once the render is done -- a finished job never shows a
+        // stale percentage.
+        assert_eq!(a.progress.get("job-abc"), None);
+    }
+
+    /// The render half of [`mock_comfy_with_ws`] without its `/ws` route --
+    /// stands in for a ComfyUI version (or a mid-upgrade hiccup) that doesn't
+    /// answer the websocket upgrade at all.
+    async fn mock_comfy_without_ws() -> u16 {
+        let router = Router::new()
+            .route(
+                "/system_stats",
+                get(|| async {
+                    Json(serde_json::json!({
+                        "system": { "comfyui_version": "0.34.0" },
+                        "devices": [{ "name": "cuda:0 test", "vram_total": 1u64, "vram_free": 1u64 }]
+                    }))
+                }),
+            )
+            .route("/free", post(|| async { axum::http::StatusCode::OK }))
+            .route("/interrupt", post(|| async { axum::http::StatusCode::OK }))
+            .route(
+                "/prompt",
+                post(|| async {
+                    Json(serde_json::json!({ "prompt_id": "p-1", "node_errors": {} }))
+                }),
+            )
+            .route(
+                "/history/{id}",
+                get(|| async {
+                    Json(serde_json::json!({
+                        "p-1": {
+                            "status": { "status_str": "success", "completed": true },
+                            "outputs": { "9": { "images": [
+                                { "filename": "job-xyz.png", "subfolder": "", "type": "output" }
+                            ]}}
+                        }
+                    }))
+                }),
+            )
+            .route("/view", get(|| async { [0x89u8, 0x50, 0x4e, 0x47].to_vec() }));
+        let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+            .await
+            .unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            axum::serve(listener, router).await.unwrap();
+        });
+        port
+    }
+
+    #[tokio::test]
+    async fn generate_media_still_completes_when_the_progress_websocket_cannot_connect() {
+        let port = mock_comfy_without_ws().await;
+        let (a, _tmp) = adapter(None).await;
+        a.attach(port).await.unwrap();
+
+        let (_cancel_tx, cancel_rx) = watch::channel(false);
+        let media = a
+            .generate_media(
+                "job-xyz",
+                &serde_json::json!({}),
+                cancel_rx,
+                Duration::from_secs(5),
+            )
+            .await
+            .unwrap();
+
+        assert!(
+            media.is_some(),
+            "history polling alone must still finish the render"
+        );
+        // No `/ws` route to connect to -- the listener gave up at once and
+        // never published anything.
+        assert_eq!(a.progress.get("job-xyz"), None);
     }
 }

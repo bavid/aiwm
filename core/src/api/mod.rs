@@ -353,6 +353,50 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn ws_jobs_streams_live_progress_for_the_named_job_only() {
+        use futures_util::StreamExt;
+
+        let (app, _tmp) = test_app().await;
+        let server = ApiServer::bind(app.clone(), SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
+            .await
+            .unwrap();
+
+        let url = format!("ws://{}/ws/jobs/job-a", server.addr);
+        let (mut ws, _) = tokio_tungstenite::connect_async(url).await.unwrap();
+
+        // A reading for a *different* job must never reach this socket.
+        app.progress.step("job-b", 1, 4);
+        app.progress.step("job-a", 3, 12);
+
+        let frame = ws.next().await.unwrap().unwrap();
+        let value: serde_json::Value = serde_json::from_str(&frame.into_text().unwrap()).unwrap();
+        assert_eq!(value["job_id"], "job-a");
+        assert_eq!(value["step"], 3);
+        assert_eq!(value["steps_total"], 12);
+        assert_eq!(value["percent"], 25.0);
+    }
+
+    #[tokio::test]
+    async fn ws_jobs_sends_the_already_known_reading_immediately_on_connect() {
+        use futures_util::StreamExt;
+
+        let (app, _tmp) = test_app().await;
+        // Published *before* the socket connects -- a render that was already
+        // underway when the UI opened the tab must not wait for the next event.
+        app.progress.executing("job-a", Some("KSampler".into()));
+        let server = ApiServer::bind(app, SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
+            .await
+            .unwrap();
+
+        let url = format!("ws://{}/ws/jobs/job-a", server.addr);
+        let (mut ws, _) = tokio_tungstenite::connect_async(url).await.unwrap();
+
+        let frame = ws.next().await.unwrap().unwrap();
+        let value: serde_json::Value = serde_json::from_str(&frame.into_text().unwrap()).unwrap();
+        assert_eq!(value["node"], "KSampler");
+    }
+
+    #[tokio::test]
     async fn set_setting_rejects_empty_key_with_400() {
         let (app, _tmp) = test_app().await;
         let server = ApiServer::bind(app, SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))

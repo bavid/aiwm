@@ -20,6 +20,7 @@
 //! - [`capability`]   — capability-specific job bodies (chat 2.4, image 3.4, video 4.1)
 //! - [`agent`]        — `AgentAdapter` trait + types for the OpenCode/Hermes runtimes (5.1)
 //! - [`pipeline`]     — fixed image workflow-JSON templates (3.4)
+//! - [`progress`]     — live per-job render progress, sourced from ComfyUI's own `/ws`
 //! - [`registry`]     — online model discovery: `ModelSource` + Hugging Face (6.1)
 //! - [`compat`]        — VRAM / KV-cache fit estimate before a model load (2.6)
 //! - [`link`]         — canonical model file ↔ runtime layout (junction/copy, 2.3)
@@ -46,6 +47,7 @@ pub mod model;
 pub mod orchestrator;
 pub mod paths;
 pub mod pipeline;
+pub mod progress;
 pub mod rag;
 pub mod recommend;
 pub mod registry;
@@ -77,6 +79,7 @@ pub use model::{
 };
 pub use orchestrator::{JobEngine, JobOutcome, JobState};
 pub use paths::AppPaths;
+pub use progress::{JobProgress, ProgressHub};
 pub use registry::{
     Fetched, Freshness, Gated, HuggingFaceSource, ModelSource, Registry, RegistryStatus,
     RemoteFile, RemoteFormat, RemoteModel, RemoteModelDetails, SearchQuery, SearchSort,

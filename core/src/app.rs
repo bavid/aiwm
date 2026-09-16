@@ -14,6 +14,7 @@ use crate::download::DownloadManager;
 use crate::launcher::{AdapterBinaries, Launcher};
 use crate::orchestrator::JobEngine;
 use crate::paths::AppPaths;
+use crate::progress::ProgressHub;
 use crate::registry::{HuggingFaceSource, Registry};
 use crate::runtime::{
     ColibriAdapter, ComfyDirs, ComfyUiAdapter, LlamaCppAdapter, RuntimeRegistry, TtsAdapter,
@@ -52,6 +53,10 @@ pub struct App {
     /// always constructed and registered the same way `colibri` is; resolving
     /// `uv` and spawning the sidecar is deferred to first real use.
     pub tts: Arc<TtsAdapter>,
+    /// Live per-job render progress (`ComfyUiAdapter::generate_media` ->
+    /// ComfyUI's own `/ws`), shared with `comfyui` so `api::http`'s
+    /// `GET /ws/jobs/{id}` route reads the same readings it publishes.
+    pub progress: Arc<ProgressHub>,
     pub scheduler: Arc<HybridScheduler>,
     pub jobs: Arc<JobEngine>,
     /// Long-running agent sessions (Phase 5.1c) — its own subsystem, not a job.
@@ -102,6 +107,7 @@ impl App {
                 .with_options(config.llama.to_options()),
         );
         runtimes.register(llama.clone());
+        let progress = Arc::new(ProgressHub::new());
         let comfyui = Arc::new(
             ComfyUiAdapter::discover(
                 db.clone(),
@@ -117,7 +123,8 @@ impl App {
                     models_store: config.store_path.clone(),
                 },
             )
-            .with_options(config.comfyui.to_options()),
+            .with_options(config.comfyui.to_options())
+            .with_progress(progress.clone()),
         );
         runtimes.register(comfyui.clone());
         let colibri = Arc::new(ColibriAdapter::discover(db.clone(), &paths.runtimes_dir()));
@@ -203,6 +210,7 @@ impl App {
             comfyui,
             colibri,
             tts,
+            progress,
             scheduler,
             jobs,
             agents,
