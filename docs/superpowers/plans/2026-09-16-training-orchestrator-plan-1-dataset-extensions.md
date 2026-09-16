@@ -413,6 +413,17 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 > with `job_id == None` and is removed when its dataset is deleted (Task 1
 > already has this scenario in `datasets.rs`; move the assertion on the frame's
 > `job_id` here once the field is optional).
+>
+> **Why the `Option<String>` change is a correctness fix, not a nicety:** the
+> Task 1 quality reviewer probed a row whose `job_id` the new `ON DELETE SET
+> NULL` had legitimately nulled and found that sqlx-sqlite decodes that SQL
+> `NULL` into an empty Rust `String` for a non-`Option` field — silently, no
+> error. Until this task lands, any read of such a row lies. This task must
+> therefore (1) make the field optional first, and (2) add a field-level
+> regression test asserting `frame.job_id == None` after the job is deleted
+> (`deleting_the_job_keeps_a_dataset_frame_with_job_id_none`), plus strengthen
+> the interim `deleting_the_job_makes_the_frame_unreachable_by_job_id` test
+> with the same field assertion.
 
 **Files:**
 - Modify: `core/src/db/dataset.rs`
