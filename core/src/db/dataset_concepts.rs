@@ -127,27 +127,39 @@ impl<'a> ConceptRepo<'a> {
 
     /// Assign `concept_id` to every frame in `frame_ids`; already-assigned
     /// pairs are ignored (idempotent), so "Alle im Set" can be clicked twice.
+    /// A frame that doesn't belong to the concept's own dataset is silently
+    /// skipped (the join-table FK alone only checks the frame exists, not
+    /// which dataset it's in). All frames succeed or none do.
     pub async fn assign(&self, concept_id: &str, frame_ids: &[String]) -> Result<()> {
+        let mut tx = self.pool.begin().await?;
         for frame_id in frame_ids {
             sqlx::query(
-                "INSERT OR IGNORE INTO frame_concepts (frame_id, concept_id) VALUES ($1, $2)",
+                "INSERT OR IGNORE INTO frame_concepts (frame_id, concept_id) \
+                 SELECT $1, $2 WHERE EXISTS ( \
+                     SELECT 1 FROM dataset_frames df JOIN dataset_concepts c ON c.id = $2 \
+                     WHERE df.id = $1 AND df.dataset_id = c.dataset_id \
+                 )",
             )
             .bind(frame_id)
             .bind(concept_id)
-            .execute(self.pool)
+            .execute(&mut *tx)
             .await?;
         }
+        tx.commit().await?;
         Ok(())
     }
 
+    /// A 40-frame "Alle im Set" unassign is all-or-nothing too.
     pub async fn unassign(&self, concept_id: &str, frame_ids: &[String]) -> Result<()> {
+        let mut tx = self.pool.begin().await?;
         for frame_id in frame_ids {
             sqlx::query("DELETE FROM frame_concepts WHERE frame_id = $1 AND concept_id = $2")
                 .bind(frame_id)
                 .bind(concept_id)
-                .execute(self.pool)
+                .execute(&mut *tx)
                 .await?;
         }
+        tx.commit().await?;
         Ok(())
     }
 
@@ -368,5 +380,93 @@ mod tests {
         db.concepts().assign(&c.id, &frames).await.unwrap();
         db.datasets().delete(&ds_id).await.unwrap();
         assert!(db.concepts().get(&c.id).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn assign_ignores_frames_from_another_dataset() {
+        let (db, ds_a, frames_a) = fixture().await;
+        let job_b = db.jobs().insert(NewJob::new("dataset_prep")).await.unwrap();
+        let ds_b = db
+            .datasets()
+            .create(NewDataset {
+                name: "U".into(),
+                mode: DatasetMode::Frames,
+                source_root: "y".into(),
+                prep_job_id: Some(job_b.id.clone()),
+            })
+            .await
+            .unwrap();
+        let frame_b = db
+            .dataset_frames()
+            .insert(NewDatasetFrame {
+                job_id: job_b.id.clone(),
+                dataset_id: Some(ds_b.id.clone()),
+                tag: "B".into(),
+                source_path: "clip.mp4".into(),
+                frame_path: "b0.png".into(),
+                timestamp_secs: Some(0.0),
+                rejection_reason: String::new(),
+                duration_secs: None,
+            })
+            .await
+            .unwrap();
+
+        let concept_a = db
+            .concepts()
+            .create(NewConcept {
+                dataset_id: ds_a.clone(),
+                name: "A".into(),
+                token: "a_xy".into(),
+                description: "".into(),
+            })
+            .await
+            .unwrap();
+
+        db.concepts()
+            .assign(&concept_a.id, std::slice::from_ref(&frame_b.id))
+            .await
+            .unwrap();
+        assert!(db
+            .concepts()
+            .map_for_dataset(&ds_a)
+            .await
+            .unwrap()
+            .is_empty());
+        assert_eq!(
+            db.concepts().counts_for_dataset(&ds_a).await.unwrap()[&concept_a.id],
+            0
+        );
+
+        db.concepts()
+            .assign(&concept_a.id, std::slice::from_ref(&frames_a[0]))
+            .await
+            .unwrap();
+        assert_eq!(
+            db.concepts().counts_for_dataset(&ds_a).await.unwrap()[&concept_a.id],
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn assign_and_unassign_with_no_frames_are_noops() {
+        let (db, ds_id, _) = fixture().await;
+        let c = db
+            .concepts()
+            .create(NewConcept {
+                dataset_id: ds_id.clone(),
+                name: "A".into(),
+                token: "a_xy".into(),
+                description: "".into(),
+            })
+            .await
+            .unwrap();
+
+        db.concepts().assign(&c.id, &[]).await.unwrap();
+        db.concepts().unassign(&c.id, &[]).await.unwrap();
+
+        assert_eq!(
+            db.concepts().counts_for_dataset(&ds_id).await.unwrap()[&c.id],
+            0
+        );
     }
 }
