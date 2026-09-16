@@ -1152,7 +1152,9 @@ export function installDevMock(): void {
           created_at: now(),
         };
         CONCEPTS.push(concept);
-        return { ...concept, frame_count: 0, token_warning: mockTokenWarning(token) };
+        // The real command answers with the stored row only -- `frame_count`
+        // and `token_warning` come from `list_concepts`.
+        return { ...concept };
       }
       case "update_concept": {
         const concept = CONCEPTS.find((c) => c.id === a.id);

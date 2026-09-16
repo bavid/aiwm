@@ -922,10 +922,17 @@ export const frameConceptMap = (datasetId: string) =>
 export const listConcepts = (datasetId: string) =>
   invoke<DatasetConcept[]>("list_concepts", { datasetId });
 
+/** The created row as stored. It carries no `frame_count`/`token_warning`:
+ *  those are computed by {@link listConcepts}, and a fresh concept has no
+ *  frames yet — refetch the list rather than splicing this in. */
 export const createConcept = (
   datasetId: string,
   body: { name: string; token: string; description?: string },
-) => invoke<DatasetConcept>("create_concept", { datasetId, body });
+) =>
+  invoke<Omit<DatasetConcept, "frame_count" | "token_warning">>("create_concept", {
+    datasetId,
+    body,
+  });
 
 export const updateConcept = (
   id: string,
