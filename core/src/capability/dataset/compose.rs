@@ -15,8 +15,10 @@ pub enum CaptionOrder {
 }
 
 /// What the auto caption is: a comma-separated tag list (WD tagger) or a
-/// sentence (Florence-2 / JoyCaption). Decides whether it joins with ", "
-/// as one more tag block or is kept as its own clause.
+/// sentence (Florence-2 / JoyCaption). Carried through the call signature
+/// now so the pipeline wiring (Task 10) can later join tag output as one more
+/// tag block; today `compose_caption` treats both styles the same (the
+/// caption is its own clause joined with ", ").
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CaptionStyle {
@@ -59,6 +61,9 @@ pub fn compose_caption(
         if description.is_empty() {
             tag_block.push(token.to_string());
         } else {
+            // The token/description boundary is deliberately flattened: the
+            // composed caption is only ever consumed by the trainer, never
+            // parsed back, so a description that itself contains ", " is fine.
             tag_block.push(format!("{token}, {description}"));
         }
     }
