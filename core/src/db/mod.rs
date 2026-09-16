@@ -13,6 +13,7 @@ mod models;
 mod runtimes;
 mod sessions;
 mod settings;
+mod voice_identities;
 
 pub use agents::{Agent, AgentRepo, AgentSession, AgentSessionEvent, AgentSessionState, NewAgent};
 pub use bench::{BenchRepo, Benchmark, NewBenchmark};
@@ -23,6 +24,7 @@ pub use models::{Model, ModelLink, ModelRepo, NewModel};
 pub use runtimes::{state as runtime_state, RuntimeRecord, RuntimeRepo};
 pub use sessions::{Session, SessionRepo};
 pub use settings::SettingsRepo;
+pub use voice_identities::{VoiceIdentity, VoiceIdentityRepo};
 
 use std::path::Path;
 use std::str::FromStr;
@@ -114,6 +116,10 @@ impl Database {
         BenchRepo::new(&self.pool)
     }
 
+    pub fn voice_identities(&self) -> VoiceIdentityRepo<'_> {
+        VoiceIdentityRepo::new(&self.pool)
+    }
+
     /// Names of the application tables (excludes SQLite internals). Test helper.
     pub async fn table_names(&self) -> Result<Vec<String>> {
         let rows: Vec<(String,)> = sqlx::query_as(
@@ -178,6 +184,7 @@ mod tests {
             "model_links",
             "jobs",
             "job_events",
+            "voice_identities",
         ] {
             assert!(
                 tables.contains(&expected.to_string()),
