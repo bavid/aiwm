@@ -79,8 +79,9 @@ pub use model::{
 pub use orchestrator::{JobEngine, JobOutcome, JobState};
 pub use paths::AppPaths;
 pub use registry::{
-    Fetched, Freshness, Gated, HuggingFaceSource, ModelSource, Registry, RegistryStatus,
-    RemoteFile, RemoteFormat, RemoteModel, RemoteModelDetails, SearchQuery, SearchSort,
+    CivitaiSource, Fetched, Freshness, Gated, HuggingFaceSource, ModelSource, Registry,
+    RegistryStatus, RemoteFile, RemoteFormat, RemoteModel, RemoteModelDetails, SearchQuery,
+    SearchSort,
 };
 pub use runtime::{
     ComfyUiAdapter, Health, LlamaCppAdapter, LlamaServerOptions, RuntimeAdapter, RuntimeKind,

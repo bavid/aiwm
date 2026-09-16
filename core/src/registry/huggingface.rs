@@ -320,6 +320,8 @@ fn parse_model(v: &Value) -> Option<RemoteModel> {
     Some(RemoteModel {
         author: str_field(v, "author").or_else(|| id.split('/').next().map(str::to_string)),
         id,
+        // Hugging Face's `id` (`owner/repo`) already reads as a title.
+        name: None,
         downloads,
         likes: v.get("likes").and_then(Value::as_i64).unwrap_or(0),
         trending_score: v.get("trendingScore").and_then(Value::as_i64),
@@ -343,6 +345,12 @@ fn parse_model(v: &Value) -> Option<RemoteModel> {
             .and_then(|n| u32::try_from(n).ok()),
         precision: v.get("safetensors").and_then(safetensors_precision),
         format: format_of(&tags, str_field(v, "library_name").as_deref()),
+        // Hugging Face has none of these Civitai-only concepts.
+        nsfw: false,
+        preview_image_url: None,
+        allow_commercial_use: Vec::new(),
+        model_kind_hint: None,
+        base_model_family: None,
     })
 }
 
@@ -363,6 +371,12 @@ fn parse_tree(v: &Value) -> Vec<RemoteFile> {
                     .filter(|h| h.len() == 64 && h.chars().all(|c| c.is_ascii_hexdigit())),
                 quant: quant_from_filename(&path),
                 shard: shard_from_filename(&path),
+                // Hugging Face has no per-file download URL or scan verdicts in
+                // this response — the URL is built by the caller from
+                // id/revision/path, and Hugging Face runs no malware scan.
+                download_url: None,
+                pickle_scan_result: None,
+                virus_scan_result: None,
                 path,
             })
         })

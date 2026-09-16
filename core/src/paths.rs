@@ -169,6 +169,15 @@ impl AppPaths {
         self.local_root.join("hf_token.txt")
     }
 
+    /// Optional Civitai API key — same machine-local-file treatment as
+    /// [`hf_token_file`](Self::hf_token_file) and for the same reason: it's
+    /// only ever needed for gated/early-access content, anonymous browsing
+    /// works without one, and it has no business in a `config.toml` that
+    /// gets bundled verbatim into every backup export.
+    pub fn civitai_token_file(&self) -> PathBuf {
+        self.local_root.join("civitai_token.txt")
+    }
+
     /// Bearer token for the unified local API endpoint (7.x) — same
     /// machine-local-file treatment as [`hf_token_file`](Self::hf_token_file)
     /// and for the same reason: a secret has no business in a `config.toml`

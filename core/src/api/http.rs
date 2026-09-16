@@ -113,6 +113,10 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/models/{id}/unload", post(unload_model))
         .route("/registry/status", get(registry_status))
         .route("/registry/token", put(set_hf_token))
+        .route("/civitai/status", get(civitai_status))
+        .route("/civitai/token", put(set_civitai_token))
+        .route("/civitai/search", get(civitai_search))
+        .route("/civitai/models/{*id}", get(civitai_details))
         .route("/local-api/status", get(local_api_status))
         .route("/local-api/token", put(set_local_api_token))
         .route("/v1/{*path}", any(local_api_proxy))
@@ -755,6 +759,18 @@ async fn set_hf_token(
     Ok(StatusCode::NO_CONTENT)
 }
 
+async fn civitai_status(State(app): AppState) -> Json<crate::registry::RegistryStatus> {
+    Json(handlers::civitai_status(&app))
+}
+
+async fn set_civitai_token(
+    State(app): AppState,
+    Json(body): Json<SetTokenDto>,
+) -> Result<StatusCode, ApiError> {
+    handlers::set_civitai_token(&app, &body.token)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 async fn local_api_status(State(app): AppState) -> Json<super::dto::LocalApiStatusDto> {
     Json(handlers::local_api_status(&app))
 }
@@ -976,6 +992,20 @@ async fn registry_search(
     Query(params): Query<super::dto::RegistrySearchDto>,
 ) -> Result<Json<crate::registry::Fetched<Vec<crate::registry::RemoteModel>>>, ApiError> {
     Ok(Json(handlers::registry_search(&app, params).await?))
+}
+
+async fn civitai_search(
+    State(app): AppState,
+    Query(params): Query<super::dto::CivitaiSearchDto>,
+) -> Result<Json<crate::registry::Fetched<Vec<crate::registry::RemoteModel>>>, ApiError> {
+    Ok(Json(handlers::civitai_search(&app, params).await?))
+}
+
+async fn civitai_details(
+    State(app): AppState,
+    Path(id): Path<String>,
+) -> Result<Json<super::dto::RegistryDetailsDto>, ApiError> {
+    Ok(Json(handlers::civitai_details(&app, &id).await?))
 }
 
 async fn registry_details(

@@ -238,6 +238,7 @@ const DOWNLOADS: AnyRecord[] = [];
 const BENCHMARKS: AnyRecord[] = [];
 const TAGS: Record<string, string[]> = { "m-qwen": ["coding", "favourite"] };
 let HF_TOKEN = "";
+let CIVITAI_TOKEN = "";
 let LOCAL_API_TOKEN = "";
 
 /** Flip a running `bench` job to `completed` a few seconds in and drop a
@@ -445,6 +446,76 @@ const DISCOVER_MODELS: AnyRecord[] = [
     param_count: 106_000_000_000, arch: "glm4", ctx_max: 131_072, precision: null, format: "gguf",
   },
 ];
+
+/** Civitai's own field shape (verified against a real, unauthenticated
+ *  request — see `registry::civitai`'s module doc). One clean checkpoint,
+ *  one LoRA, one flagged with a non-"Success" pickle scan (the "don't hide
+ *  it" fixture), one NSFW-tagged model that the default search excludes. */
+const CIVITAI_DISCOVER_MODELS: AnyRecord[] = [
+  {
+    id: "257749", name: "Pony Diffusion V6 XL", author: "AstraliteHeart",
+    downloads: 1_200_000, likes: 34_000, trending_score: null, created_at: null,
+    last_modified: "2023-07-18T00:00:00.000Z", pipeline_tag: null, library_name: null,
+    gated: "no", license: null, base_model: null,
+    tags: ["western art", "base model", "anime"], param_count: null, arch: null, ctx_max: null,
+    precision: null, format: "safetensors", nsfw: false,
+    preview_image_url: "https://placehold.co/144x144/2a2540/e8e3ff?text=Pony+V6",
+    allow_commercial_use: ["Image", "RentCivit"], model_kind_hint: "Checkpoint",
+    base_model_family: "Pony, SD 1.5",
+  },
+  {
+    id: "99263", name: "Add More Detail (detail enhancer LoRA)", author: "Lykon",
+    downloads: 500_000, likes: 9_000, trending_score: null, created_at: null,
+    last_modified: "2023-08-07T00:00:00.000Z", pipeline_tag: null, library_name: null,
+    gated: "no", license: null, base_model: null,
+    tags: ["detailed", "enhancer"], param_count: null, arch: null, ctx_max: null,
+    precision: null, format: "safetensors", nsfw: false,
+    preview_image_url: "https://placehold.co/144x144/1f2a24/d8ffe8?text=Detail",
+    allow_commercial_use: ["Image"], model_kind_hint: "LORA", base_model_family: "SD 1.5",
+  },
+  {
+    id: "424242", name: "Suspicious Upload", author: "rando",
+    downloads: 12, likes: 0, trending_score: null, created_at: null,
+    last_modified: "2024-01-01T00:00:00.000Z", pipeline_tag: null, library_name: null,
+    gated: "no", license: null, base_model: null,
+    tags: [], param_count: null, arch: null, ctx_max: null,
+    precision: null, format: "safetensors", nsfw: false, preview_image_url: null,
+    allow_commercial_use: [], model_kind_hint: "Checkpoint", base_model_family: "SD 1.5",
+  },
+  {
+    id: "777777", name: "NSFW Only Model", author: "rando2",
+    downloads: 5, likes: 0, trending_score: null, created_at: null,
+    last_modified: "2024-01-01T00:00:00.000Z", pipeline_tag: null, library_name: null,
+    gated: "no", license: null, base_model: null,
+    tags: ["nsfw"], param_count: null, arch: null, ctx_max: null,
+    precision: null, format: "safetensors", nsfw: true, preview_image_url: null,
+    allow_commercial_use: [], model_kind_hint: "Checkpoint", base_model_family: "SD 1.5",
+  },
+];
+
+const CIVITAI_FILES: Record<string, AnyRecord[]> = {
+  "257749": [{
+    path: "ponyDiffusionV6XL_v6StartWithThisOne.safetensors", size_bytes: 6_775_982_592,
+    sha256: "67ab2fd8ec439a89b3fedb15cc65f54336af163c7eb5e4f2acc98f090a29b0b3", quant: "F16",
+    shard: null, download_url: "https://civitai.com/api/download/models/290640",
+    vram_estimate_mb: 8200, fit: { level: "green" },
+    pickle_scan_result: "Success", virus_scan_result: "Success",
+  }],
+  "99263": [{
+    path: "add-detail-xl.safetensors", size_bytes: 228_452_331,
+    sha256: "0d9bd1b873a7863e128b4672e3e245838858f71469a3cec58123c16c06f83bd7", quant: null,
+    shard: null, download_url: "https://civitai.com/api/download/models/135867",
+    vram_estimate_mb: null, fit: { level: "unknown" },
+    pickle_scan_result: "Success", virus_scan_result: "Success",
+  }],
+  "424242": [{
+    path: "suspicious.safetensors", size_bytes: 102_400_000,
+    sha256: "aa".repeat(32), quant: null,
+    shard: null, download_url: "https://civitai.com/api/download/models/424242",
+    vram_estimate_mb: null, fit: { level: "unknown" },
+    pickle_scan_result: "Danger", virus_scan_result: "Success",
+  }],
+};
 
 function devSession(): AnyRecord {
   const s = DEV_SESSION!;
@@ -939,6 +1010,18 @@ export function installDevMock(): void {
       case "set_hf_token":
         HF_TOKEN = String(a.token ?? "").trim();
         return null;
+      case "civitai_status":
+        return {
+          source_id: "civitai",
+          last_fetch: now(),
+          rate_limit_remaining: null,
+          rate_limited_secs: null,
+          token_set: CIVITAI_TOKEN.length > 0,
+          cache_entries: 0,
+        };
+      case "set_civitai_token":
+        CIVITAI_TOKEN = String(a.token ?? "").trim();
+        return null;
       case "local_api_status":
         return { endpoint: "http://127.0.0.1:48096/v1", token_set: LOCAL_API_TOKEN.length > 0 };
       case "set_local_api_token":
@@ -1050,6 +1133,33 @@ export function installDevMock(): void {
               fit: { level: "yellow", reason: "needs ~9.0 GB of your ~14.8 GB VRAM budget — little head-room for a longer context or a second resident model" },
             },
           ],
+        };
+      }
+      case "civitai_search": {
+        const p = (a.params as AnyRecord) ?? {};
+        const q = String(p.q ?? "").toLowerCase();
+        const nsfw = Boolean(p.nsfw);
+        const types = String(p.types ?? "")
+          .split(",")
+          .map((t) => t.trim())
+          .filter(Boolean);
+        const all = CIVITAI_DISCOVER_MODELS.filter((m) => {
+          if (q && !String(m.name).toLowerCase().includes(q)) return false;
+          // Mirrors the real server's own default-safe NSFW filter.
+          if (!nsfw && m.nsfw) return false;
+          if (types.length > 0 && !types.includes(String(m.model_kind_hint))) return false;
+          return true;
+        });
+        return { data: all, freshness: { kind: "live" } };
+      }
+      case "civitai_model": {
+        const id = String(a.id ?? "");
+        const m = CIVITAI_DISCOVER_MODELS.find((x) => x.id === id) ?? CIVITAI_DISCOVER_MODELS[0];
+        return {
+          ...m,
+          revision: id,
+          freshness: { kind: "live" },
+          files: CIVITAI_FILES[String(m.id)] ?? [],
         };
       }
       case "list_downloads":

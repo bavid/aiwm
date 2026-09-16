@@ -895,10 +895,16 @@ export type Freshness =
   | { kind: "stale"; age_secs: number }
   | { kind: "offline"; age_secs: number };
 
-/** One search hit from the Hugging Face Hub (`GET /registry/search`). */
+/** One search hit — shared by every Discover source (`GET /registry/search`
+ *  for Hugging Face, `GET /civitai/search` for Civitai). A field a given
+ *  source has no concept of stays at its neutral default rather than being
+ *  fabricated — see each field's comment for which source(s) populate it. */
 export interface RemoteModel {
-  /** `owner/repo`. */
+  /** Hugging Face: `owner/repo`. Civitai: the numeric model id, as a string. */
   id: string;
+  /** A separate display title — Civitai's `name` (e.g. "Pony Diffusion V6
+   *  XL"). `null` for Hugging Face, where `id` already reads as a title. */
+  name: string | null;
   author: string | null;
   downloads: number;
   likes: number;
@@ -908,8 +914,10 @@ export interface RemoteModel {
   pipeline_tag: string | null;
   library_name: string | null;
   gated: "no" | "auto" | "manual";
+  /** Licence slug (Hugging Face only — Civitai has no slug; see
+   *  `allow_commercial_use`). */
   license: string | null;
-  /** The upstream repo this is a quant / fine-tune of. */
+  /** The upstream repo this is a quant / fine-tune of. Hugging Face only. */
   base_model: string | null;
   tags: string[];
   param_count: number | null;
@@ -917,6 +925,24 @@ export interface RemoteModel {
   ctx_max: number | null;
   precision: string | null;
   format: "gguf" | "safetensors" | "other";
+  /** Civitai's own NSFW flag. Always `false` for Hugging Face. The Discover
+   *  UI's Civitai search already defaults to excluding NSFW results — this
+   *  is only surfaced as defense in depth for a mislabelled result. */
+  nsfw: boolean;
+  /** A representative preview image (Civitai only). */
+  preview_image_url: string | null;
+  /** Civitai's `allowCommercialUse` flags (e.g. `["Image", "Sell"]`) — this,
+   *  not `license`, is Civitai's real commercial-terms signal. Empty for
+   *  Hugging Face. */
+  allow_commercial_use: string[];
+  /** Civitai's own `type` (`"Checkpoint"`, `"LORA"`, …), verbatim — a hint at
+   *  which `ModelType` to import a file from this model as. `null` for
+   *  Hugging Face (use `format` / `importTypeFor` instead). */
+  model_kind_hint: string | null;
+  /** Civitai's foundation-model family label (e.g. `"SDXL 1.0"`, `"Pony"`) —
+   *  distinct from `base_model`, which is an upstream *repo id*. `null` for
+   *  Hugging Face. */
+  base_model_family: string | null;
 }
 
 /** Will this file run on this machine? Weights + KV + overhead vs the VRAM
@@ -930,14 +956,25 @@ export type FitVerdict =
 export interface RegistryFile {
   path: string;
   size_bytes: number;
+  /** The source's own reported hash — a pre-download sanity check / dedup
+   *  key only. The download manager always re-hashes the bytes it actually
+   *  receives and treats *that* as the source of truth, never this field. */
   sha256: string | null;
   quant: string | null;
-  /** `[index, total]` for a split file. */
+  /** `[index, total]` for a split file. Hugging Face only. */
   shard: [number, number] | null;
-  /** The HF `/resolve/` URL — fed to `enqueueDownload` (6.4) or "Copy link". */
+  /** Hugging Face: the `/resolve/` URL. Civitai: the file's own `downloadUrl`.
+   *  Either way — fed to `enqueueDownload` (6.4) or "Copy link". */
   download_url: string;
   vram_estimate_mb: number | null;
   fit: FitVerdict;
+  /** Civitai's own malware-scan verdicts (`"Success"`, `"Danger"`,
+   *  `"Pending"`, …), verbatim — always show a non-`"Success"` value
+   *  prominently, never hide it. `null` for Hugging Face. Informational
+   *  only: never a substitute for the server's own import-time Pickle-format
+   *  guard, which runs unconditionally regardless of what a source reports. */
+  pickle_scan_result: string | null;
+  virus_scan_result: string | null;
 }
 
 export interface RegistryDetails extends RemoteModel {
@@ -966,6 +1003,48 @@ export const registrySearch = (params: RegistrySearchParams) =>
 /** One repo with every file (size, SHA-256, quant, fit). `id` is `owner/repo`. */
 export const registryModel = (id: string) =>
   invoke<RegistryDetails>("registry_model", { id });
+
+// --- Civitai (image/video checkpoints + LoRAs) ---
+
+export interface CivitaiSearchParams {
+  q?: string;
+  /** Civitai `types` values, e.g. `["Checkpoint", "LORA"]`. */
+  types?: string[];
+  sort?: "downloads" | "likes" | "trending" | "new";
+  /** Include NSFW-flagged results. **Omit or `false`** to exclude them — the
+   *  Discover UI's Civitai panel defaults its own toggle to off and the
+   *  server independently defaults to `false` too, so a caller can never
+   *  accidentally widen this by forgetting the flag. */
+  nsfw?: boolean;
+  limit?: number;
+}
+
+/** The Civitai registry health line for Diagnostics (`GET /civitai/status`). */
+export const civitaiStatus = () => invoke<RegistryStatus>("civitai_status");
+/** Set (blank clears) the Civitai API key — a machine-local file, never in a
+ *  backup. Only needed for gated/early-access content; anonymous browsing
+ *  works without one. Takes effect on the next restart. */
+export const setCivitaiToken = (token: string) => invoke<void>("set_civitai_token", { token });
+
+/** Search Civitai for image/video checkpoints and LoRAs. Offline-gated
+ *  (ADR-009). Defaults to excluding NSFW results — see `CivitaiSearchParams.nsfw`.
+ *
+ *  `types` is joined into a single comma-separated string on the wire (not a
+ *  JSON array): the same `CivitaiSearchDto` also deserializes from an HTTP
+ *  query string (the loopback server's `GET /civitai/search`), which can't
+ *  reliably parse a `Vec` from repeated keys — see the Rust-side doc on
+ *  `CivitaiSearchDto::types`. */
+export const civitaiSearch = (params: CivitaiSearchParams) =>
+  invoke<RegistrySearchResult>("civitai_search", {
+    params: {
+      ...params,
+      types: params.types && params.types.length > 0 ? params.types.join(",") : undefined,
+    },
+  });
+/** One Civitai model's primary version, with every file's size, hash, quant,
+ *  fit, and Civitai's own pickle/virus-scan verdicts. `id` is the numeric
+ *  Civitai model id, as a string. */
+export const civitaiModel = (id: string) => invoke<RegistryDetails>("civitai_model", { id });
 
 // --- tag/vibe model recommendations (core::recommend) ---
 // No dedicated IPC call: a recommendation is a `job_type: "recommend"` job,
