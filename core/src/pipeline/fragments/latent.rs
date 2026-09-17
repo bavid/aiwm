@@ -1,5 +1,5 @@
 //! Latent-image fragments: `EmptyLatentImage` / `EmptySD3LatentImage` /
-//! `EmptyFlux2LatentImage` / `LatentUpscaleBy`.
+//! `EmptyFlux2LatentImage` / `EmptyLTXVLatentVideo` / `LatentUpscaleBy`.
 
 use serde_json::json;
 
@@ -45,6 +45,17 @@ pub fn empty_flux2(
             "height": height.into().json(),
             "batch_size": 1
         }),
+    );
+    OwnedLink::new(id, 0)
+}
+
+/// `EmptyLTXVLatentVideo` — LTX-Video's empty *video* latent: a width/height
+/// plus a frame count, batch size 1. Exact keys from `ltx_video`.
+pub fn empty_ltxv(g: &mut Graph, id: &str, width: u32, height: u32, length: u32) -> OwnedLink {
+    g.node(
+        id,
+        "EmptyLTXVLatentVideo",
+        json!({ "width": width, "height": height, "length": length, "batch_size": 1 }),
     );
     OwnedLink::new(id, 0)
 }
@@ -113,6 +124,20 @@ mod tests {
         empty_flux2(&mut g, "66", &width, OwnedLink::new("99", 1));
         assert_eq!(g.input("66", "width"), Some(&json!(["99", 0])));
         assert_eq!(g.input("66", "height"), Some(&json!(["99", 1])));
+    }
+
+    #[test]
+    fn empty_ltxv_latent_video_carries_the_frame_count() {
+        let mut g = Graph::default();
+        let out = empty_ltxv(&mut g, "70", 832, 480, 81);
+        assert_eq!(out, OwnedLink::new("70", 0));
+        assert_eq!(
+            g.into_value()["70"],
+            json!({
+                "class_type": "EmptyLTXVLatentVideo",
+                "inputs": { "width": 832, "height": 480, "length": 81, "batch_size": 1 }
+            })
+        );
     }
 
     #[test]

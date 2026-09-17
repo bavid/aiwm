@@ -5,6 +5,28 @@ use serde_json::json;
 
 use crate::pipeline::graph::{Dim, Graph, OwnedLink};
 
+/// `VAEDecode` — a sampled latent back into pixels. The video recipes decode
+/// into `CreateVideo` rather than `SaveImage`, so this stands alone as well as
+/// feeding [`decode_and_save`]. Exact keys from `checkpoint_txt2img`.
+pub fn vae_decode(g: &mut Graph, id: &str, samples: &OwnedLink, vae: &OwnedLink) -> OwnedLink {
+    g.node(
+        id,
+        "VAEDecode",
+        json!({ "samples": samples.json(), "vae": vae.json() }),
+    );
+    OwnedLink::new(id, 0)
+}
+
+/// `SaveImage` — the terminal node of every image recipe (and of the RTX image
+/// upscale, which never touches a VAE). Exact keys from `checkpoint_txt2img`.
+pub fn save_image(g: &mut Graph, id: &str, images: &OwnedLink, filename_prefix: &str) {
+    g.node(
+        id,
+        "SaveImage",
+        json!({ "filename_prefix": filename_prefix, "images": images.json() }),
+    );
+}
+
 /// `VAEDecode` then `SaveImage`. Exact keys from `checkpoint_txt2img`.
 pub fn decode_and_save(
     g: &mut Graph,
@@ -14,17 +36,8 @@ pub fn decode_and_save(
     vae: &OwnedLink,
     filename_prefix: &str,
 ) {
-    g.node(
-        decode_id,
-        "VAEDecode",
-        json!({ "samples": samples.json(), "vae": vae.json() }),
-    );
-    let images = OwnedLink::new(decode_id, 0);
-    g.node(
-        save_id,
-        "SaveImage",
-        json!({ "filename_prefix": filename_prefix, "images": images.json() }),
-    );
+    let images = vae_decode(g, decode_id, samples, vae);
+    save_image(g, save_id, &images, filename_prefix);
 }
 
 /// `LoadImage` — a bare file name already staged in ComfyUI's `input/`
@@ -104,6 +117,34 @@ mod tests {
                     "class_type": "SaveImage",
                     "inputs": { "filename_prefix": "job-abc", "images": ["8", 0] }
                 }
+            })
+        );
+    }
+
+    #[test]
+    fn vae_decode_and_save_image_stand_alone() {
+        let mut g = Graph::default();
+        let images = super::vae_decode(
+            &mut g,
+            "8",
+            &OwnedLink::new("3", 0),
+            &OwnedLink::new("4", 2),
+        );
+        assert_eq!(images, OwnedLink::new("8", 0));
+        super::save_image(&mut g, "9", &images, "job-abc");
+        let v = g.into_value();
+        assert_eq!(
+            v["8"],
+            json!({
+                "class_type": "VAEDecode",
+                "inputs": { "samples": ["3", 0], "vae": ["4", 2] }
+            })
+        );
+        assert_eq!(
+            v["9"],
+            json!({
+                "class_type": "SaveImage",
+                "inputs": { "filename_prefix": "job-abc", "images": ["8", 0] }
             })
         );
     }

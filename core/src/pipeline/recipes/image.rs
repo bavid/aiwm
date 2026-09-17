@@ -8,47 +8,12 @@
 use serde_json::Value;
 
 use crate::pipeline::fragments::{conditioning, latent, loaders, loras, output, sampling};
-use crate::pipeline::graph::{Graph, PipelineError};
+use crate::pipeline::graph::Graph;
+use crate::pipeline::recipes::{
+    finish, DENOISE_FULL, DISTILLED_SAMPLER_CFG, FLUX_GUIDANCE_RANGE, SOURCE_MEGAPIXELS,
+    SOURCE_RESOLUTION_STEPS, SOURCE_UPSCALE_METHOD,
+};
 use crate::pipeline::{EditInputs, Flux2KleinModels, FluxModels, LoraSpec, Txt2ImgInputs};
-
-/// Full denoise — every recipe here starts from noise or from an encoded
-/// source image, never from a partially-denoised latent.
-const DENOISE_FULL: f64 = 1.0;
-
-/// FLUX.1 and FLUX.2 \[klein\] are guidance-distilled: the sampler itself runs
-/// at CFG 1 and the knob the user reaches for lives in `FluxGuidance`.
-const DISTILLED_SAMPLER_CFG: f64 = 1.0;
-
-/// The range `FluxGuidance` is meaningful over; a user-supplied CFG is clamped
-/// into it rather than rejected.
-const FLUX_GUIDANCE_RANGE: (f64, f64) = (1.0, 10.0);
-
-/// The edit recipe rescales its source image to roughly one megapixel before
-/// encoding it — FLUX.2 \[klein\] 9B's own template's budget.
-const EDIT_MEGAPIXELS: f64 = 1.0;
-
-/// `1` = no snapping, i.e. whatever size the megapixel budget lands on.
-const EDIT_RESOLUTION_STEPS: u32 = 1;
-
-/// The rescale filter FLUX.2 \[klein\]'s edit template uses.
-const EDIT_UPSCALE_METHOD: &str = "lanczos";
-
-/// Finish a recipe: surface a LoRA-splicing failure, then hand back the graph.
-///
-/// [`loras::apply`] can only fail when a consumer node id is absent, which
-/// means the recipe above asked for an id it never built. That is a bug in
-/// this file, not in anything a user supplied, so it is logged rather than
-/// panicked on — the graph is still returned, just without the LoRA chain
-/// wired through. The unit tests and golden fixtures pin every consumer id.
-fn finish(g: Graph, applied: Result<(), PipelineError>) -> Value {
-    if let Err(err) = applied {
-        tracing::error!(
-            error = %err,
-            "LoRA chain not spliced: recipe named a consumer node it did not build"
-        );
-    }
-    g.into_value()
-}
 
 /// The canonical ComfyUI default graph: load a single-file checkpoint, encode
 /// both prompts, sample, VAE-decode, save. No custom nodes.
@@ -86,7 +51,7 @@ pub fn flux_txt2img(i: &Txt2ImgInputs, m: &FluxModels, loras: &[LoraSpec]) -> Va
     let mut g = Graph::default();
     let loaded = loaders::flux_gguf(
         &mut g,
-        &loaders::FluxGgufIds {
+        &loaders::SplitModelIds {
             unet: "12",
             clip: "11",
             vae: "10",
@@ -133,7 +98,7 @@ pub fn flux2_klein_txt2img(i: &Txt2ImgInputs, m: &Flux2KleinModels, loras: &[Lor
     let mut g = Graph::default();
     let loaded = loaders::flux2_klein_gguf(
         &mut g,
-        &loaders::FluxGgufIds {
+        &loaders::SplitModelIds {
             unet: "12",
             clip: "11",
             vae: "10",
@@ -189,7 +154,7 @@ pub fn flux2_klein_txt2img_safetensors(
     let mut g = Graph::default();
     let loaded = loaders::flux2_klein_safetensors(
         &mut g,
-        &loaders::FluxGgufIds {
+        &loaders::SplitModelIds {
             unet: "12",
             clip: "11",
             vae: "10",
@@ -237,7 +202,7 @@ pub fn flux2_klein_edit(i: &EditInputs, m: &Flux2KleinModels, loras: &[LoraSpec]
     let mut g = Graph::default();
     let loaded = loaders::flux2_klein_safetensors(
         &mut g,
-        &loaders::FluxGgufIds {
+        &loaders::SplitModelIds {
             unet: "70",
             clip: "71",
             vae: "72",
@@ -251,9 +216,9 @@ pub fn flux2_klein_edit(i: &EditInputs, m: &Flux2KleinModels, loras: &[LoraSpec]
         &mut g,
         "80",
         &source,
-        EDIT_UPSCALE_METHOD,
-        EDIT_MEGAPIXELS,
-        EDIT_RESOLUTION_STEPS,
+        SOURCE_UPSCALE_METHOD,
+        SOURCE_MEGAPIXELS,
+        SOURCE_RESOLUTION_STEPS,
     );
     // Both the output canvas and the sampler's sigma schedule are sized from
     // the rescaled source, not from fixed inputs.

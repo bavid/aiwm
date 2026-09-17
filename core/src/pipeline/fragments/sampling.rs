@@ -1,6 +1,7 @@
-//! Sampler fragments: the plain `KSampler` chain and FLUX.2 Klein's
-//! `CFGGuider`/`SamplerCustomAdvanced` chain (`custom_advanced`), exact node
-//! shapes from `pipeline::{checkpoint_txt2img, flux2_klein_txt2img}`.
+//! Sampler fragments: the plain `KSampler` chain, FLUX.2 Klein's
+//! `CFGGuider`/`SamplerCustomAdvanced` chain (`custom_advanced`) and
+//! LTX-Video's `LTXVScheduler` + `SamplerCustom` pair — exact node shapes from
+//! `pipeline::{checkpoint_txt2img, flux2_klein_txt2img, ltx_video}`.
 
 use serde_json::json;
 
@@ -47,6 +48,14 @@ pub fn ksampler(
     OwnedLink::new(id, 0)
 }
 
+/// `KSamplerSelect` — picks the sampling algorithm by name, as a SAMPLER
+/// object a `SamplerCustom*` node consumes. Exact keys from
+/// `flux2_klein_txt2img` (and `ltx_video`, which pins it to `euler`).
+pub fn ksampler_select(g: &mut Graph, id: &str, sampler: &str) -> OwnedLink {
+    g.node(id, "KSamplerSelect", json!({ "sampler_name": sampler }));
+    OwnedLink::new(id, 0)
+}
+
 /// Explicit node ids for the five nodes in FLUX.2 \[klein\]'s
 /// `CFGGuider`/`SamplerCustomAdvanced` chain.
 #[derive(Debug, Clone, Copy)]
@@ -87,11 +96,7 @@ pub fn custom_advanced(
     latent: &OwnedLink,
     p: &CustomAdvancedParams,
 ) -> OwnedLink {
-    g.node(
-        ids.select,
-        "KSamplerSelect",
-        json!({ "sampler_name": p.sampler }),
-    );
+    ksampler_select(g, ids.select, p.sampler);
     g.node(
         ids.scheduler,
         "Flux2Scheduler",
@@ -126,11 +131,178 @@ pub fn custom_advanced(
     OwnedLink::new(ids.sampler, 0)
 }
 
+/// `SamplerCustom` always adds noise in the recipes here — it samples from
+/// scratch, never continuing a partially denoised latent.
+const ADD_NOISE: bool = true;
+
+/// `LTXVScheduler`'s shift/stretch knobs. Defaults live with the recipe that
+/// uses them; the fragment only carries the node's wire shape.
+#[derive(Debug, Clone, Copy)]
+pub struct LtxvSchedulerParams {
+    pub steps: u32,
+    pub max_shift: f64,
+    pub base_shift: f64,
+    pub stretch: bool,
+    pub terminal: f64,
+}
+
+/// `LTXVScheduler` — LTX-Video's sigma schedule, sized from the latent it will
+/// denoise. Exact keys from `ltx_video`.
+pub fn ltxv_scheduler(
+    g: &mut Graph,
+    id: &str,
+    p: &LtxvSchedulerParams,
+    latent: &OwnedLink,
+) -> OwnedLink {
+    g.node(
+        id,
+        "LTXVScheduler",
+        json!({
+            "steps": p.steps,
+            "max_shift": p.max_shift,
+            "base_shift": p.base_shift,
+            "stretch": p.stretch,
+            "terminal": p.terminal,
+            "latent": latent.json()
+        }),
+    );
+    OwnedLink::new(id, 0)
+}
+
+/// Every link a `SamplerCustom` node consumes.
+#[derive(Debug, Clone, Copy)]
+pub struct CustomLinks<'a> {
+    pub model: &'a OwnedLink,
+    pub positive: &'a OwnedLink,
+    pub negative: &'a OwnedLink,
+    pub sampler: &'a OwnedLink,
+    pub sigmas: &'a OwnedLink,
+    pub latent: &'a OwnedLink,
+}
+
+/// `SamplerCustom` — the sigma-driven sampler LTX-Video uses instead of a
+/// plain `KSampler`. Exact keys from `ltx_video`.
+pub fn sampler_custom(
+    g: &mut Graph,
+    id: &str,
+    links: &CustomLinks,
+    seed: i64,
+    cfg: f64,
+) -> OwnedLink {
+    g.node(
+        id,
+        "SamplerCustom",
+        json!({
+            "add_noise": ADD_NOISE,
+            "noise_seed": seed,
+            "cfg": cfg,
+            "model": links.model.json(),
+            "positive": links.positive.json(),
+            "negative": links.negative.json(),
+            "sampler": links.sampler.json(),
+            "sigmas": links.sigmas.json(),
+            "latent_image": links.latent.json()
+        }),
+    );
+    OwnedLink::new(id, 0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::pipeline::graph::{Graph, OwnedLink};
     use serde_json::json;
+
+    #[test]
+    fn ksampler_select_names_the_algorithm() {
+        let mut g = Graph::default();
+        let out = ksampler_select(&mut g, "73", "euler");
+        assert_eq!(out, OwnedLink::new("73", 0));
+        assert_eq!(
+            g.into_value()["73"],
+            json!({ "class_type": "KSamplerSelect", "inputs": { "sampler_name": "euler" } })
+        );
+    }
+
+    #[test]
+    fn ltxv_scheduler_sizes_its_sigmas_from_the_latent() {
+        let mut g = Graph::default();
+        let latent = OwnedLink::new("70", 0);
+        let out = ltxv_scheduler(
+            &mut g,
+            "71",
+            &LtxvSchedulerParams {
+                steps: 30,
+                max_shift: 2.05,
+                base_shift: 0.95,
+                stretch: true,
+                terminal: 0.1,
+            },
+            &latent,
+        );
+        assert_eq!(out, OwnedLink::new("71", 0));
+        assert_eq!(
+            g.into_value()["71"],
+            json!({
+                "class_type": "LTXVScheduler",
+                "inputs": {
+                    "steps": 30,
+                    "max_shift": 2.05,
+                    "base_shift": 0.95,
+                    "stretch": true,
+                    "terminal": 0.1,
+                    "latent": ["70", 0]
+                }
+            })
+        );
+    }
+
+    #[test]
+    fn sampler_custom_wires_every_link_plus_seed_and_cfg() {
+        let mut g = Graph::default();
+        let (model, positive, negative) = (
+            OwnedLink::new("44", 0),
+            OwnedLink::new("69", 0),
+            OwnedLink::new("69", 1),
+        );
+        let (sampler, sigmas, latent) = (
+            OwnedLink::new("73", 0),
+            OwnedLink::new("71", 0),
+            OwnedLink::new("70", 0),
+        );
+        let out = sampler_custom(
+            &mut g,
+            "72",
+            &CustomLinks {
+                model: &model,
+                positive: &positive,
+                negative: &negative,
+                sampler: &sampler,
+                sigmas: &sigmas,
+                latent: &latent,
+            },
+            7,
+            5.0,
+        );
+        assert_eq!(out, OwnedLink::new("72", 0));
+        assert_eq!(
+            g.into_value()["72"],
+            json!({
+                "class_type": "SamplerCustom",
+                "inputs": {
+                    "add_noise": true,
+                    "noise_seed": 7,
+                    "cfg": 5.0,
+                    "model": ["44", 0],
+                    "positive": ["69", 0],
+                    "negative": ["69", 1],
+                    "sampler": ["73", 0],
+                    "sigmas": ["71", 0],
+                    "latent_image": ["70", 0]
+                }
+            })
+        );
+    }
 
     #[test]
     fn ksampler_wires_model_cond_latent_and_params() {
