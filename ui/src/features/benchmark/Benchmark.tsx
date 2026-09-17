@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useBenchmarkHistory, useBenchSuites, useJobs, useModels } from "../../lib/hooks";
-import { isBenchmarkable, type JobState } from "../../lib/ipc";
+import { ACTIVE_JOB_STATES, isBenchmarkable } from "../../lib/ipc";
 import { BenchForm } from "./BenchForm";
 import { Comparison } from "./Comparison";
 import { History } from "./History";
@@ -18,16 +18,6 @@ import {
 } from "./benchmark-utils";
 import "./benchmark.css";
 
-/** The states {@link useJobs} is asked for — the tab only ever adopts a job
- *  that is still going, and an unfiltered page of 50 can push those out. */
-const ACTIVE_STATES: JobState[] = [
-  "queued",
-  "scheduled",
-  "blocked",
-  "preparing",
-  "running",
-  "post",
-];
 /** How long a finished run's stored row may take to show up before the tab
  *  says so rather than waiting on it silently. */
 const RESULT_WAIT_MS = 15_000;
@@ -43,7 +33,7 @@ type Props = {
 export function Benchmark({ onNavigate }: Props) {
   const { data: models } = useModels();
   const { data: suites } = useBenchSuites();
-  const { data: jobs } = useJobs({ states: ACTIVE_STATES });
+  const { data: jobs } = useJobs({ states: ACTIVE_JOB_STATES });
 
   const [modelChoice, setModelChoice] = useState("");
   const [suiteChoice, setSuiteChoice] = useState("");

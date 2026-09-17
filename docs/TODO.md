@@ -1525,6 +1525,9 @@ Bild-/Video-Benchmarks, Netz-Leaderboards. Die App bleibt offline-first
   ungefähr"-Test, und seine Historie soll vergleichbar bleiben. Die Score-Chip
   in der Model Library kann deshalb eine Suite-Zeile **oder** eine
   Quick-Test-Zeile zeigen; welche, hängt nur daran, was zuletzt lief.
+- **Der Tauri-IPC-Pfad für Suite-Läufe ist nur über den Dev-Mock abgedeckt**
+  (das HTTP-Zwilling hat Tests) — ein Smoke-Schritt, der prüft, dass ein aus
+  dem Tab gestarteter Lauf ein nicht-NULL `suite` speichert, ist noch offen.
 
 ## Offen / später zu entscheiden
 - App-Selbst-Update offline (manueller Installer + Signaturprüfung angenommen)

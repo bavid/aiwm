@@ -133,13 +133,24 @@ export function jobSuite(params: unknown, suites: readonly BenchSuite[]): BenchS
   return id == null ? null : (suites.find((s) => s.id === id) ?? null);
 }
 
+/** The core clamps a job's own `runs` to `1..=10` (`core::bench::MAX_RUNS`) —
+ *  independent of this tab's own, tighter `MAX_RUNS` above, which only bounds
+ *  what the *form* offers. A job adopted from elsewhere (the Model Library's
+ *  own suite runs, or a future caller) can carry a value up to the core's
+ *  limit, and reading it back unclamped would undercount or overcount the
+ *  live panel's total. */
+const CORE_MAX_RUNS = 10; // core::bench::MAX_RUNS
+
 /** Total passes for a job already in flight, read back from its own params
  *  rather than from the form — the form may have moved on since it started. */
 export function jobPasses(params: unknown, suites: readonly BenchSuite[]): number {
   if (params == null || typeof params !== "object") return 0;
   const { runs } = params as { runs?: unknown };
   const asked = Number(runs);
-  return totalPasses(jobSuite(params, suites), Number.isFinite(asked) ? asked : DEFAULT_RUNS);
+  const clamped = Number.isFinite(asked)
+    ? Math.min(CORE_MAX_RUNS, Math.max(MIN_RUNS, Math.round(asked)))
+    : DEFAULT_RUNS;
+  return totalPasses(jobSuite(params, suites), clamped);
 }
 
 /** A model stopped generating before the token cap, so its tok/s covers a

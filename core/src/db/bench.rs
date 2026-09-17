@@ -59,7 +59,7 @@ pub struct NewBenchmark {
     pub overall_score: u8,
     pub notes: Option<String>,
     pub suite: Option<String>,
-    /// Serialised `[{ prompt_id, tokens, gen_tps, prompt_tps }, ...]`.
+    /// Serialised `[{ prompt_id, tokens, max_tokens, gen_tps, prompt_tps }, ...]`.
     pub detail_json: Option<String>,
 }
 

@@ -1553,6 +1553,12 @@ const JOB_ACTIVE: Record<JobState, boolean> = {
 /** True while a job in this state still has work ahead of it. */
 export const isJobActive = (state: JobState): boolean => JOB_ACTIVE[state];
 
+/** Every state {@link isJobActive} calls active, derived from {@link JOB_ACTIVE}
+ *  rather than hand-listed — a poll filter that cannot silently drift from the
+ *  function it is supposed to mirror. A stable module-level constant, so it is
+ *  safe as a hook dependency / poll key. */
+export const ACTIVE_JOB_STATES = (Object.keys(JOB_ACTIVE) as JobState[]).filter(isJobActive);
+
 /** The latest benchmark for every model that has one — join by `model_id`. */
 export const listBenchmarks = () => invoke<Benchmark[]>("list_benchmarks");
 /** Every benchmark run for one model, newest first. */

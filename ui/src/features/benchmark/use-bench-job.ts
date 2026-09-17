@@ -13,9 +13,11 @@ const DONE: JobState[] = ["completed", "failed", "cancelled"];
 /** Fast enough that the pass lines appear as they are measured, slow enough
  *  that a long suite run does not hammer the core. */
 const POLL_MS = 700;
-/** How many polls in a row may fail before the tab stops waiting on a job it
- *  evidently cannot reach, and hands the user their form back. */
-const MAX_POLL_FAILURES = 5;
+/** How long an unbroken run of poll failures may continue before the tab
+ *  stops waiting on a job it evidently cannot reach, and hands the user their
+ *  form back. Time-based rather than a poll count: a single slow response
+ *  should not eat into the budget the way a run of outright failures does. */
+const UNREACHABLE_AFTER_MS = 20_000;
 
 const GONE_MESSAGE = "The benchmark job is no longer available.";
 const UNREACHABLE_MESSAGE =
@@ -50,8 +52,11 @@ export function useBenchJob(jobs: Job[] | null, onFinished: () => void): BenchJo
   const [pendingId, setPendingId] = useState<string | null>(null);
   const [detail, setDetail] = useState<JobDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
-  /** A job the tab gave up on. `detail` normally keeps adoption from picking
-   *  the same job straight back up, but `detail` can be cleared — this cannot. */
+  /** A job the tab gave up on for good — the core said it is gone (deleted, or
+   *  a core that lost its history). `detail` normally keeps adoption from
+   *  picking the same job straight back up, but `detail` can be cleared —
+   *  this cannot. An UNREACHABLE release never sets this: losing contact is
+   *  transient, so that job stays adoptable once the core answers again. */
   const releasedId = useRef<string | null>(null);
 
   // Adopt a run this tab did not start, or lost: a reload mid-run, or the
@@ -71,30 +76,36 @@ export function useBenchJob(jobs: Job[] | null, onFinished: () => void): BenchJo
   useEffect(() => {
     if (!pendingId) return;
     let alive = true;
-    let failures = 0;
+    // When the current unbroken run of failures started; `null` while polls
+    // are succeeding. Time-based rather than a poll count: one slow response
+    // should not spend the same budget as a run of outright failures.
+    let firstFailureAt: number | null = null;
     const watched = pendingId;
-    const release = (text: string) => {
-      releasedId.current = watched;
-      setPendingId(null);
-      setError(text);
-    };
     const tick = async () => {
       let d: JobDetail | null;
       try {
         d = await jobDetail(watched);
       } catch {
-        failures += 1;
-        // Transient IPC hiccups are normal; a run of them is not, and waiting
-        // forever would leave Start disabled with no way back.
-        if (alive && failures >= MAX_POLL_FAILURES) release(UNREACHABLE_MESSAGE);
+        const now = Date.now();
+        firstFailureAt ??= now;
+        // Transient IPC hiccups are normal; a stretch of them is not, and
+        // waiting forever would leave Start disabled with no way back. This
+        // is not permanent: the job stays adoptable once the core answers.
+        if (alive && now - firstFailureAt >= UNREACHABLE_AFTER_MS) {
+          setPendingId(null);
+          setError(UNREACHABLE_MESSAGE);
+        }
         return;
       }
       if (!alive) return;
-      failures = 0;
+      firstFailureAt = null;
       // The job is gone (deleted, or a core that lost its history) -- without
-      // this the tab waits on it for the rest of the session.
+      // this the tab waits on it for the rest of the session. Unlike the
+      // unreachable case, this is permanent: a deleted job never comes back.
       if (!d) {
-        release(GONE_MESSAGE);
+        releasedId.current = watched;
+        setPendingId(null);
+        setError(GONE_MESSAGE);
         return;
       }
       setDetail(d);

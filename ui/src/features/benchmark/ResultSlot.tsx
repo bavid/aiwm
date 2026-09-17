@@ -46,13 +46,22 @@ export function ResultSlot({
   }
 
   // The run used a different suite than the one on screen (an adopted run, or
-  // the form moved on). One click brings the view to it.
+  // the form moved on). One click brings the view to it -- but only when that
+  // suite still exists in this build's catalogue; offering to "show" a suite
+  // that no longer ships would just land on an empty picker.
   if (!resolvable) {
+    if (runSuiteTitle === null) {
+      return (
+        <p className="card bench__reading">
+          That run used <code>{runSuiteId}</code>, which this version no longer ships.
+        </p>
+      );
+    }
     return (
       <div className="card bench__reading bench__reading--action">
-        <span>That run used {runSuiteTitle ?? runSuiteId}.</span>
+        <span>That run used {runSuiteTitle}.</span>
         <button type="button" className="chip" onClick={onShowRunSuite}>
-          Show {runSuiteTitle ?? runSuiteId}
+          Show {runSuiteTitle}
         </button>
       </div>
     );

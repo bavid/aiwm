@@ -34,7 +34,7 @@ Chip in der Model Library.
 
 - `bench::suites`: `Suite { id, title, description, max_tokens, prompts: &[SuitePrompt { id, title, text }] }`, `all()`, `find(id)`. Tests: Ids eindeutig, Prompts nicht leer, `max_tokens` in den Grenzen, Id endet auf `-vN`.
 - `BenchRequest.suite: Option<String>` aus `params.suite`; unbekannte Suite → Job schlägt mit klarer Meldung fehl (kein stiller Fallback). Mit Suite: jeder Prompt `runs`-mal (Default 2, damit ein Lauf ≤ ~1–2 min bleibt), `max_tokens` aus der Suite. Ohne Suite: Verhalten wie heute (unverändert für die Model Library).
-- `BenchReport.detail: Vec<PromptResult { prompt_id, tokens, gen_tps, prompt_tps }>`; `gen_tps` gesamt = Mittel über alle Pässe; Stabilität über alle Pässe.
+- `BenchReport.detail: Vec<PromptResult { prompt_id, tokens, max_tokens, gen_tps, prompt_tps }>`; `gen_tps` gesamt = Mittel über alle Pässe; Stabilität = Mittel der Pro-Prompt-Stabilitäten (Abweichung vom ersten Entwurf nach Review, siehe `docs/TODO.md`).
 - DB: Migration 0017, `NewBenchmark`/`Benchmark` um `suite`, `detail_json`; `benchmarks().list_all(suite, limit)`.
 - API: `GET /bench/suites`; `POST /models/{id}/benchmark` nimmt optional `{ suite, runs }`; `GET /benchmarks/history?suite=&limit=`. Tauri-Commands + `ipc.ts` + Hooks + dev-mock spiegeln das.
 
