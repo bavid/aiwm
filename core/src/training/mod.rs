@@ -16,6 +16,7 @@
 //! weights, and its three preset (fast/balanced/thorough) starting points.
 
 pub mod config;
+pub mod process;
 pub mod profile;
 pub mod progress;
 
