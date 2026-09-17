@@ -139,6 +139,11 @@ impl Harness {
             self.store.clone(),
         )
         .with_trainer_command(fixture_bin(), args, fixture_image())
+        // The staged base weights here are byte-sized stand-ins; the real
+        // verifier compares them against sizes and hashes pinned from an
+        // actual 7.7 GB download, which no test can reproduce. Preflight's
+        // *completeness* check still runs for real.
+        .with_base_verifier(|_, _, _| Ok(()))
     }
 
     fn note(&self, what: &str) {

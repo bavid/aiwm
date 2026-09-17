@@ -75,9 +75,15 @@ pub struct Measured {
     /// Wall-clock seconds per training step, averaged over the whole run,
     /// at the profile's **Fast** preset resolution.
     pub s_per_step: f64,
-    /// Peak VRAM in use on the whole card during the run, including whatever
-    /// the desktop was already holding — i.e. what has to be free, not what
-    /// the trainer allocated.
+    /// Peak VRAM the **run itself** held, i.e. the card's measured peak minus
+    /// what was already in use before it started.
+    ///
+    /// Deliberately not the raw card peak, even though that is the simpler
+    /// measurement: this number exists to be compared against
+    /// [`VramStrategy::reserve_mb`], and that is a demand for *free* VRAM, so
+    /// the desktop's own hundreds of megabytes must not be counted on both
+    /// sides. The raw figures behind each value are in the comment next to
+    /// it, so nothing measured is thrown away.
     pub peak_vram_mb: u64,
     /// ISO date of the run the numbers come from.
     pub date: &'static str,
@@ -219,15 +225,21 @@ pub const PROFILES: &[TrainingProfile] = &[
             sample_every: 250,
         },
         license_note: "Apache-2.0 base weights",
-        // First real run on this machine (RTX 4080 Super 16 GB): 600 Fast
-        // steps at 768 px over a 50-image dataset in 16 min 30 s wall
-        // (1.65 s/step by tqdm's own final rate, 990 s / 600 steps), peak
-        // 12,249 MB of the card's 16,376 MB with ~1,256 MB of that already
-        // held by the desktop. Comfortably inside the 12,288 MB reserve --
-        // which is the claim this measurement exists to keep honest.
+        // Measured on the first run that completed end to end on this
+        // machine (RTX 4080 Super 16 GB, run
+        // 01a0af0a-ec62-7d72-8e8f-b6c2c5b1d3d8): 600 Fast steps at 768 px
+        // over a 50-image dataset in 16 min 55 s of training (1.69 s/step),
+        // 20 min 18 s wall including model load, latent caching and four
+        // sample rounds; 77 °C.
+        //
+        // VRAM: the card peaked at 12,340 MB of 16,376 MB with ~1,256 MB
+        // already held by the desktop before the run started, so the run's
+        // own peak was ~11,084 MB. An earlier run of the same config peaked
+        // at 12,249 MB card / ~10,993 MB own and 1.65 s/step, so these are
+        // steady numbers rather than one lucky sample.
         measured: Some(Measured {
-            s_per_step: 1.65,
-            peak_vram_mb: 12_249,
+            s_per_step: 1.69,
+            peak_vram_mb: 11_084,
             date: "2026-09-17",
         }),
     },
@@ -278,9 +290,13 @@ pub const PROFILES: &[TrainingProfile] = &[
             save_every: 250,
             sample_every: 250,
         },
-        license_note: "FLUX non-commercial licence; needs fp8 + layer offloading on 16 GB — \
-                        unverified until the first real run",
-        // No real run of this family here yet — see `Measured`.
+        license_note: "FLUX non-commercial licence, and the repo is gated: the download \
+                        fails with \"this repository requires approval\" until you accept \
+                        the licence on the model page and sign in. Needs fp8 + layer \
+                        offloading on 16 GB — unverified, because the gate blocked the \
+                        first attempt (2026-09-17)",
+        // No real run of this family here yet — the weights could not be
+        // downloaded, see `license_note`.
         measured: None,
     },
     TrainingProfile {
@@ -782,6 +798,23 @@ mod tests {
     }
 
     #[test]
+    fn the_9b_note_warns_that_its_weights_are_gated() {
+        // Unlike the 4B, whose weights download without any sign-in, the 9B
+        // repo is approval-gated: `hf download` answers "Access denied. This
+        // repository requires approval." (confirmed 2026-09-17). Nothing in
+        // the app can work around that, so the note has to say so -- a user
+        // who reads only "needs fp8 + layer offloading" will otherwise spend
+        // the download before finding out.
+        let note = find_for_family("flux2-klein-9b")
+            .expect("9B profile")
+            .license_note;
+        assert!(
+            note.contains("gated") || note.contains("approval"),
+            "the 9B note must warn about the gate: {note}"
+        );
+    }
+
+    #[test]
     fn only_a_profile_that_has_actually_been_run_carries_a_measurement() {
         // `measured` is evidence, not an estimate: it may only be present for
         // a family a real run has produced numbers for on real hardware.
@@ -808,9 +841,11 @@ mod tests {
 
     #[test]
     fn the_4b_reserve_covers_what_the_real_run_actually_used() {
-        // The reserve is what preflight demands be free before it will start.
-        // If a measured peak ever exceeds it, the profile is promising a run
-        // it cannot deliver -- and the user gets an OOM instead of a refusal.
+        // The reserve is what preflight demands be *free* before it will
+        // start, and `peak_vram_mb` is what the run itself held. If the
+        // measurement ever exceeds the reserve, the profile is letting a run
+        // start that cannot fit, and the user gets an OOM half an hour in
+        // instead of a refusal in the first second.
         let profile = find_for_family("flux2-klein-4b").expect("4B profile");
         let measured = profile.measured.expect("the 4B has been measured");
         assert!(
@@ -818,6 +853,15 @@ mod tests {
             "measured peak {} MB exceeds the {} MB the profile reserves",
             measured.peak_vram_mb,
             profile.vram.reserve_mb
+        );
+        // ...and the reserve must not be so far above the measurement that
+        // it refuses runs that would have been fine. 1.5x is generous for a
+        // figure that varied by ~100 MB across two runs.
+        assert!(
+            profile.vram.reserve_mb <= measured.peak_vram_mb * 3 / 2,
+            "the {} MB reserve is far above the {} MB actually needed",
+            profile.vram.reserve_mb,
+            measured.peak_vram_mb
         );
     }
 

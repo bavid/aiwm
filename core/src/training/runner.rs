@@ -190,8 +190,10 @@ impl Runner {
     }
 
     /// Replace the base-weight verifier the preflight check uses. Test seam
-    /// only — see [`BaseVerifier`].
-    #[cfg(test)]
+    /// only — see [`BaseVerifier`]. Public for the same reason
+    /// [`Self::with_free_space_probe`] is: the end-to-end lifecycle test in
+    /// `core/tests/` lives outside this crate's own test build and cannot
+    /// stage 7.7 GB of real weights either.
     #[must_use]
     pub fn with_base_verifier(mut self, verify: BaseVerifier) -> Self {
         self.verify_base = verify;
