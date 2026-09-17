@@ -7,16 +7,20 @@
 //! `serde_yaml_ng` is used instead of the original `serde_yaml`: the latter
 //! is deprecated and unmaintained; `serde_yaml_ng` is the maintained fork
 //! with the same API.
+//!
+//! One caveat the typed-struct approach cannot paper over on its own: see
+//! [`normalize_yaml_floats`] below for why `lr`/`caption_dropout_rate`/
+//! `ema_decay`/`guidance_scale` get a post-render fix-up pass.
 
+use std::ops::RangeInclusive;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
 use super::profile::{PresetValues, TrainingProfile};
+use super::training_err;
 use crate::db::DatasetMode;
 use crate::Result;
-
-use super::training_err;
 
 /// Wan 2.2 5B clip defaults for this rendering task (spec appendix: "Wan 2.2
 /// 5B defaults"). Named constants rather than magic numbers scattered across
@@ -39,14 +43,18 @@ const DEVICE: &str = "cuda:0";
 const SAMPLE_START_STEP: u32 = 0;
 const SAMPLE_SEED: u32 = 42;
 const SAMPLE_STEPS: u32 = 20;
-const DEFAULT_GUIDANCE_SCALE: f64 = 4.0;
-const SDXL_GUIDANCE_SCALE: f64 = 6.0;
-const SDXL_ARCH: &str = "sdxl";
+
+/// Sane bounds for per-run hyperparameter overrides — see
+/// [`Hyperparams::validate`].
+const LR_RANGE: RangeInclusive<f64> = 1e-6..=1e-2;
+const RANK_RANGE: RangeInclusive<u32> = 4..=128;
+const STEPS_RANGE: RangeInclusive<u32> = 50..=20_000;
+const RESOLUTION_RANGE: RangeInclusive<u32> = 256..=2048;
 
 /// Optional per-run overrides on top of a profile's preset, deserialized
 /// from `TrainingRun::hyperparams_json`. Every field is optional — an
 /// absent field keeps the preset's own value.
-#[derive(Debug, Clone, Copy, PartialEq, Default, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
 pub struct Hyperparams {
     pub steps: Option<u32>,
     pub lr: Option<f64>,
@@ -54,9 +62,57 @@ pub struct Hyperparams {
     pub resolution: Option<u32>,
 }
 
+impl Hyperparams {
+    /// Reject a present-but-out-of-range field before it ever reaches
+    /// [`merge_hyperparams`]/[`render_yaml`]. An absent field is never
+    /// rejected — "not overridden" is always valid.
+    pub fn validate(&self) -> Result<()> {
+        if let Some(lr) = self.lr {
+            if !LR_RANGE.contains(&lr) {
+                return Err(training_err(format!(
+                    "lr {lr} is outside the allowed range {}..={}",
+                    LR_RANGE.start(),
+                    LR_RANGE.end()
+                )));
+            }
+        }
+        if let Some(rank) = self.rank {
+            if !RANK_RANGE.contains(&rank) {
+                return Err(training_err(format!(
+                    "rank {rank} is outside the allowed range {}..={}",
+                    RANK_RANGE.start(),
+                    RANK_RANGE.end()
+                )));
+            }
+        }
+        if let Some(steps) = self.steps {
+            if !STEPS_RANGE.contains(&steps) {
+                return Err(training_err(format!(
+                    "steps {steps} is outside the allowed range {}..={}",
+                    STEPS_RANGE.start(),
+                    STEPS_RANGE.end()
+                )));
+            }
+        }
+        if let Some(resolution) = self.resolution {
+            if !RESOLUTION_RANGE.contains(&resolution) {
+                return Err(training_err(format!(
+                    "resolution {resolution} is outside the allowed range {}..={}",
+                    RESOLUTION_RANGE.start(),
+                    RESOLUTION_RANGE.end()
+                )));
+            }
+        }
+        Ok(())
+    }
+}
+
 /// Everything [`render_yaml`] needs, already resolved by the caller: the
 /// profile, the merged preset (see [`merge_hyperparams`]), and the
-/// filesystem paths for base weights / dataset / work dir.
+/// filesystem paths for base weights / dataset / work dir. `overrides` is
+/// the raw per-run input the caller merged into `preset` — passed through
+/// so `render_yaml` can defensively re-validate it (see
+/// [`Hyperparams::validate`]) even if the caller forgot to.
 #[derive(Debug, Clone, Copy)]
 pub struct RenderInput<'a> {
     pub profile: &'a TrainingProfile,
@@ -68,6 +124,7 @@ pub struct RenderInput<'a> {
     pub work_dir: &'a Path,
     pub prompts: &'a [String],
     pub data_kind: DatasetMode,
+    pub overrides: Option<Hyperparams>,
 }
 
 /// Apply per-run hyperparameter overrides on top of a profile's preset
@@ -212,33 +269,92 @@ struct MetaBlock {
     version: &'static str,
 }
 
-/// `true` for the profiles ai-toolkit trains with the `ddpm` scheduler
-/// instead of `flowmatch` (today: SDXL only — see the appendix).
-fn is_ddpm(profile: &TrainingProfile) -> bool {
-    profile.arch == SDXL_ARCH
-}
-
-fn noise_scheduler(profile: &TrainingProfile) -> &'static str {
-    if is_ddpm(profile) {
-        "ddpm"
-    } else {
-        "flowmatch"
+fn network_block(preset: &PresetValues) -> NetworkBlock {
+    NetworkBlock {
+        kind: "lora",
+        linear: preset.rank,
+        linear_alpha: preset.rank,
     }
 }
 
-fn guidance_scale(profile: &TrainingProfile) -> f64 {
-    if is_ddpm(profile) {
-        SDXL_GUIDANCE_SCALE
-    } else {
-        DEFAULT_GUIDANCE_SCALE
+fn save_block(preset: &PresetValues) -> SaveBlock {
+    SaveBlock {
+        dtype: SAVE_DTYPE,
+        save_every: preset.save_every,
+        max_step_saves_to_keep: MAX_STEP_SAVES_TO_KEEP,
+    }
+}
+
+fn dataset_block(input: &RenderInput<'_>, is_clips: bool) -> DatasetBlock {
+    DatasetBlock {
+        folder_path: input.dataset_dir.to_string_lossy().into_owned(),
+        caption_ext: CAPTION_EXT,
+        caption_dropout_rate: CAPTION_DROPOUT_RATE,
+        shuffle_tokens: false,
+        cache_latents_to_disk: true,
+        resolution: vec![input.preset.resolution],
+        num_frames: is_clips.then_some(CLIP_NUM_FRAMES),
+        do_i2v: is_clips.then_some(true),
+    }
+}
+
+fn train_block(input: &RenderInput<'_>) -> TrainBlock {
+    TrainBlock {
+        batch_size: TRAIN_BATCH_SIZE,
+        steps: input.preset.steps,
+        gradient_accumulation_steps: GRADIENT_ACCUMULATION_STEPS,
+        train_unet: true,
+        train_text_encoder: false,
+        gradient_checkpointing: true,
+        noise_scheduler: input.profile.noise_scheduler,
+        optimizer: OPTIMIZER,
+        lr: input.preset.lr,
+        ema_config: EmaConfigBlock {
+            use_ema: true,
+            ema_decay: EMA_DECAY,
+        },
+        dtype: TRAIN_DTYPE,
+    }
+}
+
+fn model_block(input: &RenderInput<'_>) -> ModelBlock {
+    let vram = &input.profile.vram;
+    ModelBlock {
+        name_or_path: input.base_dir.to_string_lossy().into_owned(),
+        arch: input.profile.arch,
+        quantize: vram.quantize,
+        qtype: vram.quantize.then_some(vram.qtype),
+        quantize_te: vram.quantize_te,
+        low_vram: vram.low_vram,
+        layer_offloading: vram.layer_offloading.then_some(true),
+    }
+}
+
+fn sample_block(input: &RenderInput<'_>, is_clips: bool) -> SampleBlock {
+    SampleBlock {
+        sampler: input.profile.noise_scheduler,
+        sample_every: input.preset.sample_every,
+        sample_start_step: SAMPLE_START_STEP,
+        width: input.preset.resolution,
+        height: input.preset.resolution,
+        prompts: input.prompts.to_vec(),
+        neg: "",
+        seed: SAMPLE_SEED,
+        walk_seed: true,
+        guidance_scale: input.profile.guidance_scale,
+        sample_steps: SAMPLE_STEPS,
+        num_frames: is_clips.then_some(CLIP_NUM_FRAMES),
+        fps: is_clips.then_some(CLIP_FPS),
     }
 }
 
 /// Render the ai-toolkit `config.yaml` document for one run.
 pub fn render_yaml(input: &RenderInput<'_>) -> Result<String> {
+    if let Some(overrides) = &input.overrides {
+        overrides.validate()?;
+    }
+
     let is_clips = input.data_kind == DatasetMode::Clips;
-    let scheduler = noise_scheduler(input.profile);
-    let vram = &input.profile.vram;
 
     let doc = RootDoc {
         job: "extension",
@@ -252,66 +368,12 @@ pub fn render_yaml(input: &RenderInput<'_>) -> Result<String> {
                 device: DEVICE,
                 trigger_word: (!input.trigger_word.is_empty())
                     .then(|| input.trigger_word.to_string()),
-                network: NetworkBlock {
-                    kind: "lora",
-                    linear: input.preset.rank,
-                    linear_alpha: input.preset.rank,
-                },
-                save: SaveBlock {
-                    dtype: SAVE_DTYPE,
-                    save_every: input.preset.save_every,
-                    max_step_saves_to_keep: MAX_STEP_SAVES_TO_KEEP,
-                },
-                datasets: vec![DatasetBlock {
-                    folder_path: input.dataset_dir.to_string_lossy().into_owned(),
-                    caption_ext: CAPTION_EXT,
-                    caption_dropout_rate: CAPTION_DROPOUT_RATE,
-                    shuffle_tokens: false,
-                    cache_latents_to_disk: true,
-                    resolution: vec![input.preset.resolution],
-                    num_frames: is_clips.then_some(CLIP_NUM_FRAMES),
-                    do_i2v: is_clips.then_some(true),
-                }],
-                train: TrainBlock {
-                    batch_size: TRAIN_BATCH_SIZE,
-                    steps: input.preset.steps,
-                    gradient_accumulation_steps: GRADIENT_ACCUMULATION_STEPS,
-                    train_unet: true,
-                    train_text_encoder: false,
-                    gradient_checkpointing: true,
-                    noise_scheduler: scheduler,
-                    optimizer: OPTIMIZER,
-                    lr: input.preset.lr,
-                    ema_config: EmaConfigBlock {
-                        use_ema: true,
-                        ema_decay: EMA_DECAY,
-                    },
-                    dtype: TRAIN_DTYPE,
-                },
-                model: ModelBlock {
-                    name_or_path: input.base_dir.to_string_lossy().into_owned(),
-                    arch: input.profile.arch,
-                    quantize: vram.quantize,
-                    qtype: vram.quantize.then_some(vram.qtype),
-                    quantize_te: vram.quantize_te,
-                    low_vram: vram.low_vram,
-                    layer_offloading: vram.layer_offloading.then_some(true),
-                },
-                sample: SampleBlock {
-                    sampler: scheduler,
-                    sample_every: input.preset.sample_every,
-                    sample_start_step: SAMPLE_START_STEP,
-                    width: input.preset.resolution,
-                    height: input.preset.resolution,
-                    prompts: input.prompts.to_vec(),
-                    neg: "",
-                    seed: SAMPLE_SEED,
-                    walk_seed: true,
-                    guidance_scale: guidance_scale(input.profile),
-                    sample_steps: SAMPLE_STEPS,
-                    num_frames: is_clips.then_some(CLIP_NUM_FRAMES),
-                    fps: is_clips.then_some(CLIP_FPS),
-                },
+                network: network_block(&input.preset),
+                save: save_block(&input.preset),
+                datasets: vec![dataset_block(input, is_clips)],
+                train: train_block(input),
+                model: model_block(input),
+                sample: sample_block(input, is_clips),
             }],
         },
         meta: MetaBlock {
@@ -320,7 +382,77 @@ pub fn render_yaml(input: &RenderInput<'_>) -> Result<String> {
         },
     };
 
-    serde_yaml_ng::to_string(&doc).map_err(|e| training_err(format!("render config yaml: {e}")))
+    let yaml = serde_yaml_ng::to_string(&doc)
+        .map_err(|e| training_err(format!("render config yaml: {e}")))?;
+    Ok(normalize_yaml_floats(&yaml))
+}
+
+/// The training-relevant float keys ai-toolkit's Python side parses as
+/// numbers — see [`normalize_yaml_floats`].
+const YAML_FLOAT_KEYS: [&str; 4] = ["lr", "caption_dropout_rate", "ema_decay", "guidance_scale"];
+
+/// `serde_yaml_ng` formats `f64` via `ryu`'s shortest-round-trip algorithm,
+/// which switches to bare `<mantissa>e<±exp>` notation (no decimal point)
+/// once the magnitude drops below roughly `1e-5` — e.g. `lr: 1e-6`. PyYAML's
+/// YAML-1.1 float resolver (the reader ai-toolkit's Python side uses)
+/// requires a literal `.` to recognize a scalar as a float, so a bare
+/// `1e-6` round-trips back as a **string** there, silently breaking `lr`.
+///
+/// There is no way to avoid this through `serde`'s `Serializer` trait alone
+/// — verified empirically, not assumed:
+/// - `serialize_f64` always defers to `ryu::Buffer::format_finite`, which
+///   uses this exponential form for any real magnitude below ~`1e-5`
+///   regardless of how the value is rounded first (the decision is made on
+///   the value's decimal exponent, not on precision).
+/// - `serialize_str` on an already-correctly-formatted decimal string like
+///   `"0.000001"` gets force-quoted by `serde_yaml_ng`'s own
+///   `InferScalarStyle` visitor, because it round-trips through
+///   `parse_f64` and the serializer quotes anything that would otherwise
+///   read back as a non-string — the exact opposite of what we want here.
+/// - `Value::Number` is a dead end too: its `Serialize` impl just calls
+///   `serializer.serialize_f64(f)` on the same `f64`, reproducing the same
+///   `ryu` output.
+///
+/// So this rewrites just the rendered lines for the four float keys ai
+/// toolkit actually parses as numbers, after `serde_yaml_ng::to_string` has
+/// produced an otherwise-correct document, into an explicit fixed-decimal
+/// form. It runs unconditionally (not only when `ryu` chose exponential
+/// notation) so every occurrence of these keys is guaranteed the same
+/// "always has a dot, never an exponent" shape.
+fn normalize_yaml_floats(yaml: &str) -> String {
+    let mut out = yaml
+        .lines()
+        .map(|line| {
+            let Some((prefix, rest)) = line.split_once(": ") else {
+                return line.to_string();
+            };
+            let key = prefix.trim_start();
+            if !YAML_FLOAT_KEYS.contains(&key) {
+                return line.to_string();
+            }
+            match rest.parse::<f64>() {
+                Ok(value) => format!("{prefix}: {}", format_plain_decimal(value)),
+                Err(_) => line.to_string(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    out.push('\n');
+    out
+}
+
+/// Format `v` as a plain decimal that always has a `.` and never an
+/// exponent: fixed at 12 decimal places, trailing zeros trimmed, but at
+/// least one digit is kept after the dot (`0.000001`, `0.0001`, `0.99`,
+/// `4.0`).
+fn format_plain_decimal(v: f64) -> String {
+    let fixed = format!("{v:.12}");
+    let trimmed = fixed.trim_end_matches('0');
+    if let Some(stripped) = trimmed.strip_suffix('.') {
+        format!("{stripped}.0")
+    } else {
+        trimmed.to_string()
+    }
 }
 
 #[cfg(test)]
@@ -346,6 +478,7 @@ mod tests {
             work_dir,
             prompts,
             data_kind: DatasetMode::Frames,
+            overrides: None,
         }
     }
 
@@ -456,6 +589,7 @@ meta:
             work_dir,
             prompts: &prompts,
             data_kind: DatasetMode::Clips,
+            overrides: None,
         };
 
         let yaml = render_yaml(&input).expect("render yaml");
@@ -533,6 +667,7 @@ meta:
             work_dir,
             prompts: &prompts,
             data_kind: DatasetMode::Frames,
+            overrides: None,
         };
 
         let yaml = render_yaml(&input).expect("render yaml");
@@ -595,5 +730,112 @@ meta:
         let work_dir = Path::new(r"E:\Data\training\runs\anime_style_v1");
         assert_eq!(config_path(work_dir), work_dir.join("config.yaml"));
         assert_eq!(training_folder(work_dir), work_dir.join("output"));
+    }
+
+    #[test]
+    fn lr_encoding_uses_a_plain_decimal_with_no_exponent() {
+        let base_dir = Path::new(r"E:\Models\training\flux2-klein-4b");
+        let dataset_dir = Path::new(r"E:\Data\training\anime\export");
+        let work_dir = Path::new(r"E:\Data\training\runs\anime_style_v1");
+        let prompts = vec!["ghibli_xy portrait".to_string()];
+        let mut preset = find_for_family("flux2-klein-4b").unwrap().fast;
+        preset.lr = 1e-6;
+        let input = flux2_4b_input(
+            preset,
+            base_dir,
+            dataset_dir,
+            work_dir,
+            "ghibli_xy",
+            &prompts,
+        );
+
+        let yaml = render_yaml(&input).expect("render yaml");
+
+        assert!(
+            yaml.contains("lr: 0.000001\n"),
+            "expected a bare `lr: 0.000001` line, got:\n{yaml}"
+        );
+        for key in YAML_FLOAT_KEYS {
+            for line in yaml.lines() {
+                let Some((prefix, rest)) = line.split_once(": ") else {
+                    continue;
+                };
+                if prefix.trim_start() != key {
+                    continue;
+                }
+                assert!(
+                    !rest.contains("e-") && !rest.contains("e+"),
+                    "{key}: {rest} still uses exponential notation"
+                );
+            }
+        }
+
+        // And it must read back as a Number (not a String) — the whole point.
+        let value: serde_yaml_ng::Value = serde_yaml_ng::from_str(&yaml).expect("parse yaml");
+        let lr = &value["config"]["process"][0]["train"]["lr"];
+        assert!(lr.is_number(), "lr must parse back as a Number, got {lr:?}");
+        assert_eq!(lr.as_f64(), Some(1e-6));
+    }
+
+    #[test]
+    fn hyperparams_validate_rejects_out_of_range_values() {
+        assert!(Hyperparams {
+            lr: Some(1.0),
+            ..Default::default()
+        }
+        .validate()
+        .is_err());
+        assert!(Hyperparams {
+            rank: Some(2),
+            ..Default::default()
+        }
+        .validate()
+        .is_err());
+        assert!(Hyperparams {
+            steps: Some(10),
+            ..Default::default()
+        }
+        .validate()
+        .is_err());
+        assert!(Hyperparams {
+            resolution: Some(64),
+            ..Default::default()
+        }
+        .validate()
+        .is_err());
+
+        // In-range and absent fields are both fine.
+        assert!(Hyperparams::default().validate().is_ok());
+        assert!(Hyperparams {
+            lr: Some(1e-4),
+            rank: Some(16),
+            steps: Some(600),
+            resolution: Some(768),
+        }
+        .validate()
+        .is_ok());
+    }
+
+    #[test]
+    fn render_yaml_rejects_an_out_of_range_lr_override() {
+        let base_dir = Path::new(r"E:\Models\training\flux2-klein-4b");
+        let dataset_dir = Path::new(r"E:\Data\training\anime\export");
+        let work_dir = Path::new(r"E:\Data\training\runs\anime_style_v1");
+        let prompts = vec!["ghibli_xy portrait".to_string()];
+        let mut input = flux2_4b_input(
+            find_for_family("flux2-klein-4b").unwrap().fast,
+            base_dir,
+            dataset_dir,
+            work_dir,
+            "ghibli_xy",
+            &prompts,
+        );
+        input.overrides = Some(Hyperparams {
+            lr: Some(1.0), // way outside [1e-6, 1e-2]
+            ..Default::default()
+        });
+
+        let err = render_yaml(&input).expect_err("out-of-range lr must be rejected");
+        assert!(err.to_string().contains("lr"));
     }
 }

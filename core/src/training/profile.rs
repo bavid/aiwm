@@ -97,6 +97,13 @@ pub struct TrainingProfile {
     pub data_kind: DataKind,
     pub vram: VramStrategy,
     pub base: BaseWeight,
+    /// `train.noise_scheduler`/`sample.sampler` in the rendered config
+    /// (`core::training::config`): `flowmatch` for the three flow-matching
+    /// models, `ddpm` for SDXL — see the plan's appendix.
+    pub noise_scheduler: &'static str,
+    /// `sample.guidance_scale` in the rendered config: `4.0` for the
+    /// flow-matching models, `6.0` for SDXL.
+    pub guidance_scale: f64,
     pub caption_order: CaptionOrder,
     pub fast: PresetValues,
     pub balanced: PresetValues,
@@ -144,6 +151,8 @@ pub const PROFILES: &[TrainingProfile] = &[
             required_files: FLUX2_KLEIN_REQUIRED_FILES,
             approx_gb: 16,
         },
+        noise_scheduler: "flowmatch",
+        guidance_scale: 4.0,
         caption_order: CaptionOrder::ProseFirst,
         fast: PresetValues {
             steps: 600,
@@ -191,6 +200,8 @@ pub const PROFILES: &[TrainingProfile] = &[
             required_files: FLUX2_KLEIN_REQUIRED_FILES,
             approx_gb: 30,
         },
+        noise_scheduler: "flowmatch",
+        guidance_scale: 4.0,
         caption_order: CaptionOrder::ProseFirst,
         fast: PresetValues {
             steps: 600,
@@ -245,6 +256,8 @@ pub const PROFILES: &[TrainingProfile] = &[
             ],
             approx_gb: 7,
         },
+        noise_scheduler: "ddpm",
+        guidance_scale: 6.0,
         caption_order: CaptionOrder::TagsFirst,
         fast: PresetValues {
             steps: 800,
@@ -292,6 +305,8 @@ pub const PROFILES: &[TrainingProfile] = &[
             required_files: &["model_index.json"],
             approx_gb: 20,
         },
+        noise_scheduler: "flowmatch",
+        guidance_scale: 4.0,
         caption_order: CaptionOrder::ProseFirst,
         fast: PresetValues {
             steps: 500,
@@ -602,6 +617,29 @@ mod tests {
             let profile = find_for_family(family).expect("seeded profile");
             assert_eq!(profile.vram.reserve_mb, *reserve_mb, "{family}: reserve_mb");
             assert_eq!(profile.vram.fit, *fit, "{family}: fit");
+        }
+    }
+
+    #[test]
+    fn noise_scheduler_and_guidance_scale_match_the_spec_table() {
+        // flowmatch/4.0 for the three flow-matching models, ddpm/6.0 for
+        // SDXL — see `core::training::config` and the plan's appendix.
+        let expected: &[(&str, &str, f64)] = &[
+            ("flux2-klein-4b", "flowmatch", 4.0),
+            ("flux2-klein-9b", "flowmatch", 4.0),
+            ("sdxl", "ddpm", 6.0),
+            ("wan", "flowmatch", 4.0),
+        ];
+        for (family, noise_scheduler, guidance_scale) in expected {
+            let profile = find_for_family(family).expect("seeded profile");
+            assert_eq!(
+                profile.noise_scheduler, *noise_scheduler,
+                "{family}: noise_scheduler"
+            );
+            assert_eq!(
+                profile.guidance_scale, *guidance_scale,
+                "{family}: guidance_scale"
+            );
         }
     }
 }
