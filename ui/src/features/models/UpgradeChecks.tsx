@@ -8,9 +8,17 @@ import {
   type UpgradeReport,
 } from "../../lib/ipc";
 import { FitBadge } from "./FitBadge";
-import { fitTierRank } from "./fit-utils";
+import { fitTierRank, type FitTier } from "./fit-utils";
 
 const ACTIVE = new Set(["queued", "scheduled", "blocked", "preparing", "running", "post"]);
+
+/** Ranking for the *unattended* pick below — deliberately not the display
+ *  rank. The badge list puts `unknown` ahead of `red` so a human scanning it
+ *  sees the unjudged file before the hopeless one; an automatic download must
+ *  not read that as "unknown beats too big". A file the core could not size
+ *  could be anything at all, so it must never outrank a file that is merely
+ *  known to be too big — both come last, and the smaller one wins. */
+const pickRank = (level: FitTier): number => Math.min(fitTierRank(level), 2);
 
 const count = (n: number) =>
   n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}k` : `${n}`;
@@ -94,10 +102,7 @@ function Candidate({ c }: { c: UpgradeCandidate }) {
       const details = await registryModel(c.id);
       const files = details.files
         .filter((f) => f.quant && !f.shard)
-        .sort(
-          (a, b) =>
-            fitTierRank(a.fit.level) - fitTierRank(b.fit.level) || a.size_bytes - b.size_bytes,
-        );
+        .sort((a, b) => pickRank(a.fit.level) - pickRank(b.fit.level) || a.size_bytes - b.size_bytes);
       const pick = files[0];
       if (!pick || c.gated) {
         setDl("error");
@@ -118,7 +123,7 @@ function Candidate({ c }: { c: UpgradeCandidate }) {
 
   return (
     <li className="up__cand">
-      <FitBadge fit={c.fit} />
+      <FitBadge fit={c.fit} subject={c.id} />
       <a
         className="up__id"
         href={`https://huggingface.co/${c.id}`}

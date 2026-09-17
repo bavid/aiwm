@@ -20,6 +20,7 @@ import {
 import { filterDisplayTags } from "../../lib/tags";
 import { FileList } from "./FileList";
 import { FitBadge } from "./FitBadge";
+import { weightFiles } from "./registry-files";
 
 /** Which Discover source is active. Civitai has no "ask my local model"
  *  ranking integration (yet) — that toggle only ever applies to the Hugging
@@ -103,12 +104,6 @@ function guessModelType(kind: RecommendKind, format: RecommendCandidate["format"
       return format === "gguf" ? "diffusion_model" : "checkpoint";
   }
 }
-
-/** A Hugging Face repo lists its README, configs and tokenizer next to the
- *  weights; only a file with a quant label or a VRAM estimate is something
- *  you'd download from here. Civitai already lists weights only. */
-const weightFiles = (details: RegistryDetails) =>
-  details.files.filter((f) => f.quant || f.vram_estimate_mb != null);
 
 function rolesFor(kind: RecommendKind): string[] | undefined {
   if (kind === "chat") return ["chat"];
@@ -716,7 +711,7 @@ function RecommendCard({ candidate, kind }: { candidate: RecommendCandidate; kin
           </a>
           {candidate.gated && <span className="badge badge--warn">gated</span>}
           {candidate.llm_ranked && <span className="badge">picked by your local model</span>}
-          <FitBadge fit={candidate.fit} />
+          <FitBadge fit={candidate.fit} subject={candidate.id} />
         </div>
         <p className="recommend__why">{candidate.why}</p>
         <div className="discover__meta numeric">

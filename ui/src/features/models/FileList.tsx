@@ -1,9 +1,12 @@
-import { useMemo, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { enqueueDownload, type ModelType, type RegistryFile } from "../../lib/ipc";
 import { FitBadge } from "./FitBadge";
 import { countFitTiers, fitTierSummary, sortByFitTier } from "./fit-utils";
 
 const gb = (bytes: number) => `${(bytes / 1024 ** 3).toFixed(2)} GB`;
+
+/** How long "Copied ✓" / "Queued ✓" style feedback stays up. */
+const COPIED_MS = 1500;
 
 /** A `.gguf` file can never be a checkpoint/VAE/LoRA (`core::model::kind`'s
  *  own rule -- those only ever accept `.safetensors`). The repo-level format
@@ -33,6 +36,7 @@ export function FileList({
   gated,
   modelType,
   roles,
+  isRecommended,
   emptyNote,
 }: {
   files: RegistryFile[];
@@ -41,16 +45,17 @@ export function FileList({
   /** Roles to stamp on import (e.g. `["chat", "coding"]`); omit for a plain
    *  download. */
   roles?: string[];
+  /** Flags the curated "pick this one" quant among several shown. */
+  isRecommended?: (file: RegistryFile) => boolean;
   /** Shown instead of the list when the source returned no usable file. */
   emptyNote: string;
 }) {
   const [hideTooBig, setHideTooBig] = useState(false);
 
-  const sorted = useMemo(() => sortByFitTier(files), [files]);
-  const counts = useMemo(() => countFitTiers(files), [files]);
-
   if (files.length === 0) return <p className="muted">{emptyNote}</p>;
 
+  const counts = countFitTiers(files);
+  const sorted = sortByFitTier(files);
   const shown = hideTooBig ? sorted.filter((f) => f.fit.level !== "red") : sorted;
   const hidden = sorted.length - shown.length;
   const summary = fitTierSummary(counts);
@@ -80,16 +85,20 @@ export function FileList({
           gated={gated}
           modelType={modelType}
           roles={roles}
+          recommended={isRecommended?.(f)}
         />
       ))}
 
-      {hidden > 0 && (
-        <p className="muted filelist__hidden" role="status">
-          {hidden === 1
+      {/* The live region exists from the first render — a `role="status"`
+          element that only appears together with its text is often created
+          too late for the announcement to be made at all. */}
+      <p className="muted filelist__hidden" role="status">
+        {hidden === 0
+          ? ""
+          : hidden === 1
             ? "1 file hidden because it won’t fit on this GPU — untick the filter to show it."
             : `${hidden} files hidden because they won’t fit on this GPU — untick the filter to show them.`}
-        </p>
-      )}
+      </p>
     </>
   );
 }
@@ -135,11 +144,10 @@ function ScanBadge({ pickle, virus }: { pickle: string | null; virus: string | n
 }
 
 /** One resolved file row: fit badge, quant, size, "Download & import", "Copy
- *  link". Shared by Discover's own results (via `FileList`) and the Models
- *  tab's Featured catalog (`Models.tsx`), which passes `roles` so a coding
- *  pick actually gets the `coding` role on import, and `recommended` to flag
- *  the curated quant among every option Hugging Face offers. */
-export function FileRow({
+ *  link". `roles` are stamped on import (e.g. `["chat", "coding"]`, so a
+ *  coding pick actually gets the `coding` role); `recommended` flags the
+ *  curated quant among every option the source offers. */
+function FileRow({
   file,
   gated,
   modelType,
@@ -149,20 +157,28 @@ export function FileRow({
   file: RegistryFile;
   gated: boolean;
   modelType: ModelType;
-  /** Roles to stamp on import (e.g. `["chat", "coding"]`); omit for a plain
-   *  download. */
   roles?: string[];
-  /** Marks this as the curated "pick this one" quant among several shown. */
   recommended?: boolean;
 }) {
   const [copied, setCopied] = useState(false);
   const [dl, setDl] = useState<"idle" | "queued" | "error">("idle");
+  const copiedTimer = useRef<number | null>(null);
+
+  // The row can disappear while the "Copied ✓" timer is still pending (the
+  // fit filter, a collapsed card, a new search) — drop the timer with it.
+  useEffect(
+    () => () => {
+      if (copiedTimer.current != null) window.clearTimeout(copiedTimer.current);
+    },
+    [],
+  );
 
   const copy = async () => {
     try {
       await navigator.clipboard.writeText(file.download_url);
       setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
+      if (copiedTimer.current != null) window.clearTimeout(copiedTimer.current);
+      copiedTimer.current = window.setTimeout(() => setCopied(false), COPIED_MS);
     } catch {
       /* clipboard blocked — the link is in the title attr */
     }
@@ -185,14 +201,15 @@ export function FileRow({
     }
   };
 
+  const name = file.quant ?? file.path;
   // Split files need every part — no one-click for those yet (6.4).
   const canDownload = !file.shard && !gated;
 
   return (
     <div className="discover__file">
-      <FitBadge fit={file.fit} vramMb={file.vram_estimate_mb} />
+      <FitBadge fit={file.fit} vramMb={file.vram_estimate_mb} subject={name} />
       <span className="discover__quant">
-        {file.quant ?? file.path}
+        {name}
         {file.shard && ` · part ${file.shard[0]}/${file.shard[1]}`}
         {recommended && <span className="badge badge--pick">★</span>}
       </span>

@@ -14,15 +14,17 @@ export const FIT_TIER_LABEL: Record<FitTier, string> = {
   unknown: "Unknown",
 };
 
-/** Best first. `unknown` sorts *before* `red`: an unjudged file is still
- *  worth a look (the source gave no size estimate), one that is known not to
- *  fit is the last resort. */
-const FIT_TIER_RANK: Record<FitTier, number> = { green: 0, yellow: 1, unknown: 2, red: 3 };
-
-/** Tier order used by `sortByFitTier` and the summary line. */
+/** The one tier order in the UI, best first — both the sort rank and the
+ *  summary line read it. `unknown` sorts *before* `red`: an unjudged file is
+ *  still worth a look (the source gave no size estimate), one that is known
+ *  not to fit is the last resort.
+ *
+ *  This is a *display* order. An unattended pick (e.g. the upgrade check's
+ *  automatic download) must not read it as "unknown beats too big" — see
+ *  `UpgradeChecks.tsx`. */
 const FIT_TIER_ORDER: FitTier[] = ["green", "yellow", "unknown", "red"];
 
-export const fitTierRank = (tier: FitTier): number => FIT_TIER_RANK[tier];
+export const fitTierRank = (tier: FitTier): number => FIT_TIER_ORDER.indexOf(tier);
 
 /** The core's plain-language explanation, when there is one — `green` and
  *  `unknown` carry no reason, so this returns `null` for them. */
@@ -52,7 +54,7 @@ const FIT_SUMMARY_WORD: Record<FitTier, string> = {
   green: "fit",
   yellow: "tight",
   red: "too big",
-  unknown: "unknown",
+  unknown: "unrated",
 };
 
 /** One line like `3 fit · 2 tight · 4 too big for this GPU`. Empty tiers are

@@ -32,9 +32,10 @@ import {
 } from "../../lib/ipc";
 import { ColibriPanel } from "./ColibriPanel";
 import { Discover } from "./Discover";
-import { FileRow } from "./FileList";
+import { FileList } from "./FileList";
 import { FitBadge } from "./FitBadge";
 import { Downloads } from "./Downloads";
+import { weightFiles } from "./registry-files";
 import { DeleteButton, StoragePanel } from "./StoragePanel";
 import { UpgradeChecks } from "./UpgradeChecks";
 import "./models.css";
@@ -812,7 +813,7 @@ function KnownRow({
         <span className="known__badges">
           <span className="badge">{model.kind.replace("_", " ")}</span>
           {model.family && <span className="badge">{model.family}</span>}
-          <FitBadge fit={model.fit} />
+          <FitBadge fit={model.fit} subject={model.name} />
         </span>
         {!compact && <span className="known__note">{model.note}</span>}
         <span className="known__file numeric">
@@ -879,7 +880,7 @@ function StackCard({ stack, onUseType }: { stack: ModelStack; onUseType: (t: Mod
             {stack.members.length} file{stack.members.length > 1 ? "s" : ""}
           </span>
           <span className="badge numeric">{gbBytes(totalBytes)} total</span>
-          <FitBadge fit={fit} />
+          <FitBadge fit={fit} subject={stack.label} />
         </span>
         <span className="known__note">{stack.note}</span>
       </header>
@@ -935,7 +936,6 @@ function FeaturedRow({ model, onUseType }: { model: FeaturedModel; onUseType: (t
   };
 
   const hint = model.quant_hint.toUpperCase();
-  const weightFiles = details?.files.filter((f) => f.quant || f.vram_estimate_mb != null) ?? [];
   const gated = details ? details.gated !== "no" : false;
 
   const copyRepoLink = async () => {
@@ -957,7 +957,7 @@ function FeaturedRow({ model, onUseType }: { model: FeaturedModel; onUseType: (t
         </div>
         <span className="known__badges">
           <span className="badge">{model.role}</span>
-          <FitBadge fit={model.fit} />
+          <FitBadge fit={model.fit} subject={model.label} />
         </span>
         <span className="known__note">{model.note}</span>
         <span className="known__file numeric">
@@ -973,19 +973,18 @@ function FeaturedRow({ model, onUseType }: { model: FeaturedModel; onUseType: (t
           <div className="discover__files">
             {loading && <p className="muted">Looking up the real file list…</p>}
             {err && <p className="import__err">{err}</p>}
-            {details && weightFiles.length === 0 && (
-              <p className="muted">No weight files found right now — open the repo on Hugging Face.</p>
-            )}
-            {weightFiles.map((f) => (
-              <FileRow
-                key={f.path}
-                file={f}
+            {details && (
+              <FileList
+                files={weightFiles(details)}
                 gated={gated}
                 modelType="chat"
                 roles={model.import_roles}
-                recommended={f.quant?.toUpperCase().includes(hint) ?? f.path.toUpperCase().includes(hint)}
+                isRecommended={(f) =>
+                  f.quant?.toUpperCase().includes(hint) ?? f.path.toUpperCase().includes(hint)
+                }
+                emptyNote="No weight files found right now — open the repo on Hugging Face."
               />
-            ))}
+            )}
           </div>
         )}
       </div>
