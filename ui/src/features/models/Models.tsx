@@ -23,7 +23,6 @@ import {
   upgradeCheck,
   type Benchmark,
   type FeaturedModel,
-  type FitVerdict,
   type Job,
   type KnownModel,
   type Model,
@@ -32,7 +31,9 @@ import {
   type RegistryDetails,
 } from "../../lib/ipc";
 import { ColibriPanel } from "./ColibriPanel";
-import { Discover, FileRow } from "./Discover";
+import { Discover } from "./Discover";
+import { FileRow } from "./FileList";
+import { FitBadge } from "./FitBadge";
 import { Downloads } from "./Downloads";
 import { DeleteButton, StoragePanel } from "./StoragePanel";
 import { UpgradeChecks } from "./UpgradeChecks";
@@ -653,34 +654,6 @@ function ImportForm({
       </form>
       {message && <p className={message.kind === "ok" ? "import__ok" : "import__err"}>{message.text}</p>}
     </section>
-  );
-}
-
-const FIT_COLOR: Record<FitVerdict["level"], string> = {
-  green: "var(--load-ok)",
-  yellow: "var(--load-warn)",
-  red: "var(--load-crit)",
-  unknown: "var(--border)",
-};
-
-const FIT_LABEL: Record<FitVerdict["level"], string> = {
-  green: "Fits comfortably",
-  yellow: "Tight fit",
-  red: "Won't fit well",
-  unknown: "Fit unknown",
-};
-
-const fitTitle = (fit: FitVerdict): string =>
-  fit.level === "yellow" || fit.level === "red" ? fit.reason : FIT_LABEL[fit.level];
-
-/** A colored dot + plain-language label for a `FitVerdict` — shared by the
- *  Image/Video/Chat/Code catalog rows below. */
-function FitBadge({ fit }: { fit: FitVerdict }) {
-  return (
-    <span className="known__fit" title={fitTitle(fit)}>
-      <span className="known__fitdot" style={{ background: FIT_COLOR[fit.level] }} />
-      {FIT_LABEL[fit.level]}
-    </span>
   );
 }
 

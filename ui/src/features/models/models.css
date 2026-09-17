@@ -269,13 +269,6 @@
   border-top: 1px solid var(--border);
 }
 
-.up__dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  flex-shrink: 0;
-}
-
 .up__id {
   font-family: var(--font-mono);
   font-weight: 600;
@@ -560,22 +553,8 @@
 .known__badges {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: var(--space-1);
-}
-
-.known__fit {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-size: var(--text-xs);
-  color: var(--muted);
-}
-
-.known__fitdot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  flex-shrink: 0;
 }
 
 .badge--pick {
@@ -802,6 +781,7 @@
 .discover__title {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: var(--space-2);
   font-weight: 600;
   word-break: break-all;
@@ -851,15 +831,9 @@
 .discover__file {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: var(--space-2);
   font-size: var(--text-xs);
-}
-
-.discover__dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  flex-shrink: 0;
 }
 
 .discover__quant {
@@ -868,10 +842,148 @@
   word-break: break-all;
 }
 
-.discover__fitnote {
-  color: var(--load-warn);
+/* --- hardware-fit tiers --- */
+
+/* One labelled tier: shape + name + VRAM estimate. The shape (drawn below,
+   per tier) exists so the tier survives without colour — on a monochrome
+   screen, in high contrast, or for a red/green colour deficiency. */
+.fit {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+  padding: 1px var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text);
+  font-family: inherit;
   font-size: var(--text-xs);
-  cursor: help;
+  font-weight: 600;
+  line-height: 1.7;
+  white-space: nowrap;
+}
+
+.fit__mark {
+  width: 9px;
+  height: 9px;
+  flex-shrink: 0;
+}
+
+.fit--green {
+  border-color: color-mix(in oklab, var(--load-ok) 45%, var(--border));
+  background: color-mix(in oklab, var(--load-ok) 10%, var(--surface));
+}
+
+/* circle */
+.fit--green .fit__mark {
+  border-radius: 50%;
+  background: var(--load-ok);
+}
+
+.fit--yellow {
+  border-color: color-mix(in oklab, var(--load-warn) 45%, var(--border));
+  background: color-mix(in oklab, var(--load-warn) 10%, var(--surface));
+}
+
+/* diamond */
+.fit--yellow .fit__mark {
+  background: var(--load-warn);
+  transform: rotate(45deg);
+}
+
+.fit--red {
+  border-color: color-mix(in oklab, var(--load-crit) 45%, var(--border));
+  background: color-mix(in oklab, var(--load-crit) 10%, var(--surface));
+}
+
+/* triangle */
+.fit--red .fit__mark {
+  width: 10px;
+  border-left: 5px solid transparent;
+  border-right: 5px solid transparent;
+  border-bottom: 9px solid var(--load-crit);
+}
+
+.fit--unknown {
+  color: var(--muted);
+}
+
+/* hollow ring */
+.fit--unknown .fit__mark {
+  border: 1.5px solid var(--faint);
+  border-radius: 50%;
+}
+
+.fit__est {
+  color: var(--muted);
+  font-weight: 500;
+}
+
+/* The disclosure form: carries the core's reason, so it is a real button —
+   focusable, operable with Enter/Space, described by the reason text. */
+.fit--why {
+  cursor: pointer;
+}
+
+.fit--why:hover {
+  border-color: var(--accent);
+}
+
+.fit--why:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.fit__hint {
+  color: var(--muted);
+  font-weight: 700;
+}
+
+/* Sits on its own line below the (wrapping) flex row that holds the badge:
+   `order` keeps it out of the middle of the row it belongs to, while screen
+   readers still reach it through the badge's `aria-describedby`. */
+.fit__reason {
+  order: 1;
+  flex-basis: 100%;
+  min-width: 0;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  font-weight: 400;
+}
+
+/* Read by screen readers, never shown: the explanation a `title=` tooltip
+   would have hidden from keyboard and touch users. */
+.fit__reason--sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  clip-path: inset(50%);
+  overflow: hidden;
+}
+
+.filelist__head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  font-size: var(--text-xs);
+}
+
+.filelist__summary {
+  color: var(--muted);
+}
+
+.filelist__filter {
+  font-size: var(--text-xs);
+}
+
+.filelist__hidden {
+  margin: 0;
+  font-size: var(--text-xs);
 }
 
 .discover__dlbtn {

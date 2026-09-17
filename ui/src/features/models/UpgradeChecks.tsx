@@ -3,20 +3,14 @@ import { useJobs } from "../../lib/hooks";
 import {
   enqueueDownload,
   registryModel,
-  type FitVerdict,
   type Job,
   type UpgradeCandidate,
   type UpgradeReport,
 } from "../../lib/ipc";
+import { FitBadge } from "./FitBadge";
+import { fitTierRank } from "./fit-utils";
 
 const ACTIVE = new Set(["queued", "scheduled", "blocked", "preparing", "running", "post"]);
-
-const FIT_COLOR: Record<FitVerdict["level"], string> = {
-  green: "var(--load-ok)",
-  yellow: "var(--load-warn)",
-  red: "var(--load-crit)",
-  unknown: "var(--border)",
-};
 
 const count = (n: number) =>
   n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}k` : `${n}`;
@@ -100,10 +94,10 @@ function Candidate({ c }: { c: UpgradeCandidate }) {
       const details = await registryModel(c.id);
       const files = details.files
         .filter((f) => f.quant && !f.shard)
-        .sort((a, b) => {
-          const rank = (lvl: string) => (lvl === "green" ? 0 : lvl === "yellow" ? 1 : 2);
-          return rank(a.fit.level) - rank(b.fit.level) || a.size_bytes - b.size_bytes;
-        });
+        .sort(
+          (a, b) =>
+            fitTierRank(a.fit.level) - fitTierRank(b.fit.level) || a.size_bytes - b.size_bytes,
+        );
       const pick = files[0];
       if (!pick || c.gated) {
         setDl("error");
@@ -124,7 +118,7 @@ function Candidate({ c }: { c: UpgradeCandidate }) {
 
   return (
     <li className="up__cand">
-      <span className="up__dot" style={{ background: FIT_COLOR[c.fit.level] }} />
+      <FitBadge fit={c.fit} />
       <a
         className="up__id"
         href={`https://huggingface.co/${c.id}`}
