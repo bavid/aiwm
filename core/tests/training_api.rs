@@ -105,6 +105,56 @@ async fn installing_the_trainer_is_refused_in_offline_mode() {
 }
 
 #[tokio::test]
+async fn starting_and_resuming_a_run_are_refused_in_offline_mode() {
+    // ADR-009. Staged base weights are not enough to train offline: on a
+    // family's first run ai-toolkit fetches the Qwen3 text encoder and the
+    // FLUX.2 VAE from the Hub itself (confirmed on the real 4B run, which
+    // pulled 8 GB of Qwen3-4B after the local blob had already loaded). A
+    // run started with the network switched off would get minutes in and
+    // then die on a download, so it is refused up front.
+    let (server, _tmp, app) = fixture().await;
+    let run_id = insert_running_run(&app).await;
+    app.set_offline(true);
+    let client = reqwest::Client::new();
+
+    let start = client
+        .post(format!("http://{}/training/runs", server.addr))
+        .json(&serde_json::json!({
+            "name": "Anime style v1",
+            "target_model_id": "m-flux2",
+            "dataset_id": "ds-1",
+            "trigger_word": "ghibli_xy",
+            "preset": "fast",
+            "hyperparams": {},
+            "sample_prompts": ["ghibli_xy portrait"],
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(start.status(), 400);
+    let body: serde_json::Value = start.json().await.unwrap();
+    assert!(
+        body["error"].as_str().unwrap().contains("offline"),
+        "got: {body}"
+    );
+
+    let resume = client
+        .post(format!(
+            "http://{}/training/runs/{run_id}/resume",
+            server.addr
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resume.status(), 400);
+    let body: serde_json::Value = resume.json().await.unwrap();
+    assert!(
+        body["error"].as_str().unwrap().contains("offline"),
+        "got: {body}"
+    );
+}
+
+#[tokio::test]
 async fn probing_without_a_trainer_is_a_refusal_not_a_fault() {
     let (server, _tmp, _app) = fixture().await;
     let resp = reqwest::Client::new()

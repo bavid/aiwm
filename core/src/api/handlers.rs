@@ -725,7 +725,28 @@ fn check_sample_prompts(raw: &[String]) -> Result<Vec<String>> {
 /// `POST /training/runs` — validate the form, then create the row and launch
 /// the detached trainer. Everything the preflight refuses comes back as a
 /// plain sentence with a 400.
+/// ADR-009: refuse to drive the trainer while offline mode is on.
+///
+/// Staged base weights are not enough. On a family's first run `ai-toolkit`
+/// fetches two more pieces from the Hub itself — the Qwen3 text encoder and
+/// the FLUX.2 VAE live in *different* repos from the base checkpoint (see
+/// [`crate::training::bases`]) — which the real 4B run demonstrated by
+/// downloading 8 GB of `Qwen/Qwen3-4B` after the local blob had already
+/// loaded. Without this a run started offline would spend minutes loading a
+/// model and then die on a download, so it is refused in the first second
+/// instead, as a sentence the Training tab can show as-is.
+fn check_trainer_online(app: &App) -> Result<()> {
+    if app.offline() {
+        return Err(crate::training::training_refusal(
+            "offline mode is on — the trainer needs the Hugging Face Hub on a family's \
+             first run (Qwen3 text encoder, FLUX.2 VAE); turn offline mode off for this run",
+        ));
+    }
+    Ok(())
+}
+
 pub async fn start_training_run(app: &App, body: StartRunDto) -> Result<crate::db::TrainingRun> {
+    check_trainer_online(app)?;
     let trigger_word = check_trigger_word(&body.trigger_word)?;
     let sample_prompts = check_sample_prompts(&body.sample_prompts)?;
 
@@ -822,6 +843,7 @@ pub async fn pause_training_run(app: &App, id: &str) -> Result<crate::db::Traini
 
 /// `POST /training/runs/{id}/resume` — relaunch from the latest checkpoint.
 pub async fn resume_training_run(app: &App, id: &str) -> Result<crate::db::TrainingRun> {
+    check_trainer_online(app)?;
     app.training_runner.resume(id).await?;
     reload_run(app, id).await
 }
