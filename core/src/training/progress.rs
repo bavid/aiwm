@@ -49,7 +49,8 @@ pub enum Marker {
     Error(String),
     /// `Job stopped` (clean interrupt; no checkpoint is written)
     Stopped,
-    /// The ` - 1 completed job` line that follows `Result:` on success.
+    /// The ` - 1 completed job` line that follows `Result:` on success
+    /// (matched with or without its leading indentation).
     Completed,
     /// `Saved checkpoint to <path>`
     SavedCheckpoint(String),
@@ -197,7 +198,11 @@ pub fn parse_marker(line: &str) -> Option<Marker> {
     if line.contains("Job stopped") {
         return Some(Marker::Stopped);
     }
-    if line.contains(" - 1 completed job") {
+    // Deliberately matched without the leading space of the real line
+    // (` - 1 completed job`): every caller goes through [`split_updates`],
+    // which trims each update, so requiring the indentation here would make
+    // completion undetectable for exactly the code that needs it.
+    if line.contains("- 1 completed job") {
         return Some(Marker::Completed);
     }
     if let Some(path) = line.strip_prefix("Saved checkpoint to ") {
@@ -420,6 +425,20 @@ mod tests {
         );
         assert_eq!(parse_marker("Job stopped"), Some(Marker::Stopped));
         assert_eq!(parse_marker(" - 1 completed job"), Some(Marker::Completed));
+        // [`split_updates`] trims every update before handing it on, so the
+        // completion line reaches this parser without its leading space.
+        assert_eq!(parse_marker("- 1 completed job"), Some(Marker::Completed));
+        assert_eq!(
+            split_updates(
+                "Result:
+ - 1 completed job
+"
+            )
+            .filter_map(parse_marker)
+            .collect::<Vec<_>>(),
+            vec![Marker::Completed],
+            "the completion marker must survive the splitter the runner uses"
+        );
         assert_eq!(
             parse_marker("Saved checkpoint to /work/my_lora/my_lora_000000500.safetensors"),
             Some(Marker::SavedCheckpoint(

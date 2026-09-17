@@ -328,6 +328,24 @@ impl<'a> TrainingRunRepo<'a> {
             .collect::<Result<Vec<_>>>()
     }
 
+    /// Runs the poller and startup recovery must look at: [`Self::list_alive`]
+    /// plus `finishing`. A `finishing` row no longer has a process — it is
+    /// waiting for its checkpoint to be imported — but if the app died mid-
+    /// import nobody else would ever pick it up again, so it belongs in the
+    /// recovery sweep even though it is not "alive" in the GPU sense.
+    pub async fn list_recoverable(&self) -> Result<Vec<TrainingRun>> {
+        let rows = sqlx::query_as::<_, TrainingRunRow>(sqlx::AssertSqlSafe(format!(
+            "SELECT {SELECT_COLS} FROM training_runs
+             WHERE state IN ('running', 'resuming', 'finishing')
+             ORDER BY created_at DESC, id DESC"
+        )))
+        .fetch_all(self.pool)
+        .await?;
+        rows.into_iter()
+            .map(TrainingRun::try_from)
+            .collect::<Result<Vec<_>>>()
+    }
+
     /// Move a run to `next`, validating the transition first. Sets
     /// `started_at` the first time a run reaches `running`, and
     /// `finished_at` when it lands in a terminal state.
@@ -716,6 +734,67 @@ mod tests {
         assert!(alive_ids.contains(&resuming.id.as_str()));
         assert!(!alive_ids.contains(&preparing.id.as_str()));
         assert!(!alive_ids.contains(&cancelled.id.as_str()));
+    }
+
+    #[tokio::test]
+    async fn list_recoverable_adds_finishing_to_the_alive_set() {
+        let db = Database::connect_in_memory().await.unwrap();
+
+        let running = db.training_runs().create(sample_run()).await.unwrap();
+        db.training_runs()
+            .set_state(&running.id, RunState::Running)
+            .await
+            .unwrap();
+
+        let finishing = db.training_runs().create(sample_run()).await.unwrap();
+        for next in [RunState::Running, RunState::Finishing] {
+            db.training_runs()
+                .set_state(&finishing.id, next)
+                .await
+                .unwrap();
+        }
+
+        let completed = db.training_runs().create(sample_run()).await.unwrap();
+        for next in [RunState::Running, RunState::Finishing, RunState::Completed] {
+            db.training_runs()
+                .set_state(&completed.id, next)
+                .await
+                .unwrap();
+        }
+
+        let alive: Vec<String> = db
+            .training_runs()
+            .list_alive()
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|r| r.id)
+            .collect();
+        assert!(!alive.contains(&finishing.id), "list_alive stays as it was");
+
+        let recoverable: Vec<String> = db
+            .training_runs()
+            .list_recoverable()
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|r| r.id)
+            .collect();
+        assert!(recoverable.contains(&running.id));
+        assert!(recoverable.contains(&finishing.id));
+        assert!(!recoverable.contains(&completed.id));
+    }
+
+    #[tokio::test]
+    async fn set_work_dir_records_the_derived_folder() {
+        let db = Database::connect_in_memory().await.unwrap();
+        let run = db.training_runs().create(sample_run()).await.unwrap();
+        db.training_runs()
+            .set_work_dir(&run.id, "E:/Data/training/abc")
+            .await
+            .unwrap();
+        let back = db.training_runs().get(&run.id).await.unwrap().unwrap();
+        assert_eq!(back.work_dir, "E:/Data/training/abc");
     }
 
     #[tokio::test]

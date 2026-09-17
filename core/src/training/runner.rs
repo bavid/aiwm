@@ -33,6 +33,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
+use tokio::sync::Mutex as AsyncMutex;
+
 use crate::db::{
     now_rfc3339, Database, DatasetMode, NewTrainingRun, Preset, RunState, TrainingRun,
 };
@@ -46,9 +48,11 @@ use crate::training::config::{
 };
 use crate::training::process::{is_alive, kill_tree, read_pid_file, write_pid_file};
 use crate::training::profile::{find_for_family, find_for_model, preset_values, TrainingProfile};
-use crate::training::progress::{parse_marker, parse_progress, scan_work_dir, tail_log, Marker};
+use crate::training::progress::{
+    parse_marker, parse_progress, scan_work_dir, split_updates, tail_log, Marker,
+};
 use crate::training::{training_err, TRAINING_MODEL_ID};
-use crate::Result;
+use crate::{CoreError, Result};
 
 /// How often the poller re-reads every alive run's log, work dir and PID.
 pub const POLL_INTERVAL: Duration = Duration::from_secs(3);
@@ -67,7 +71,10 @@ const RUN_PY: &str = "run.py";
 
 /// Free disk wanted on the work dir's volume before a run starts —
 /// checkpoints plus samples plus the trainer's own scratch.
-const MIN_FREE_DISK_BYTES: u64 = 20 * 1024 * 1024 * 1024;
+const MIN_FREE_DISK_BYTES: u64 = 20 * BYTES_PER_GB;
+
+/// One gigabyte, the unit both halves of the disk message are phrased in.
+const BYTES_PER_GB: u64 = 1024 * 1024 * 1024;
 
 /// How far back into an existing log [`Runner::recover`] starts reading after
 /// an app restart. A multi-hour run's log is megabytes of redrawn `tqdm`
@@ -111,12 +118,41 @@ struct PollState {
     checkpoint_step: Option<u64>,
 }
 
+/// `(free, total)` bytes on the volume a path lives on — the shape of
+/// [`crate::cleanup::volume_free`], behind a function pointer so the
+/// preflight disk check can be driven from a test.
+pub type FreeSpaceProbe = fn(&Path) -> Option<(u64, u64)>;
+
+/// What one pass over a run's on-disk state found: the updated cursor and
+/// markers, the run's state after any progress-driven promotion, and the
+/// newest checkpoint it has written.
+#[derive(Debug, Clone)]
+struct Observation {
+    poll: PollState,
+    state: RunState,
+    checkpoint: Option<PathBuf>,
+}
+
+/// A LoRA that reached the library. `warning` is set when the file itself
+/// landed but the metadata on top of it could not be finalised — the run is
+/// still linked to it, because an imported-but-unfindable LoRA is worse than
+/// one with a stale family.
+#[derive(Debug, Clone)]
+struct ImportedLora {
+    model_id: String,
+    warning: Option<String>,
+}
+
 /// A trainer command that replaces `python run.py` — set only by tests
-/// (Task 8's `aiwm-fake-trainer`), never in production.
+/// (Task 8's `aiwm-fake-trainer`), never in production. `image` is the name
+/// the stand-in's process shows up as in `tasklist`/`taskkill`, which is what
+/// every PID check compares against (see [`crate::training::process`]); a
+/// fixture is not `python.exe`, so the seam has to carry it.
 #[derive(Debug, Clone)]
 struct TrainerCommand {
     program: PathBuf,
     extra_args: Vec<String>,
+    image: String,
 }
 
 pub struct Runner {
@@ -130,6 +166,17 @@ pub struct Runner {
     store_root: PathBuf,
     polls: Mutex<BTreeMap<String, PollState>>,
     trainer_command: Option<TrainerCommand>,
+    free_space: FreeSpaceProbe,
+    /// Held across preflight + create + launch. Preflight refuses a second
+    /// concurrent run by reading the database, which is only a decision about
+    /// the state it saw; this is what stops two Start clicks from both
+    /// passing that check before either has written a row.
+    start_lock: AsyncMutex<()>,
+    /// PIDs the launch rollback has killed. Test-only: the rollback is a
+    /// best-effort side effect with nothing observable left behind once it
+    /// has run, so this is the only way to assert it happened at all.
+    #[cfg(test)]
+    rolled_back: Mutex<Vec<u32>>,
 }
 
 impl std::fmt::Debug for Runner {
@@ -160,18 +207,48 @@ impl Runner {
             store_root,
             polls: Mutex::new(BTreeMap::new()),
             trainer_command: None,
+            free_space: crate::cleanup::volume_free,
+            start_lock: AsyncMutex::new(()),
+            #[cfg(test)]
+            rolled_back: Mutex::new(Vec::new()),
         }
     }
 
+    /// Replace the free-disk probe the preflight check uses. Test seam only —
+    /// the real one reports the machine's actual volumes, which no test can
+    /// arrange.
+    #[must_use]
+    pub fn with_free_space_probe(mut self, probe: FreeSpaceProbe) -> Self {
+        self.free_space = probe;
+        self
+    }
+
     /// Run `program` (with `extra_args` before the config path) instead of the
-    /// trainer venv's `python run.py`. Test seam only — Task 8's fake trainer
-    /// uses it to exercise the real detached-process lifecycle without a GPU.
-    pub fn with_trainer_command(mut self, program: PathBuf, extra_args: Vec<String>) -> Self {
+    /// trainer venv's `python run.py`, and expect its process to run as
+    /// `image` rather than [`TRAINER_IMAGE`]. Test seam only — Task 8's fake
+    /// trainer uses it to exercise the real detached-process lifecycle
+    /// without a GPU.
+    #[must_use]
+    pub fn with_trainer_command(
+        mut self,
+        program: PathBuf,
+        extra_args: Vec<String>,
+        image: impl Into<String>,
+    ) -> Self {
         self.trainer_command = Some(TrainerCommand {
             program,
             extra_args,
+            image: image.into(),
         });
         self
+    }
+
+    /// The image name this runner's trainer runs as: [`TRAINER_IMAGE`] in
+    /// production, the stand-in's own executable when the test seam is set.
+    fn trainer_image(&self) -> &str {
+        self.trainer_command
+            .as_ref()
+            .map_or(TRAINER_IMAGE, |cmd| cmd.image.as_str())
     }
 
     /// `<data>/training/<run_id>` — the run's config, log, PID file and
@@ -189,6 +266,7 @@ impl Runner {
 
     /// Preflight, create the `preparing` row, then launch it.
     pub async fn create_and_start(&self, req: StartRequest) -> Result<TrainingRun> {
+        let _one_at_a_time = self.start_lock.lock().await;
         let name = req.name.trim();
         if name.is_empty() {
             return Err(training_err("the training run needs a name"));
@@ -244,6 +322,7 @@ impl Runner {
     /// Launch a row that is still `preparing` (a Start that was interrupted
     /// between the insert and the spawn).
     pub async fn start(&self, run_id: &str) -> Result<()> {
+        let _one_at_a_time = self.start_lock.lock().await;
         let run = self.run(run_id).await?;
         if run.state != RunState::Preparing {
             return Err(training_err(format!(
@@ -274,7 +353,7 @@ impl Runner {
             // It died before we got here: whatever the log says it is, it is.
             return self.reconcile_dead(&run).await;
         }
-        self.finish(&run, RunState::Paused, None).await
+        self.finish(&run, RunState::Paused, None).await.map(|_| ())
     }
 
     /// Relaunch a paused/interrupted run with the same config: ai-toolkit sees
@@ -282,6 +361,7 @@ impl Runner {
     /// it. The row stays `resuming` until the poller sees the first progress
     /// line, which is the only proof the trainer really came back.
     pub async fn resume(&self, run_id: &str) -> Result<()> {
+        let _one_at_a_time = self.start_lock.lock().await;
         let run = self.run(run_id).await?;
         if !matches!(run.state, RunState::Paused | RunState::Interrupted) {
             return Err(training_err(format!(
@@ -314,10 +394,29 @@ impl Runner {
                 "this run is importing its result — it will be done in a moment",
             ));
         }
-        // Unlike pause, cancel means the same thing whether or not the process
-        // was still there, so a `false` here needs no reconciliation.
-        self.stop_process(&run).await?;
-        self.finish(&run, RunState::Cancelled, None).await
+        if !self.stop_process(&run).await? {
+            // Nothing was killed because nothing was running. The run may
+            // have *finished* rather than merely stopped, and rewriting a
+            // completed run as `cancelled` would throw away its LoRA — so
+            // read the same evidence the poller reads first.
+            self.reconcile_dead(&run).await?;
+            let settled = self.run(run_id).await?;
+            if settled.state.is_terminal() {
+                tracing::info!(
+                    run = %run_id,
+                    state = settled.state.as_str(),
+                    "cancel found a run that had already finished on its own"
+                );
+                return Ok(());
+            }
+            return self
+                .finish(&settled, RunState::Cancelled, None)
+                .await
+                .map(|_| ());
+        }
+        self.finish(&run, RunState::Cancelled, None)
+            .await
+            .map(|_| ())
     }
 
     // ----------------------------------------------------------------- poll
@@ -325,7 +424,7 @@ impl Runner {
     /// One pass over every `running`/`resuming` run. Never fails because one
     /// run misbehaved — a per-run error is logged and the others still run.
     pub async fn poll_once(&self) -> Result<()> {
-        for run in self.db.training_runs().list_alive().await? {
+        for run in self.db.training_runs().list_recoverable().await? {
             if let Err(e) = self.poll_run(&run).await {
                 tracing::warn!(run = %run.id, error = %e, "polling a training run failed");
             }
@@ -334,6 +433,37 @@ impl Runner {
     }
 
     async fn poll_run(&self, run: &TrainingRun) -> Result<()> {
+        // Liveness **before** the reads in `observe`, not after them. A
+        // trainer writes its last words — the final checkpoint, the
+        // completion block, an `Error running job:` — in the instant before
+        // it exits, so a check made *after* the read can find the process
+        // already gone while the chunk we read still ends a step or two short
+        // of them. That is exactly how a finished run gets settled as
+        // `interrupted` (reproduced by `tests/training_run.rs`: the log's
+        // completion block landed between the read and the check). Checked
+        // first, a `false` here means "everything this run will ever write is
+        // already on disk", so the reads that follow are complete by
+        // construction; a `true` costs nothing but one more poll interval
+        // before the run settles.
+        //
+        // A `finishing` row is exempt: it has no process left, only an import
+        // that did not get to run.
+        let alive = run.state != RunState::Finishing
+            && self.process_alive(run, &self.work_dir(&run.id)).await;
+
+        let seen = self.observe(run).await?;
+        if alive {
+            return Ok(());
+        }
+        self.settle(&with_state(run, seen.state), &seen.poll, seen.checkpoint)
+            .await
+    }
+
+    /// Read everything new off a run's disk state: the log tail (progress
+    /// bars and lifecycle markers) and the work dir (the newest checkpoint).
+    /// Shared by the poller, startup recovery and the pause/cancel paths, so
+    /// all three judge a dead process from exactly the same evidence.
+    async fn observe(&self, run: &TrainingRun) -> Result<Observation> {
         let work_dir = self.work_dir(&run.id);
         let mut poll = self.poll_state(&run.id);
         let mut state = run.state;
@@ -342,20 +472,12 @@ impl Runner {
         poll.offset = offset;
 
         let mut latest = None;
-        // Split on CR/LF exactly like [`split_updates`], but keep each
-        // raw line for [`parse_marker`]: some markers are matched with their
-        // leading indentation (` - 1 completed job`), which trimming would
-        // eat. `parse_progress` is indifferent either way.
-        for raw in chunk.split(['\r', '\n']) {
-            let update = raw.trim();
-            if update.is_empty() {
-                continue;
-            }
+        for update in split_updates(&chunk) {
             if let Some(progress) = parse_progress(update) {
                 latest = Some(progress);
                 continue;
             }
-            match parse_marker(raw) {
+            match parse_marker(update) {
                 Some(Marker::Resuming(path)) => {
                     tracing::info!(run = %run.id, %path, "the trainer is resuming from a checkpoint");
                 }
@@ -399,11 +521,11 @@ impl Runner {
                 )
                 .await?;
             // A relaunched run is only really back once it prints a step.
-            if state == RunState::Resuming {
-                self.db
-                    .training_runs()
-                    .set_state_from(&run.id, RunState::Resuming, RunState::Running)
-                    .await?;
+            if state == RunState::Resuming
+                && self
+                    .transition(&run.id, RunState::Resuming, RunState::Running)
+                    .await?
+            {
                 state = RunState::Running;
             }
         }
@@ -421,52 +543,66 @@ impl Runner {
         }
         self.set_poll_state(&run.id, poll.clone());
 
-        if self.process_alive(run, &work_dir).await {
-            return Ok(());
-        }
-
-        self.settle(
-            &with_state(run, state),
-            &poll,
-            checkpoint.map(|(_, path)| path),
-        )
-        .await
+        Ok(Observation {
+            poll,
+            state,
+            checkpoint: checkpoint.map(|(_, path)| path),
+        })
     }
 
     // ------------------------------------------------------------- recovery
 
-    /// At app start: every `running`/`resuming` row is checked against its PID
-    /// file. A live process keeps its GPU reservation (and the poller picks it
-    /// up from there); anything else is `interrupted` and stays resumable.
+    /// At app start: every `running`/`resuming`/`finishing` row is checked
+    /// against its PID file. A live process keeps its GPU reservation (and the
+    /// poller picks it up from there); everything else is judged from the
+    /// same on-disk evidence the poller uses, so a run that finished — or
+    /// failed — while AIWM was closed lands where it belongs instead of being
+    /// blanket-marked `interrupted`.
     pub async fn recover(&self) -> Result<()> {
-        for run in self.db.training_runs().list_alive().await? {
-            let work_dir = self.work_dir(&run.id);
-            if self.process_alive(&run, &work_dir).await {
-                let reserve = find_for_family(&run.profile_family)
-                    .map(|p| p.vram.reserve_mb)
-                    .unwrap_or_default();
-                self.adapter.load_model(TRAINING_MODEL_ID, reserve).await?;
-                self.adapter.mark_alive(&run.id, reserve);
-                self.scheduler.pin(TRAINING_MODEL_ID);
-                let log = self.log_path(&run.id);
-                let len = tokio::fs::metadata(&log)
-                    .await
-                    .map(|m| m.len())
-                    .unwrap_or(0);
-                self.set_poll_state(
-                    &run.id,
-                    PollState {
-                        offset: len.saturating_sub(RECOVERY_TAIL_BYTES),
-                        ..PollState::default()
-                    },
-                );
-                tracing::info!(run = %run.id, "reattached to a training run that survived the restart");
-                continue;
+        for run in self.db.training_runs().list_recoverable().await? {
+            if let Err(e) = self.recover_run(&run).await {
+                tracing::warn!(run = %run.id, error = %e, "recovering a training run failed");
             }
-            tracing::warn!(run = %run.id, "a training run did not survive the restart");
-            self.finish(&run, RunState::Interrupted, None).await?;
         }
         Ok(())
+    }
+
+    async fn recover_run(&self, run: &TrainingRun) -> Result<()> {
+        // A `finishing` row never has a process — only an unfinished import.
+        if run.state != RunState::Finishing
+            && self.process_alive(run, &self.work_dir(&run.id)).await
+        {
+            let reserve = find_for_family(&run.profile_family)
+                .map(|p| p.vram.reserve_mb)
+                .unwrap_or_default();
+            self.adapter.load_model(TRAINING_MODEL_ID, reserve).await?;
+            self.adapter.mark_alive(&run.id, reserve);
+            self.scheduler.pin(TRAINING_MODEL_ID);
+            self.seed_cursor_at_the_tail(&run.id).await;
+            tracing::info!(run = %run.id, "reattached to a training run that survived the restart");
+            return Ok(());
+        }
+
+        tracing::warn!(run = %run.id, "a training run did not survive the restart");
+        self.seed_cursor_at_the_tail(&run.id).await;
+        self.reconcile_dead(run).await
+    }
+
+    /// Start reading this run's log near its end. A multi-hour run's log is
+    /// megabytes of redrawn `tqdm` bars, but the markers that decide its fate
+    /// are all in the last chunk.
+    async fn seed_cursor_at_the_tail(&self, run_id: &str) {
+        let len = tokio::fs::metadata(self.log_path(run_id))
+            .await
+            .map(|m| m.len())
+            .unwrap_or(0);
+        self.set_poll_state(
+            run_id,
+            PollState {
+                offset: len.saturating_sub(RECOVERY_TAIL_BYTES),
+                ..PollState::default()
+            },
+        );
     }
 
     // -------------------------------------------------------------- helpers
@@ -504,7 +640,7 @@ impl Runner {
                 "only one training can run at a time — run {other} is still going"
             )));
         }
-        if let Some(other) = self.db.training_runs().list_alive().await?.first() {
+        if let Some(other) = self.db.training_runs().list_recoverable().await?.first() {
             return Err(training_err(format!(
                 "only one training can run at a time — \"{}\" is still going",
                 other.name
@@ -581,7 +717,7 @@ impl Runner {
         }
         hyperparams.validate()?;
 
-        self.check_disk();
+        self.check_disk()?;
 
         self.release_gpu().await;
         let free = self.scheduler.free_mb();
@@ -698,15 +834,25 @@ impl Runner {
     /// Warn (never block) when the work dir's volume is nearly full. Uses the
     /// same `sysinfo`-based helper the storage report uses, so this needs no
     /// extra dependency and no `unsafe` Win32 call.
-    fn check_disk(&self) {
-        match crate::cleanup::volume_free(&self.data_dir) {
-            Some((free, _total)) if free < MIN_FREE_DISK_BYTES => tracing::warn!(
-                free_gb = free / (1024 * 1024 * 1024),
-                "starting a training run with little free disk space"
-            ),
-            Some(_) => {}
-            None => tracing::debug!("could not determine free disk space for the training folder"),
+    fn check_disk(&self) -> Result<()> {
+        let Some((free, _total)) = (self.free_space)(&self.data_dir) else {
+            // A volume we cannot measure is not a volume we may refuse: the
+            // probe misses network and mounted-folder paths, and a run the
+            // user could have completed is worse than a disk-full failure
+            // they can read straight off the trainer's log.
+            tracing::debug!("could not determine free disk space for the training folder");
+            return Ok(());
+        };
+        if free >= MIN_FREE_DISK_BYTES {
+            return Ok(());
         }
+        Err(training_err(format!(
+            "only {} GB free on {}, at least {} GB needed for the checkpoints and \
+             preview images this run writes",
+            free / BYTES_PER_GB,
+            volume_label(&self.data_dir),
+            MIN_FREE_DISK_BYTES / BYTES_PER_GB
+        )))
     }
 
     /// Render the config, spawn the detached trainer, take the reservation.
@@ -776,7 +922,34 @@ impl Runner {
         )
         .await?;
 
-        write_pid_file(&work_dir, pid, TRAINER_IMAGE).await?;
+        // From here on a real process is running that nothing else knows
+        // about: if any of the bookkeeping below fails, the run is not
+        // started but the trainer is, and it would grind away on the GPU for
+        // hours with no row, no PID file and no way for the user to stop it.
+        if let Err(e) = self
+            .adopt(run, prep, pid, &work_dir, offset, merged.steps)
+            .await
+        {
+            self.roll_back_spawn(&run.id, pid).await;
+            return Err(e);
+        }
+        Ok(())
+    }
+
+    /// Everything between "the trainer is running" and "the run owns it":
+    /// the PID file, the recorded PID, the GPU reservation and the poller's
+    /// starting cursor. Split out of [`Self::launch`] so the rollback has one
+    /// fallible unit to guard.
+    async fn adopt(
+        &self,
+        run: &TrainingRun,
+        prep: &Prepared,
+        pid: u32,
+        work_dir: &Path,
+        offset: u64,
+        steps: u32,
+    ) -> Result<()> {
+        write_pid_file(work_dir, pid, self.trainer_image()).await?;
         self.db
             .training_runs()
             .set_pid(&run.id, Some(i64::from(pid)))
@@ -789,7 +962,7 @@ impl Runner {
 
         self.db
             .training_runs()
-            .set_progress(&run.id, run.step, i64::from(merged.steps), run.last_loss)
+            .set_progress(&run.id, run.step, i64::from(steps), run.last_loss)
             .await?;
         self.set_poll_state(
             &run.id,
@@ -799,6 +972,24 @@ impl Runner {
             },
         );
         Ok(())
+    }
+
+    /// Undo a spawn we could not adopt: kill the process we just started and
+    /// give back anything [`Self::adopt`] managed to take before it failed.
+    async fn roll_back_spawn(&self, run_id: &str, pid: u32) {
+        #[cfg(test)]
+        self.rolled_back
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(pid);
+
+        if let Err(e) = kill_tree(pid, self.trainer_image()).await {
+            tracing::warn!(pid, error = %e, "could not stop a trainer we failed to adopt");
+        }
+        if let Err(e) = self.db.training_runs().set_pid(run_id, None).await {
+            tracing::warn!(run = %run_id, error = %e, "could not clear a rolled-back PID");
+        }
+        self.release(run_id).await;
     }
 
     /// [`Self::launch`] plus the state move around it: `then` on success, and
@@ -846,7 +1037,7 @@ impl Runner {
         let Some((pid, image)) = from_file.or_else(|| {
             run.pid
                 .and_then(|p| u32::try_from(p).ok())
-                .map(|p| (p, TRAINER_IMAGE.to_string()))
+                .map(|p| (p, self.trainer_image().to_string()))
         }) else {
             return false;
         };
@@ -871,7 +1062,7 @@ impl Runner {
         let Some((pid, image)) = from_file.or_else(|| {
             run.pid
                 .and_then(|p| u32::try_from(p).ok())
-                .map(|p| (p, TRAINER_IMAGE.to_string()))
+                .map(|p| (p, self.trainer_image().to_string()))
         }) else {
             return Ok(false);
         };
@@ -882,10 +1073,8 @@ impl Runner {
 
     /// What a dead process means, read off the log and the work dir.
     async fn reconcile_dead(&self, run: &TrainingRun) -> Result<()> {
-        let poll = self.poll_state(&run.id);
-        let work_dir = self.work_dir(&run.id);
-        let scanned = scan_work_dir(&training_folder(&work_dir).join(&run.name), &run.name)?;
-        self.settle(run, &poll, scanned.latest_checkpoint.map(|(_, p)| p))
+        let seen = self.observe(run).await?;
+        self.settle(&with_state(run, seen.state), &seen.poll, seen.checkpoint)
             .await
     }
 
@@ -898,28 +1087,26 @@ impl Runner {
         poll: &PollState,
         checkpoint: Option<PathBuf>,
     ) -> Result<()> {
+        // A `finishing` row has already been judged complete — the verdict is
+        // in the database, not in this tick's markers (which, after a
+        // restart, no longer include the completion block). All that is left
+        // is the import, which the app may have died in the middle of.
+        if run.state == RunState::Finishing {
+            return self.complete(run, checkpoint).await;
+        }
+
         if poll.completed {
             if let Some(path) = checkpoint {
-                self.transition(&run.id, run.state, RunState::Finishing)
-                    .await?;
-                let finishing = with_state(run, RunState::Finishing);
-                return match self.import_result(run, &path).await {
-                    Ok(model_id) => {
-                        self.db
-                            .training_runs()
-                            .set_result(&run.id, &model_id)
-                            .await?;
-                        self.finish(&finishing, RunState::Completed, None).await
-                    }
-                    Err(e) => {
-                        self.finish(
-                            &finishing,
-                            RunState::Failed,
-                            Some(format!("the finished LoRA could not be imported: {e}")),
-                        )
-                        .await
-                    }
-                };
+                if !self
+                    .transition(&run.id, run.state, RunState::Finishing)
+                    .await?
+                {
+                    // Someone else claimed this run between our read and now.
+                    return Ok(());
+                }
+                return self
+                    .complete(&with_state(run, RunState::Finishing), Some(path))
+                    .await;
             }
             tracing::warn!(
                 run = %run.id,
@@ -927,24 +1114,73 @@ impl Runner {
             );
         }
         match &poll.failure {
-            Some(reason) => {
-                self.finish(run, RunState::Failed, Some(reason.clone()))
+            Some(reason) => self
+                .finish(run, RunState::Failed, Some(reason.clone()))
+                .await
+                .map(|_| ()),
+            None => self
+                .finish(run, RunState::Interrupted, None)
+                .await
+                .map(|_| ()),
+        }
+    }
+
+    /// Turn a `finishing` run into a `completed` one by importing its
+    /// checkpoint. Safe to re-enter: `import_model` deduplicates by SHA-256,
+    /// so a retry after a crash mid-import finds the same library row rather
+    /// than making a second copy.
+    async fn complete(&self, run: &TrainingRun, checkpoint: Option<PathBuf>) -> Result<()> {
+        let Some(path) = checkpoint else {
+            return self
+                .finish(
+                    run,
+                    RunState::Failed,
+                    Some("the run reported success but left no checkpoint behind".to_string()),
+                )
+                .await
+                .map(|_| ());
+        };
+        match self.import_result(run, &path).await {
+            Ok(imported) => {
+                self.db
+                    .training_runs()
+                    .set_result(&run.id, &imported.model_id)
+                    .await?;
+                self.finish(run, RunState::Completed, imported.warning)
                     .await
+                    .map(|_| ())
             }
-            None => self.finish(run, RunState::Interrupted, None).await,
+            Err(e) => self
+                .finish(
+                    run,
+                    RunState::Failed,
+                    Some(format!("the finished LoRA could not be imported: {e}")),
+                )
+                .await
+                .map(|_| ()),
         }
     }
 
     /// Land a run in `next`, record `error` if there is one, and hand the GPU
     /// back.
-    async fn finish(&self, run: &TrainingRun, next: RunState, error: Option<String>) -> Result<()> {
+    async fn finish(
+        &self,
+        run: &TrainingRun,
+        next: RunState,
+        error: Option<String>,
+    ) -> Result<bool> {
+        if !self.transition(&run.id, run.state, next).await? {
+            // Another writer settled this run first. Its own `finish` already
+            // released the GPU; do not stamp our verdict over theirs.
+            self.release(&run.id).await;
+            return Ok(false);
+        }
         if let Some(text) = &error {
             self.db.training_runs().set_error(&run.id, text).await?;
         }
-        self.transition(&run.id, run.state, next).await?;
         self.db.training_runs().set_pid(&run.id, None).await?;
         self.release(&run.id).await;
-        Ok(())
+        Ok(true)
     }
 
     /// A state move that also knows the one detour the state machine needs:
@@ -952,20 +1188,38 @@ impl Runner {
     /// relaunched run that produced no progress line before dying reaches
     /// `interrupted` (or `finishing`) through `running` — it did run, it just
     /// never said so.
-    async fn transition(&self, run_id: &str, from: RunState, next: RunState) -> Result<()> {
+    async fn transition(&self, run_id: &str, from: RunState, next: RunState) -> Result<bool> {
         if from == next {
-            return Ok(());
+            return Ok(true);
         }
         let runs = self.db.training_runs();
-        if from.can_transition_to(next) {
-            return runs.set_state_from(run_id, from, next).await;
+        let moved = if from.can_transition_to(next) {
+            runs.set_state_from(run_id, from, next).await
+        } else if from == RunState::Resuming && RunState::Running.can_transition_to(next) {
+            match runs
+                .set_state_from(run_id, RunState::Resuming, RunState::Running)
+                .await
+            {
+                Ok(()) => runs.set_state_from(run_id, RunState::Running, next).await,
+                Err(e) => Err(e),
+            }
+        } else {
+            return from.ensure_transition(next).map(|()| true);
+        };
+
+        match moved {
+            Ok(()) => Ok(true),
+            Err(e) if is_lost_race(&e) => {
+                tracing::info!(
+                    run = %run_id,
+                    from = from.as_str(),
+                    to = next.as_str(),
+                    "a training-run state change was overtaken by another writer"
+                );
+                Ok(false)
+            }
+            Err(e) => Err(e),
         }
-        if from == RunState::Resuming && RunState::Running.can_transition_to(next) {
-            runs.set_state_from(run_id, RunState::Resuming, RunState::Running)
-                .await?;
-            return runs.set_state_from(run_id, RunState::Running, next).await;
-        }
-        from.ensure_transition(next)
     }
 
     /// Hand the GPU back and forget the run's poll cursor.
@@ -987,7 +1241,7 @@ impl Runner {
     /// actually pick: `import_model` does the hashing, the store placement and
     /// the ComfyUI link, then the two fields it cannot know — the inference
     /// family and the `training:<run_id>` provenance — are set on the row.
-    async fn import_result(&self, run: &TrainingRun, checkpoint: &Path) -> Result<String> {
+    async fn import_result(&self, run: &TrainingRun, checkpoint: &Path) -> Result<ImportedLora> {
         let outcome = import_model(
             &self.db,
             &self.store_root,
@@ -1001,20 +1255,42 @@ impl Runner {
             },
         )
         .await?;
+        let model_id = outcome.model.id;
+
+        // The file is in the store and the library row exists; only the
+        // cosmetics are outstanding. Losing the *run* over those would leave
+        // a LoRA nothing points at, so a second failure becomes a warning on
+        // a completed run rather than an error that discards it.
+        let warning = match self.finalise_metadata(&model_id, run).await {
+            Ok(()) => None,
+            Err(first) => {
+                tracing::warn!(run = %run.id, error = %first, "retrying the LoRA's library entry");
+                match self.finalise_metadata(&model_id, run).await {
+                    Ok(()) => None,
+                    Err(second) => Some(format!(
+                        "the LoRA was imported but its library entry could not be \
+                         finalised ({second}) — rename it and set its family by hand"
+                    )),
+                }
+            }
+        };
+
+        tracing::info!(run = %run.id, model = %model_id, "imported a trained LoRA");
+        Ok(ImportedLora { model_id, warning })
+    }
+
+    /// The two fields `import_model` cannot infer, plus the run's own name.
+    async fn finalise_metadata(&self, model_id: &str, run: &TrainingRun) -> Result<()> {
         self.db
             .models()
             .set_family_and_source(
-                &outcome.model.id,
+                model_id,
                 Some(library_family(&run.profile_family)),
                 &format!("training:{}", run.id),
             )
             .await?;
-        self.db
-            .models()
-            .rename(&outcome.model.id, &run.name)
-            .await?;
-        tracing::info!(run = %run.id, model = %outcome.model.id, "imported a trained LoRA");
-        Ok(outcome.model.id)
+        self.db.models().rename(model_id, &run.name).await?;
+        Ok(())
     }
 
     fn poll_state(&self, run_id: &str) -> PollState {
@@ -1024,6 +1300,15 @@ impl Runner {
             .get(run_id)
             .cloned()
             .unwrap_or_default()
+    }
+
+    /// PIDs [`Self::launch`]'s rollback has killed, oldest first.
+    #[cfg(test)]
+    fn rolled_back(&self) -> Vec<u32> {
+        self.rolled_back
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
     }
 
     fn set_poll_state(&self, run_id: &str, state: PollState) {
@@ -1055,6 +1340,26 @@ pub fn spawn_poller(runner: Arc<Runner>) -> tokio::task::JoinHandle<()> {
 /// offer it next to its base model. The training profiles split FLUX.2 [klein]
 /// by size (`flux2-klein-4b`/`-9b`) because the two train differently; the
 /// library does not — both infer as `flux2`.
+/// The compare-and-swap in `TrainingRunRepo::set_state_from` reports a lost
+/// race as exactly this error. Losing it is ordinary — the poller settling a
+/// process that died while the user was clicking Cancel — not a failure, so
+/// the callers that can lose it treat this as "no change" instead of
+/// surfacing a scary message the user can do nothing about.
+fn is_lost_race(e: &CoreError) -> bool {
+    matches!(e, CoreError::Config(msg) if msg.contains("state changed concurrently"))
+}
+
+/// The volume a path lives on, for the disk message: `E:` on Windows, the
+/// whole path anywhere it has no drive prefix.
+fn volume_label(path: &Path) -> String {
+    match path.components().next() {
+        Some(std::path::Component::Prefix(prefix)) => {
+            prefix.as_os_str().to_string_lossy().into_owned()
+        }
+        _ => path.display().to_string(),
+    }
+}
+
 fn library_family(profile_family: &str) -> &str {
     if profile_family.starts_with("flux2-klein") || profile_family.starts_with("flux2_klein") {
         "flux2"
@@ -1113,12 +1418,16 @@ mod tests {
     /// A PID that cannot plausibly be live on Windows.
     const DEAD_PID: u32 = 4_000_000;
 
+    /// The only profile with a complete contract at this point in the plan.
+    const FAMILY: &str = "flux2-klein-4b";
+
     struct Fx {
         _tmp: tempfile::TempDir,
         db: Database,
         adapter: Arc<TrainingAdapter>,
         scheduler: Arc<HybridScheduler>,
         runner: Runner,
+        runtimes: RuntimeRegistry,
         runtimes_dir: PathBuf,
         root: PathBuf,
     }
@@ -1149,7 +1458,7 @@ mod tests {
             db.clone(),
             adapter.clone(),
             scheduler.clone(),
-            runtimes,
+            runtimes.clone(),
             root.join("training"),
             root.join("store"),
         );
@@ -1159,6 +1468,7 @@ mod tests {
             adapter,
             scheduler,
             runner,
+            runtimes,
             runtimes_dir,
             root,
         }
@@ -1275,6 +1585,82 @@ mod tests {
         reload(fx, &run.id).await
     }
 
+    /// The complete base-weight directory the 4B klein profile insists on,
+    /// registered under its role so preflight can find it.
+    async fn install_base_weights(fx: &Fx) -> PathBuf {
+        let profile = find_for_family(FAMILY).expect("the 4B klein profile exists");
+        let dir = fx.root.join("base");
+        for rel in profile.base.required_files {
+            let file = dir.join(rel);
+            std::fs::create_dir_all(file.parent().expect("a required file has a parent"))
+                .expect("create the base weight dir");
+            std::fs::write(&file, b"weights").expect("write a base weight");
+        }
+        fx.db
+            .models()
+            .insert(NewModel {
+                publisher: None,
+                name: "FLUX.2 klein 4B base".into(),
+                family: None,
+                format: "safetensors".into(),
+                quant: None,
+                arch: None,
+                param_count: None,
+                file_path: dir.to_string_lossy().into_owned(),
+                sha256: None,
+                size_bytes: 1,
+                ctx_max: None,
+                vram_estimate_mb: None,
+                ram_estimate_mb: None,
+                source: "manual".into(),
+                source_revision: None,
+                n_layers: None,
+                n_embd: None,
+                n_heads: None,
+                n_kv_heads: None,
+                roles: vec![profile.base.role.to_string()],
+            })
+            .await
+            .expect("register the base weights");
+        dir
+    }
+
+    /// Everything preflight asks for, so a test can reach the check it is
+    /// actually about.
+    async fn ready_fixture() -> (Fx, String, String) {
+        let fx = fixture().await;
+        fake_install(&fx.runtimes_dir);
+        install_base_weights(&fx).await;
+        let target = target_model(&fx.db).await;
+        let ds = dataset(&fx.db, Some(&fx.root.join("export"))).await;
+        (fx, target, ds)
+    }
+
+    /// A `Prepared` built by hand, so [`Runner::launch`] can be driven without
+    /// going through preflight.
+    fn prepared(fx: &Fx, base_dir: PathBuf) -> Prepared {
+        Prepared {
+            profile: find_for_family(FAMILY).expect("the 4B klein profile exists"),
+            base_dir,
+            dataset_dir: fx.root.join("export"),
+            data_kind: DatasetMode::Frames,
+            hyperparams: Hyperparams::default(),
+            prompts: vec!["tgr_xy a cat".to_string()],
+        }
+    }
+
+    /// The log a finished ai-toolkit run leaves behind.
+    const COMPLETION_LOG: &str = "Saved checkpoint to out\n\nResult:\n - 1 completed job\n";
+
+    /// Put the checkpoint a completed run is expected to have written on disk.
+    fn write_checkpoint(fx: &Fx, run: &TrainingRun) -> PathBuf {
+        let out = training_folder(&fx.runner.work_dir(&run.id)).join(&run.name);
+        std::fs::create_dir_all(&out).expect("create the output dir");
+        let path = out.join(format!("{}_000000100.safetensors", run.name));
+        std::fs::write(&path, b"not really a lora").expect("write the checkpoint");
+        path
+    }
+
     async fn reload(fx: &Fx, run_id: &str) -> TrainingRun {
         fx.db
             .training_runs()
@@ -1282,6 +1668,13 @@ mod tests {
             .await
             .expect("re-read")
             .expect("the run exists")
+    }
+
+    fn with_name(run: &TrainingRun, name: &str) -> TrainingRun {
+        TrainingRun {
+            name: name.to_string(),
+            ..run.clone()
+        }
     }
 
     fn assert_released(fx: &Fx) {
@@ -1460,6 +1853,237 @@ mod tests {
             "a process that died on its own was never paused"
         );
         assert_released(&fx);
+    }
+
+    #[tokio::test]
+    async fn cancel_of_a_finished_run_completes_it_instead() {
+        let fx = fixture().await;
+        let run = running_run(&fx, COMPLETION_LOG).await;
+        write_checkpoint(&fx, &run);
+
+        fx.runner.cancel(&run.id).await.expect("cancel");
+
+        let after = reload(&fx, &run.id).await;
+        assert_eq!(
+            after.state,
+            RunState::Completed,
+            "a run that had already finished must not be rewritten as cancelled"
+        );
+        assert!(after.result_model_id.is_some(), "the LoRA must be imported");
+        assert_released(&fx);
+    }
+
+    #[tokio::test]
+    async fn preflight_blocks_when_the_disk_is_nearly_full() {
+        let (fx, target, ds) = ready_fixture().await;
+        let runner = Runner::new(
+            fx.db.clone(),
+            fx.adapter.clone(),
+            fx.scheduler.clone(),
+            fx.runtimes.clone(),
+            fx.root.join("training"),
+            fx.root.join("store"),
+        )
+        .with_free_space_probe(|_| Some((5 * 1024 * 1024 * 1024, 200 * 1024 * 1024 * 1024)));
+
+        let err = runner
+            .create_and_start(start_request(&target, &ds))
+            .await
+            .expect_err("a nearly full disk must stop the run before it starts");
+
+        let msg = err.to_string();
+        assert!(msg.contains("20 GB"), "unexpected error: {msg}");
+        assert!(msg.contains("5 GB"), "the free figure must be named: {msg}");
+    }
+
+    #[tokio::test]
+    async fn preflight_passes_when_the_volume_is_unknown() {
+        let (fx, target, ds) = ready_fixture().await;
+        let runner = Runner::new(
+            fx.db.clone(),
+            fx.adapter.clone(),
+            fx.scheduler.clone(),
+            fx.runtimes.clone(),
+            fx.root.join("training"),
+            fx.root.join("store"),
+        )
+        .with_free_space_probe(|_| None);
+
+        // The fake install's `python` is not a real interpreter, so the run
+        // gets as far as the spawn and dies there — which is proof the disk
+        // check let it through rather than refusing it.
+        let err = runner
+            .create_and_start(start_request(&target, &ds))
+            .await
+            .expect_err("the fake interpreter cannot actually launch");
+        assert!(
+            !err.to_string().contains("20 GB"),
+            "an unknown volume must not block: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn recover_completes_a_run_that_finished_while_the_app_was_down() {
+        let fx = fixture().await;
+        let run = running_run(&fx, COMPLETION_LOG).await;
+        write_checkpoint(&fx, &run);
+
+        fx.runner.recover().await.expect("recover");
+
+        let after = reload(&fx, &run.id).await;
+        assert_eq!(after.state, RunState::Completed);
+        assert!(after.result_model_id.is_some());
+        assert_released(&fx);
+    }
+
+    #[tokio::test]
+    async fn recover_finishes_a_finishing_row_that_has_a_checkpoint() {
+        let fx = fixture().await;
+        let run = running_run(&fx, COMPLETION_LOG).await;
+        write_checkpoint(&fx, &run);
+        fx.db
+            .training_runs()
+            .set_state(&run.id, RunState::Finishing)
+            .await
+            .expect("to finishing");
+
+        fx.runner.recover().await.expect("recover");
+
+        let after = reload(&fx, &run.id).await;
+        assert_eq!(
+            after.state,
+            RunState::Completed,
+            "an import that the app died in the middle of must be picked up again"
+        );
+        assert!(after.result_model_id.is_some());
+        assert_released(&fx);
+    }
+
+    #[tokio::test]
+    async fn recover_fails_a_run_whose_log_ends_in_an_error() {
+        let fx = fixture().await;
+        let run = running_run(&fx, "Error running job: boom\n").await;
+
+        fx.runner.recover().await.expect("recover");
+
+        let after = reload(&fx, &run.id).await;
+        assert_eq!(after.state, RunState::Failed);
+        assert_eq!(after.error_text.as_deref(), Some("boom"));
+    }
+
+    #[tokio::test]
+    async fn a_failed_adoption_kills_the_process_it_just_spawned() {
+        let fx = fixture().await;
+        let base = install_base_weights(&fx).await;
+        let runner = Runner::new(
+            fx.db.clone(),
+            fx.adapter.clone(),
+            fx.scheduler.clone(),
+            fx.runtimes.clone(),
+            fx.root.join("training"),
+            fx.root.join("store"),
+        )
+        .with_trainer_command(
+            PathBuf::from("ping"),
+            vec!["-n".into(), "2".into(), "127.0.0.1".into()],
+            "PING.EXE",
+        );
+        let run = fx
+            .db
+            .training_runs()
+            .create(NewTrainingRun {
+                name: "testlora".into(),
+                profile_family: FAMILY.into(),
+                target_model_id: None,
+                dataset_id: None,
+                data_kind: DatasetMode::Frames,
+                trigger_word: "tgr_xy".into(),
+                preset: Preset::Fast,
+                hyperparams_json: "{}".into(),
+                sample_prompts_json: "[\"tgr_xy a cat\"]".into(),
+                work_dir: String::new(),
+            })
+            .await
+            .expect("create the run");
+        let work_dir = runner.work_dir(&run.id);
+        std::fs::create_dir_all(&work_dir).expect("create the work dir");
+        // A directory where the PID file belongs: the first step after the
+        // spawn now fails, with a real process already running.
+        std::fs::create_dir_all(work_dir.join("trainer.pid")).expect("block the pid file");
+
+        let err = runner
+            .launch(&run, &prepared(&fx, base))
+            .await
+            .expect_err("adoption must fail");
+
+        assert!(
+            err.to_string().contains("trainer.pid"),
+            "unexpected error: {err}"
+        );
+        assert_eq!(
+            runner.rolled_back().len(),
+            1,
+            "the process we spawned must be killed again, not orphaned"
+        );
+        assert_eq!(
+            runner.adapter.alive_run(),
+            None,
+            "a rolled-back launch must not leave a reservation behind"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_lost_state_race_is_reported_as_no_change_not_an_error() {
+        let fx = fixture().await;
+        let run = running_run(&fx, "").await;
+        // The poller got there first.
+        fx.db
+            .training_runs()
+            .set_state(&run.id, RunState::Interrupted)
+            .await
+            .expect("to interrupted");
+
+        // ... and the user's Cancel still believes the run is `running`.
+        let landed = fx
+            .runner
+            .finish(
+                &with_state(&run, RunState::Running),
+                RunState::Cancelled,
+                None,
+            )
+            .await
+            .expect("losing the race is not an error");
+
+        assert!(!landed, "the move must report that it did not land");
+        assert_eq!(reload(&fx, &run.id).await.state, RunState::Interrupted);
+    }
+
+    #[tokio::test]
+    async fn metadata_that_cannot_be_finalised_still_links_the_lora() {
+        let fx = fixture().await;
+        let run = running_run(&fx, COMPLETION_LOG).await;
+        let checkpoint = write_checkpoint(&fx, &run);
+
+        // `rename` refuses a blank name, so this is a finalisation that fails
+        // for real rather than one faked with a test-only switch.
+        let imported = fx
+            .runner
+            .import_result(&with_name(&run, "   "), &checkpoint)
+            .await
+            .expect("a metadata problem must not lose the imported file");
+
+        assert!(
+            imported.warning.is_some(),
+            "the failure must be reported, not swallowed"
+        );
+        let model = fx
+            .db
+            .models()
+            .get(&imported.model_id)
+            .await
+            .expect("read the model")
+            .expect("the LoRA is in the library even so");
+        assert!(model.file_path.contains("store"), "it is in the store");
     }
 
     #[tokio::test]
