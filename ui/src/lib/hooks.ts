@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import {
   about,
+  benchmarkHistory,
   characterLog,
   civitaiSearch,
   civitaiStatus,
@@ -11,6 +12,7 @@ import {
   launcherStatus,
   listAgentRuntimes,
   listAgents,
+  listBenchSuites,
   listBenchmarks,
   listCharacterRelationships,
   listCharacters,
@@ -48,6 +50,7 @@ import {
   type Agent,
   type AgentRuntime,
   type Benchmark,
+  type BenchSuite,
   type Character,
   type CharacterLogEntry,
   type CharacterRelationship,
@@ -281,6 +284,17 @@ export const useDownloads = () =>
   usePolled<Download[]>("downloads", listDownloads, 1500);
 export const useBenchmarks = () =>
   usePolled<Benchmark[]>("benchmarks", listBenchmarks, 3000);
+/** The built-in suite catalogue. Static on the core side, but polled like its
+ *  neighbours so the picker fills in once the core is up. */
+export const useBenchSuites = () =>
+  usePolled<BenchSuite[]>("bench-suites", listBenchSuites, 3000);
+/** Cross-model benchmark history; `null` suite = every row, quick tests too. */
+export const useBenchmarkHistory = (suite: string | null) =>
+  usePolled<Benchmark[]>(
+    `benchmark-history:${suite ?? ""}`,
+    () => benchmarkHistory(suite ? { suite } : undefined),
+    3000,
+  );
 export const useStorage = () =>
   usePolled<StorageReport>("storage", storageReport, 5000);
 export const useDocuments = (sessionId: string | null) =>

@@ -8,10 +8,10 @@ use std::sync::{Arc, Mutex};
 
 use aiwm_core::api::dto::{
     AboutDto, AgentPermissionDto, AgentSessionDetailDto, AssignedDto, AttachExternalDto,
-    CharacterBodyDto, CivitaiSearchDto, ColibriModelDto, ConceptBodyDto, ConceptFramesDto,
-    ConceptSummaryDto, ConfigUpdate, EnqueueDownloadDto, ExportDatasetDto, FeaturedModelDto,
-    JobDetailDto, KnownModelDto, LaunchExternalDto, LocalApiStatusDto, LocationBodyDto,
-    ModelStackDto, NewAgentDto, NewSessionDto, NewVoiceIdentityDto, NpcBodyDto,
+    BenchmarkOptionsDto, CharacterBodyDto, CivitaiSearchDto, ColibriModelDto, ConceptBodyDto,
+    ConceptFramesDto, ConceptSummaryDto, ConfigUpdate, EnqueueDownloadDto, ExportDatasetDto,
+    FeaturedModelDto, JobDetailDto, KnownModelDto, LaunchExternalDto, LocalApiStatusDto,
+    LocationBodyDto, ModelStackDto, NewAgentDto, NewSessionDto, NewVoiceIdentityDto, NpcBodyDto,
     OpenAgentSessionDto, ProfileDto, RegisterColibriModelDto, RegistryDetailsDto,
     RegistrySearchDto, RunDetailDto, RuntimeStatusDto, SceneBodyDto, SceneDetailDto, StartRunDto,
     StoryBodyDto, SubmitJobDto, TrainerStatusDto, UpdateDatasetDto, UpdateDatasetFrameDto,
@@ -814,9 +814,32 @@ async fn model_benchmarks(
     to_ipc(handlers::model_benchmarks(&app, &id).await)
 }
 
+/// The built-in benchmark suites — static data, so no `App` state is needed.
+/// Cloned into an owned `Vec` because a Tauri command's return type has to be
+/// `'static`-owned for the IPC serializer.
 #[tauri::command]
-async fn benchmark_model(app: tauri::State<'_, Arc<App>>, id: String) -> Result<Job, String> {
-    to_ipc(handlers::benchmark_model(&app, &id).await)
+fn bench_suites() -> Vec<aiwm_core::bench::suites::Suite> {
+    handlers::bench_suites().to_vec()
+}
+
+#[tauri::command]
+async fn benchmark_history(
+    app: tauri::State<'_, Arc<App>>,
+    suite: Option<String>,
+    limit: Option<i64>,
+) -> Result<Vec<Benchmark>, String> {
+    to_ipc(handlers::benchmark_history(&app, suite.as_deref(), limit).await)
+}
+
+/// `body` is optional — the Model Library's plain "Test model" button omits it
+/// and still gets the single-prompt quick test.
+#[tauri::command]
+async fn benchmark_model(
+    app: tauri::State<'_, Arc<App>>,
+    id: String,
+    body: Option<BenchmarkOptionsDto>,
+) -> Result<Job, String> {
+    to_ipc(handlers::benchmark_model(&app, &id, body.unwrap_or_default()).await)
 }
 
 #[tauri::command]
@@ -1102,6 +1125,8 @@ fn try_run() -> anyhow::Result<()> {
             list_benchmarks,
             model_benchmarks,
             benchmark_model,
+            bench_suites,
+            benchmark_history,
             upgrade_check,
             storage_report,
             cleanup_outputs,

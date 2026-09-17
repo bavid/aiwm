@@ -13,12 +13,12 @@ use serde::Deserialize;
 
 use super::dto::{
     AddSceneImageDto, AgentMessageDto, AgentPermissionDto, AttachDocumentDto, AttachExternalDto,
-    CharacterBodyDto, ConceptBodyDto, ConceptFramesDto, DetachEngineDto, ExportDatasetDto,
-    LaunchExternalDto, LocationBodyDto, NewAgentDto, NewRelationshipDto, NewSessionDto,
-    NewVoiceIdentityDto, NpcBodyDto, OpenAgentSessionDto, RenameModelDto, RenameSessionDto,
-    SceneBodyDto, SceneDetailDto, SetArchivedDto, SetInventoryDto, SetReferenceJobDto, SetRolesDto,
-    SetTagsDto, SetTokenDto, StartRunDto, StoryBodyDto, SubmitJobDto, UpdateDatasetDto,
-    UpdateDatasetFrameDto,
+    BenchmarkHistoryDto, BenchmarkOptionsDto, CharacterBodyDto, ConceptBodyDto, ConceptFramesDto,
+    DetachEngineDto, ExportDatasetDto, LaunchExternalDto, LocationBodyDto, NewAgentDto,
+    NewRelationshipDto, NewSessionDto, NewVoiceIdentityDto, NpcBodyDto, OpenAgentSessionDto,
+    RenameModelDto, RenameSessionDto, SceneBodyDto, SceneDetailDto, SetArchivedDto,
+    SetInventoryDto, SetReferenceJobDto, SetRolesDto, SetTagsDto, SetTokenDto, StartRunDto,
+    StoryBodyDto, SubmitJobDto, UpdateDatasetDto, UpdateDatasetFrameDto,
 };
 use super::handlers;
 use crate::db::JobFilter;
@@ -181,6 +181,8 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/models/{id}/benchmarks", get(model_benchmarks))
         .route("/models/{id}/upgrade-check", post(upgrade_check))
         .route("/benchmarks", get(latest_benchmarks))
+        .route("/benchmarks/history", get(benchmark_history))
+        .route("/bench/suites", get(bench_suites))
         .route("/runtimes", get(runtimes))
         .route("/runtimes/versions", get(check_tool_versions))
         .route("/runtimes/llamacpp/install", post(install_llamacpp))
@@ -1283,13 +1285,31 @@ async fn model_benchmarks(
     Ok(Json(handlers::model_benchmarks(&app, &id).await?))
 }
 
+async fn bench_suites() -> Json<&'static [crate::bench::suites::Suite]> {
+    Json(handlers::bench_suites())
+}
+
+async fn benchmark_history(
+    State(app): AppState,
+    Query(q): Query<BenchmarkHistoryDto>,
+) -> Result<Json<Vec<crate::db::Benchmark>>, ApiError> {
+    Ok(Json(
+        handlers::benchmark_history(&app, q.suite.as_deref(), q.limit).await?,
+    ))
+}
+
+/// The body is optional: with no `Content-Type` at all (the Model Library's
+/// plain "Test model" button) axum hands us `None`, which is the original
+/// single-prompt quick test.
 async fn benchmark_model(
     State(app): AppState,
     Path(id): Path<String>,
+    body: Option<Json<BenchmarkOptionsDto>>,
 ) -> Result<(StatusCode, Json<crate::db::Job>), ApiError> {
+    let opts = body.map_or_else(BenchmarkOptionsDto::default, |Json(b)| b);
     Ok((
         StatusCode::CREATED,
-        Json(handlers::benchmark_model(&app, &id).await?),
+        Json(handlers::benchmark_model(&app, &id, opts).await?),
     ))
 }
 

@@ -583,41 +583,224 @@ let HERMES_INSTALLED = false;
 let DEV_LAUNCH: AnyRecord | null = null;
 
 const DOWNLOADS: AnyRecord[] = [];
-const BENCHMARKS: AnyRecord[] = [];
 const TAGS: Record<string, string[]> = { "m-qwen": ["coding", "favourite"] };
 let HF_TOKEN = "";
 let CIVITAI_TOKEN = "";
 let LOCAL_API_TOKEN = "";
 
-/** Flip a running `bench` job to `completed` a few seconds in and drop a
- *  benchmark row — the dev-mock stand-in for `core::bench`. */
+/** The built-in suites, mirroring `core/src/bench/suites.rs`. Ids, titles,
+ *  descriptions, `max_tokens` and prompt titles are copied verbatim; the
+ *  prompt *texts* are shortened here — the dev preview only ever previews
+ *  them, and the real ones are several lines each. */
+const BENCH_SUITES: AnyRecord[] = [
+  {
+    id: "chat-v1",
+    title: "Chat (v1)",
+    description:
+      "Three everyday assistant prompts — explain, summarise, rewrite. Measures generation speed on prose, not answer quality.",
+    max_tokens: 256,
+    prompts: [
+      { id: "chat-v1-explain", title: "Explain a concept", text: "Explain what a write-ahead log is, why databases keep one… (shortened in dev-mock)" },
+      { id: "chat-v1-summarise", title: "Summarise a paragraph", text: "Summarise the paragraph below in two sentences… (shortened in dev-mock)" },
+      { id: "chat-v1-rewrite", title: "Rewrite an email politely", text: "Rewrite the email below so that it stays firm about the deadline… (shortened in dev-mock)" },
+    ],
+  },
+  {
+    id: "coding-v1",
+    title: "Coding (v1)",
+    description:
+      "Three programming prompts — write, debug, explain. Measures generation speed on code-shaped output; the code is never run or checked for correctness.",
+    max_tokens: 384,
+    prompts: [
+      { id: "coding-v1-write", title: "Write a function from a spec", text: "Write a Rust function with the signature `fn merge_ranges(…)`… (shortened in dev-mock)" },
+      { id: "coding-v1-fix", title: "Find and fix a bug", text: "The function below should return the index of the first element greater than `target`… (shortened in dev-mock)" },
+      { id: "coding-v1-explain", title: "Explain code and propose tests", text: "Explain what the function below does and propose five test cases… (shortened in dev-mock)" },
+    ],
+  },
+];
+
+/** How long one fake generation pass "takes" — slow enough that the event
+ *  trail is readable as it grows, quick enough to not stall the preview. */
+const BENCH_PASS_MS = 900;
+/** Extra time after the last pass, standing in for the scoring + store write. */
+const BENCH_SETTLE_MS = 600;
+
+function benchSuite(id: string | null): AnyRecord | null {
+  return BENCH_SUITES.find((s) => s.id === id) ?? null;
+}
+
+/** The per-pass tok/s a bench job was born with — fixed at submit time so the
+ *  event trail does not jitter between polls. */
+function benchPassRates(j: AnyRecord): number[] {
+  return (j.dev_pass_tps as number[] | undefined) ?? [];
+}
+
+/** One `{suite, prompt title, pass}` triple per element of `benchPassRates`,
+ *  in the order `core::bench` runs them: every pass of a prompt, then the
+ *  next prompt. */
+function benchPassLabels(j: AnyRecord): { label: string | null; runs: number; pass: number; promptId: string | null }[] {
+  const params = (j.params ?? {}) as AnyRecord;
+  const suite = benchSuite(params.suite ? String(params.suite) : null);
+  const runs = Number(params.runs ?? (suite ? 2 : 3));
+  if (!suite) {
+    return Array.from({ length: runs }, (_, i) => ({ label: null, runs, pass: i + 1, promptId: null }));
+  }
+  const prompts = suite.prompts as AnyRecord[];
+  return prompts.flatMap((p) =>
+    Array.from({ length: runs }, (_, i) => ({
+      label: `${suite.id} · ${p.title}`,
+      runs,
+      pass: i + 1,
+      promptId: String(p.id),
+    })),
+  );
+}
+
+/** The event trail `core::bench` would have appended by now — the opening
+ *  line, one line per finished pass, and the closing score line. Wording and
+ *  number formatting match `core/src/bench/mod.rs`. */
+function benchEvents(j: AnyRecord): AnyRecord[] {
+  const params = (j.params ?? {}) as AnyRecord;
+  const suite = benchSuite(params.suite ? String(params.suite) : null);
+  const model = MODELS.find((m) => m.id === j.model_id);
+  const rates = benchPassRates(j);
+  const labels = benchPassLabels(j);
+  const runs = labels[0]?.runs ?? 3;
+  const tokens = Number(suite?.max_tokens ?? 128);
+  const events: AnyRecord[] = [
+    {
+      ts: j.started_at ?? j.created_at,
+      level: "info",
+      message: suite
+        ? `benchmarking “${model?.name ?? j.model_id}” with suite ${suite.id} — ${(suite.prompts as AnyRecord[]).length} prompt(s) × ${runs} run(s), ${tokens} tokens each`
+        : `benchmarking “${model?.name ?? j.model_id}” — ${runs} run(s), ${tokens} tokens each`,
+    },
+  ];
+  const elapsed = Date.now() - Date.parse(String(j.started_at ?? j.created_at));
+  const done = Math.min(rates.length, Math.floor(elapsed / BENCH_PASS_MS));
+  for (let i = 0; i < done; i++) {
+    const step = labels[i];
+    const tps = rates[i];
+    events.push({
+      ts: now(),
+      level: "info",
+      message: step.label
+        ? `${step.label} — pass ${step.pass}/${step.runs}: ${tps.toFixed(1)} tok/s`
+        : `run ${step.pass}/${step.runs}: ${tps.toFixed(1)} tok/s generation, ${Math.round(tps * 6)} tok/s prompt`,
+    });
+  }
+  const row = BENCHMARKS.find((b) => b.job_id === j.id);
+  if (row) {
+    events.push({
+      ts: j.finished_at,
+      level: "info",
+      message: `score ${row.overall_score} — ${Number(row.gen_tps).toFixed(1)} tok/s gen, ${Math.round(Number(row.prompt_tps))} tok/s prompt, stability ${Number(row.stability_score).toFixed(2)}`,
+    });
+  }
+  return events;
+}
+
+/** Flip a running `bench` job to `completed` once its fake passes have all
+ *  "run", and drop a benchmark row — the dev-mock stand-in for `core::bench`.
+ *  A suite run carries the per-prompt `detail` the real one records. */
 function progressBenchJobs(): void {
   for (const j of JOBS) {
     if (j.job_type !== "bench" || j.state !== "running") continue;
+    const rates = benchPassRates(j);
     const started = Date.parse(String(j.started_at ?? j.created_at));
-    if (Date.now() - started < 3500) continue;
+    if (Date.now() - started < rates.length * BENCH_PASS_MS + BENCH_SETTLE_MS) continue;
     j.state = "completed";
     j.finished_at = now();
     const m = MODELS.find((x) => x.id === j.model_id);
-    const gen = 38 + Math.round(Math.random() * 42);
+    const labels = benchPassLabels(j);
+    const suiteId = ((j.params ?? {}) as AnyRecord).suite;
+    const suite = benchSuite(suiteId ? String(suiteId) : null);
+    const gen = rates.reduce((a, b) => a + b, 0) / Math.max(1, rates.length);
     BENCHMARKS.unshift({
       id: `bench-${seq++}`,
       model_id: j.model_id,
       job_id: j.id,
       kind: "llm",
-      runs: 3,
+      runs: rates.length,
       prompt_tps: 260 + Math.round(Math.random() * 220),
-      gen_tps: gen,
+      gen_tps: Math.round(gen * 10) / 10,
       load_ms: 1500 + Math.round(Math.random() * 2200),
       vram_peak_mb: Number(m?.vram_estimate_mb ?? 6000),
       ram_peak_mb: 14000 + Math.round(Math.random() * 2000),
       stability_score: 0.9 + Math.random() * 0.09,
       overall_score: Math.min(100, Math.round(gen * 1.15)),
       notes: "dev-mock",
+      suite: suite ? String(suite.id) : null,
+      detail: suite ? benchDetail(labels, rates) : null,
       created_at: now(),
     });
   }
 }
+
+/** Collapse the per-pass rates into one `PromptResult` per prompt, the way
+ *  `core::bench` averages a suite's passes. */
+function benchDetail(
+  labels: { promptId: string | null }[],
+  rates: number[],
+): AnyRecord[] {
+  const byPrompt = new Map<string, number[]>();
+  labels.forEach((step, i) => {
+    if (!step.promptId || rates[i] == null) return;
+    byPrompt.set(step.promptId, [...(byPrompt.get(step.promptId) ?? []), rates[i]]);
+  });
+  return [...byPrompt].map(([prompt_id, tps]) => ({
+    prompt_id,
+    tokens: 256,
+    gen_tps: Math.round((tps.reduce((a, b) => a + b, 0) / tps.length) * 10) / 10,
+    prompt_tps: 300 + Math.round(Math.random() * 180),
+  }));
+}
+
+function mkBenchmark(
+  modelId: string,
+  suiteId: string | null,
+  gen: number,
+  hoursAgo: number,
+): AnyRecord {
+  const suite = benchSuite(suiteId);
+  const prompts = (suite?.prompts as AnyRecord[] | undefined) ?? [];
+  return {
+    id: `bench-seed-${modelId}-${suiteId ?? "quick"}`,
+    model_id: modelId,
+    job_id: null,
+    kind: "llm",
+    runs: suite ? prompts.length * 2 : 3,
+    prompt_tps: 380,
+    gen_tps: gen,
+    load_ms: 2100,
+    vram_peak_mb: Number(MODELS.find((m) => m.id === modelId)?.vram_estimate_mb ?? 6000),
+    ram_peak_mb: 15200,
+    stability_score: 0.94,
+    overall_score: Math.min(100, Math.round(gen * 1.15)),
+    notes: "dev-mock",
+    suite: suiteId,
+    detail: suite
+      ? prompts.map((p, i) => ({
+          prompt_id: String(p.id),
+          tokens: Number(suite?.max_tokens ?? 256),
+          gen_tps: Math.round((gen + (i - 1) * 2.4) * 10) / 10,
+          prompt_tps: 360 + i * 25,
+        }))
+      : null,
+    created_at: new Date(Date.now() - hoursAgo * 3_600_000).toISOString(),
+  };
+}
+
+/** Seeded history so the Benchmark tab has something to compare on first
+ *  paint: both suites across the two GGUF chat models, plus one suite-less
+ *  quick test. Newest first, like `list_all`. */
+const BENCHMARKS: AnyRecord[] = [
+  mkBenchmark("m-hermes", "coding-v1", 52.4, 2),
+  mkBenchmark("m-qwen", "coding-v1", 61.8, 5),
+  mkBenchmark("m-hermes", "chat-v1", 57.1, 26),
+  mkBenchmark("m-qwen", "chat-v1", 66.3, 29),
+  mkBenchmark("m-qwen", null, 64.9, 50),
+];
 
 /** Flip a running `chat`/`colibri` job to `completed` with a canned reply a
  *  moment in -- the dev-mock stand-in for a real llama.cpp answer. Recognizes
@@ -1142,6 +1325,10 @@ export function installDevMock(): void {
       case "job_detail": {
         const job = JOBS.find((j) => j.id === a.id);
         if (!job) return null;
+        if (job.job_type === "bench") {
+          progressBenchJobs();
+          return { job, events: benchEvents(job) };
+        }
         const message =
           job.job_type === "dataset_prep"
             ? job.state === "completed"
@@ -1694,11 +1881,36 @@ export function installDevMock(): void {
       case "model_benchmarks":
         progressBenchJobs();
         return BENCHMARKS.filter((b) => b.model_id === a.id);
+      case "bench_suites":
+        return BENCH_SUITES;
+      case "benchmark_history": {
+        progressBenchJobs();
+        const suite = a.suite == null ? null : String(a.suite);
+        if (suite && !benchSuite(suite)) throw new Error(`unknown benchmark suite "${suite}"`);
+        const limit = Math.min(200, Math.max(1, Number(a.limit ?? 50)));
+        return BENCHMARKS.filter((b) => suite == null || b.suite === suite).slice(0, limit);
+      }
       case "benchmark_model": {
+        const opts = (a.body ?? {}) as AnyRecord;
+        const suiteId = opts.suite == null ? null : String(opts.suite);
+        if (suiteId && !benchSuite(suiteId)) throw new Error(`unknown benchmark suite "${suiteId}"`);
+        const model = MODELS.find((m) => m.id === a.id);
+        const params: AnyRecord = { vram_needed_mb: Number(model?.vram_estimate_mb ?? 6000) };
+        if (suiteId) params.suite = suiteId;
+        if (opts.runs != null) params.runs = Number(opts.runs);
         const job = mkJob(`j-bench-${seq++}`, "bench", "running", {
           model_id: String(a.id),
+          runtime_id: "llamacpp",
+          params,
           started_at: now(),
         });
+        // Fixed per-pass rates, drawn once so the growing event trail stays
+        // stable across polls (the real numbers come from llama.cpp).
+        const passes = benchPassLabels(job).length;
+        job.dev_pass_tps = Array.from(
+          { length: passes },
+          () => Math.round((38 + Math.random() * 34) * 10) / 10,
+        );
         JOBS.unshift(job);
         return job;
       }

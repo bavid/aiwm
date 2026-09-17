@@ -1460,6 +1460,38 @@ export const clearFinishedDownloads = () => invoke<number>("clear_finished_downl
 
 // --- benchmarks (Phase 6.5) ----------------------------------------------
 
+/** One prompt inside a {@link BenchSuite}. `text` is what the model is sent
+ *  verbatim — long enough that the picker should only ever preview it. */
+export interface BenchSuitePrompt {
+  id: string;
+  title: string;
+  text: string;
+}
+
+/** A fixed, versioned set of prompts run at a fixed generation length. The id
+ *  carries the version (`chat-v1`): changing a prompt means a new id, so
+ *  stored rows stay comparable. */
+export interface BenchSuite {
+  id: string;
+  title: string;
+  /** What the suite measures, in the honest sense — speed, never quality. */
+  description: string;
+  /** Tokens generated per pass. */
+  max_tokens: number;
+  prompts: BenchSuitePrompt[];
+}
+
+/** What one suite prompt contributed to a run, averaged over its own passes
+ *  (`Benchmark.detail[]`). */
+export interface BenchPromptResult {
+  /** Matches a {@link BenchSuitePrompt.id}. */
+  prompt_id: string;
+  /** Mean generated tokens per pass, rounded. */
+  tokens: number;
+  gen_tps: number | null;
+  prompt_tps: number | null;
+}
+
 /** One "Test model" run, measured on this machine (`GET /benchmarks`). */
 export interface Benchmark {
   id: string;
@@ -1482,6 +1514,10 @@ export interface Benchmark {
    *  quality score. */
   overall_score: number;
   notes: string | null;
+  /** Id of the suite this run used; null for the Model Library's quick test. */
+  suite: string | null;
+  /** Per-prompt breakdown; null without a suite. */
+  detail: BenchPromptResult[] | null;
   created_at: string;
 }
 
@@ -1490,8 +1526,22 @@ export const listBenchmarks = () => invoke<Benchmark[]>("list_benchmarks");
 /** Every benchmark run for one model, newest first. */
 export const modelBenchmarks = (id: string) =>
   invoke<Benchmark[]>("model_benchmarks", { id });
-/** Queue a "Test model" job (GGUF models only). Returns the job. */
-export const benchmarkModel = (id: string) => invoke<Job>("benchmark_model", { id });
+/** The built-in, versioned suites a run may name — the Benchmark tab's picker. */
+export const listBenchSuites = () => invoke<BenchSuite[]>("bench_suites");
+/** Queue a "Test model" job (GGUF models only). Returns the job.
+ *  Without `opts` this is the single-prompt quick test the Model Library
+ *  button has always queued; `suite` runs a versioned suite instead and `runs`
+ *  sets the passes per prompt (the job clamps it to 1..10). */
+export const benchmarkModel = (id: string, opts?: { suite?: string; runs?: number }) =>
+  invoke<Job>("benchmark_model", { id, body: opts ?? null });
+/** Benchmarks across all models, newest first — the Benchmark tab's history.
+ *  No `suite` returns every row (quick tests included); `limit` defaults to 50
+ *  and is clamped to 1..200. */
+export const benchmarkHistory = (opts?: { suite?: string; limit?: number }) =>
+  invoke<Benchmark[]>("benchmark_history", {
+    suite: opts?.suite ?? null,
+    limit: opts?.limit ?? null,
+  });
 
 // --- upgrade check (Phase 6.7) ------------------------------------------
 

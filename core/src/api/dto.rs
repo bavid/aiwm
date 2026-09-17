@@ -798,6 +798,33 @@ pub struct SetTagsDto {
     pub tags: Vec<String>,
 }
 
+/// Optional body for `POST /models/{id}/benchmark`. Every field is optional and
+/// the whole body may be omitted — that is the Model Library's plain "Test
+/// model" button, which still means the single-prompt quick test.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct BenchmarkOptionsDto {
+    /// Id of a [`crate::bench::suites`] suite to run instead of the default
+    /// prompt. Refused with a 400 when it names no known suite.
+    #[serde(default)]
+    pub suite: Option<String>,
+    /// Generation passes per prompt. Passed through as given — the job clamps
+    /// it to `1..=10` itself, so a silly number is not worth a refusal.
+    #[serde(default)]
+    pub runs: Option<u32>,
+}
+
+/// Query for `GET /benchmarks/history` — the Benchmark tab's cross-model list.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct BenchmarkHistoryDto {
+    /// Keep only rows measured with this suite; absent = every row, including
+    /// the suite-less quick tests.
+    #[serde(default)]
+    pub suite: Option<String>,
+    /// Rows to return, newest first. Default 50, clamped to `1..=200`.
+    #[serde(default)]
+    pub limit: Option<i64>,
+}
+
 /// Body for `PUT /models/{id}/roles` — replace a model's role set. Lets a
 /// model fixed up after the fact (e.g. a chat GGUF downloaded before its
 /// `coding` role was set) get the role without re-importing.

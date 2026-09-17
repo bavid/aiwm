@@ -7,14 +7,15 @@ use std::path::PathBuf;
 
 use super::dto::{
     AboutDto, AgentPermissionDto, AgentSessionDetailDto, AssignedDto, AttachExternalDto,
-    CharacterBodyDto, CivitaiSearchDto, ColibriModelDto, ConceptBodyDto, ConceptFramesDto,
-    ConceptSummaryDto, ConfigUpdate, DetachEngineDto, DialogueLineDto, EnqueueDownloadDto,
-    ExportDatasetDto, FeaturedModelDto, JobDetailDto, KnownModelDto, LaunchExternalDto,
-    LocalApiStatusDto, LocationBodyDto, ModelStackDto, NewAgentDto, NewSessionDto,
-    NewVoiceIdentityDto, NpcBodyDto, OpenAgentSessionDto, ProfileDto, ProfilePresetsDto,
-    RegisterColibriModelDto, RegistryDetailsDto, RegistryFileDto, RegistrySearchDto, RunDetailDto,
-    RuntimeStatusDto, SceneBodyDto, SceneDetailDto, StartRunDto, StoryBodyDto, SubmitJobDto,
-    TrainableModelDto, TrainerStatusDto, UpdateDatasetDto, UpdateDatasetFrameDto,
+    BenchmarkOptionsDto, CharacterBodyDto, CivitaiSearchDto, ColibriModelDto, ConceptBodyDto,
+    ConceptFramesDto, ConceptSummaryDto, ConfigUpdate, DetachEngineDto, DialogueLineDto,
+    EnqueueDownloadDto, ExportDatasetDto, FeaturedModelDto, JobDetailDto, KnownModelDto,
+    LaunchExternalDto, LocalApiStatusDto, LocationBodyDto, ModelStackDto, NewAgentDto,
+    NewSessionDto, NewVoiceIdentityDto, NpcBodyDto, OpenAgentSessionDto, ProfileDto,
+    ProfilePresetsDto, RegisterColibriModelDto, RegistryDetailsDto, RegistryFileDto,
+    RegistrySearchDto, RunDetailDto, RuntimeStatusDto, SceneBodyDto, SceneDetailDto, StartRunDto,
+    StoryBodyDto, SubmitJobDto, TrainableModelDto, TrainerStatusDto, UpdateDatasetDto,
+    UpdateDatasetFrameDto,
 };
 use crate::compat::FitVerdict;
 use crate::config::Config;
@@ -2151,10 +2152,52 @@ pub async fn model_benchmarks(app: &App, model_id: &str) -> Result<Vec<Benchmark
     app.db.benchmarks().list_for(model_id).await
 }
 
+/// The built-in, versioned benchmark suites a run may name — the Benchmark
+/// tab's picker. Static data; no store access.
+pub fn bench_suites() -> &'static [crate::bench::suites::Suite] {
+    crate::bench::suites::all()
+}
+
+/// Default rows for [`benchmark_history`] when the caller names no `limit`.
+const DEFAULT_HISTORY_LIMIT: i64 = 50;
+/// Upper bound for [`benchmark_history`], below the store's own `500` — the
+/// Benchmark tab compares a screenful, it never needs the whole table.
+const MAX_HISTORY_LIMIT: i64 = 200;
+
+/// A suite id the caller supplied, checked against the built-in catalogue.
+/// `None`/blank means "no suite", which is a valid ask everywhere here.
+fn known_suite(id: Option<&str>) -> Result<Option<&'static str>> {
+    let Some(id) = id.map(str::trim).filter(|s| !s.is_empty()) else {
+        return Ok(None);
+    };
+    crate::bench::suites::find(id)
+        .map(|s| Some(s.id))
+        .ok_or_else(|| CoreError::Config(format!("unknown benchmark suite \"{id}\"")))
+}
+
+/// Benchmarks across all models, newest first — the Benchmark tab's history.
+/// An unknown `suite` is a refusal rather than an empty list: silently showing
+/// nothing would read as "this model was never tested".
+pub async fn benchmark_history(
+    app: &App,
+    suite: Option<&str>,
+    limit: Option<i64>,
+) -> Result<Vec<Benchmark>> {
+    let suite = known_suite(suite)?;
+    let limit = limit
+        .unwrap_or(DEFAULT_HISTORY_LIMIT)
+        .clamp(1, MAX_HISTORY_LIMIT);
+    app.db.benchmarks().list_all(suite, limit).await
+}
+
 /// Queue a "Test model" job for a local GGUF model. It goes through the
 /// scheduler like a chat job (load / evict / run), then [`crate::bench`]
 /// records a `benchmarks` row.
-pub async fn benchmark_model(app: &App, model_id: &str) -> Result<Job> {
+///
+/// `opts` is what the Benchmark tab adds on top of the Model Library's plain
+/// button: a suite to run instead of the single default prompt, and how many
+/// passes per prompt. Omitting both is the original quick test, byte for byte.
+pub async fn benchmark_model(app: &App, model_id: &str, opts: BenchmarkOptionsDto) -> Result<Job> {
     let model = app
         .db
         .models()
@@ -2166,11 +2209,20 @@ pub async fn benchmark_model(app: &App, model_id: &str) -> Result<Job> {
             "benchmarking is llama.cpp / GGUF models only for now".into(),
         ));
     }
+    let suite = known_suite(opts.suite.as_deref())?;
     let ctx = crate::compat::effective_ctx(model.ctx_max.and_then(|v| u32::try_from(v).ok()));
     let vram = crate::compat::estimate(&model.vram_dims(), ctx).total_mb;
-    app.jobs
-        .submit(NewJob::new("bench").on("llamacpp", &model.id, vram))
-        .await
+    let mut new = NewJob::new("bench").on("llamacpp", &model.id, vram);
+    // Only written when asked for — a plain quick test keeps the exact params
+    // it had before suites existed. `runs` goes through unvalidated on purpose:
+    // `BenchRequest::from_params` clamps it to `1..=10`.
+    if let Some(suite) = suite {
+        new.params["suite"] = suite.into();
+    }
+    if let Some(runs) = opts.runs {
+        new.params["runs"] = runs.into();
+    }
+    app.jobs.submit(new).await
 }
 
 // --- upgrade check (Phase 6.7) -------------------------------------------
