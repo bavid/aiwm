@@ -17,6 +17,9 @@
 
 use serde_json::{json, Value};
 
+pub mod fragments;
+pub mod graph;
+
 /// The prompt + sampling parameters a text-to-image workflow needs, already
 /// resolved (no `Auto`, no negative seeds). Model file names are passed
 /// separately — they differ per template.
