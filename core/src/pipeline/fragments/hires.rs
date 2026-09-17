@@ -23,7 +23,7 @@ use serde_json::json;
 use crate::pipeline::fragments::latent;
 use crate::pipeline::fragments::sampling::{self, CustomAdvancedLinks, SamplerParams};
 use crate::pipeline::graph::{Graph, OwnedLink};
-use crate::pipeline::HiresFix;
+use crate::pipeline::{latent_upscaled_px, HiresFix};
 
 /// The first node id this fragment uses. It owns `HIRES_ID_BASE ..=
 /// HIRES_ID_BASE + 4`; see the node-id map in
@@ -53,18 +53,39 @@ fn id(offset: u32) -> String {
 /// sigmas, which would re-compose the image from scratch.
 const LOW_SIGMAS_SLOT: u32 = 1;
 
-/// FLUX.2's latent grid is 16 pixels to a tile (`Flux2Scheduler` derives its
-/// sequence length as `width * height / 256`, one token per 16×16 tile), so a
-/// scaled size that is not a multiple of 16 does not describe a real latent.
-/// Round the scaled dimension **up** — `(scaled + 15) / 16 * 16` — so the
-/// schedule is never computed for fewer tokens than the upscaled latent
-/// actually has.
-fn round16(dim: u32, scale: f64) -> u32 {
+/// FLUX.2's token grid is 16 pixels to a tile (`Flux2Scheduler` derives its
+/// sequence length as `width * height / 256`, one token per 16×16 tile).
+const FLUX2_TILE: u32 = 16;
+
+/// The size `Flux2Scheduler` is built at for the second pass: the real
+/// post-upscale size ([`latent_upscaled_px`] — the one formula both the graph
+/// and `ImageRequest::final_size` use) snapped **up** to FLUX.2's 16-pixel
+/// token grid, so the schedule is never computed for fewer tokens than the
+/// upscaled latent actually has.
+fn scheduler_px(dim: u32, scale: f64) -> u32 {
+    latent_upscaled_px(dim, scale).div_ceil(FLUX2_TILE) * FLUX2_TILE
+}
+
+/// The `Flux2Scheduler.steps` that leaves `hires.steps` steps *executed* after
+/// `SplitSigmasDenoise` cuts the schedule.
+///
+/// `hires.steps` means executed steps in every family (that's what
+/// `KSampler.steps` is, even at a denoise below 1). Here the sampler runs the
+/// low-sigma tail `SplitSigmasDenoise` keeps — the last `round(steps *
+/// denoise)` of them — so the schedule has to be built `steps / denoise` long
+/// for the tail to come out at `hires.steps`.
+fn schedule_steps(hires: &HiresFix) -> u32 {
+    // The request parser clamps `denoise` to ≥ 0.2; this guard is the
+    // fragment's own, so a hand-built `HiresFix` cannot divide by zero.
+    if hires.denoise <= 0.0 {
+        return hires.steps.max(1);
+    }
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    // Dimensions are image sizes (≤ 8192) times a scale of at most a few, so
-    // the product is far inside u32 and never negative.
-    let scaled = (f64::from(dim) * scale).round() as u32;
-    scaled.div_ceil(16) * 16
+    // `steps` is clamped to ≤ 60 and `denoise` to ≥ 0.2, so the quotient is
+    // a few hundred at worst and never negative.
+    let total = (f64::from(hires.steps) / hires.denoise).round() as u32;
+    // A zero-length schedule is not a graph ComfyUI can run.
+    total.max(1)
 }
 
 /// The KSampler-family second pass: `LatentUpscaleBy` → a second `KSampler`
@@ -111,8 +132,16 @@ pub fn ksampler_pass(
 /// Returns the second pass's latent.
 ///
 /// `width`/`height` are the *first* pass's pixel size; the scheduler is built
-/// at `round16(dim, scale_by)`, because its sequence length is derived from
-/// the size it is handed and the second pass runs on a bigger latent.
+/// at [`scheduler_px`], because its sequence length is derived from the size
+/// it is handed and the second pass runs on a bigger latent.
+///
+/// Note what `steps` becomes here. `hires.steps` is *executed* steps —
+/// whatever `KSampler.steps` means for the other family — but
+/// `Flux2Scheduler.steps` is the length of the *whole* schedule, of which
+/// `SplitSigmasDenoise` keeps only the `denoise` tail. So this pass asks the
+/// scheduler for the longer total ([`schedule_steps`]); handing it
+/// `hires.steps` directly would silently run `steps × denoise` steps (5 of 12
+/// at denoise 0.45) and make the knob mean two different things.
 pub fn custom_advanced_pass(
     g: &mut Graph,
     first_pass: &OwnedLink,
@@ -132,9 +161,9 @@ pub fn custom_advanced_pass(
         &id(SCHEDULER),
         "Flux2Scheduler",
         json!({
-            "steps": hires.steps,
-            "width": round16(width, hires.scale_by),
-            "height": round16(height, hires.scale_by)
+            "steps": schedule_steps(hires),
+            "width": scheduler_px(width, hires.scale_by),
+            "height": scheduler_px(height, hires.scale_by)
         }),
     );
     g.node(
@@ -226,17 +255,64 @@ mod tests {
         assert_eq!(written, window);
     }
 
+    /// The scheduler size starts from the *same* latent-unit formula the
+    /// decoded image uses ([`latent_upscaled_px`]) and only then snaps up to
+    /// FLUX.2's 16-pixel token grid. The old fragment-local formula scaled in
+    /// pixels instead and came out 16 px larger at 1000 × 1.25 (1264 vs 1248).
     #[test]
-    fn round16_rounds_up_to_a_multiple_of_16() {
+    fn scheduler_px_starts_from_the_shared_latent_formula() {
+        // The case the two formulas used to disagree on: 1000 px = 125 latent
+        // units, 125 × 1.25 = 156.25 → 156 → 1248 px, already a multiple of
+        // 16, so the scheduler sees exactly the decoded size.
+        assert_eq!(latent_upscaled_px(1000, 1.25), 1248);
+        assert_eq!(scheduler_px(1000, 1.25), 1248);
         // Already a multiple: unchanged.
-        assert_eq!(round16(1024, 1.5), 1536);
-        assert_eq!(round16(1024, 1.25), 1280);
-        // Not a multiple: rounded up, never down.
-        assert_eq!(round16(1000, 1.5), 1504);
-        assert_eq!(round16(1000, 1.25), 1264);
+        assert_eq!(scheduler_px(1024, 1.5), 1536);
+        assert_eq!(scheduler_px(1024, 1.25), 1280);
+        // Rounding up to 16 kicks in: 125 × 1.35 = 168.75 → 169 → 1352 px,
+        // which is not a multiple of 16, so the schedule is computed for the
+        // next whole token row (1360) rather than for fewer tokens than the
+        // latent really has.
+        assert_eq!(latent_upscaled_px(1000, 1.35), 1352);
+        assert_eq!(scheduler_px(1000, 1.35), 1360);
         // A 1.0 scale still snaps, so the size is always legal.
-        assert_eq!(round16(1000, 1.0), 1008);
-        assert_eq!(round16(1024, 1.0), 1024);
+        assert_eq!(scheduler_px(1000, 1.0), 1008);
+        assert_eq!(scheduler_px(1024, 1.0), 1024);
+    }
+
+    /// `hires.steps` is EXECUTED steps in both families, so the klein-GGUF
+    /// schedule has to be the longer total the denoise cut is taken from.
+    #[test]
+    fn schedule_steps_is_the_total_a_denoise_cut_leaves_hires_steps_of() {
+        // 12 executed at denoise 0.45 needs a 27-step schedule
+        // (12 / 0.45 = 26.67 → 27; 27 × 0.45 = 12.15 → 12 kept).
+        assert_eq!(schedule_steps(&hires()), 27);
+        // denoise 1.0 asks for the whole schedule.
+        assert_eq!(
+            schedule_steps(&HiresFix {
+                denoise: 1.0,
+                ..hires()
+            }),
+            12
+        );
+        // The fragment must not divide by zero even though the parser clamps
+        // denoise to ≥ 0.2.
+        assert_eq!(
+            schedule_steps(&HiresFix {
+                denoise: 0.0,
+                ..hires()
+            }),
+            12
+        );
+        // Never a zero-length schedule.
+        assert_eq!(
+            schedule_steps(&HiresFix {
+                denoise: 0.7,
+                steps: 0,
+                ..hires()
+            }),
+            1
+        );
     }
 
     #[test]
@@ -317,7 +393,8 @@ mod tests {
             v["42"],
             json!({
                 "class_type": "Flux2Scheduler",
-                "inputs": { "steps": 12, "width": 1536, "height": 1536 }
+                // 12 EXECUTED steps at denoise 0.45 = a 27-step schedule.
+                "inputs": { "steps": 27, "width": 1536, "height": 1536 }
             })
         );
         assert_eq!(

@@ -79,8 +79,17 @@ pub struct HiresFix {
     /// The second pass's denoise. Low (≈0.2–0.7) — high values throw the
     /// first pass's composition away.
     pub denoise: f64,
-    /// Steps for the second pass. Usually about half the first pass's, since
-    /// only a fraction of the schedule actually runs at this denoise.
+    /// Steps the second pass actually **executes** — the same meaning in every
+    /// family. Usually about half the first pass's: the pass only fills in
+    /// detail, it does not re-compose.
+    ///
+    /// That is what `KSampler.steps` already means at a denoise below 1 (it
+    /// builds a `steps / denoise` schedule and runs the last `steps` of it,
+    /// ComfyUI v0.34.0). FLUX.2 \[klein\] GGUF has no such node, so its
+    /// fragment does the same arithmetic by hand — `Flux2Scheduler.steps =
+    /// round(steps / denoise)`, cut back down by `SplitSigmasDenoise` — rather
+    /// than letting this number mean "schedule length" there and "executed
+    /// steps" everywhere else. See `fragments::hires::custom_advanced_pass`.
     pub steps: u32,
     /// `LatentUpscaleBy`'s `upscale_method` — one of ComfyUI's
     /// `nearest-exact`, `bilinear`, `area`, `bicubic`, `bislerp`.
@@ -92,6 +101,36 @@ impl HiresFix {
     /// to be re-denoised anyway, so a cheap, artifact-free resample beats a
     /// smart one.
     pub const DEFAULT_METHOD: &str = "nearest-exact";
+}
+
+/// Pixels per latent unit. Every image family we render encodes 8×8 pixels
+/// into one latent cell, which is what makes [`latent_upscaled_px`] the same
+/// arithmetic for all of them.
+const LATENT_SCALE: u32 = 8;
+
+/// One dimension, in pixels, after `LatentUpscaleBy` — **the** formula for the
+/// post-upscale size, used by both the graph builders and the capability layer
+/// (`ImageRequest::final_size`), so a request's advertised output size and the
+/// size the graph actually produces can never drift apart.
+///
+/// `LatentUpscaleBy` scales the *latent* and rounds there — `width =
+/// round(samples.shape[-1] * scale_by)` in latent units (ComfyUI v0.34.0,
+/// `nodes.py:1384-1385`) — so the decoded image is `round(px / 8 * scale) * 8`,
+/// not `round(px * scale)`. Those differ: 1000 px × 1.25 is 1248, not 1250.
+///
+/// Note on halves: ComfyUI rounds with Python's `round()`, which breaks ties to
+/// the *even* number, while Rust's `f64::round` breaks them away from zero. The
+/// two disagree only when a tie would land on an odd result (a latent width of
+/// 162.5: Python 162, Rust 163 → 8 px apart). Nothing pins the Python
+/// behaviour today and matching it exactly would need a bespoke rounding, so
+/// the Rust semantics stand.
+#[must_use]
+pub fn latent_upscaled_px(dim: u32, scale: f64) -> u32 {
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    // `dim` is a clamped image size (≤ 2048) and `scale` a clamped factor
+    // (≤ 2.0), so the product is small and never negative.
+    let latent = (f64::from(dim / LATENT_SCALE) * scale).round() as u32;
+    latent.saturating_mul(LATENT_SCALE)
 }
 
 /// FLUX needs its diffusion model, both text encoders and the VAE as separate

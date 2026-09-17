@@ -66,11 +66,6 @@ const MAX_HIRES_STEPS: u32 = 60;
 const HIRES_UPSCALE_METHODS: [&str; 5] =
     ["nearest-exact", "bilinear", "area", "bicubic", "bislerp"];
 
-/// Pixels per latent unit. Every image family we render encodes 8×8 pixels
-/// into one latent cell, which is what makes [`ImageRequest::final_size`]'s
-/// arithmetic the same for all of them.
-const LATENT_SCALE: u32 = 8;
-
 /// Upper bound on one image render — a slow first checkpoint load plus a large,
 /// high-step render. Past this the job fails rather than hanging forever.
 const IMAGE_TIMEOUT: Duration = Duration::from_secs(600);
@@ -198,14 +193,14 @@ impl ImageRequest {
     /// The pixel size the finished image actually has: `width`×`height` for a
     /// single-pass render, the second pass's size when Hi-Res-Fix is on.
     ///
-    /// The second pass's size is decided by `LatentUpscaleBy`, which scales
-    /// the *latent* and rounds there — `width = round(samples.shape[-1] *
-    /// scale_by)` in latent units (ComfyUI v0.34.0, `nodes.py:1384-1385`) —
-    /// so the decoded image is `round(px / 8 * scale_by) * 8`, not
-    /// `round(px * scale_by)`. Those differ: 1000 px × 1.5 is 1504, not 1500.
+    /// The second pass's size is decided by `LatentUpscaleBy`, so the formula
+    /// belongs to the layer that builds the graph: this is
+    /// [`pipeline::latent_upscaled_px`] and nothing else, which is how the
+    /// size advertised here and the size the graph produces stay the same
+    /// number.
     ///
     /// (FLUX.2 \[klein\] GGUF additionally rounds *the schedule's* size up to
-    /// a multiple of 16 — see `fragments::hires::round16` — but that only
+    /// a multiple of 16 — see `fragments::hires::scheduler_px` — but that only
     /// feeds `Flux2Scheduler`'s sequence length, never the latent, so the
     /// decoded size is this one in every family.)
     pub fn final_size(&self) -> (u32, u32) {
@@ -213,8 +208,8 @@ impl ImageRequest {
             return (self.width, self.height);
         };
         (
-            upscaled_dim(self.width, hires.scale_by),
-            upscaled_dim(self.height, hires.scale_by),
+            pipeline::latent_upscaled_px(self.width, hires.scale_by),
+            pipeline::latent_upscaled_px(self.height, hires.scale_by),
         )
     }
 
@@ -312,16 +307,6 @@ fn parse_hires(params: &Value, first_pass_steps: u32) -> Option<HiresFix> {
         steps,
         upscale_method,
     })
-}
-
-/// One dimension after `LatentUpscaleBy` — see [`ImageRequest::final_size`]
-/// for why the rounding happens in latent units.
-fn upscaled_dim(dim: u32, scale_by: f64) -> u32 {
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    // `dim` is a clamped image size (≤ 2048) and `scale_by` a clamped factor
-    // (≤ 2.0), so the product is small and never negative.
-    let latent = (f64::from(dim / LATENT_SCALE) * scale_by).round() as u32;
-    latent.saturating_mul(LATENT_SCALE)
 }
 
 /// A finished image body.
@@ -1550,6 +1535,17 @@ mod tests {
         // 1000 px = 125 latent units; 125 × 1.5 = 187.5 → round 188 → 1504 px.
         assert_eq!(size(1000, 1000, 1.5), (1504, 1504));
         assert_eq!(size(1024, 768, 2.0), (2048, 1536));
+        // 125 × 1.25 = 156.25 → 156 → 1248 px. The pipeline layer owns this
+        // formula now, so there is exactly one of it: a pixel-space variant
+        // would say 1250 (or 1264 once snapped to 16).
+        assert_eq!(size(1000, 1000, 1.25), (1248, 1248));
+        assert_eq!(
+            size(1000, 1000, 1.25),
+            (
+                pipeline::latent_upscaled_px(1000, 1.25),
+                pipeline::latent_upscaled_px(1000, 1.25)
+            )
+        );
 
         // No Hi-Res-Fix → the requested size *is* the final size.
         let plain = ImageRequest::from_params(&serde_json::json!({

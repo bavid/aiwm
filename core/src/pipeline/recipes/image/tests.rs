@@ -7,7 +7,7 @@ use serde_json::json;
 
 use super::*;
 use crate::pipeline::{
-    EditInputs, Flux2KleinModels, FluxModels, HiresFix, LoraSpec, Txt2ImgInputs,
+    latent_upscaled_px, EditInputs, Flux2KleinModels, FluxModels, HiresFix, LoraSpec, Txt2ImgInputs,
 };
 
 fn inputs() -> Txt2ImgInputs<'static> {
@@ -565,12 +565,15 @@ fn flux2_klein_gguf_hires_uses_flux2_scheduler_at_the_upscaled_size_and_split_si
     );
     // Flux2Scheduler has no `denoise` input (ComfyUI v0.34.0,
     // comfy_extras/nodes_flux.py) -- the schedule is cut by
-    // SplitSigmasDenoise instead, whose slot 1 is the low-sigma tail.
+    // SplitSigmasDenoise instead, whose slot 1 is the low-sigma tail. Because
+    // of that cut the scheduler is built LONGER than `hires.steps`: 12
+    // executed steps at denoise 0.45 need a 12 / 0.45 = 27-step schedule, so
+    // that `hires.steps` means the same thing here as it does for KSampler.
     assert_eq!(
         g["42"],
         json!({
             "class_type": "Flux2Scheduler",
-            "inputs": { "steps": 12, "width": 1536, "height": 1536 }
+            "inputs": { "steps": 27, "width": 1536, "height": 1536 }
         })
     );
     assert_eq!(
@@ -601,18 +604,39 @@ fn flux2_klein_gguf_hires_uses_flux2_scheduler_at_the_upscaled_size_and_split_si
 }
 
 #[test]
-fn flux2_klein_gguf_hires_rounds_the_scheduler_size_up_to_a_multiple_of_sixteen() {
-    let mut i = hires_inputs();
-    i.width = 1000;
-    i.height = 1024;
-    i.hires = Some(HiresFix {
-        scale_by: 1.25,
-        ..hires()
-    });
-    let g = flux2_klein_txt2img(&i, &klein_models(), &[]);
-    // 1000 * 1.25 = 1250 -> 1264; 1024 * 1.25 = 1280, already a multiple.
-    assert_eq!(g["42"]["inputs"]["width"], 1264);
+fn flux2_klein_gguf_hires_sizes_the_scheduler_from_the_upscaled_latent() {
+    let sized = |scale_by: f64| {
+        let mut i = hires_inputs();
+        i.width = 1000;
+        i.height = 1024;
+        i.hires = Some(HiresFix {
+            scale_by,
+            ..hires()
+        });
+        flux2_klein_txt2img(&i, &klein_models(), &[])
+    };
+
+    // LatentUpscaleBy scales the LATENT, so the upscaled image is
+    // `round(px / 8 * scale) * 8`: 1000 px = 125 latent units, 125 * 1.25 =
+    // 156.25 -> 156 -> 1248 px (not 1250, and not the 1264 a pixel-space
+    // formula would give). 1248 is already a multiple of 16, so the
+    // scheduler is built for exactly that size. 1024 * 1.25 = 1280 likewise.
+    let g = sized(1.25);
+    assert_eq!(g["42"]["inputs"]["width"], 1248);
     assert_eq!(g["42"]["inputs"]["height"], 1280);
+    assert_eq!(
+        g["42"]["inputs"]["width"],
+        json!(latent_upscaled_px(1000, 1.25)),
+        "same formula the decoded size uses"
+    );
+
+    // Where the upscaled size is not a multiple of 16, the schedule rounds
+    // UP to the next whole token row -- never fewer tokens than the latent
+    // actually has. 125 * 1.35 = 168.75 -> 169 -> 1352 -> 1360;
+    // 128 * 1.35 = 172.8 -> 173 -> 1384 -> 1392.
+    let g = sized(1.35);
+    assert_eq!(g["42"]["inputs"]["width"], 1360);
+    assert_eq!(g["42"]["inputs"]["height"], 1392);
 }
 
 #[test]
