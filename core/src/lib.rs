@@ -56,6 +56,7 @@ pub mod scheduler;
 pub mod select;
 pub mod sidecar;
 pub mod telemetry;
+pub mod training;
 pub mod upgrade;
 pub mod voice_identity;
 
