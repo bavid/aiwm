@@ -80,3 +80,20 @@ fn rtx_upscale_video_wires_load_video_get_components_rtx_and_create_save_video()
     assert_eq!(g["5"]["inputs"]["video"], json!(["4", 0]));
     assert_eq!(g["5"]["inputs"]["filename_prefix"], "job-up");
 }
+
+#[test]
+fn rtx_upscale_video_wires_target_dimensions_as_dotted_width_height() {
+    let g = rtx_upscale_video(&upscale_video_inputs(UpscaleResize::Target {
+        width: 1920,
+        height: 1080,
+    }));
+    assert_eq!(g["3"]["inputs"]["resize_type"], "target dimensions");
+    assert_eq!(g["3"]["inputs"]["resize_type.width"], 1920);
+    assert_eq!(g["3"]["inputs"]["resize_type.height"], 1080);
+    assert!(g["3"]["inputs"].get("resize_type.scale").is_none());
+    // The rest of the chain is resize-independent -- the frames still come
+    // from GetVideoComponents and the original audio/fps still ride along.
+    assert_eq!(g["3"]["inputs"]["images"], json!(["2", 0]));
+    assert_eq!(g["4"]["inputs"]["audio"], json!(["2", 1]));
+    assert_eq!(g["4"]["inputs"]["fps"], json!(["2", 2]));
+}

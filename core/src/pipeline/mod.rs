@@ -21,9 +21,12 @@
 //! image→video (a start frame in ComfyUI's `input/`). A TOML pipeline *registry*
 //! stays out of the MVP.
 
-pub mod fragments;
-pub mod graph;
-pub mod recipes;
+// The graph builder, the fragment layer and the recipe bodies are
+// implementation detail: nothing outside `pipeline` touches them, callers go
+// through the re-exported recipe functions below.
+pub(crate) mod fragments;
+pub(crate) mod graph;
+pub(crate) mod recipes;
 
 pub use recipes::image::{
     checkpoint_txt2img, flux2_klein_edit, flux2_klein_txt2img, flux2_klein_txt2img_safetensors,

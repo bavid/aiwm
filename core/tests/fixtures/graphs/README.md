@@ -1,9 +1,16 @@
 # Pipeline golden graph fixtures
 
-These 14 JSON files are the recorded output of every recipe function in
-`core/src/pipeline/mod.rs`, rendered from the fixed inputs in
+These JSON files are the recorded output of every recipe function in
+`core/src/pipeline/recipes/` (`image.rs`, `story.rs`, `video.rs`,
+`upscale.rs` — the recipes moved out of `core/src/pipeline/mod.rs` during the
+refactor these fixtures guard), rendered from the fixed inputs in
 `core/tests/pipeline_goldens.rs` and normalised (object keys recursively
 sorted; array order — link pairs like `["4", 0]` — preserved).
+
+Most recipes have one fixture, rendered with a LoRA chain. Two also have a
+`*_no_loras` variant (`checkpoint_txt2img`, `flux2_klein_edit`): an absent
+chain is a genuinely different graph from a present one, and the with-LoRAs
+fixtures alone never pinned that shape.
 
 They are the safety net for the ComfyUI workflow engine refactor (Plan 3:
 `docs/superpowers/plans/2026-09-17-comfyui-workflow-engine-plan-3.md`), which

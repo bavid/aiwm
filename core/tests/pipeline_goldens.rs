@@ -280,6 +280,15 @@ fn checkpoint_txt2img_golden() {
     check_golden("checkpoint_txt2img", &g);
 }
 
+/// The LoRA-free shape of the same recipe: a chain that is *absent* is a
+/// different graph from one that is present, and only the with-LoRAs fixture
+/// above pinned it before.
+#[test]
+fn checkpoint_txt2img_no_loras_golden() {
+    let g = checkpoint_txt2img(&txt2img_inputs(), "sd_xl_base_1.0.safetensors", &[]);
+    check_golden("checkpoint_txt2img_no_loras", &g);
+}
+
 #[test]
 fn flux_txt2img_golden() {
     let g = flux_txt2img(
@@ -318,6 +327,14 @@ fn flux2_klein_edit_golden() {
         &one_lora("flux2-realistic-detail.safetensors"),
     );
     check_golden("flux2_klein_edit", &g);
+}
+
+/// The edit graph without a LoRA chain — the most branch-heavy recipe, and
+/// the one where a mis-spliced chain would be hardest to spot by eye.
+#[test]
+fn flux2_klein_edit_no_loras_golden() {
+    let g = flux2_klein_edit(&edit_inputs(), &flux2_klein_safetensors_models(), &[]);
+    check_golden("flux2_klein_edit_no_loras", &g);
 }
 
 #[test]

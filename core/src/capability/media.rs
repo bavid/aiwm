@@ -27,9 +27,10 @@ pub struct LoraRef {
 const MAX_LORA_STRENGTH: f64 = 5.0;
 const MIN_LORA_STRENGTH: f64 = -5.0;
 const DEFAULT_LORA_STRENGTH: f64 = 1.0;
-/// More than this and the graph (and the render) gets unwieldy for little
-/// benefit — a soft ceiling, not a ComfyUI limitation.
-const MAX_LORAS: usize = 5;
+/// The cap on how many LoRAs a request may carry. Defined next to the node-id
+/// window it bounds (see [`MAX_LORAS`]'s own doc comment) so the cap and the
+/// reserved ids can never drift apart.
+use crate::pipeline::fragments::loras::MAX_LORAS;
 
 /// Read `params["loras"]` — an array of `{ model_id, strength }` — dropping
 /// any entry with a blank/missing id and clamping strength. Absent or

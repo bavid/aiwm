@@ -7,9 +7,19 @@ use serde_json::json;
 use crate::pipeline::graph::{Graph, NextId, OwnedLink, PipelineError};
 use crate::pipeline::LoraSpec;
 
-/// The first node id the chain uses. Clear of every fixed id the recipes
-/// allocate (the highest is `78`), so a chain never collides with one.
-const LORA_ID_BASE: u32 = 90;
+/// The first node id the chain uses. The chain runs from here to
+/// `LORA_ID_BASE + MAX_LORAS - 1` (= 94) and no recipe emits a fixed id in
+/// that window — see the node-id map in [`crate::pipeline::recipes::ids`],
+/// which reserves it and has the test that pins the reservation.
+pub(crate) const LORA_ID_BASE: u32 = 90;
+
+/// How many `LoraLoader` nodes a chain can be long. More than this and the
+/// graph (and the render) gets unwieldy for little benefit — a soft ceiling,
+/// not a ComfyUI limitation. It lives here rather than in the request parser
+/// that enforces it ([`crate::capability::media::parse_loras`], which reads
+/// it from here) because it is what makes the reserved id window above
+/// finite: cap and range have to move together or the reservation is a lie.
+pub(crate) const MAX_LORAS: usize = 5;
 
 /// Splice `loras` in as a chain of `LoraLoader` nodes between the current
 /// model/CLIP source and their consumers, then repoint those consumers at the

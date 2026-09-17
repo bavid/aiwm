@@ -70,13 +70,11 @@ impl From<&OwnedLink> for Dim {
     }
 }
 
-/// Failure modes for [`Graph::set_input`] and [`Graph::from_value`].
+/// Failure modes for [`Graph::set_input`].
 #[derive(Debug, thiserror::Error)]
 pub enum PipelineError {
     #[error("graph has no node {0:?}")]
     MissingNode(String),
-    #[error("graph is not an object of nodes")]
-    NotAnObject,
 }
 
 /// A ComfyUI API-format prompt graph under construction: explicit node ids
@@ -106,11 +104,18 @@ impl Graph {
     }
 
     /// Read one input field of a node, if the node and field both exist.
+    ///
+    /// Test-only: production code builds graphs, it never reads one back —
+    /// the fragment and recipe tests use this (and [`Graph::contains`]) to
+    /// assert wiring without serialising the whole graph first.
+    #[cfg(test)]
     pub fn input(&self, id: &str, key: &str) -> Option<&Value> {
         self.nodes.get(id)?.get("inputs")?.get(key)
     }
 
-    /// Whether a node with this id has been added.
+    /// Whether a node with this id has been added. Test-only, see
+    /// [`Graph::input`].
+    #[cfg(test)]
     pub fn contains(&self, id: &str) -> bool {
         self.nodes.contains_key(id)
     }
@@ -118,15 +123,6 @@ impl Graph {
     /// Consume the graph into the ComfyUI API-format prompt JSON.
     pub fn into_value(self) -> Value {
         Value::Object(self.nodes)
-    }
-
-    /// Rebuild a `Graph` from an existing API-format prompt JSON value — for
-    /// tests, and for a later task's gradual port of the inline recipes.
-    pub fn from_value(v: Value) -> Result<Self, PipelineError> {
-        match v {
-            Value::Object(map) => Ok(Self { nodes: map }),
-            _ => Err(PipelineError::NotAnObject),
-        }
     }
 }
 
@@ -190,14 +186,21 @@ mod tests {
     }
 
     #[test]
-    fn from_value_round_trips() {
-        let original = json!({
-            "4": {
-                "class_type": "CheckpointLoaderSimple",
-                "inputs": { "ckpt_name": "x.safetensors" }
-            }
-        });
-        let g = Graph::from_value(original.clone()).unwrap();
-        assert_eq!(g.into_value(), original);
+    fn into_value_renders_the_api_format_prompt_object() {
+        let mut g = Graph::default();
+        g.node(
+            "4",
+            "CheckpointLoaderSimple",
+            json!({ "ckpt_name": "x.safetensors" }),
+        );
+        assert_eq!(
+            g.into_value(),
+            json!({
+                "4": {
+                    "class_type": "CheckpointLoaderSimple",
+                    "inputs": { "ckpt_name": "x.safetensors" }
+                }
+            })
+        );
     }
 }

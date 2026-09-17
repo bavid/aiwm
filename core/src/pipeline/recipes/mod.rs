@@ -42,11 +42,18 @@ pub(crate) const SOURCE_UPSCALE_METHOD: &str = "lanczos";
 ///
 /// [`crate::pipeline::fragments::loras::apply`] can only fail when a consumer
 /// node id is absent, which means the recipe above asked for an id it never
-/// built. That is a bug in this module, not in anything a user supplied, so it
-/// is logged rather than panicked on — the graph is still returned, just
-/// without the LoRA chain wired through. The unit tests and golden fixtures
-/// pin every consumer id.
+/// built. That is a bug in this module, not in anything a user supplied, so
+/// release builds log it and still return the graph (just without the LoRA
+/// chain wired through) rather than killing a render — the repo bans
+/// `unwrap`/`expect` in production. Dev and test builds fail loudly instead:
+/// the `debug_assert!` below turns a latent wiring bug into a visible one long
+/// before it can ship. The unit tests and golden fixtures pin every consumer
+/// id.
 pub(crate) fn finish(g: Graph, applied: Result<(), PipelineError>) -> Value {
+    debug_assert!(
+        applied.is_ok(),
+        "recipe named a LoRA consumer id it never built: {applied:?}"
+    );
     if let Err(err) = applied {
         tracing::error!(
             error = %err,
@@ -55,3 +62,51 @@ pub(crate) fn finish(g: Graph, applied: Result<(), PipelineError>) -> Value {
     }
     g.into_value()
 }
+
+/// The node-id map: which id ranges belong to which concern, so a new fragment
+/// can pick ids without reading every recipe first.
+///
+/// ComfyUI node ids are arbitrary strings; every recipe here uses decimal
+/// numbers. The ranges below are what a single rendered *graph* reserves — not
+/// what this module reserves globally. Two recipes that can never appear in
+/// the same graph may reuse an id: Story Studio's IP-Adapter chain and the
+/// Hi-Res-Fix fragment both sit at 40–43, which is fine precisely because no
+/// txt2img recipe emits an IP-Adapter chain and no Story Studio recipe takes a
+/// `hires` input.
+///
+/// | Range | Concern | Recipe file |
+/// |-------|---------|-------------|
+/// | 1–5 | RTX upscale: load → `RTXVideoSuperResolution` → save | [`upscale`] |
+/// | 3–12 | The shared txt2img skeleton: sampler, checkpoint, latent, both encodes, decode, save, and the three split loaders | [`image`], [`story`] |
+/// | 26–32 | `FluxGuidance`/`ConditioningZeroOut` plus FLUX.2 \[klein\]'s `CFGGuider` chain and latent | [`image`], [`story`] |
+/// | 37–39, 44, 48, 55, 58–60, 69–73, 77–78 | The Wan and LTX video chains | [`video`] |
+/// | 40–43 | Story Studio's IP-Adapter chain (`CLIPVisionLoader`, `IPAdapterModelLoader`, `LoadImage`, `IPAdapterAdvanced`) | [`story`] |
+/// | 40–44 | **Hi-Res-Fix** (`HIRES_ID_BASE` = 40, five ids) — reserved in the four txt2img recipes only, which is why none of them uses 40–44 for anything else | `fragments::hires` (next commit) |
+/// | 50–54 | FLUX.2 \[klein\]'s reference-portrait chain | [`story`] |
+/// | 61–66, 70–76, 80, 82, 99, 123–125 | The `flux2_klein_edit` graph | [`image`] |
+/// | 90–94 | **LoRA chain** (`LORA_ID_BASE` = 90, `MAX_LORAS` = 5 ids) — reserved in *every* recipe | [`crate::pipeline::fragments::loras`] |
+///
+/// `tests::no_recipe_puts_a_node_in_another_concerns_reserved_range` renders
+/// every recipe (with a full five-LoRA chain) and pins the two cross-cutting
+/// reservations — the table above is documentation, that test is the
+/// enforcement.
+///
+/// The consts below are therefore test-only: production code allocates
+/// *forward* from a fragment's own base (`LORA_ID_BASE`) and never needs the
+/// end of a range. Naming the closed ranges here is what lets the test assert
+/// the reservation instead of trusting it.
+pub(crate) mod ids {
+    #[cfg(test)]
+    use std::ops::RangeInclusive;
+
+    #[cfg(test)]
+    pub(crate) use crate::pipeline::fragments::loras::{LORA_ID_BASE, MAX_LORAS};
+
+    /// The ids a LoRA chain can occupy: `90 ..= 94`.
+    #[cfg(test)]
+    pub(crate) const LORA_IDS: RangeInclusive<u32> =
+        LORA_ID_BASE..=LORA_ID_BASE + MAX_LORAS as u32 - 1;
+}
+
+#[cfg(test)]
+mod tests;

@@ -15,8 +15,6 @@ pub mod sampling;
 pub mod upscale;
 pub mod video;
 
-pub use conditioning::Cond;
-pub use loaders::{Loaded, SplitModelIds};
-pub use output::ImageSize;
-pub use sampling::{CustomAdvancedIds, CustomAdvancedParams, CustomLinks, SamplerParams};
-pub use video::{Frame, VideoComponents, VideoLatent};
+// No flat re-exports: the recipes name every fragment type through its own
+// module (`sampling::SamplerParams`, `loaders::SplitModelIds`, …), which keeps
+// a call site's fragment layer obvious at a glance.
