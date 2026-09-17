@@ -15,6 +15,7 @@
 //! `ai-toolkit` architecture each one maps to, its VRAM strategy, its base
 //! weights, and its three preset (fast/balanced/thorough) starting points.
 
+pub mod config;
 pub mod profile;
 
 use crate::CoreError;
