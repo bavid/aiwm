@@ -34,12 +34,16 @@ import {
   listDownloads,
   listModels,
   listSessions,
+  listTrainingProfiles,
+  listTrainingRuns,
   listVoiceIdentities,
   localApiStatus,
   modelTags,
+  getTrainingRun,
   registrySearch,
   registryStatus,
   storageReport,
+  trainerStatus,
   type AboutInfo,
   type Agent,
   type AgentRuntime,
@@ -72,10 +76,14 @@ import {
   type ModelStack,
   type RegistrySearchParams,
   type RegistrySearchResult,
+  type RunDetail,
   type RuntimeStatus,
   type Session,
   type SessionCapability,
   type SystemTelemetry,
+  type TrainerStatus,
+  type TrainingProfile,
+  type TrainingRun,
   type VoiceIdentity,
 } from "./ipc";
 
@@ -334,6 +342,34 @@ export const useSessions = (capability: SessionCapability) =>
  *  name across many narration calls. */
 export const useVoiceIdentities = () =>
   usePolled<VoiceIdentity[]>("voice-identities", listVoiceIdentities, 4000);
+
+// --- training orchestrator -----------------------------------------------
+
+/** The trainer's install/probe state. Polled slowly — it only moves when the
+ *  user sets the trainer up or repairs it, and an install reports its own
+ *  progress through `install_state`. */
+export const useTrainerStatus = () =>
+  usePolled<TrainerStatus>("trainer-status", trainerStatus, 5000);
+
+/** The trainable model families with their base-weight and library joins.
+ *  Slow: it only changes when a model is imported or downloaded. */
+export const useTrainingProfiles = () =>
+  usePolled<TrainingProfile[]>("training-profiles", listTrainingProfiles, 10000);
+
+/** Every run, newest first. Polled at the runner's own cadence so the history
+ *  list tracks a live run without hammering the store. */
+export const useTrainingRuns = () =>
+  usePolled<TrainingRun[]>("training-runs", listTrainingRuns, 3000);
+
+/** One run with its log tail and preview images; `null` disables polling (no
+ *  run selected). Faster than the list: this is the view someone actually
+ *  sits and watches. */
+export const useTrainingRun = (runId: string | null) =>
+  usePolled<RunDetail | null>(
+    `training-run:${runId ?? ""}`,
+    () => (runId ? getTrainingRun(runId) : Promise.resolve(null)),
+    2000,
+  );
 
 // --- Story Studio (Phase 1) ---------------------------------------------
 

@@ -1716,3 +1716,206 @@ export const addSceneImage = (sceneId: string, jobId: string) =>
 export const setCanonicalSceneImage = (id: string) =>
   invoke<void>("set_canonical_scene_image", { id });
 export const deleteSceneImage = (id: string) => invoke<void>("delete_scene_image", { id });
+
+// --- training orchestrator (spec `2026-09-16-training-orchestrator-design`) -
+
+/** The training-run lifecycle. `interrupted` is the one every long run has to
+ *  survive: the process vanished (a reboot, a kill, a driver crash), the
+ *  checkpoints are intact, and the run is resumable — never `failed`. */
+export type TrainingRunState =
+  | "preparing"
+  | "running"
+  | "paused"
+  | "interrupted"
+  | "resuming"
+  | "finishing"
+  | "completed"
+  | "failed"
+  | "cancelled";
+
+/** Speed/quality trade-off applied on top of a profile's own defaults. */
+export type TrainingPreset = "fast" | "balanced" | "thorough";
+
+/** Plain-English VRAM headroom, shown before a run starts. */
+export type TrainingFit = "comfortable" | "at_the_edge";
+
+/** What kind of dataset a profile trains from. */
+export type TrainingDataKind = "frames" | "clips" | "both";
+
+/** Which step of the trainer install is running. */
+export type TrainerInstallPhase =
+  | "downloading"
+  | "extracting"
+  | "installing_python"
+  | "creating_venv"
+  | "installing_torch"
+  | "installing_deps";
+
+/** Install progress — same serialized shape as the ComfyUI install card's. */
+export type TrainerInstallState =
+  | { state: "idle" }
+  | { state: "running"; phase: TrainerInstallPhase; done_bytes: number; total_bytes: number }
+  | { state: "failed"; error: string };
+
+/** Everything the Training tab's header needs to choose between "set up",
+ *  "wait", "repair" and "start a run". */
+export interface TrainerStatus {
+  installed: boolean;
+  installing: boolean;
+  /** The last probe found the venv unusable — offer a repair, not a run. */
+  env_broken: boolean;
+  install_state: TrainerInstallState;
+  /** The adapter's own one-line status, ready to show verbatim. */
+  detail: string;
+  /** The run currently holding the GPU, if any. */
+  alive_run_id: string | null;
+}
+
+/** What the trainer venv reports about its own PyTorch ("Jetzt testen"). */
+export interface TrainerProbe {
+  torch_version: string;
+  cuda: boolean;
+  vram_total_mb: number;
+}
+
+/** Rank/LR/resolution/step starting points of one preset. */
+export interface TrainingPresetValues {
+  steps: number;
+  lr: number;
+  rank: number;
+  resolution: number;
+  save_every: number;
+  sample_every: number;
+}
+
+/** A library model a profile can train — the target-model dropdown. */
+export interface TrainableModel {
+  id: string;
+  name: string;
+  family: string;
+}
+
+/** One trainable model family, joined with the two facts only the library
+ *  knows: whether its base weights are staged, and what resolves to it. */
+export interface TrainingProfile {
+  family: string;
+  label: string;
+  /** The ai-toolkit architecture id (`flux2_klein_4b`, `wan22_5b`, …). */
+  arch: string;
+  data_kind: TrainingDataKind;
+  fit: TrainingFit;
+  /** `fit` in plain English — show this, never the enum. */
+  fit_label: string;
+  reserve_mb: number;
+  base_repo: string;
+  base_role: string;
+  base_required_files: string[];
+  base_approx_gb: number;
+  /** A library directory model with `base_role` holding every required file. */
+  base_installed: boolean;
+  caption_order: CaptionOrder;
+  license_note: string;
+  presets: {
+    fast: TrainingPresetValues;
+    balanced: TrainingPresetValues;
+    thorough: TrainingPresetValues;
+  };
+  trainable_models: TrainableModel[];
+}
+
+/** Per-run overrides on top of the preset; an absent field keeps the preset's
+ *  own value. */
+export interface TrainingHyperparams {
+  steps?: number | null;
+  lr?: number | null;
+  rank?: number | null;
+  resolution?: number | null;
+}
+
+/** One training run, as stored. Unlike a {@link Job} it outlives the app: the
+ *  trainer is a detached process, so a run that started yesterday is still
+ *  observable (and resumable) after a restart. */
+export interface TrainingRun {
+  id: string;
+  name: string;
+  profile_family: string;
+  target_model_id: string | null;
+  dataset_id: string | null;
+  data_kind: DatasetMode;
+  trigger_word: string;
+  preset: TrainingPreset;
+  /** JSON of {@link TrainingHyperparams}, as stored. */
+  hyperparams_json: string;
+  /** JSON string array, as stored. */
+  sample_prompts_json: string;
+  state: TrainingRunState;
+  step: number;
+  total_steps: number;
+  last_loss: number | null;
+  last_checkpoint_at: string | null;
+  pid: number | null;
+  work_dir: string;
+  /** The imported LoRA, once the run completed. */
+  result_model_id: string | null;
+  error_text: string | null;
+  created_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+}
+
+/** A run plus the two things that live on disk rather than in the store. */
+export interface RunDetail {
+  run: TrainingRun;
+  /** Opaque tokens for {@link trainingSampleUrl}, newest checkpoint first —
+   *  deliberately not file paths. */
+  latest_samples: string[];
+  /** The tail of `train.log`, already split on `\r` and `\n`. */
+  log_tail: string[];
+  work_dir: string;
+}
+
+/** Body for {@link startTrainingRun} — what the Training form collects. */
+export interface StartRunBody {
+  name: string;
+  target_model_id: string;
+  dataset_id: string;
+  trigger_word: string;
+  preset: TrainingPreset;
+  hyperparams: TrainingHyperparams;
+  sample_prompts: string[];
+}
+
+export const trainerStatus = () => invoke<TrainerStatus>("training_status");
+
+/** `"started"` | `"already_installed"`; rejected in offline mode. */
+export const installTrainer = () => invoke<string>("install_trainer");
+
+/** Run the import probe — the one check that says a run would actually start.
+ *  Sets or clears `env_broken` as a side effect. */
+export const probeTrainer = () => invoke<TrainerProbe>("probe_trainer");
+
+export const listTrainingProfiles = () => invoke<TrainingProfile[]>("list_training_profiles");
+
+export const listTrainingRuns = () => invoke<TrainingRun[]>("list_training_runs");
+
+export const startTrainingRun = (body: StartRunBody) =>
+  invoke<TrainingRun>("start_training_run", { body });
+
+export const getTrainingRun = (id: string) => invoke<RunDetail | null>("get_training_run", { id });
+
+export const pauseTrainingRun = (id: string) => invoke<TrainingRun>("pause_training_run", { id });
+
+export const resumeTrainingRun = (id: string) => invoke<TrainingRun>("resume_training_run", { id });
+
+export const cancelTrainingRun = (id: string) => invoke<TrainingRun>("cancel_training_run", { id });
+
+/** Drop a finished run from the history. `purge` also deletes its work
+ *  directory — checkpoints and preview images included. */
+export const deleteTrainingRun = (id: string, purge: boolean) =>
+  invoke<void>("delete_training_run", { id, purge });
+
+/** URL the loopback core serves the `n`-th latest preview image from — same
+ *  shape as {@link jobOutputUrl}. `n` indexes
+ *  {@link RunDetail.latest_samples}, and is never a path. */
+export const trainingSampleUrl = (coreApiPort: number, runId: string, n: number) =>
+  `http://127.0.0.1:${coreApiPort}/training/runs/${runId}/samples/${n}`;
