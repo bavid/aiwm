@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use serde_json::Value;
+use serde_json::{json, Value};
 use tokio::sync::watch;
 
 use super::media::{
@@ -19,7 +19,7 @@ use super::media::{
 };
 use crate::db::{Database, EventLevel, Model};
 use crate::pipeline::{
-    self, EditInputs, Flux2KleinModels, FluxModels, LoraSpec, Recipe, Txt2ImgInputs,
+    self, EditInputs, Flux2KleinModels, FluxModels, HiresFix, LoraSpec, Recipe, Txt2ImgInputs,
 };
 use crate::runtime::ComfyUiAdapter;
 use crate::Result;
@@ -45,6 +45,31 @@ const DEFAULT_SCHEDULER: &str = "normal";
 const DEFAULT_REFERENCE_WEIGHT: f64 = 0.8;
 const MIN_REFERENCE_WEIGHT: f64 = 0.0;
 const MAX_REFERENCE_WEIGHT: f64 = 2.0;
+
+/// Hi-Res-Fix bounds (spec §2). Below `MIN_HIRES_SCALE` the second pass isn't
+/// worth its render time; above `MAX_HIRES_SCALE` it stops filling in detail
+/// and starts inventing a second composition (and the VRAM cost grows with
+/// the square of the factor).
+const MIN_HIRES_SCALE: f64 = 1.25;
+const MAX_HIRES_SCALE: f64 = 2.0;
+const DEFAULT_HIRES_SCALE: f64 = 1.5;
+/// Denoise for the second pass. Under the minimum nothing changes; over the
+/// maximum the first pass's composition is thrown away.
+const MIN_HIRES_DENOISE: f64 = 0.2;
+const MAX_HIRES_DENOISE: f64 = 0.7;
+const DEFAULT_HIRES_DENOISE: f64 = 0.45;
+const MIN_HIRES_STEPS: u32 = 4;
+const MAX_HIRES_STEPS: u32 = 60;
+/// `LatentUpscaleBy`'s own `upscale_methods` list, verbatim (ComfyUI v0.34.0,
+/// `nodes.py`). Anything else would make ComfyUI reject the graph, so an
+/// unknown request value falls back to [`HiresFix::DEFAULT_METHOD`] instead.
+const HIRES_UPSCALE_METHODS: [&str; 5] =
+    ["nearest-exact", "bilinear", "area", "bicubic", "bislerp"];
+
+/// Pixels per latent unit. Every image family we render encodes 8×8 pixels
+/// into one latent cell, which is what makes [`ImageRequest::final_size`]'s
+/// arithmetic the same for all of them.
+const LATENT_SCALE: u32 = 8;
 
 /// Upper bound on one image render — a slow first checkpoint load plus a large,
 /// high-step render. Past this the job fails rather than hanging forever.
@@ -85,6 +110,17 @@ pub struct ImageRequest {
     /// single scalar knob in that graph). Ignored when `reference_image` is
     /// `None`.
     pub reference_weight: f64,
+    /// `Some` → render in two passes: compose at `width`×`height`, then
+    /// upscale the latent and re-sample it at a low denoise (see
+    /// [`crate::pipeline::HiresFix`]). Already clamped — the recipes wire
+    /// whatever they're handed verbatim.
+    ///
+    /// Only the four text-to-image recipes honour it. An *edit*
+    /// ([`Self::source_image`]) has no latent of its own to upscale, and a
+    /// reference-anchored render ([`Self::reference_image`]) deliberately
+    /// skips it: Story Studio trades resolution for character consistency
+    /// (spec §3).
+    pub hires: Option<HiresFix>,
 }
 
 impl ImageRequest {
@@ -155,7 +191,31 @@ impl ImageRequest {
             source_image,
             reference_image,
             reference_weight,
+            hires: parse_hires(params, steps),
         })
+    }
+
+    /// The pixel size the finished image actually has: `width`×`height` for a
+    /// single-pass render, the second pass's size when Hi-Res-Fix is on.
+    ///
+    /// The second pass's size is decided by `LatentUpscaleBy`, which scales
+    /// the *latent* and rounds there — `width = round(samples.shape[-1] *
+    /// scale_by)` in latent units (ComfyUI v0.34.0, `nodes.py:1384-1385`) —
+    /// so the decoded image is `round(px / 8 * scale_by) * 8`, not
+    /// `round(px * scale_by)`. Those differ: 1000 px × 1.5 is 1504, not 1500.
+    ///
+    /// (FLUX.2 \[klein\] GGUF additionally rounds *the schedule's* size up to
+    /// a multiple of 16 — see `fragments::hires::round16` — but that only
+    /// feeds `Flux2Scheduler`'s sequence length, never the latent, so the
+    /// decoded size is this one in every family.)
+    pub fn final_size(&self) -> (u32, u32) {
+        let Some(hires) = self.hires else {
+            return (self.width, self.height);
+        };
+        (
+            upscaled_dim(self.width, hires.scale_by),
+            upscaled_dim(self.height, hires.scale_by),
+        )
     }
 
     /// Write the resolved values back over a job's `params` object so a random
@@ -184,7 +244,84 @@ impl ImageRequest {
             "loras".into(),
             serde_json::to_value(&self.loras).unwrap_or(Value::Array(Vec::new())),
         );
+        obj.insert(
+            "hires".into(),
+            self.hires.map_or(Value::Null, |h| {
+                json!({
+                    "scale_by": h.scale_by,
+                    "denoise": h.denoise,
+                    "steps": h.steps,
+                    "upscale_method": h.upscale_method,
+                })
+            }),
+        );
+        // Only a Hi-Res-Fix render finishes at a size other than the one that
+        // was asked for, so that's the only case worth spelling out — absent
+        // keys mean "the output is `width`×`height`".
+        if self.hires.is_some() {
+            let (width, height) = self.final_size();
+            obj.insert("output_width".into(), width.into());
+            obj.insert("output_height".into(), height.into());
+        }
     }
+}
+
+/// Read `params["hires"]` — `{ scale_by, denoise, steps?, upscale_method? }` —
+/// clamping every knob to the bounds above. Absent, `null` or a non-object
+/// yields `None`: Hi-Res-Fix is always opt-in, and a malformed value should
+/// render a plain image rather than fail the job (same posture as
+/// [`parse_loras`]).
+///
+/// `first_pass_steps` only supplies the `steps` default: a second pass at a
+/// low denoise runs a fraction of the schedule anyway, so half the first
+/// pass's steps is the useful starting point.
+fn parse_hires(params: &Value, first_pass_steps: u32) -> Option<HiresFix> {
+    let hires = params.get("hires")?.as_object()?;
+    let scale_by = hires
+        .get("scale_by")
+        .and_then(Value::as_f64)
+        .map_or(DEFAULT_HIRES_SCALE, |v| {
+            v.clamp(MIN_HIRES_SCALE, MAX_HIRES_SCALE)
+        });
+    let denoise = hires
+        .get("denoise")
+        .and_then(Value::as_f64)
+        .map_or(DEFAULT_HIRES_DENOISE, |v| {
+            v.clamp(MIN_HIRES_DENOISE, MAX_HIRES_DENOISE)
+        });
+    let steps = hires
+        .get("steps")
+        .and_then(Value::as_u64)
+        .and_then(|v| u32::try_from(v).ok())
+        .unwrap_or(first_pass_steps / 2)
+        .clamp(MIN_HIRES_STEPS, MAX_HIRES_STEPS);
+    let upscale_method = hires
+        .get("upscale_method")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .and_then(|m| {
+            HIRES_UPSCALE_METHODS
+                .into_iter()
+                .find(|known| known.eq_ignore_ascii_case(m))
+        })
+        .unwrap_or(HiresFix::DEFAULT_METHOD);
+
+    Some(HiresFix {
+        scale_by,
+        denoise,
+        steps,
+        upscale_method,
+    })
+}
+
+/// One dimension after `LatentUpscaleBy` — see [`ImageRequest::final_size`]
+/// for why the rounding happens in latent units.
+fn upscaled_dim(dim: u32, scale_by: f64) -> u32 {
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    // `dim` is a clamped image size (≤ 2048) and `scale_by` a clamped factor
+    // (≤ 2.0), so the product is small and never negative.
+    let latent = (f64::from(dim / LATENT_SCALE) * scale_by).round() as u32;
+    latent.saturating_mul(LATENT_SCALE)
 }
 
 /// A finished image body.
@@ -289,6 +426,20 @@ pub async fn run(
         )
         .await?;
 
+    if let Some(h) = req.hires {
+        let (width, height) = req.final_size();
+        db.jobs()
+            .append_event(
+                job_id,
+                EventLevel::Info,
+                &format!(
+                    "Hi-Res-Fix: {:.2}\u{00d7} \u{2192} {}\u{00d7}{}, denoise {:.2}, {} steps",
+                    h.scale_by, width, height, h.denoise, h.steps
+                ),
+            )
+            .await?;
+    }
+
     let inputs = Txt2ImgInputs {
         positive: &req.prompt,
         negative: &req.negative,
@@ -300,9 +451,7 @@ pub async fn run(
         scheduler: &req.scheduler,
         seed: req.seed,
         filename_prefix: job_id,
-        // Plan 3 Task 6 wires this from `ImageRequest`; the pipeline plumbing
-        // lands first, so every render is still a single pass.
-        hires: None,
+        hires: req.hires,
     };
     let workflow = match recipe {
         Recipe::Checkpoint => pipeline::checkpoint_txt2img(&inputs, model_file, &lora_specs),
@@ -369,6 +518,9 @@ pub async fn run(
         }
     };
 
+    // The reported size is the *finished* one, which a Hi-Res-Fix render
+    // decides in its second pass (see `ImageRequest::final_size`).
+    let (out_width, out_height) = req.final_size();
     finish(
         db,
         comfyui,
@@ -376,8 +528,8 @@ pub async fn run(
         job_id,
         &workflow,
         req.seed,
-        req.width,
-        req.height,
+        out_width,
+        out_height,
         cancel,
     )
     .await
@@ -579,8 +731,10 @@ async fn run_reference(
         scheduler: &req.scheduler,
         seed: req.seed,
         filename_prefix: job_id,
-        // Plan 3 Task 6 wires this from `ImageRequest`; the pipeline plumbing
-        // lands first, so every render is still a single pass.
+        // Deliberately never set here: a reference-anchored render is Story
+        // Studio's consistency path, where a second pass at a low denoise
+        // would pull the subject away from the reference for the sake of
+        // resolution (spec §3). The Image tab's toggle is the place for it.
         hires: None,
     };
     let workflow = match recipe {
@@ -1249,5 +1403,161 @@ mod tests {
         .await
         .unwrap_err();
         assert!(err.to_string().contains("FLUX.1"), "{err}");
+    }
+
+    // --- Hi-Res-Fix (Plan 3 Task 6) ---------------------------------------
+
+    #[test]
+    fn from_params_reads_hires_defaults() {
+        let r = ImageRequest::from_params(&serde_json::json!({
+            "prompt": "x",
+            "steps": 20,
+            "hires": {}
+        }))
+        .unwrap();
+        let h = r.hires.expect("hires requested");
+        assert_eq!(h.scale_by, DEFAULT_HIRES_SCALE);
+        assert_eq!(h.denoise, DEFAULT_HIRES_DENOISE);
+        // The default second pass runs half the first pass's steps.
+        assert_eq!(h.steps, 10);
+        assert_eq!(h.upscale_method, HiresFix::DEFAULT_METHOD);
+    }
+
+    #[test]
+    fn from_params_clamps_the_hires_knobs() {
+        let high = ImageRequest::from_params(&serde_json::json!({
+            "prompt": "x",
+            "steps": 150,
+            "hires": { "scale_by": 5.0, "denoise": 0.99, "steps": 500 }
+        }))
+        .unwrap()
+        .hires
+        .expect("hires requested");
+        assert_eq!(high.scale_by, MAX_HIRES_SCALE);
+        assert_eq!(high.denoise, MAX_HIRES_DENOISE);
+        assert_eq!(high.steps, MAX_HIRES_STEPS);
+
+        let low = ImageRequest::from_params(&serde_json::json!({
+            "prompt": "x",
+            "steps": 4,
+            "hires": { "scale_by": 1.0, "denoise": 0.0, "steps": 1 }
+        }))
+        .unwrap()
+        .hires
+        .expect("hires requested");
+        assert_eq!(low.scale_by, MIN_HIRES_SCALE);
+        assert_eq!(low.denoise, MIN_HIRES_DENOISE);
+        assert_eq!(low.steps, MIN_HIRES_STEPS);
+
+        // Half of a 4-step first pass is under the floor — the default is
+        // clamped exactly the way an explicit value is.
+        let floor = ImageRequest::from_params(&serde_json::json!({
+            "prompt": "x",
+            "steps": 4,
+            "hires": {}
+        }))
+        .unwrap()
+        .hires
+        .expect("hires requested");
+        assert_eq!(floor.steps, MIN_HIRES_STEPS);
+    }
+
+    #[test]
+    fn from_params_keeps_known_upscale_methods_and_falls_back_otherwise() {
+        let known = ImageRequest::from_params(&serde_json::json!({
+            "prompt": "x",
+            "hires": { "upscale_method": "  BICUBIC  " }
+        }))
+        .unwrap()
+        .hires
+        .expect("hires requested");
+        assert_eq!(known.upscale_method, "bicubic");
+
+        let unknown = ImageRequest::from_params(&serde_json::json!({
+            "prompt": "x",
+            "hires": { "upscale_method": "lanczos" }
+        }))
+        .unwrap()
+        .hires
+        .expect("hires requested");
+        assert_eq!(unknown.upscale_method, HiresFix::DEFAULT_METHOD);
+    }
+
+    #[test]
+    fn from_params_has_no_hires_when_absent_null_or_malformed() {
+        let absent = ImageRequest::from_params(&serde_json::json!({ "prompt": "x" })).unwrap();
+        assert_eq!(absent.hires, None);
+
+        let null = ImageRequest::from_params(&serde_json::json!({ "prompt": "x", "hires": null }))
+            .unwrap();
+        assert_eq!(null.hires, None);
+
+        let malformed =
+            ImageRequest::from_params(&serde_json::json!({ "prompt": "x", "hires": 1.5 })).unwrap();
+        assert_eq!(malformed.hires, None);
+    }
+
+    #[test]
+    fn apply_to_round_trips_hires() {
+        let mut params = serde_json::json!({
+            "prompt": "x",
+            "width": 1024,
+            "height": 1024,
+            "steps": 20,
+            "hires": { "scale_by": 1.75, "denoise": 0.3 }
+        });
+        let r = ImageRequest::from_params(&params).unwrap();
+        r.apply_to(&mut params);
+
+        assert_eq!(params["hires"]["scale_by"], 1.75);
+        assert_eq!(params["hires"]["denoise"], 0.3);
+        assert_eq!(params["hires"]["steps"], 10);
+        assert_eq!(params["hires"]["upscale_method"], HiresFix::DEFAULT_METHOD);
+        // The result card reads the finished pixel size from here.
+        assert_eq!(params["output_width"], 1792);
+        assert_eq!(params["output_height"], 1792);
+
+        // Re-parsing the written-back params yields the same request.
+        let again = ImageRequest::from_params(&params).unwrap();
+        assert_eq!(again, r);
+    }
+
+    #[test]
+    fn apply_to_writes_a_null_hires_when_there_is_none() {
+        let mut params = serde_json::json!({ "prompt": "x", "hires": { "scale_by": 1.5 } });
+        let mut r = ImageRequest::from_params(&params).unwrap();
+        r.hires = None;
+        r.apply_to(&mut params);
+        assert_eq!(params["hires"], Value::Null);
+        assert!(params.get("output_width").is_none());
+    }
+
+    #[test]
+    fn final_size_follows_the_latent_upscale() {
+        let size = |width: u32, height: u32, scale: f64| {
+            ImageRequest::from_params(&serde_json::json!({
+                "prompt": "x",
+                "width": width,
+                "height": height,
+                "hires": { "scale_by": scale }
+            }))
+            .unwrap()
+            .final_size()
+        };
+
+        // 1024 px = 128 latent units; 128 × 1.5 = 192 → 1536 px.
+        assert_eq!(size(1024, 1024, 1.5), (1536, 1536));
+        // 1000 px = 125 latent units; 125 × 1.5 = 187.5 → round 188 → 1504 px.
+        assert_eq!(size(1000, 1000, 1.5), (1504, 1504));
+        assert_eq!(size(1024, 768, 2.0), (2048, 1536));
+
+        // No Hi-Res-Fix → the requested size *is* the final size.
+        let plain = ImageRequest::from_params(&serde_json::json!({
+            "prompt": "x",
+            "width": 1024,
+            "height": 768
+        }))
+        .unwrap();
+        assert_eq!(plain.final_size(), (1024, 768));
     }
 }

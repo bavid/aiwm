@@ -623,6 +623,23 @@ export interface LoraParam {
   strength: number;
 }
 
+/** Hi-Res-Fix: render once at `width`×`height`, then upscale that latent and
+ *  re-sample it at a low denoise. Only the text-to-image paths honour it —
+ *  an image *edit* and Story Studio's reference-anchored renders ignore it.
+ *  Every field is clamped on the Rust side (`scale_by` 1.25–2, `denoise`
+ *  0.2–0.7, `steps` 4–60) and written back resolved. */
+export interface HiresFixParams {
+  /** How much bigger the second pass runs. Default 1.5. */
+  scale_by: number;
+  /** The second pass's denoise. Default 0.45. */
+  denoise: number;
+  /** Second-pass steps; defaults to half the first pass's. */
+  steps?: number;
+  /** One of ComfyUI's `LatentUpscaleBy` methods (`nearest-exact` — the
+   *  default —, `bilinear`, `area`, `bicubic`, `bislerp`). */
+  upscale_method?: string;
+}
+
 /** The parameters of a `job_type=image` job. After the engine runs, `params`
  *  holds these resolved values (a random seed is pinned back). */
 export interface ImageParams {
@@ -640,6 +657,12 @@ export interface ImageParams {
    *  the instruction, not a generation prompt) — a finished job's id, or a
    *  path. Only FLUX.2 [klein] supports this. */
   source_image?: string;
+  /** Set (or `null`) once the engine has resolved the request. */
+  hires?: HiresFixParams | null;
+  /** The finished pixel size, written back only when `hires` is set — a
+   *  single-pass render always finishes at `width`×`height`. */
+  output_width?: number;
+  output_height?: number;
 }
 
 /** The parameters of a `job_type=video` job. After the engine runs, `params`

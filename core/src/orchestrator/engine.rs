@@ -607,7 +607,11 @@ impl JobEngine {
             (req.width, req.height, req.length)
         } else {
             let req = ImageRequest::from_params(&job.params)?;
-            (req.width, req.height, 1)
+            // The *finished* size, not the requested one: with Hi-Res-Fix the
+            // sampler and the VAE decode both run on the second pass's larger
+            // latent, so that's the shape the headroom has to cover.
+            let (width, height) = req.final_size();
+            (width, height, 1)
         };
 
         Ok(Target {
@@ -1411,6 +1415,11 @@ fn parse_recommend_params(params: &serde_json::Value) -> Result<(String, recomme
 /// then rescales the headroom portion to the job's actual pixel count (and,
 /// for video, frame count) instead of always charging the full reference-size
 /// headroom — see `REFERENCE_IMAGE_PIXELS`/`REFERENCE_VIDEO_PIXEL_FRAMES`.
+///
+/// `width`/`height` are the *finished* pixel size, which for a Hi-Res-Fix
+/// render is the second pass's (`ImageRequest::final_size`) — that pass is
+/// where the peak sits, and its `scale_by²` more pixels is exactly what this
+/// rescaling then charges for.
 fn media_vram_mb(model: &Model, width: u32, height: u32, frames: u32) -> u64 {
     let family = model.family.as_deref();
     let fallback = match family {
@@ -1866,6 +1875,37 @@ mod tests {
         let weights = 8_000.0 - sdxl_headroom;
         let expected = (weights + sdxl_headroom * MIN_HEADROOM_RATIO).round() as u64;
         assert_eq!(tiny, expected);
+    }
+
+    /// A Hi-Res-Fix render decodes the *second* pass, so the activations the
+    /// headroom has to cover follow the upscaled size — the whole reason
+    /// `plan_comfyui` feeds `media_vram_mb` the request's `final_size()`
+    /// rather than its `width`/`height`.
+    #[tokio::test]
+    async fn hires_fix_raises_the_headroom_with_the_second_pass_size() {
+        let db = Database::connect_in_memory().await.unwrap();
+        let model = model_with(&db, Some("sdxl"), 8_000).await;
+
+        let req = image::ImageRequest::from_params(&serde_json::json!({
+            "prompt": "x",
+            "width": 1024,
+            "height": 1024,
+            "hires": { "scale_by": 1.5, "denoise": 0.45 }
+        }))
+        .unwrap();
+        let (width, height) = req.final_size();
+        assert_eq!((width, height), (1536, 1536));
+
+        // 1024² is exactly the reference shape, so the plain render charges
+        // the stored estimate verbatim.
+        assert_eq!(media_vram_mb(&model, 1024, 1024, 1), 8_000);
+
+        // 1536² is 2.25× the pixels — the headroom scales by that, the
+        // weights don't move.
+        let sdxl_headroom: f64 = 2_048.0;
+        let weights = 8_000.0 - sdxl_headroom;
+        let expected = (weights + sdxl_headroom * 2.25).round() as u64;
+        assert_eq!(media_vram_mb(&model, width, height, 1), expected);
     }
 
     #[test]

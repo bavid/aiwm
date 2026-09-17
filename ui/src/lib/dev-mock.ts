@@ -73,6 +73,49 @@ function mkJob(id: string, jobType: string, state: string, over: AnyRecord): Any
   };
 }
 
+const HIRES_UPSCALE_METHODS = ["nearest-exact", "bilinear", "area", "bicubic", "bislerp"];
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), max);
+}
+
+/** Mirror of `ImageRequest`'s Hi-Res-Fix parsing (`core/src/capability/
+ *  image.rs`): the same clamps and defaults, so the dev preview shows the
+ *  numbers the real engine would pin back. Absent/null stays absent. */
+function resolveHires(hires: AnyRecord | null, firstPassSteps: number): AnyRecord | null {
+  if (!hires || typeof hires !== "object") return null;
+  const method = String(hires.upscale_method ?? "").trim().toLowerCase();
+  return {
+    scale_by: clamp(Number(hires.scale_by ?? 1.5), 1.25, 2),
+    denoise: clamp(Number(hires.denoise ?? 0.45), 0.2, 0.7),
+    steps: clamp(Math.trunc(Number(hires.steps ?? Math.floor(firstPassSteps / 2))), 4, 60),
+    upscale_method: HIRES_UPSCALE_METHODS.includes(method) ? method : "nearest-exact",
+  };
+}
+
+/** `LatentUpscaleBy` rounds in *latent* units (8 px each), so the decoded
+ *  size is `round(px / 8 * scale_by) * 8` -- 1000 px x 1.5 is 1504, not 1500.
+ *  Same arithmetic as `ImageRequest::final_size`. */
+function upscaledDim(dim: number, scaleBy: number): number {
+  return Math.round(Math.trunc(dim / 8) * scaleBy) * 8;
+}
+
+/** What the engine writes back over a submitted job's params. Only the image
+ *  path has anything to resolve here today: Hi-Res-Fix's clamped knobs plus
+ *  the finished output size (absent when the render is single-pass). */
+function resolveJobParams(jobType: string, params: AnyRecord): AnyRecord {
+  if (jobType !== "image") return params;
+  const hires = resolveHires((params.hires ?? null) as AnyRecord | null, Number(params.steps ?? 25));
+  if (!hires) return { ...params, hires: null };
+  const scaleBy = Number(hires.scale_by);
+  return {
+    ...params,
+    hires,
+    output_width: upscaledDim(Number(params.width ?? 1024), scaleBy),
+    output_height: upscaledDim(Number(params.height ?? 1024), scaleBy),
+  };
+}
+
 function mkSession(id: string, capability: string, name: string): AnyRecord {
   return { id, capability, name, created_at: now(), archived_at: null };
 }
@@ -1126,7 +1169,7 @@ export function installDevMock(): void {
           upscale: "rtx-video-super-resolution",
         };
         const job = mkJob(`j-dev-${seq++}`, jobType, "running", {
-          params: body.params ?? {},
+          params: resolveJobParams(jobType, (body.params ?? {}) as AnyRecord),
           model_id: (body.model_id as string) ?? autoModel[jobType] ?? "m-wan",
           runtime_id: (body.runtime_id as string) ?? "comfyui",
           output_path: null,
