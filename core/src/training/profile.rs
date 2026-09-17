@@ -337,6 +337,56 @@ pub fn preset_values(p: &TrainingProfile, preset: Preset) -> PresetValues {
     }
 }
 
+/// Resolve the profile for a *library model* the user picked as the
+/// training target. An exact `family` match wins first — this is how the
+/// training-base directory models (`flux2-klein-4b`/`flux2-klein-9b`, see
+/// [`PROFILES`]'s doc comment) resolve. Today's inference-only library
+/// entries all share the generic `"flux2"` family for FLUX.2 [klein]
+/// regardless of size, and `"wan"` for every Wan 2.2 size, so those two
+/// need the model's name/id or `param_count` to disambiguate:
+/// - `"flux2"`: a `4b`/`9b` token in `name` (case-insensitive) wins; else
+///   `param_count` (`< 6e9` → 4B, else 9B); else not trainable.
+/// - `"wan"`: only the 5B is trainable here — a `5b` token in `name`, or
+///   `param_count < 8e9`, resolves to `wan22_5b`; otherwise (the 14B, or
+///   nothing to go on) `None`.
+///
+/// `None` means "not trainable" — the UI shows that in plain text rather
+/// than failing.
+pub fn find_for_model(
+    family: Option<&str>,
+    name: &str,
+    param_count: Option<i64>,
+) -> Option<&'static TrainingProfile> {
+    const FLUX2_4B_PARAM_THRESHOLD: i64 = 6_000_000_000;
+    const WAN_5B_PARAM_THRESHOLD: i64 = 8_000_000_000;
+
+    let family = family?;
+    let lower_name = name.to_lowercase();
+
+    match family {
+        "flux2" => {
+            let resolved = if lower_name.contains("9b") {
+                "flux2-klein-9b"
+            } else if lower_name.contains("4b") || param_count? < FLUX2_4B_PARAM_THRESHOLD {
+                "flux2-klein-4b"
+            } else {
+                "flux2-klein-9b"
+            };
+            find_for_family(resolved)
+        }
+        "wan" => {
+            let is_5b = lower_name.contains("5b")
+                || param_count.is_some_and(|count| count < WAN_5B_PARAM_THRESHOLD);
+            if is_5b {
+                find_for_family("wan")
+            } else {
+                None
+            }
+        }
+        other => find_for_family(other),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -442,5 +492,73 @@ mod tests {
         assert_eq!(preset_values(sdxl, Preset::Fast), sdxl.fast);
         assert_eq!(preset_values(sdxl, Preset::Balanced), sdxl.balanced);
         assert_eq!(preset_values(sdxl, Preset::Thorough), sdxl.thorough);
+    }
+
+    #[test]
+    fn find_for_model_reads_the_size_token_from_the_name_first() {
+        assert_eq!(
+            find_for_model(Some("flux2"), "flux2-klein-9b-fp8", None).map(|p| p.arch),
+            Some("flux2_klein_9b")
+        );
+        assert_eq!(
+            find_for_model(Some("flux2"), "FLUX.2 [klein] 4B", None).map(|p| p.arch),
+            Some("flux2_klein_4b")
+        );
+    }
+
+    #[test]
+    fn find_for_model_falls_back_to_param_count_for_generic_flux2_names() {
+        assert_eq!(
+            find_for_model(Some("flux2"), "flux2-klein", Some(8_900_000_000)).map(|p| p.arch),
+            Some("flux2_klein_9b")
+        );
+        assert_eq!(
+            find_for_model(Some("flux2"), "flux2-klein", Some(4_000_000_000)).map(|p| p.arch),
+            Some("flux2_klein_4b")
+        );
+    }
+
+    #[test]
+    fn find_for_model_is_none_for_flux2_with_no_size_signal() {
+        assert_eq!(find_for_model(Some("flux2"), "mystery", None), None);
+    }
+
+    #[test]
+    fn find_for_model_matches_sdxl_regardless_of_name() {
+        assert_eq!(
+            find_for_model(Some("sdxl"), "anything", None).map(|p| p.arch),
+            Some("sdxl")
+        );
+    }
+
+    #[test]
+    fn find_for_model_accepts_only_the_wan_5b_size() {
+        assert_eq!(
+            find_for_model(Some("wan"), "wan2.2-ti2v-5b-fp16", None).map(|p| p.arch),
+            Some("wan22_5b")
+        );
+        assert_eq!(
+            find_for_model(Some("wan"), "wan-mystery", Some(5_000_000_000)).map(|p| p.arch),
+            Some("wan22_5b")
+        );
+        // The 14B is a real Wan 2.2 size but has no profile here.
+        assert_eq!(
+            find_for_model(Some("wan"), "wan2.2-t2v-14b", Some(14_000_000_000)),
+            None
+        );
+        assert_eq!(find_for_model(Some("wan"), "wan-mystery", None), None);
+    }
+
+    #[test]
+    fn find_for_model_returns_none_without_a_family() {
+        assert_eq!(find_for_model(None, "anything", None), None);
+    }
+
+    #[test]
+    fn find_for_model_matches_the_size_specific_family_exactly() {
+        assert_eq!(
+            find_for_model(Some("flux2-klein-9b"), "irrelevant name", None).map(|p| p.arch),
+            Some("flux2_klein_9b")
+        );
     }
 }
