@@ -4,7 +4,7 @@
 
 use serde_json::json;
 
-use crate::pipeline::graph::{Graph, OwnedLink};
+use crate::pipeline::graph::{Dim, Graph, OwnedLink};
 
 /// Parameters a plain `KSampler` node needs.
 #[derive(Debug, Clone, Copy)]
@@ -58,15 +58,17 @@ pub struct CustomAdvancedIds<'a> {
     pub sampler: &'a str,
 }
 
-/// Parameters the chain needs. `sigmas_override` lets a caller (e.g. a
+/// Parameters the chain needs. `width`/`height` are [`Dim`]s because
+/// `flux2_klein_edit` sizes its `Flux2Scheduler` from a `GetImageSize` node
+/// rather than from fixed inputs. `sigmas_override` lets a caller (e.g. a
 /// future Hi-Res-Fix second pass) feed a different sigmas source than this
 /// chain's own `Flux2Scheduler`; `None` reproduces today's graph exactly.
 #[derive(Debug, Clone)]
 pub struct CustomAdvancedParams<'a> {
     pub seed: i64,
     pub steps: u32,
-    pub width: u32,
-    pub height: u32,
+    pub width: Dim,
+    pub height: Dim,
     pub sampler: &'a str,
     pub cfg: f64,
     pub sigmas_override: Option<OwnedLink>,
@@ -93,7 +95,7 @@ pub fn custom_advanced(
     g.node(
         ids.scheduler,
         "Flux2Scheduler",
-        json!({ "steps": p.steps, "width": p.width, "height": p.height }),
+        json!({ "steps": p.steps, "width": p.width.json(), "height": p.height.json() }),
     );
     g.node(ids.noise, "RandomNoise", json!({ "noise_seed": p.seed }));
     g.node(
@@ -198,8 +200,8 @@ mod tests {
             &CustomAdvancedParams {
                 seed: 42,
                 steps: 25,
-                width: 1024,
-                height: 1024,
+                width: Dim::Fixed(1024),
+                height: Dim::Fixed(1024),
                 sampler: "euler",
                 cfg: 7.0,
                 sigmas_override: None,
@@ -275,13 +277,44 @@ mod tests {
             &CustomAdvancedParams {
                 seed: 42,
                 steps: 25,
-                width: 1024,
-                height: 1024,
+                width: Dim::Fixed(1024),
+                height: Dim::Fixed(1024),
                 sampler: "euler",
                 cfg: 7.0,
                 sigmas_override: Some(override_link),
             },
         );
         assert_eq!(g.input("3", "sigmas"), Some(&json!(["60", 0])));
+    }
+
+    #[test]
+    fn custom_advanced_scheduler_takes_link_dimensions() {
+        let mut g = Graph::default();
+        let ids = CustomAdvancedIds {
+            select: "61",
+            scheduler: "62",
+            noise: "73",
+            guider: "63",
+            sampler: "64",
+        };
+        custom_advanced(
+            &mut g,
+            &ids,
+            &OwnedLink::new("70", 0),
+            &OwnedLink::new("123", 0),
+            &OwnedLink::new("125", 0),
+            &OwnedLink::new("66", 0),
+            &CustomAdvancedParams {
+                seed: 42,
+                steps: 8,
+                width: Dim::Link(OwnedLink::new("99", 0)),
+                height: Dim::Link(OwnedLink::new("99", 1)),
+                sampler: "euler",
+                cfg: 1.5,
+                sigmas_override: None,
+            },
+        );
+        assert_eq!(g.input("62", "width"), Some(&json!(["99", 0])));
+        assert_eq!(g.input("62", "height"), Some(&json!(["99", 1])));
     }
 }

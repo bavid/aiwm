@@ -48,6 +48,23 @@ pub fn zero_out(g: &mut Graph, id: &str, cond: &OwnedLink) -> OwnedLink {
     OwnedLink::new(id, 0)
 }
 
+/// `ReferenceLatent` — splice an encoded source image into a conditioning so
+/// the model edits from the real picture instead of generating from nothing.
+/// Exact keys from `flux2_klein_edit`.
+pub fn reference_latent(
+    g: &mut Graph,
+    id: &str,
+    cond: &OwnedLink,
+    latent: &OwnedLink,
+) -> OwnedLink {
+    g.node(
+        id,
+        "ReferenceLatent",
+        json!({ "conditioning": cond.json(), "latent": latent.json() }),
+    );
+    OwnedLink::new(id, 0)
+}
+
 /// `FluxGuidance` — the CFG-scale stand-in for FLUX.1 and the FLUX.2
 /// \[klein\] safetensors recipe (both are guidance-distilled).
 pub fn flux_guidance(g: &mut Graph, id: &str, cond: &OwnedLink, guidance: f64) -> OwnedLink {
@@ -84,5 +101,21 @@ mod tests {
         assert_eq!(guided, OwnedLink::new("26", 0));
         assert_eq!(g.input("26", "conditioning"), Some(&json!(["6", 0])));
         assert_eq!(g.input("26", "guidance"), Some(&json!(3.5)));
+    }
+
+    #[test]
+    fn reference_latent_wires_conditioning_and_latent() {
+        let mut g = Graph::default();
+        let cond = OwnedLink::new("74", 0);
+        let latent = OwnedLink::new("124", 0);
+        let out = reference_latent(&mut g, "123", &cond, &latent);
+        assert_eq!(out, OwnedLink::new("123", 0));
+        assert_eq!(
+            g.into_value()["123"],
+            json!({
+                "class_type": "ReferenceLatent",
+                "inputs": { "conditioning": ["74", 0], "latent": ["124", 0] }
+            })
+        );
     }
 }

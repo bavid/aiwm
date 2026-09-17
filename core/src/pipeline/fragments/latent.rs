@@ -3,7 +3,7 @@
 
 use serde_json::json;
 
-use crate::pipeline::graph::{Graph, OwnedLink};
+use crate::pipeline::graph::{Dim, Graph, OwnedLink};
 
 /// `EmptyLatentImage` — the plain-checkpoint recipe's latent, batch size 1.
 /// Exact keys from `checkpoint_txt2img`.
@@ -28,12 +28,35 @@ pub fn empty_sd3(g: &mut Graph, id: &str, width: u32, height: u32) -> OwnedLink 
 }
 
 /// `EmptyFlux2LatentImage` — FLUX.2 \[klein\]'s latent, batch size 1. Exact
-/// keys from `flux2_klein_txt2img`.
-pub fn empty_flux2(g: &mut Graph, id: &str, width: u32, height: u32) -> OwnedLink {
+/// keys from `flux2_klein_txt2img`. Takes [`Dim`]s rather than plain numbers
+/// because `flux2_klein_edit` sizes its output canvas from a `GetImageSize`
+/// node instead of from fixed inputs.
+pub fn empty_flux2(
+    g: &mut Graph,
+    id: &str,
+    width: impl Into<Dim>,
+    height: impl Into<Dim>,
+) -> OwnedLink {
     g.node(
         id,
         "EmptyFlux2LatentImage",
-        json!({ "width": width, "height": height, "batch_size": 1 }),
+        json!({
+            "width": width.into().json(),
+            "height": height.into().json(),
+            "batch_size": 1
+        }),
+    );
+    OwnedLink::new(id, 0)
+}
+
+/// `VAEEncode` — a real image back into a latent, the edit graph's way of
+/// starting from the source picture rather than from noise. Exact keys from
+/// `flux2_klein_edit`.
+pub fn vae_encode(g: &mut Graph, id: &str, pixels: &OwnedLink, vae: &OwnedLink) -> OwnedLink {
+    g.node(
+        id,
+        "VAEEncode",
+        json!({ "pixels": pixels.json(), "vae": vae.json() }),
     );
     OwnedLink::new(id, 0)
 }
@@ -81,6 +104,31 @@ mod tests {
         assert_eq!(c, OwnedLink::new("32", 0));
         assert_eq!(g.input("32", "height"), Some(&json!(1024)));
         assert_eq!(g.input("32", "batch_size"), Some(&json!(1)));
+    }
+
+    #[test]
+    fn empty_flux2_accepts_link_dimensions() {
+        let mut g = Graph::default();
+        let width = OwnedLink::new("99", 0);
+        empty_flux2(&mut g, "66", &width, OwnedLink::new("99", 1));
+        assert_eq!(g.input("66", "width"), Some(&json!(["99", 0])));
+        assert_eq!(g.input("66", "height"), Some(&json!(["99", 1])));
+    }
+
+    #[test]
+    fn vae_encode_wires_pixels_and_vae() {
+        let mut g = Graph::default();
+        let pixels = OwnedLink::new("80", 0);
+        let vae = OwnedLink::new("72", 0);
+        let out = vae_encode(&mut g, "124", &pixels, &vae);
+        assert_eq!(out, OwnedLink::new("124", 0));
+        assert_eq!(
+            g.into_value()["124"],
+            json!({
+                "class_type": "VAEEncode",
+                "inputs": { "pixels": ["80", 0], "vae": ["72", 0] }
+            })
+        );
     }
 
     #[test]

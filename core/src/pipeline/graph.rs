@@ -30,6 +30,46 @@ impl OwnedLink {
     }
 }
 
+/// A width/height input that is either a literal number or another node's
+/// output slot. Most recipes size a latent from fixed inputs, but
+/// `flux2_klein_edit` sizes both its `Flux2Scheduler` and its output canvas
+/// from a `GetImageSize` node, so the same fragments have to take either.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Dim {
+    /// A literal pixel count.
+    Fixed(u32),
+    /// A node output slot carrying the dimension (e.g. `GetImageSize`).
+    Link(OwnedLink),
+}
+
+impl Dim {
+    /// The JSON this dimension serialises to: a bare number, or a link pair.
+    pub fn json(&self) -> Value {
+        match self {
+            Self::Fixed(n) => json!(n),
+            Self::Link(link) => link.json(),
+        }
+    }
+}
+
+impl From<u32> for Dim {
+    fn from(n: u32) -> Self {
+        Self::Fixed(n)
+    }
+}
+
+impl From<OwnedLink> for Dim {
+    fn from(link: OwnedLink) -> Self {
+        Self::Link(link)
+    }
+}
+
+impl From<&OwnedLink> for Dim {
+    fn from(link: &OwnedLink) -> Self {
+        Self::Link(link.clone())
+    }
+}
+
 /// Failure modes for [`Graph::set_input`] and [`Graph::from_value`].
 #[derive(Debug, thiserror::Error)]
 pub enum PipelineError {
@@ -140,6 +180,13 @@ mod tests {
         assert_eq!(ids.take(), "90");
         assert_eq!(ids.take(), "91");
         assert_eq!(ids.take(), "92");
+    }
+
+    #[test]
+    fn dim_renders_as_a_number_or_a_link() {
+        assert_eq!(Dim::from(1024u32).json(), json!(1024));
+        assert_eq!(Dim::from(OwnedLink::new("99", 1)).json(), json!(["99", 1]));
+        assert_eq!(Dim::from(&OwnedLink::new("99", 0)).json(), json!(["99", 0]));
     }
 
     #[test]
