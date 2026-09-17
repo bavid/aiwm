@@ -63,6 +63,26 @@ pub struct VramStrategy {
     pub reserve_mb: u64,
 }
 
+/// What a real training run on real hardware actually cost.
+///
+/// Deliberately not an estimate and not a projection: a profile may only
+/// carry this once a run of that family has finished on this machine and the
+/// numbers have been read off it. Everything else a profile claims (the VRAM
+/// strategy, the preset step counts) is a starting point someone chose;
+/// this is the part that was measured.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize)]
+pub struct Measured {
+    /// Wall-clock seconds per training step, averaged over the whole run,
+    /// at the profile's **Fast** preset resolution.
+    pub s_per_step: f64,
+    /// Peak VRAM in use on the whole card during the run, including whatever
+    /// the desktop was already holding — i.e. what has to be free, not what
+    /// the trainer allocated.
+    pub peak_vram_mb: u64,
+    /// ISO date of the run the numbers come from.
+    pub date: &'static str,
+}
+
 /// Rank/LR/resolution/step starting points for one of the three presets.
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize)]
 pub struct PresetValues {
@@ -111,6 +131,10 @@ pub struct TrainingProfile {
     pub balanced: PresetValues,
     pub thorough: PresetValues,
     pub license_note: &'static str,
+    /// `Some` only for a family a real run has produced numbers for — see
+    /// [`Measured`]. `None` means "nobody has run this here yet", which is
+    /// what the UI should say rather than inventing a figure.
+    pub measured: Option<Measured>,
 }
 
 /// What the FLUX.2 [klein] trainer actually opens under `name_or_path` — the
@@ -195,6 +219,17 @@ pub const PROFILES: &[TrainingProfile] = &[
             sample_every: 250,
         },
         license_note: "Apache-2.0 base weights",
+        // First real run on this machine (RTX 4080 Super 16 GB): 600 Fast
+        // steps at 768 px over a 50-image dataset in 16 min 30 s wall
+        // (1.65 s/step by tqdm's own final rate, 990 s / 600 steps), peak
+        // 12,249 MB of the card's 16,376 MB with ~1,256 MB of that already
+        // held by the desktop. Comfortably inside the 12,288 MB reserve --
+        // which is the claim this measurement exists to keep honest.
+        measured: Some(Measured {
+            s_per_step: 1.65,
+            peak_vram_mb: 12_249,
+            date: "2026-09-17",
+        }),
     },
     TrainingProfile {
         family: "flux2-klein-9b",
@@ -245,6 +280,8 @@ pub const PROFILES: &[TrainingProfile] = &[
         },
         license_note: "FLUX non-commercial licence; needs fp8 + layer offloading on 16 GB — \
                         unverified until the first real run",
+        // No real run of this family here yet — see `Measured`.
+        measured: None,
     },
     TrainingProfile {
         family: "sdxl",
@@ -300,6 +337,8 @@ pub const PROFILES: &[TrainingProfile] = &[
             sample_every: 250,
         },
         license_note: "CreativeML Open RAIL++-M",
+        // No real run of this family here yet — see `Measured`.
+        measured: None,
     },
     TrainingProfile {
         family: "wan",
@@ -350,6 +389,8 @@ pub const PROFILES: &[TrainingProfile] = &[
         },
         license_note: "Apache-2.0; the 16 GB setting is unverified until a real attempt \
                         (spec: open point)",
+        // No real run of this family here yet — see `Measured`.
+        measured: None,
     },
 ];
 
@@ -738,6 +779,46 @@ mod tests {
             assert_eq!(profile.vram.reserve_mb, *reserve_mb, "{family}: reserve_mb");
             assert_eq!(profile.vram.fit, *fit, "{family}: fit");
         }
+    }
+
+    #[test]
+    fn only_a_profile_that_has_actually_been_run_carries_a_measurement() {
+        // `measured` is evidence, not an estimate: it may only be present for
+        // a family a real run has produced numbers for on real hardware.
+        // Today that is the 4B and nothing else.
+        for profile in PROFILES {
+            match profile.family {
+                "flux2-klein-4b" => {
+                    let m = profile.measured.expect("the 4B has been run for real");
+                    assert!(m.s_per_step > 0.0, "seconds per step must be positive");
+                    assert!(
+                        m.peak_vram_mb > 0 && m.peak_vram_mb < 16_376,
+                        "a peak measured on a 16 GB card must fit in one: {}",
+                        m.peak_vram_mb
+                    );
+                    assert_eq!(m.date.len(), 10, "an ISO date, e.g. 2026-09-17");
+                }
+                other => assert!(
+                    profile.measured.is_none(),
+                    "{other}: no real run has measured this profile yet"
+                ),
+            }
+        }
+    }
+
+    #[test]
+    fn the_4b_reserve_covers_what_the_real_run_actually_used() {
+        // The reserve is what preflight demands be free before it will start.
+        // If a measured peak ever exceeds it, the profile is promising a run
+        // it cannot deliver -- and the user gets an OOM instead of a refusal.
+        let profile = find_for_family("flux2-klein-4b").expect("4B profile");
+        let measured = profile.measured.expect("the 4B has been measured");
+        assert!(
+            measured.peak_vram_mb <= profile.vram.reserve_mb,
+            "measured peak {} MB exceeds the {} MB the profile reserves",
+            measured.peak_vram_mb,
+            profile.vram.reserve_mb
+        );
     }
 
     #[test]

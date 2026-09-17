@@ -385,6 +385,64 @@ async fn poll_turns_an_error_marker_into_failed_with_the_message() {
 }
 
 #[tokio::test]
+async fn poll_completes_a_run_whose_bar_reached_its_total_without_any_marker() {
+    // The pinned ai-toolkit commit never prints its completion block on the
+    // happy path: `run.py` calls `print_end_message` only from the `except`
+    // branch, so a job that simply succeeds returns from `main` in silence.
+    // The first real run on this machine therefore trained all 600 steps,
+    // saved its final checkpoint and its samples, exited 0 -- and was
+    // recorded as `interrupted`, with no LoRA imported, because the marker
+    // the runner was waiting for does not exist.
+    //
+    // A bar that reached its own total is the evidence that does exist.
+    let fx = fixture().await;
+    let log = "testlora: 100%|##########| 600/600 [16:30<00:00,  1.65s/it, lr: 1.0e-04 \
+               loss: 5.875e-01]\nSaved checkpoint to out\n";
+    let run = running_run(&fx, log).await;
+    let out = training_folder(&fx.runner.work_dir(&run.id)).join(&run.name);
+    std::fs::create_dir_all(&out).expect("create the output dir");
+    let checkpoint = out.join(format!("{}.safetensors", run.name));
+    std::fs::write(&checkpoint, b"not really a lora").expect("write the checkpoint");
+
+    fx.runner.poll_once().await.expect("poll");
+
+    let after = reload(&fx, &run.id).await;
+    assert_eq!(
+        after.state,
+        RunState::Completed,
+        "a run that finished every step must not be reported as interrupted"
+    );
+    assert!(
+        after.result_model_id.is_some(),
+        "the LoRA must reach the library"
+    );
+    assert_released(&fx);
+}
+
+#[tokio::test]
+async fn poll_does_not_complete_a_run_whose_bar_is_still_short_of_its_total() {
+    // The mirror of the test above: "the bar reached its total" is only
+    // usable as a success signal if falling short is still an interruption.
+    let fx = fixture().await;
+    let log = "testlora:  93%|#########3| 560/600 [15:24<00:44,  1.65s/it, lr: 1.0e-04 \
+               loss: 5.3e-01]\n";
+    let run = running_run(&fx, log).await;
+    let out = training_folder(&fx.runner.work_dir(&run.id)).join(&run.name);
+    std::fs::create_dir_all(&out).expect("create the output dir");
+    std::fs::write(
+        out.join(format!("{}_000000400.safetensors", run.name)),
+        b"partial",
+    )
+    .expect("write the checkpoint");
+
+    fx.runner.poll_once().await.expect("poll");
+
+    let after = reload(&fx, &run.id).await;
+    assert_eq!(after.state, RunState::Interrupted);
+    assert!(after.result_model_id.is_none());
+}
+
+#[tokio::test]
 async fn poll_completes_and_imports_when_the_completion_marker_and_a_checkpoint_exist() {
     let fx = fixture().await;
     let run = running_run(&fx, "Result:\n - 1 completed job\n").await;

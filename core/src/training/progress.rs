@@ -283,20 +283,50 @@ pub async fn tail_log(path: &Path, from: u64) -> Result<(String, u64)> {
     Ok((chunk, new_offset))
 }
 
-/// The `_{step:09}` suffix on a checkpoint file name
-/// (`<run_name>_<step:09>.safetensors`), parsed against a specific run.
+/// The step a checkpoint file belongs to, parsed against a specific run.
+///
+/// `ai-toolkit` writes intermediate saves as
+/// `<run_name>_<step:09>.safetensors` but the **final** save as plain
+/// `<run_name>.safetensors`, with no step at all — confirmed on the first
+/// real run, which finished with `myrender-v1_000000200`,
+/// `myrender-v1_000000400` and `myrender-v1` side by side. Reading only the
+/// numbered form left the newest and best checkpoint invisible and would
+/// have imported the step-400 one as the run's result.
+///
+/// The unsuffixed file is by definition the last thing written, so it sorts
+/// above every numbered save via [`u64::MAX`]; the real step it corresponds
+/// to is the run's configured total and is already in the database.
 fn checkpoint_step(file_name: &str, run_name: &str) -> Option<u64> {
     let stem = file_name.strip_suffix(".safetensors")?;
-    let step_str = stem.strip_prefix(run_name)?.strip_prefix('_')?;
-    step_str.parse().ok()
+    let rest = stem.strip_prefix(run_name)?;
+    if rest.is_empty() {
+        return Some(FINAL_CHECKPOINT_RANK);
+    }
+    rest.strip_prefix('_')?.parse().ok()
 }
 
-/// The `_{step:09}_` step segment of a sample file name
-/// (`<time>_<step:09>_<count>.<ext>`).
+/// The sort rank of the final, unsuffixed checkpoint — above every numbered
+/// save. Not a real step count; see [`checkpoint_step`].
+const FINAL_CHECKPOINT_RANK: u64 = u64::MAX;
+
+/// The step a sample image belongs to, from its file name.
+///
+/// `ai-toolkit` writes `<time>__<step:09>_<count>.<ext>` — with *two*
+/// underscores after the millisecond timestamp, e.g.
+/// `1789641631350__000000200_0.jpg`. Splitting left-to-right on the first two
+/// underscores therefore lands on the empty string between them, which is how
+/// every preview image of the first real run came to be invisible to the API.
+///
+/// Counting from the right instead: the last underscore-separated segment is
+/// the per-prompt counter and the one before it is the step, whatever the
+/// timestamp looks like and however many underscores separate them.
 fn sample_step(file_name: &str) -> Option<u64> {
-    let (_time, rest) = file_name.split_once('_')?;
-    let (step_str, _count_and_ext) = rest.split_once('_')?;
-    step_str.parse().ok()
+    let stem = file_name
+        .rsplit_once('.')
+        .map_or(file_name, |(stem, _)| stem);
+    let mut segments = stem.split('_').filter(|s| !s.is_empty()).rev();
+    let _count = segments.next()?;
+    segments.next()?.parse().ok()
 }
 
 /// Scan a run's work directory for its latest checkpoint and the samples
@@ -338,9 +368,15 @@ pub fn scan_work_dir(run_dir: &Path, run_name: &str) -> Result<WorkDirState> {
             samples.push((step, path));
         }
 
+        // Which step's previews belong with the checkpoint we picked. The
+        // final, unsuffixed checkpoint carries no step of its own — it only
+        // sorts last (see `checkpoint_step`) — so its previews are simply the
+        // newest ones on disk, which is also the fallback when there is no
+        // checkpoint at all yet.
+        let newest_sample_step = samples.iter().map(|(step, _)| *step).max();
         let target_step = match latest_checkpoint {
+            Some((FINAL_CHECKPOINT_RANK, _)) | None => newest_sample_step,
             Some((step, _)) => Some(step),
-            None => samples.iter().map(|(step, _)| *step).max(),
         };
         if let Some(target_step) = target_step {
             latest_samples = samples
@@ -393,6 +429,114 @@ mod tests {
             "job:  50%|█████     | 100/200 [1:02:03<2:00:00,  1.86it/s, lr: 1.0e-04 loss: 3.123e-01]";
         let p3 = parse_progress(long_running).expect("should parse h:mm:ss eta");
         assert_eq!(p3.eta_secs, Some(2 * 3600));
+    }
+
+    #[test]
+    fn the_final_unsuffixed_checkpoint_is_the_newest_one() {
+        // ai-toolkit names intermediate saves `<name>_<step:09>.safetensors`
+        // but the *final* one just `<name>.safetensors` -- verified on the
+        // first real run, whose folder ended up holding
+        // myrender-v1_000000200, myrender-v1_000000400 and myrender-v1.
+        // Reading only the suffixed form meant the run's best and last
+        // checkpoint was the one checkpoint the app could not see, and the
+        // step-400 file would have been imported as the result.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let dir = tmp.path().join("myrender-v1");
+        std::fs::create_dir_all(dir.join("samples")).expect("create dirs");
+        for name in [
+            "myrender-v1_000000200.safetensors",
+            "myrender-v1_000000400.safetensors",
+            "myrender-v1.safetensors",
+            "optimizer.pt",
+            "config.yaml",
+        ] {
+            std::fs::write(dir.join(name), b"x").expect("write");
+        }
+
+        // Previews from three different steps, as a real run leaves behind.
+        for name in [
+            "1789641631350__000000200_0.jpg",
+            "1789642005095__000000400_0.jpg",
+            "1789642368993__000000600_0.jpg",
+            "1789642386450__000000600_1.jpg",
+        ] {
+            std::fs::write(dir.join("samples").join(name), b"x").expect("write");
+        }
+
+        let state = scan_work_dir(&dir, "myrender-v1").expect("scan");
+        let (step, path) = state.latest_checkpoint.expect("a checkpoint must be found");
+        assert_eq!(
+            path.file_name().and_then(|n| n.to_str()),
+            Some("myrender-v1.safetensors"),
+            "the unsuffixed final save must win over every numbered one"
+        );
+        assert!(
+            step >= 400,
+            "the final save must not sort below the numbered ones: {step}"
+        );
+
+        // The final checkpoint has no step of its own, so pairing previews by
+        // its sort rank would match nothing at all -- which is how a finished
+        // run came to report an empty `latest_samples` with eight preview
+        // images sitting on disk.
+        let mut names: Vec<&str> = state
+            .latest_samples
+            .iter()
+            .filter_map(|p| p.file_name().and_then(|n| n.to_str()))
+            .collect();
+        names.sort_unstable();
+        assert_eq!(
+            names,
+            vec![
+                "1789642368993__000000600_0.jpg",
+                "1789642386450__000000600_1.jpg"
+            ],
+            "the final checkpoint's previews are the newest ones on disk"
+        );
+    }
+
+    #[test]
+    fn a_run_without_a_final_save_still_finds_its_newest_numbered_checkpoint() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let dir = tmp.path().join("myrender-v1");
+        std::fs::create_dir_all(&dir).expect("create dir");
+        for name in [
+            "myrender-v1_000000200.safetensors",
+            "myrender-v1_000000400.safetensors",
+        ] {
+            std::fs::write(dir.join(name), b"x").expect("write");
+        }
+        let state = scan_work_dir(&dir, "myrender-v1").expect("scan");
+        let (step, path) = state.latest_checkpoint.expect("a checkpoint must be found");
+        assert_eq!(step, 400);
+        assert_eq!(
+            path.file_name().and_then(|n| n.to_str()),
+            Some("myrender-v1_000000400.safetensors")
+        );
+    }
+
+    #[test]
+    fn real_sample_file_names_yield_their_step() {
+        // Verbatim from the first real run's `samples/` folder (2026-09-17).
+        // Note the *double* underscore after the timestamp: the spec appendix
+        // recorded this layout as `<time>_<step:09>_<count>.<ext>`, and on
+        // that reading `sample_step` split the empty string between the two
+        // underscores and returned `None` for every file. The result was a
+        // run whose preview images all existed on disk while the API reported
+        // `latest_samples: []` and the sample route answered 404.
+        assert_eq!(sample_step("1789641249130__000000000_0.jpg"), Some(0));
+        assert_eq!(sample_step("1789641267104__000000000_1.jpg"), Some(0));
+        assert_eq!(sample_step("1789641631350__000000200_0.jpg"), Some(200));
+        assert_eq!(sample_step("1789641650004__000000200_1.jpg"), Some(200));
+
+        // The single-underscore spelling must keep working: it is what the
+        // fake trainer writes, and nothing says ai-toolkit cannot go back.
+        assert_eq!(sample_step("1789641631350_000000200_0.png"), Some(200));
+
+        // Not a sample file.
+        assert_eq!(sample_step("config.yaml"), None);
+        assert_eq!(sample_step(".thumbs"), None);
+        assert_eq!(sample_step("optimizer.pt"), None);
     }
 
     #[test]

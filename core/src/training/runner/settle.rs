@@ -30,7 +30,19 @@ use crate::{CoreError, Result};
 #[derive(Debug, Clone, Default)]
 pub(super) struct PollState {
     pub(super) offset: u64,
+    /// The trainer printed its completion block.
     pub(super) completed: bool,
+    /// This run's own progress bar reached its total at least once.
+    ///
+    /// This is the success signal that actually fires. The pinned
+    /// `ai-toolkit` commit only calls `print_end_message` from `run.py`'s
+    /// `except` branch, so a job that succeeds returns from `main` without
+    /// printing anything at all — [`completed`](Self::completed) stays false
+    /// forever on the happy path, and a run that trained every step, saved
+    /// its checkpoint and exited 0 was settled as `interrupted` with no LoRA
+    /// imported. Reaching `N/N` on the run's own bar is the evidence the
+    /// trainer does leave behind.
+    pub(super) reached_total: bool,
     pub(super) failure: Option<String>,
     pub(super) checkpoint_step: Option<u64>,
 }
@@ -124,6 +136,9 @@ impl Runner {
             // Scoped to this run's own bar: the trainer draws several other
             // progress bars of the same shape (see `parse_run_progress`).
             if let Some(progress) = parse_run_progress(update, &run.name) {
+                if progress.total > 0 && progress.step >= progress.total {
+                    poll.reached_total = true;
+                }
                 latest = Some(progress);
                 continue;
             }
@@ -224,7 +239,7 @@ impl Runner {
             return self.complete(run, checkpoint).await;
         }
 
-        if poll.completed {
+        if poll.completed || poll.reached_total {
             if let Some(path) = checkpoint {
                 if !self
                     .transition(&run.id, run.state, RunState::Finishing)
