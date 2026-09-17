@@ -18,6 +18,7 @@ mod job;
 mod llamacpp;
 mod registry;
 mod supervisor;
+pub mod training;
 pub mod tts;
 mod version_check;
 pub mod vision;
@@ -35,6 +36,7 @@ pub use job::JobObject;
 pub use llamacpp::{GenerationEvent, InstallState, LlamaCppAdapter, LlamaServerOptions};
 pub use registry::RuntimeRegistry;
 pub use supervisor::{RuntimeSupervisor, SupervisorState};
+pub use training::TrainingAdapter;
 pub use tts::TtsAdapter;
 pub use version_check::{check_versions, ToolVersionCheck, UpdateStatus};
 pub use vision::VisionAdapter;
@@ -73,6 +75,10 @@ pub enum RuntimeKind {
     /// The Florence-2 / Qwen2.5-VL captioning pipeline for `job_type=
     /// dataset_prep` — see [`vision::VisionAdapter`].
     Vision,
+    /// The `ai-toolkit` LoRA trainer — see [`training::TrainingAdapter`]. It
+    /// owns no supervised process: a run is detached and holds the GPU under
+    /// one synthetic reservation.
+    Training,
     Fake,
 }
 

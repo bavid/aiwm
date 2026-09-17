@@ -17,8 +17,8 @@ use crate::paths::AppPaths;
 use crate::progress::ProgressHub;
 use crate::registry::{CivitaiSource, HuggingFaceSource, Registry};
 use crate::runtime::{
-    ColibriAdapter, ComfyDirs, ComfyUiAdapter, LlamaCppAdapter, RuntimeRegistry, TtsAdapter,
-    VisionAdapter,
+    ColibriAdapter, ComfyDirs, ComfyUiAdapter, LlamaCppAdapter, RuntimeRegistry, TrainingAdapter,
+    TtsAdapter, VisionAdapter,
 };
 use crate::scheduler::HybridScheduler;
 use crate::telemetry::{GpuStatus, Sampler};
@@ -61,6 +61,11 @@ pub struct App {
     /// The dataset-prep captioning pipeline's runtime (Florence-2/Qwen2.5-VL)
     /// — same lazy-sidecar shape as `tts`, but tracks real (non-zero) VRAM.
     pub vision: Arc<VisionAdapter>,
+    /// The `ai-toolkit` LoRA trainer. Registered like every other runtime so
+    /// it shows up in `GET /runtimes` and the Settings install card, but it
+    /// supervises no process: a training run is detached and reports its GPU
+    /// hold as one synthetic loaded model (`training::TRAINING_MODEL_ID`).
+    pub training: Arc<TrainingAdapter>,
     pub scheduler: Arc<HybridScheduler>,
     pub jobs: Arc<JobEngine>,
     /// Long-running agent sessions (Phase 5.1c) — its own subsystem, not a job.
@@ -143,6 +148,8 @@ impl App {
         runtimes.register(tts.clone());
         let vision = Arc::new(VisionAdapter::new());
         runtimes.register(vision.clone());
+        let training = Arc::new(TrainingAdapter::discover(&paths.runtimes_dir()));
+        runtimes.register(training.clone());
         let budget = resolve_vram_budget(&config, &telemetry);
         let scheduler = Arc::new(HybridScheduler::new(runtimes.clone(), budget));
         let auto_pref = config.models.auto_preference;
@@ -258,6 +265,7 @@ impl App {
             tts,
             progress,
             vision,
+            training,
             scheduler,
             jobs,
             agents,
