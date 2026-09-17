@@ -1,0 +1,456 @@
+/* Training tab — one column of cards (the run form on top, then the run
+   history). Reuses the app-wide `.card` / `.chip` / `.muted` vocabulary and
+   the dataset form's field classes rather than inventing a second one. */
+
+.training {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  max-width: 1100px;
+  margin: 0 auto;
+}
+
+.training__head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+}
+
+.training__head h2 {
+  font-size: var(--text-lg);
+}
+
+.training__status {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+
+.training__new {
+  padding: var(--space-2) var(--space-4);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: var(--accent);
+  color: var(--accent-fg);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.training__new:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.training__empty {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  color: var(--muted);
+  font-size: var(--text-sm);
+  line-height: 1.6;
+}
+
+.training__empty h3 {
+  color: var(--text);
+  font-size: var(--text-md);
+}
+
+.training__empty ol {
+  margin: 0;
+  padding-left: var(--space-5);
+}
+
+.training__err {
+  margin: 0;
+  color: var(--load-crit);
+  font-size: var(--text-sm);
+}
+
+/* --- new-run form ------------------------------------------------------ */
+
+.runform {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.runform__head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+}
+
+.runform__head h3 {
+  font-size: var(--text-md);
+}
+
+.runform__close {
+  margin-left: auto;
+}
+
+.runform__grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3);
+}
+
+.runform__presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin: 0;
+  padding: var(--space-3);
+  min-inline-size: 0;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+
+.runform__presets legend {
+  padding: 0 var(--space-2);
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.runform__preset {
+  display: flex;
+  flex: 1 1 180px;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  cursor: pointer;
+}
+
+.runform__preset strong {
+  display: block;
+  font-size: var(--text-sm);
+}
+
+.runform__preset em {
+  display: block;
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  font-style: normal;
+}
+
+.runform__prompts {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.runform__prompt {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.runform__prompt input {
+  flex: 1;
+  min-width: 0;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--text-sm);
+}
+
+.runform__tune {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--space-3);
+  margin-top: var(--space-2);
+}
+
+/* An open disclosure highlights like a pressed chip. `.chip` itself only
+   styles `[aria-pressed="true"]`, which a disclosure button must not use --
+   it has `aria-expanded` instead. */
+.chip[aria-expanded="true"] {
+  color: var(--accent);
+  border-color: color-mix(in oklab, var(--accent) 45%, var(--border));
+}
+
+.runform__fielderr {
+  color: var(--load-crit);
+  font-size: var(--text-xs);
+  font-style: normal;
+  line-height: 1.5;
+}
+
+.runform__tune input {
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--text-sm);
+}
+
+.runform__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+/* --- preflight --------------------------------------------------------- */
+
+.preflight {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+
+.preflight h4 {
+  margin: 0;
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.preflight__item {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+}
+
+.preflight__line {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+
+.preflight__mark {
+  font-weight: 700;
+}
+
+.preflight__item[data-ok="pass"] .preflight__mark {
+  color: var(--load-ok);
+}
+
+.preflight__item[data-ok="fail"] .preflight__mark {
+  color: var(--load-crit);
+}
+
+/* Also the "not answered yet" state -- a check still waiting on its poll
+   reads neutral, never as a failure. */
+.preflight__item[data-ok="note"] .preflight__mark {
+  color: var(--muted);
+}
+
+.preflight__fix {
+  margin: 0;
+  padding-left: var(--space-5);
+  color: var(--muted);
+  font-size: var(--text-xs);
+  line-height: 1.6;
+}
+
+.preflight__cmd {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  margin: var(--space-1) 0 0 var(--space-5);
+}
+
+.preflight__cmd code {
+  flex: 1;
+  min-width: 0;
+  padding: var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  overflow-wrap: anywhere;
+}
+
+/* --- run card ---------------------------------------------------------- */
+
+.runlist {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.runcard {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.runcard__head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.runcard__head h3 {
+  font-size: var(--text-md);
+}
+
+.runcard__profile {
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+
+.runcard__chip {
+  margin-left: auto;
+  padding: 2px var(--space-2);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.runcard__chip[data-state="running"],
+.runcard__chip[data-state="preparing"],
+.runcard__chip[data-state="resuming"],
+.runcard__chip[data-state="finishing"] {
+  color: var(--accent);
+}
+
+.runcard__chip[data-state="completed"] {
+  color: var(--load-ok);
+}
+
+.runcard__chip[data-state="failed"] {
+  color: var(--load-crit);
+}
+
+.runcard__chip[data-state="paused"],
+.runcard__chip[data-state="interrupted"],
+.runcard__chip[data-state="cancelled"] {
+  color: var(--load-warn);
+  text-transform: none;
+}
+
+.runcard__bar {
+  height: 6px;
+  border-radius: 999px;
+  background: var(--track);
+  overflow: hidden;
+}
+
+.runcard__fill {
+  height: 100%;
+  background: var(--accent);
+  transition: width var(--dur) var(--ease);
+}
+
+.runcard__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+
+.runcard__samples {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.runcard__sample {
+  width: 120px;
+  height: 120px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--track);
+  object-fit: cover;
+}
+
+.runcard__sample--missing {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-2);
+  color: var(--faint);
+  font-size: var(--text-xs);
+  text-align: center;
+}
+
+.runcard__log {
+  margin: 0;
+  max-height: 220px;
+  padding: var(--space-3);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: 1.6;
+  overflow: auto;
+  white-space: pre-wrap;
+}
+
+.runcard__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.runcard__spacer {
+  margin-left: auto;
+}
+
+.runcard__badge {
+  padding: 2px var(--space-2);
+  border-radius: var(--radius-sm);
+  border: 1px solid color-mix(in oklab, var(--load-ok) 45%, var(--border));
+  color: var(--load-ok);
+  font-size: var(--text-xs);
+}
+
+.runcard__confirm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid color-mix(in oklab, var(--load-crit) 40%, var(--border));
+  border-radius: var(--radius-sm);
+  font-size: var(--text-sm);
+}
+
+.runcard__confirm label {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.runcard__err {
+  margin: 0;
+  color: var(--load-crit);
+  font-size: var(--text-sm);
+}
+
+@media (max-width: 900px) {
+  .runform__grid,
+  .runform__tune {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

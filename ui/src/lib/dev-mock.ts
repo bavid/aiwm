@@ -320,6 +320,165 @@ function progressDatasetJobs(): void {
   }
 }
 
+// --- training orchestrator ----------------------------------------------
+
+/** Steps one mock tick advances a running run by. Small enough that the
+ *  progress bar visibly crawls, large enough to reach a checkpoint in a few
+ *  polls of the 3 s `useTrainingRuns` interval. */
+const TRAINING_STEPS_PER_TICK = 25;
+
+/** Checkpoint (and sample) interval — the real `save_every`/`sample_every` of
+ *  the balanced presets. */
+const TRAINING_CHECKPOINT_EVERY = 250;
+
+const TRAINING_RUNS: AnyRecord[] = [
+  mkTrainingRun("tr-done", "Ghibli Look v1", {
+    state: "completed",
+    step: 1500,
+    total_steps: 1500,
+    last_loss: 0.0412,
+    last_checkpoint_at: now(),
+    result_model_id: "m-lora-flux-style",
+    finished_at: now(),
+  }),
+  mkTrainingRun("tr-live", "Kenji Character v2", {
+    state: "running",
+    step: 325,
+    total_steps: 1500,
+    last_loss: 0.1183,
+    last_checkpoint_at: now(),
+    pid: 24680,
+    started_at: now(),
+  }),
+];
+
+function mkTrainingRun(id: string, name: string, over: AnyRecord): AnyRecord {
+  return {
+    id,
+    name,
+    profile_family: "flux2-klein-4b",
+    target_model_id: "m-flux2-klein",
+    dataset_id: DATASETS[0]?.id ?? null,
+    data_kind: "frames",
+    trigger_word: "ghibli_xy",
+    preset: "balanced",
+    hyperparams_json: "{}",
+    sample_prompts_json: JSON.stringify([`${name} — a portrait, soft light`]),
+    state: "preparing",
+    step: 0,
+    total_steps: 1500,
+    last_loss: null,
+    last_checkpoint_at: null,
+    pid: null,
+    work_dir: `E:\\AI\\data\\training\\${id}`,
+    result_model_id: null,
+    error_text: null,
+    created_at: now(),
+    started_at: null,
+    finished_at: null,
+    ...over,
+  };
+}
+
+/** Advances every `running` mock run by one tick: steps climb, the loss
+ *  decays with a little noise, a checkpoint lands every
+ *  {@link TRAINING_CHECKPOINT_EVERY} steps, and reaching `total_steps`
+ *  completes the run and imports a LoRA row the Image tab can then pick —
+ *  the same end-to-end shape the real runner produces, minus the GPU. */
+function progressTrainingRuns(): void {
+  for (const r of TRAINING_RUNS) {
+    if (r.state !== "running" && r.state !== "resuming") continue;
+    r.state = "running";
+    const total = Number(r.total_steps);
+    const step = Math.min(total, Number(r.step) + TRAINING_STEPS_PER_TICK);
+    const previous = Number(r.step);
+    r.step = step;
+    // A decaying loss with a touch of jitter -- the chart has to look alive
+    // without ever suggesting real numbers.
+    r.last_loss = Number((0.35 * Math.exp(-step / 600) + Math.random() * 0.01).toFixed(4));
+    if (
+      Math.floor(step / TRAINING_CHECKPOINT_EVERY) >
+      Math.floor(previous / TRAINING_CHECKPOINT_EVERY)
+    ) {
+      r.last_checkpoint_at = now();
+    }
+    if (step < total) continue;
+
+    r.state = "completed";
+    r.finished_at = now();
+    r.pid = null;
+    r.last_checkpoint_at = now();
+    const model = mkModel(`m-lora-${String(r.id)}`, `${String(r.name)} (LoRA)`, {
+      family: "flux2",
+      roles: ["lora"],
+      runtimes: ["comfyui"],
+      size_bytes: 168_000_000,
+      source: `training:${String(r.id)}`,
+    });
+    MODELS.push(model);
+    r.result_model_id = model.id;
+  }
+}
+
+/** The four seeded profiles. Only the 4B base is staged, so the dev preview
+ *  shows both halves of the "Basisgewichte fehlen" branch at once. */
+const TRAINING_PROFILES: AnyRecord[] = [
+  mkTrainingProfile("flux2-klein-4b", "FLUX.2 [klein] 4B", "flux2_klein_4b", {
+    fit: "comfortable", fit_label: "fits comfortably", reserve_mb: 12288,
+    base_repo: "black-forest-labs/FLUX.2-klein-base-4B",
+    base_role: "training_base_flux2_klein_4b", base_approx_gb: 16, base_installed: true,
+    license_note: "Apache-2.0 base weights",
+    trainable_models: [{ id: "m-flux2-klein", name: "FLUX.2 [klein] 4B (dev-mock)", family: "flux2" }],
+  }),
+  mkTrainingProfile("flux2-klein-9b", "FLUX.2 [klein] 9B", "flux2_klein_9b", {
+    fit: "at_the_edge", fit_label: "at the edge", reserve_mb: 15000,
+    base_repo: "black-forest-labs/FLUX.2-klein-base-9B",
+    base_role: "training_base_flux2_klein_9b", base_approx_gb: 30, base_installed: false,
+    license_note: "FLUX non-commercial licence; needs fp8 + layer offloading on 16 GB",
+  }),
+  mkTrainingProfile("sdxl", "SDXL", "sdxl", {
+    fit: "comfortable", fit_label: "fits comfortably", reserve_mb: 10240,
+    base_repo: "stabilityai/stable-diffusion-xl-base-1.0",
+    base_role: "training_base_sdxl", base_approx_gb: 7, base_installed: false,
+    caption_order: "tags_first", license_note: "CreativeML Open RAIL++-M",
+    trainable_models: [{ id: "m-sdxl", name: "SDXL Base 1.0", family: "sdxl" }],
+  }),
+  mkTrainingProfile("wan", "Wan 2.2 TI2V 5B", "wan22_5b", {
+    data_kind: "both", fit: "at_the_edge", fit_label: "at the edge", reserve_mb: 15000,
+    base_repo: "Wan-AI/Wan2.2-TI2V-5B-Diffusers",
+    base_role: "training_base_wan22_5b", base_approx_gb: 20, base_installed: false,
+    license_note: "Apache-2.0; the 16 GB setting is unverified until a real attempt",
+    trainable_models: [{ id: "m-wan", name: "wan2.2_ti2v_5B_fp16", family: "wan" }],
+  }),
+];
+
+function mkTrainingProfile(
+  family: string,
+  label: string,
+  arch: string,
+  over: AnyRecord,
+): AnyRecord {
+  return {
+    family, label, arch, data_kind: "frames", fit: "comfortable",
+    fit_label: "fits comfortably", reserve_mb: 12288, base_repo: "", base_role: "",
+    base_required_files: ["model_index.json"], base_approx_gb: 16, base_installed: false,
+    // The real core builds this from `training::bases`; the shape is what the
+    // preflight panel shows and copies verbatim, so the mock spells out a
+    // plausible one rather than leaving the copy block empty.
+    base_download_command:
+      `hf download ${String(over.base_repo ?? "")} ` +
+      `--local-dir E:\\AI\\models\\training\\${family} --exclude "*.jpg"`,
+    caption_order: "prose_first", license_note: "",
+    presets: {
+      fast: { steps: 600, lr: 1e-4, rank: 16, resolution: 768, save_every: 200, sample_every: 200 },
+      balanced: { steps: 1500, lr: 1e-4, rank: 16, resolution: 1024, save_every: 250, sample_every: 250 },
+      thorough: { steps: 3000, lr: 8e-5, rank: 32, resolution: 1024, save_every: 250, sample_every: 250 },
+    },
+    trainable_models: [],
+    ...over,
+  };
+}
+
 const RUNTIMES: AnyRecord[] = [
   {
     id: "llamacpp", kind: "llama_cpp", health: "healthy", vram_used_mb: 6400,
@@ -1255,6 +1414,96 @@ export function installDevMock(): void {
         const dataset = DATASETS.find((d) => d.id === a.datasetId);
         if (dataset) dataset.export_dir = destDir;
         return { exported: kept.length, dest_dir: destDir };
+      }
+      // --- training orchestrator ---
+      case "training_status":
+        return {
+          installed: true, installing: false, env_broken: false,
+          install_state: { state: "idle" },
+          detail: "installed · idle",
+          alive_run_id: TRAINING_RUNS.find((r) => r.state === "running")?.id ?? null,
+        };
+      case "install_trainer":
+        return "already_installed";
+      case "probe_trainer":
+        return { torch_version: "2.13.0+cu130", cuda: true, vram_total_mb: 16376 };
+      case "list_training_profiles":
+        return TRAINING_PROFILES.map((p) => ({ ...p }));
+      case "list_training_runs":
+        progressTrainingRuns();
+        // Fresh array — `usePolled` needs a changed reference to re-render.
+        return TRAINING_RUNS.map((r) => ({ ...r }));
+      case "start_training_run": {
+        const body = (a.body ?? {}) as AnyRecord;
+        const prompts = (body.sample_prompts as string[]) ?? [];
+        const run = mkTrainingRun(`tr-${seq++}`, String(body.name ?? "Training run"), {
+          profile_family: "flux2-klein-4b",
+          target_model_id: String(body.target_model_id ?? ""),
+          dataset_id: String(body.dataset_id ?? ""),
+          trigger_word: String(body.trigger_word ?? ""),
+          preset: String(body.preset ?? "balanced"),
+          hyperparams_json: JSON.stringify(body.hyperparams ?? {}),
+          sample_prompts_json: JSON.stringify(prompts),
+          state: "running",
+          total_steps: 1500,
+          pid: 30000 + seq,
+          started_at: now(),
+        });
+        TRAINING_RUNS.unshift(run);
+        return { ...run };
+      }
+      case "get_training_run": {
+        progressTrainingRuns();
+        const run = TRAINING_RUNS.find((r) => r.id === a.id);
+        if (!run) return null;
+        // No real bytes exist here, so the preview `<img>` tags 404 in the
+        // dev preview -- same caveat as every `output_path` (see module doc).
+        const samples = run.last_checkpoint_at ? ["0", "1"] : [];
+        return {
+          run: { ...run },
+          latest_samples: samples,
+          log_tail: [
+            `${String(run.name)}: dev-mock, no real trainer attached`,
+            `${String(run.name)}:  ${String(run.step)}/${String(run.total_steps)} [02:14<11:03, 1.84it/s]`,
+          ],
+          work_dir: String(run.work_dir),
+        };
+      }
+      case "pause_training_run":
+      case "resume_training_run":
+      case "cancel_training_run": {
+        const run = TRAINING_RUNS.find((r) => r.id === a.id);
+        if (!run) throw new Error(`no such training run ${String(a.id)}`);
+        run.state =
+          cmd === "pause_training_run"
+            ? "paused"
+            : cmd === "resume_training_run"
+              ? "running"
+              : "cancelled";
+        if (cmd === "cancel_training_run") {
+          run.finished_at = now();
+          run.pid = null;
+        }
+        return { ...run };
+      }
+      case "delete_training_run": {
+        const run = TRAINING_RUNS.find((r) => r.id === a.id);
+        if (!run) throw new Error(`no such training run ${String(a.id)}`);
+        if (!["completed", "failed", "cancelled"].includes(String(run.state))) {
+          throw new Error(`"${String(run.name)}" is still ${String(run.state)} — cancel it first`);
+        }
+        removeWhere(TRAINING_RUNS, (r) => r.id === a.id);
+        return null;
+      }
+      /** Mock-only: flip a running run to `interrupted` so the "Fortsetzen"
+       *  branch can be checked in the browser preview. There is no process to
+       *  kill here, which is the only reason this command exists. */
+      case "__mock_interrupt_training_run": {
+        const run = TRAINING_RUNS.find((r) => r.id === a.id);
+        if (!run) throw new Error(`no such training run ${String(a.id)}`);
+        run.state = "interrupted";
+        run.pid = null;
+        return { ...run };
       }
       case "storage_report": {
         const kindOf = (m: AnyRecord): string => {

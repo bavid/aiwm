@@ -56,6 +56,7 @@ pub mod scheduler;
 pub mod select;
 pub mod sidecar;
 pub mod telemetry;
+pub mod training;
 pub mod upgrade;
 pub mod voice_identity;
 
@@ -64,7 +65,7 @@ pub use agent::{
     HermesInstallStatus, OpenCodeAdapter, PermissionDecision, SessionSpec,
 };
 pub use api::{ApiServer, Services};
-pub use app::App;
+pub use app::{App, AppOptions};
 pub use bench::{BenchOutcome, BenchReport, BenchRequest};
 pub use capability::agent::{AgentSessions, CodingRuntime, LlamaCodingRuntime};
 pub use cleanup::StorageReport;

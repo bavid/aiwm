@@ -17,7 +17,8 @@ use super::dto::{
     LaunchExternalDto, LocationBodyDto, NewAgentDto, NewRelationshipDto, NewSessionDto,
     NewVoiceIdentityDto, NpcBodyDto, OpenAgentSessionDto, RenameModelDto, RenameSessionDto,
     SceneBodyDto, SceneDetailDto, SetArchivedDto, SetInventoryDto, SetReferenceJobDto, SetRolesDto,
-    SetTagsDto, SetTokenDto, StoryBodyDto, SubmitJobDto, UpdateDatasetDto, UpdateDatasetFrameDto,
+    SetTagsDto, SetTokenDto, StartRunDto, StoryBodyDto, SubmitJobDto, UpdateDatasetDto,
+    UpdateDatasetFrameDto,
 };
 use super::handlers;
 use crate::db::JobFilter;
@@ -132,6 +133,22 @@ pub fn router(app: Arc<App>) -> Router {
             "/concepts/{id}/frames",
             post(assign_concept).delete(unassign_concept),
         )
+        .route("/training/status", get(training_status))
+        .route("/training/install", post(install_trainer))
+        .route("/training/probe", post(probe_trainer))
+        .route("/training/profiles", get(list_training_profiles))
+        .route(
+            "/training/runs",
+            get(list_training_runs).post(start_training_run),
+        )
+        .route(
+            "/training/runs/{id}",
+            get(get_training_run).delete(delete_training_run),
+        )
+        .route("/training/runs/{id}/pause", post(pause_training_run))
+        .route("/training/runs/{id}/resume", post(resume_training_run))
+        .route("/training/runs/{id}/cancel", post(cancel_training_run))
+        .route("/training/runs/{id}/samples/{n}", get(training_sample))
         .route("/models", get(list_models).post(import_model))
         .route("/models/known", get(known_models))
         .route("/models/stacks", get(model_stacks))
@@ -1028,6 +1045,131 @@ async fn detach_engine(
 ) -> Result<StatusCode, ApiError> {
     handlers::detach_engine(&app, body).await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+// --- training orchestrator ---------------------------------------------------
+
+async fn training_status(State(app): AppState) -> Json<super::dto::TrainerStatusDto> {
+    Json(handlers::trainer_status(&app))
+}
+
+async fn install_trainer(
+    State(app): AppState,
+) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    install_status(handlers::install_trainer(&app)?)
+}
+
+async fn probe_trainer(
+    State(app): AppState,
+) -> Result<Json<crate::runtime::training::Probe>, ApiError> {
+    Ok(Json(handlers::probe_trainer(&app).await?))
+}
+
+async fn list_training_profiles(
+    State(app): AppState,
+) -> Result<Json<Vec<super::dto::ProfileDto>>, ApiError> {
+    Ok(Json(handlers::list_training_profiles(&app).await?))
+}
+
+async fn list_training_runs(
+    State(app): AppState,
+) -> Result<Json<Vec<crate::db::TrainingRun>>, ApiError> {
+    Ok(Json(handlers::list_training_runs(&app).await?))
+}
+
+async fn start_training_run(
+    State(app): AppState,
+    Json(body): Json<StartRunDto>,
+) -> Result<(StatusCode, Json<crate::db::TrainingRun>), ApiError> {
+    Ok((
+        StatusCode::CREATED,
+        Json(handlers::start_training_run(&app, body).await?),
+    ))
+}
+
+async fn get_training_run(
+    State(app): AppState,
+    Path(id): Path<String>,
+) -> Result<Response, ApiError> {
+    match handlers::get_training_run(&app, &id).await? {
+        Some(detail) => Ok(Json(detail).into_response()),
+        None => Ok(no_such_run()),
+    }
+}
+
+async fn pause_training_run(
+    State(app): AppState,
+    Path(id): Path<String>,
+) -> Result<Json<crate::db::TrainingRun>, ApiError> {
+    Ok(Json(handlers::pause_training_run(&app, &id).await?))
+}
+
+async fn resume_training_run(
+    State(app): AppState,
+    Path(id): Path<String>,
+) -> Result<Json<crate::db::TrainingRun>, ApiError> {
+    Ok(Json(handlers::resume_training_run(&app, &id).await?))
+}
+
+async fn cancel_training_run(
+    State(app): AppState,
+    Path(id): Path<String>,
+) -> Result<Json<crate::db::TrainingRun>, ApiError> {
+    Ok(Json(handlers::cancel_training_run(&app, &id).await?))
+}
+
+#[derive(Deserialize)]
+struct PurgeQuery {
+    /// Also delete the run's work directory — checkpoints and preview images
+    /// included. Absent means "keep the files", the safe default.
+    #[serde(default)]
+    purge: bool,
+}
+
+async fn delete_training_run(
+    State(app): AppState,
+    Path(id): Path<String>,
+    Query(q): Query<PurgeQuery>,
+) -> Result<StatusCode, ApiError> {
+    handlers::delete_training_run(&app, &id, q.purge).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// One preview image from the latest checkpoint's sample set. Loopback only
+/// (ADR-008), same shape as `serve_dataset_frame_image`: the request only
+/// carries an index into the set, never a path.
+async fn training_sample(
+    State(app): AppState,
+    Path((id, n)): Path<(String, usize)>,
+) -> Result<Response, ApiError> {
+    let Some(path) = handlers::training_sample_path(&app, &id, n).await? else {
+        return Ok(no_such_run());
+    };
+    let bytes = tokio::fs::read(&path).await.map_err(CoreError::Io)?;
+    // ai-toolkit writes `.jpg`, but a sampler configured for another format
+    // (or a filesystem that hands the name back upper-cased) must not silently
+    // become a PNG — compare case-insensitively.
+    let extension = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_ascii_lowercase);
+    let content_type = match extension.as_deref() {
+        Some("jpg" | "jpeg") => "image/jpeg",
+        Some("webp") => "image/webp",
+        _ => "image/png",
+    };
+    Ok((
+        [
+            (axum::http::header::CONTENT_TYPE, content_type),
+            (axum::http::header::CACHE_CONTROL, "no-store"),
+        ],
+        bytes,
+    )
+        .into_response())
+}
+
+fn no_such_run() -> Response {
+    error_response(StatusCode::NOT_FOUND, "no such training run")
 }
 
 /// A minimal JSON error body, shaped like [`ApiError`]'s, for the hand-rolled

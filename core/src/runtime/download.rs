@@ -201,6 +201,24 @@ pub(crate) fn hex(bytes: &[u8]) -> String {
 #[async_trait::async_trait]
 pub(crate) trait CmdRunner: Send + Sync {
     async fn run(&self, program: &Path, args: &[&str], env: &[(&str, &str)]) -> Result<()>;
+
+    /// Like [`run`](Self::run), but returns the command's stdout — the trainer
+    /// adapter's import probe reads JSON the child prints
+    /// (`runtime::training::TrainingAdapter::probe`). Defaults to an explicit
+    /// error so a runner that only records arguments (every installer test
+    /// fake) fails loudly instead of silently reporting empty output; runners
+    /// used for probing override it.
+    async fn run_capture(
+        &self,
+        program: &Path,
+        _args: &[&str],
+        _env: &[(&str, &str)],
+    ) -> Result<String> {
+        Err(dl_err(format!(
+            "this runner cannot capture the output of {}",
+            program.display()
+        )))
+    }
 }
 
 /// The real runner: `tokio::process::Command`, non-zero exit → error with the
@@ -210,6 +228,15 @@ pub(crate) struct SystemRunner;
 #[async_trait::async_trait]
 impl CmdRunner for SystemRunner {
     async fn run(&self, program: &Path, args: &[&str], env: &[(&str, &str)]) -> Result<()> {
+        self.run_capture(program, args, env).await.map(|_| ())
+    }
+
+    async fn run_capture(
+        &self,
+        program: &Path,
+        args: &[&str],
+        env: &[(&str, &str)],
+    ) -> Result<String> {
         let mut cmd = tokio::process::Command::new(program);
         cmd.args(args).kill_on_drop(true);
         for (k, v) in env {
@@ -220,7 +247,7 @@ impl CmdRunner for SystemRunner {
             .await
             .map_err(|e| dl_err(format!("run {}: {e}", program.display())))?;
         if out.status.success() {
-            return Ok(());
+            return Ok(String::from_utf8_lossy(&out.stdout).into_owned());
         }
         let stderr = String::from_utf8_lossy(&out.stderr);
         let tail: String = stderr

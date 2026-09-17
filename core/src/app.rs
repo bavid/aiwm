@@ -17,11 +17,12 @@ use crate::paths::AppPaths;
 use crate::progress::ProgressHub;
 use crate::registry::{CivitaiSource, HuggingFaceSource, Registry};
 use crate::runtime::{
-    ColibriAdapter, ComfyDirs, ComfyUiAdapter, LlamaCppAdapter, RuntimeRegistry, TtsAdapter,
-    VisionAdapter,
+    ColibriAdapter, ComfyDirs, ComfyUiAdapter, LlamaCppAdapter, RuntimeRegistry, TrainingAdapter,
+    TtsAdapter, VisionAdapter,
 };
 use crate::scheduler::HybridScheduler;
 use crate::telemetry::{GpuStatus, Sampler};
+use crate::training::runner::{spawn_poller, Runner as TrainingRunner};
 use crate::Result;
 
 /// Settings seeded on first run. `config.toml` remains the source of truth for
@@ -61,6 +62,16 @@ pub struct App {
     /// The dataset-prep captioning pipeline's runtime (Florence-2/Qwen2.5-VL)
     /// — same lazy-sidecar shape as `tts`, but tracks real (non-zero) VRAM.
     pub vision: Arc<VisionAdapter>,
+    /// The `ai-toolkit` LoRA trainer. Registered like every other runtime so
+    /// it shows up in `GET /runtimes` and the Settings install card, but it
+    /// supervises no process: a training run is detached and reports its GPU
+    /// hold as one synthetic loaded model (`training::TRAINING_MODEL_ID`).
+    pub training: Arc<TrainingAdapter>,
+    /// Drives training runs: preflight, the detached launch, the 3 s poller,
+    /// pause/resume/cancel and the import of the finished LoRA. Separate from
+    /// [`jobs`](Self::jobs) on purpose — a run outlives the app (see
+    /// `crate::training`).
+    pub training_runner: Arc<TrainingRunner>,
     pub scheduler: Arc<HybridScheduler>,
     pub jobs: Arc<JobEngine>,
     /// Long-running agent sessions (Phase 5.1c) — its own subsystem, not a job.
@@ -92,12 +103,45 @@ pub struct App {
     offline: Arc<AtomicBool>,
 }
 
+/// Startup switches for [`App::load_with`]. Every field defaults to what the
+/// real application wants; a test flips only the one it needs to hold still.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AppOptions {
+    /// Spawn the training poller loop. On in production — it is what keeps a
+    /// detached trainer's progress visible and settles a run whose process
+    /// has gone away.
+    ///
+    /// A test that writes `training_runs` rows by hand wants it off: every
+    /// few seconds the poller re-reads each `running` row, finds no PID
+    /// behind it and reconciles it to `interrupted` — correctly — racing
+    /// whatever the test asserts about that row in the meantime.
+    ///
+    /// This does **not** switch off [`crate::training::runner::Runner::
+    /// recover`], which runs either way: recovery is startup state repair,
+    /// and it sees only the rows a *previous* process left behind.
+    pub training_poller: bool,
+}
+
+impl Default for AppOptions {
+    fn default() -> Self {
+        Self {
+            training_poller: true,
+        }
+    }
+}
+
 impl App {
     /// Ensure directories exist, load configuration, open the database, seed
     /// first-run settings, start telemetry, and wire up the scheduler + job
     /// engine. Does **not** install logging (see [`bootstrap_process`]).
     /// Requires a Tokio runtime.
     pub async fn load(paths: AppPaths) -> Result<Self> {
+        Self::load_with(paths, AppOptions::default()).await
+    }
+
+    /// [`load`](Self::load) with the startup switches spelled out — see
+    /// [`AppOptions`].
+    pub async fn load_with(paths: AppPaths, options: AppOptions) -> Result<Self> {
         paths.ensure()?;
         if crate::backup::apply_pending_import(&paths)? {
             tracing::warn!("a backup import was applied on startup");
@@ -143,6 +187,8 @@ impl App {
         runtimes.register(tts.clone());
         let vision = Arc::new(VisionAdapter::new());
         runtimes.register(vision.clone());
+        let training = Arc::new(TrainingAdapter::discover(&paths.runtimes_dir()));
+        runtimes.register(training.clone());
         let budget = resolve_vram_budget(&config, &telemetry);
         let scheduler = Arc::new(HybridScheduler::new(runtimes.clone(), budget));
         let auto_pref = config.models.auto_preference;
@@ -222,6 +268,35 @@ impl App {
             offline.clone(),
         ));
 
+        // The training runner, its startup recovery and its poller, in that
+        // order and after the job engine's own recovery in [`Self::seed`]: a
+        // detached trainer that survived the restart keeps its GPU
+        // reservation, anything else becomes `interrupted`.
+        //
+        // `recover` is awaited rather than spawned. Every `running` row that
+        // exists at this moment is by definition a leftover, which is what
+        // lets recovery read "no PID anywhere" as "it did not survive"; once
+        // the app is live that inference stops holding, because a run created
+        // a millisecond ago looks exactly the same. Awaiting it here draws
+        // that line where it belongs, and never fails startup over it.
+        let training_runner = Arc::new(TrainingRunner::new(
+            db.clone(),
+            training.clone(),
+            scheduler.clone(),
+            runtimes.clone(),
+            paths.root().join("training"),
+            config.store_path.clone(),
+        ));
+        // Recovery is state repair, not polling: it runs even with the poller
+        // switched off, because a store left with `running` rows and no
+        // process behind them is wrong whether or not anyone is watching.
+        if let Err(e) = training_runner.recover().await {
+            tracing::warn!(error = %e, "training-run recovery failed");
+        }
+        if options.training_poller {
+            spawn_poller(training_runner.clone());
+        }
+
         // Best-effort startup sweep (nice-to-have alongside the manual
         // "clean up now" button + a periodic timer isn't wired up separately):
         // only runs when a retention policy is actually configured, and never
@@ -258,6 +333,8 @@ impl App {
             tts,
             progress,
             vision,
+            training,
+            training_runner,
             scheduler,
             jobs,
             agents,

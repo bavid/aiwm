@@ -695,7 +695,7 @@ stillschweigend weggelassen):**
   die Story-Studio-Oberfläche hat bewusst keine Bildparameter-Feinsteuerung,
   wie schon in Phase 1.
 
-## Lokale KI-Trainings-Engine (Teilsystem 1 ✅ umgesetzt inkl. Plan-1-Erweiterungen — 2026-09-16, Teilsystem 2 geplant, nicht gebaut)
+## Lokale KI-Trainings-Engine (Teilsystem 1 ✅ umgesetzt inkl. Plan-1-Erweiterungen — 2026-09-16, Teilsystem 2 ✅ umgesetzt — 2026-09-17)
 User-Leitprinzip (2026-09-15, wörtlich wichtig): AIWM soll ein **lokales
 All-in-one-Tool** bleiben — eigenes Training auf **eigenen Daten, jeder Art**
 soll genauso leicht zugänglich sein wie die bestehenden Image/Video/Chat-
@@ -979,70 +979,188 @@ UI-Task zusätzlich live im Browser gegen den dev-mock verifiziert.
   `eslint-plugin-jsx-a11y` (hätte die `alt=""`-/unbeschriftete-Input-Funde
   automatisch gefangen).
 
-### Teilsystem 2 — Trainings-Orchestrator: geplant (2026-09-16), Plan liegt vor unter `docs/superpowers/plans/2026-09-16-training-orchestrator-plan-2-trainer-runtime.md` — noch keine Implementierung
+### Teilsystem 2 — Trainings-Orchestrator: ✅ umgesetzt (2026-09-17)
 
-**Priorität entschieden (User, 2026-09-16):** Architektur von Anfang an
-zielart-generisch (`TrainingTarget::Image | Video`), aber der erste
-Implementierungs-Slice ist **Bild-LoRA** (SDXL/Flux) — reife Tooling-Lage,
-niedrigeres Risiko. Video-LoRA (Wan/LTX) folgt als eigener Slice, sobald das
-Harness für Bild einmal steht; die Tooling-Recherche dafür (Kandidaten
-ungeprüft: z. B. `musubi-tuner` für Wan, oder ein diffusers-basiertes
-Skript) ist noch offen und wird erst zu dem Zeitpunkt gemacht, nicht jetzt
-spekulativ vorweggenommen.
+Gebaut, getestet und **auf dieser Maschine mit echten Gewichten und echten
+Daten durchgelaufen** — kein Fake-Trainer, kein Trockenlauf. Der erste
+vollständige FLUX.2-[klein]-4B-LoRA-Lauf steht unten mit den gemessenen
+Zahlen; alles was hier als Zahl steht, stammt aus diesem Lauf und nicht aus
+einer Schätzung.
 
-**Warum kohya-ss/sd-scripts für den Bild-Pfad, nicht erst zu recherchieren:**
-Teilsystem 1's Export-Format (`NNNN.png`+`NNNN.txt`-Paare) wurde **bereits
-bewusst** nach genau dieser Konvention gebaut (siehe Export-Beschreibung
-oben) — die Dataset-Pipeline ist also faktisch schon der erste halbe Schritt
-zu einem kohya-ss-Trainingslauf, nicht nur zufällig kompatibel.
+Alle Gates grün: `cargo fmt --all -- --check` sauber, `cargo clippy
+--workspace --all-targets -- -D warnings` sauber, `cargo test --workspace`
+**1046 passed / 0 failed / 6 ignored**, sidecar `ruff check .` sauber und
+`pytest` **89 passed**, UI `tsc --noEmit` / `eslint .` / `vite build` sauber.
 
-**Reales technisches Risiko, das die Architektur bestimmt (2026-09-16
-gegen den echten Code geprüft):** `JobEngine::recover` (`core/src/
-orchestrator/engine.rs:268`) markiert jeden beim App-Start noch
-`running`-Job als **fehlgeschlagen** — es gibt aktuell keinerlei
-Job-Resume nach einem Neustart. Für einen stundenlangen Trainingslauf ist
-das inakzeptabel (ein Absturz/Update-Neustart darf nicht 3 Stunden GPU-Zeit
-wegwerfen). AIWM hat dafür bereits **einen** Präzedenzfall: der externe
-Agent-`Launcher` (OpenCode/Hermes) spawnt bewusst einen echten,
-unabhängigen Terminal-Prozess, **nicht** Job-Object-supervised, gerade weil
-der länger leben soll als die App selbst (siehe `launcher`-Modul-Doc). Ein
-Trainingslauf sollte diesem Muster folgen — ein `TrainingRun` ist kein
-`Job` im bestehenden Scheduler-Sinn, sondern ein eigenständiger,
-detached Subprozess mit eigenem Fortschritts-Tracking (kohya-ss schreibt
-eigene Checkpoints; AIWM muss nur den Fortschritt lesen/anzeigen, nicht die
-Resume-Logik selbst bauen) — nicht der bestehende `JobEngine`-Pfad mit
-seiner Restart=Fail-Semantik.
+**Architektur-Entscheidung gegenüber dem Plan geändert:** nicht
+kohya-ss/sd-scripts, sondern **`ostris/ai-toolkit`** (fest gepinnter Commit
+`e65c4d0fb69251e692390574c49873297dc4bae5`). Grund: ai-toolkit unterstützt
+FLUX.2 [klein] 4B/9B, SDXL und Wan 2.2 aus einer einzigen Config-Form heraus,
+kohya-ss zum Zeitpunkt der Recherche kein FLUX.2. Teilsystem 1's
+Export-Format (`NNNN.png`+`NNNN.txt`) passt unverändert auch hier.
 
-**Architektur-Skizze (Plan, nicht gebaut):**
-- Neuer `TrainingAdapter` nach dem bestehenden `RuntimeAdapter`-Muster
-  (install/health/status), aber mit eigenem, isoliertem `uv`-venv für
-  kohya-ss/sd-scripts — getrennt vom Sidecar-venv, aus genau dem Grund, aus
-  dem der Sidecar selbst schon isoliert ist (potenziell andere
-  Torch-Version/Dependency-Baum als die Haupt-Sidecar-Umgebung).
-  Install folgt dem etablierten idempotenten Marker-Muster
-  (`runtime::comfyui::install` als Vorbild).
-- `TrainingRun` als eigene DB-Tabelle (Status/Fortschritt/Zielart/
-  Basis-Checkpoint/Ergebnis-Datei-Pfad), **nicht** in `jobs` — Grund siehe
-  oben. Der Scheduler muss trotzdem von der VRAM-Reservierung wissen
-  (ein laufendes Training blockiert GPU-Kapazität wie jeder andere
-  Runtime), auch ohne über den Job-Mechanismus zu laufen.
-- UI-Einstieg: ein "LoRA trainieren"-Button direkt im Dataset-Tab nach dem
-  Export (natürlicher nächster Schritt in der bestehenden Kuratier-UI),
-  mit sinnvollen Defaults für Rank/Alpha/Lernrate/Epochen, damit ein Laie
-  nicht jeden Trainings-Parameter verstehen muss, bevor er startet.
-- Nach Abschluss: Ergebnis-LoRA automatisch ins bestehende Modell-System
-  importieren (gleicher Import-Pfad wie ein manuell heruntergeladenes
-  LoRA), sofort in Image/Video zum Testen wählbar.
+- **Runtime-Adapter + Installer** (`core/src/runtime/training/{mod,install}.rs`):
+  eigenes, isoliertes `uv`-venv unter `E:\AI\data\runtimes\ai-toolkit\`
+  (Python 3.12), Quell-Archiv über SHA-256 + Größe verifiziert
+  (`6d4c67fa…e5`, 35.740.120 B), danach `torch==2.13.0`/`torchvision==0.28.0`/
+  `torchaudio==2.11.0` vom cu130-Index **vor** `requirements.txt`, damit der
+  CUDA-Build gewinnt. Abschluss-Marker `.installed-<commit>`, also ist ein
+  "Reparieren" ein einziges Löschen und ein Commit-Bump erzwingt den Neubau.
+  Installation lief hier in einem Durchgang durch; `POST /training/probe`
+  meldet danach `{"torch_version":"2.13.0+cu130","cuda":true,
+  "vram_total_mb":16375}`.
+- **Profil-Registry** (`core/src/training/profile.rs`): vier Familien
+  (FLUX.2 klein 4B/9B, SDXL, Wan 2.2 TI2V 5B) mit ai-toolkit-Arch-Id,
+  VRAM-Strategie, Preset-Startwerten (fast/balanced/thorough) und — neu —
+  `measured`, den *gemessenen* Sekunden/Schritt und dem VRAM-Peak eines
+  echten Laufs. `measured` ist `None`, solange niemand die Familie hier
+  wirklich trainiert hat; geraten wird nichts.
+- **Basis-Gewichts-Manifest** (`core/src/training/bases.rs`): pro Familie
+  Repo, `hf download`-Selektor und — sobald einmal echt heruntergeladen —
+  Größe und lokal berechnete SHA-256 jeder Datei, die der Trainer öffnet.
+  `verify_base_dir` prüft beim Start nur Größen (billig) und beim Registrieren
+  einmal alle Hashes (vollständig). Der Befehl, den der Preflight zum Kopieren
+  anzeigt, wird serverseitig aus genau diesem Manifest gebaut, kann also nicht
+  von dem abweichen, was der Runner danach erwartet.
+- **YAML-Rendering** (`core/src/training/config.rs`): erzeugt ai-toolkits
+  Job-Config. **Lektion PyYAML-Floats:** serde_yaml schreibt kleine Zahlen in
+  wissenschaftlicher Kurzform (`lr: 1e-4`), und PyYAMLs 1.1-Resolver liest das
+  als **String**, nicht als Float — der Lauf wäre mit einer Lernrate vom Typ
+  `str` gestartet. `normalize_yaml_floats` schreibt betroffene Skalare
+  deshalb in eine Form zurück, die PyYAML sicher als Zahl erkennt.
+- **Log-Parser** (`core/src/training/progress.rs`): liest tqdm-Bar, Loss, LR,
+  ETA und die Lifecycle-Marker aus dem Trainings-Log. `ai-toolkit` zeichnet
+  die Bar mit `\r` an Ort und Stelle neu, ein Chunk enthält also viele
+  veraltete Bars und ggf. ein angeschnittenes Fragment.
+- **Detached-Start** (`core/src/training/process.rs` + `launcher::spawn`):
+  der Trainer ist bewusst **kein** Job-Object-Kind der App, sondern ein
+  eigenständiger Prozess, der einen App-Neustart überlebt — sonst würfe ein
+  Update mitten im Lauf Stunden GPU-Zeit weg. **Lektion:** genau deshalb kann
+  die App ihn nicht über ein Handle beenden; Abbruch läuft über
+  `taskkill /PID <pid> /T /F`, und "lebt der noch?" wird über die PID plus den
+  erwarteten Image-Namen beantwortet, nicht über ein Handle.
+- **Runner mit CAS-Zustandsautomat** (`core/src/training/runner*.rs`):
+  Preflight (Trainer da? Basis-Gewichte vollständig *und* unversehrt?
+  Datensatz exportiert? genug VRAM? genug Platz?), Start, Poll, Pause/Resume/
+  Abbruch, Wiederaufnahme nach App-Neustart. Jeder Zustandswechsel ist ein
+  Compare-and-Swap, damit Poller und Nutzerklick nicht gegeneinander
+  schreiben.
+- **Fake-Trainer** (`core/src/bin/aiwm-fake-trainer.rs`): spricht denselben
+  Log-Dialekt, für den vollständigen Lebenszyklus-Test ohne GPU.
+- **API/Tauri/ipc + Training-Tab**: Profile, Status, Installation, Probe,
+  Läufe, Pause/Resume/Abbruch, Sample-Bilder; Einstieg zusätzlich direkt aus
+  dem Dataset-Tab.
 
-**Ausdrücklich noch offen, bewusst nicht vorab entschieden:**
-Video-LoRA-Tooling-Wahl (siehe oben); ob/wie ein laufendes Training in der
-Diagnostics-/Runtimes-Übersicht neben ComfyUI/llama.cpp erscheint; wie
-Abbruch eines laufenden Trainings sauber funktioniert (kohya-ss selbst
-beenden vs. nur den Fortschritt ignorieren). **Weiterhin keine
-Implementierung** — laut `brainstorming`-Skill erst vollständiges
-Design/Spec + User-Freigabe, dann `writing-plans`, bevor hier Code
-entsteht; diese Notiz ist der Zwischenstand dieses Prozesses, kein
-fertiges Spec.
+**Der erste echte Lauf (2026-09-17, RTX 4080 Super 16 GB):**
+
+- Material: 54 echte Renders → Dataset-Prep behielt **50** nach Unschärfe-/
+  Duplikat-Filter, Export als 50 `NNNN.png`+`NNNN.txt`-Paare nach
+  `E:\AI\data\training\datasets\myrenders-v1`. Ohne Captioner, Captions sind
+  also nur das Trigger-Wort `myrender_xy`.
+- Lauf: Preset **Fast**, 600 Schritte, Rank 16, LR 1e-4, 768 px, Batch 1,
+  qfloat8 + quantisierter Text-Encoder, adamw8bit, flowmatch, EMA 0.99.
+- **600/600 Schritte in 16 min 55 s** = **1,69 s/Schritt** (ein zweiter Lauf
+  derselben Config: 16 min 30 s = 1,65 s/Schritt — die Zahlen sind stabil).
+- **VRAM-Peak 12.340 MB von 16.376 MB**, davon ~1.256 MB schon vor dem Lauf
+  vom Desktop belegt — der Lauf selbst brauchte also ~**11.084 MB**.
+  GPU-Temperatur max. 77 °C. Das passt in die 12.288 MB, die das 4B-Profil
+  vorab freihaben will; ein Test hält diese Zusage jetzt fest (und schlägt
+  auch an, wenn die Reserve unnötig weit darüber liegt).
+- Gesamt-Wanduhr inkl. Modell-Laden, Latent-Cache und vier Sample-Runden:
+  **20 min 18 s** (13:05:23 → 13:25:41). Der allererste Lauf brauchte länger,
+  weil ai-toolkit erst den 8-GB-Text-Encoder ziehen musste.
+- Ergebnis: **`state: completed`**, LoRA mit 46.223.656 B (Rank 16)
+  automatisch als Bibliothekseintrag importiert
+  (`source: training:<run-id>`, Rolle `lora`, Familie `flux2`),
+  Zwischenstände bei Schritt 200/400, acht Sample-Bilder bei 0/200/400/600 ×
+  2 Prompts.
+- Erste drei tqdm-Zeilen dieses Laufs (sie pinnen den Parser in einem Test):
+  ```text
+  myrender-v2:   0%|          | 0/600 [00:00<?, ?it/s]
+  myrender-v2:   0%|          | 0/600 [00:10<?, ?it/s, lr: 1.0e-04 loss: 6.468e-01]
+  myrender-v2:   0%|          | 1/600 [00:10<1:42:50, 10.30s/it, lr: 1.0e-04 loss: 6.468e-01]
+  ```
+
+**Vier Fehler, die nur ein echter Lauf finden konnte — alle behoben:**
+
+1. **Der Trainer liest *eine* Datei, nicht das diffusers-Layout.** Das
+   Manifest pinnte die fünf Dateien des diffusers-Snapshots. ai-toolkits
+   `Flux2Model.load_model` macht aber
+   `load_file(os.path.join(name_or_path, "flux-2-klein-base-4b.safetensors"))`
+   — genau die Einzeldatei, die der Download-Befehl vorher als "Duplikat, das
+   der Trainer nie öffnet" **ausgeschlossen** hatte. Text-Encoder (`Qwen/Qwen3-4B`,
+   8 GB) und VAE (`ai-toolkit/flux2_vae`) holt der Trainer sich zur Laufzeit
+   selbst aus ganz anderen Repos. Der erste Start starb an
+   `FileNotFoundError: … flux2-klein-4b` — mit allen fünf gepinnten Dateien
+   vorhanden und geprüft. **Nebenwirkung:** der Download schrumpft von 23 GB
+   auf 7,75 GB. **Und:** der Trainer braucht beim ersten Lauf einer Familie
+   Netz, auch wenn die Basis-Gewichte lokal liegen.
+2. **Erfolg wurde nie gemeldet.** Der Runner wartete auf ai-toolkits
+   ` - 1 completed job`. In diesem Commit ruft `run.py` `print_end_message`
+   **nur im `except`-Zweig** auf — ein Job, der einfach gelingt, kehrt
+   schweigend aus `main` zurück. Der erste Lauf trainierte alle 600 Schritte,
+   schrieb Checkpoint und Samples, beendete sich mit 0 — und wurde als
+   `interrupted` ohne LoRA verbucht. Jetzt gilt "die eigene Fortschrittsbar hat
+   `N/N` erreicht" als Erfolgsnachweis.
+3. **Der finale Checkpoint war unsichtbar.** Zwischenstände heißen
+   `<name>_<step:09>.safetensors`, der **letzte** aber schlicht
+   `<name>.safetensors`. Der Parser verlangte die nummerierte Form, hätte also
+   den Stand von Schritt 400 als Ergebnis importiert.
+4. **Alle Sample-Bilder waren unsichtbar.** ai-toolkit schreibt
+   `<time>__<step:09>_<count>.<ext>` mit **zwei** Unterstrichen; der Parser
+   zerlegte von links und las den leeren String dazwischen. `latest_samples`
+   kam leer zurück und die Sample-Route antwortete 404, bei acht Bildern auf
+   der Platte. (Die Bilder sind übrigens **JPEG**, nicht PNG.)
+
+Zusätzlich fiel auf, dass der Fortschritts-Parser die tqdm-Bars *anderer*
+Phasen (Quantisieren, Latent-Cache, Sample-Generierung) als Trainingsschritte
+mitzählte — der Lauf meldete „Schritt 34", während das Log noch bei den
+Baseline-Samples stand. Der Parser akzeptiert jetzt nur noch die Bar, die auf
+den Namen des Laufs hört.
+
+**9B-Versuch: nicht durchführbar (2026-09-17).** `black-forest-labs/FLUX.2-klein-base-9B`
+ist **zugangsbeschränkt**: `hf download` antwortet
+`Access denied. This repository requires approval.` Ohne Zustimmung zur Lizenz
+auf der Modellseite und einen HF-Token mit Freigabe kommen die Gewichte nicht
+herunter — das kann die App nicht umgehen. Das 9B-Profil sagt das jetzt im
+`license_note`, damit niemand erst nach 18 GB Download darauf stößt. Ob 9B auf
+16 GB mit `low_vram` + `layer_offloading` läuft, bleibt damit **unverifiziert**.
+
+**Bewusst offen geblieben:**
+
+- **Loss-Verlauf**: die UI zeigt nur den letzten Loss; für eine Sparkline
+  fehlt ein `loss_history`-Feld im DTO.
+- **Platz-Preflight** prüft serverseitig, hat aber keine eigene UI-Zeile.
+- **Wan-2.2-Clips-Profil** weiterhin ungeprüft — kein echter Lauf.
+- **JoyCaption** als Captioner weiterhin offen (siehe Teilsystem 1).
+- **Diagnostics**: ein laufendes Training erscheint noch nicht als eigene
+  GPU-Zeile neben ComfyUI/llama.cpp.
+- **`find_for_model`-Heuristik** ist zu großzügig: `GET /training/profiles`
+  listet u. a. `flux2-vae`, `t5xxl_fp8_e4m3fn` und `wan2.2_vae` als
+  „trainierbare" Zielmodelle, weil nur Familie/Name/Parameterzahl geprüft
+  werden und nicht die Rolle.
+- **Basis-Gewichte laden** bleibt Handarbeit über die `hf`-CLI: die HTTP-API
+  hat **keine** Route, die einen beliebigen Ordner als Verzeichnis-Modell
+  registriert (die einzige vorhandene ist fest auf den Colibri-Chat-Katalog
+  verdrahtet und kann `family` nicht setzen). Bis der Models-Tab ein „Ordner
+  registrieren" bekommt, macht das die `#[ignore]`-Harness
+  `core/tests/register_training_base.rs`.
+- **LoRA-Wirkung ungeprüft**: ein Bild-Job mit dem trainierten LoRA
+  (`myrender-v2.safetensors` @ 0.80) lief sauber durch und schrieb ein
+  gültiges 768×768-PNG (`E:\AI\data\outputs\01a0af20-….png`, 1.004.788 B) —
+  aber gegen die installierte **9B**-fp8-Variante, weil kein
+  4B-Inferenz-Checkpoint installiert ist. ComfyUIs `LoraLoader` scheitert
+  nicht an Keys, die nicht passen, er überspringt sie; **ob das auf 4B
+  trainierte LoRA auf dem 9B-Modell überhaupt greift, ist damit nicht
+  belegt**. Für einen echten Wirkungstest fehlt ein FLUX.2-[klein]-**4B**-
+  Inferenz-Checkpoint in der Bibliothek.
+- **Import-Pfad mit gemischten Trennzeichen**: die importierte LoRA landet
+  unter `E:\AI\models\image/loras\myrender-v2.safetensors` — funktioniert
+  unter Windows, sieht aber in Logs und UI falsch aus.
+- **`reached_total` lebt nur im Speicher**: stirbt die App zwischen „Bar hat
+  `N/N` erreicht" und dem Ende des Trainer-Prozesses, ist der Erfolgsnachweis
+  weg und der Lauf wird nach dem Neustart als `interrupted` verbucht (dasselbe
+  galt vorher für den Completion-Marker).
 
 ## ComfyUI Workflow-Engine (geplant, 2026-09-16 — noch keine Implementierung)
 
@@ -1238,6 +1356,40 @@ anderen Checkout zeigte): zwei LoRAs gleichzeitig aktiv mit unterschiedlicher
 Stärke (0.80 / 1.55) im Image-Tab, Entfernen einer LoRA per Checkbox
 bestätigt (Regler verschwindet, andere LoRA bleibt unverändert), gleiches
 Verhalten im Video-Tab mit der neuen Wan-LoRA bestätigt.
+
+## Benchmark-Tab für Chat-/Coding-Modelle (Backlog, User-Wunsch 2026-09-17)
+
+**Ziel (User):** „Wie viele Tokens/s produziere ich mit Modell X?" — Modell
+wählen, einen vordefinierten Test starten, Ausgabe messen. Erst einmal nur
+Chat/Coding, bewusst einfach.
+
+**Was schon da ist:** `job_type=bench` (`core/src/bench/mod.rs`) läuft heute
+schon als Job über die JobEngine gegen llama.cpp und liefert einen
+`BenchReport` mit `tokens_per_second` (Generierung), `prompt_tokens_per_second`
+(Prompt-Verarbeitung), Kaltstart-Ladezeit und einem Score; Ergebnisse landen
+auf der Modell-Zeile (`for_role_with_benchmark`) und die Jobs-Seite listet
+`bench`-Jobs. **Was fehlt:** ein eigener Benchmark-Tab (Modell-Dropdown,
+Test-Set wählen, Start, Verlauf/Vergleich mehrerer Modelle nebeneinander) und
+ein vordefiniertes, versioniertes Test-Set für Chat und Coding (feste Prompts
+mit fester Ausgabelänge, damit tok/s vergleichbar sind; Coding-Prompts mit
+einer kleinen automatischen Korrektheitsprüfung, z. B. „schreibe eine Funktion
+… — Tests laufen lassen").
+
+**Vorgesehene Inspiration (Ideen, kein Code kopieren; Lizenz je prüfen):**
+- `ggml-org/llama.cpp` → `llama-bench` (Rohdurchsatz pp/tg pro Batchgröße;
+  das ist die Referenzmetrik für tok/s).
+- `Aider-AI/aider` → „polyglot benchmark" (Coding-Aufgaben aus Exercism mit
+  automatischer Testauswertung; guter Zuschnitt für „kann das Modell coden").
+- `EleutherAI/lm-evaluation-harness` (Standard-Tasks, zu groß für die App,
+  aber die Task-Definition als Vorbild).
+- `bigcode-project/bigcode-evaluation-harness` / `openai/human-eval`
+  (HumanEval-Stil: Funktion generieren, Tests ausführen — als kleine,
+  lokale Teilmenge).
+- `princeton-nlp/SWE-bench` (Repo-Level-Aufgaben; nur als Vorbild für die
+  Aufgabenform, nicht als Laufzeitabhängigkeit).
+
+**Nicht enthalten (bewusst):** Qualitäts-Benchmarks mit Judge-Modell,
+Bild-/Video-Benchmarks, Netz-Leaderboards. Die App bleibt offline-first.
 
 ## Offen / später zu entscheiden
 - App-Selbst-Update offline (manueller Installer + Signaturprüfung angenommen)

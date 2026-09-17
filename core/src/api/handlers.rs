@@ -11,9 +11,10 @@ use super::dto::{
     ConceptSummaryDto, ConfigUpdate, DetachEngineDto, DialogueLineDto, EnqueueDownloadDto,
     ExportDatasetDto, FeaturedModelDto, JobDetailDto, KnownModelDto, LaunchExternalDto,
     LocalApiStatusDto, LocationBodyDto, ModelStackDto, NewAgentDto, NewSessionDto,
-    NewVoiceIdentityDto, NpcBodyDto, OpenAgentSessionDto, RegisterColibriModelDto,
-    RegistryDetailsDto, RegistryFileDto, RegistrySearchDto, RuntimeStatusDto, SceneBodyDto,
-    SceneDetailDto, StoryBodyDto, SubmitJobDto, UpdateDatasetDto, UpdateDatasetFrameDto,
+    NewVoiceIdentityDto, NpcBodyDto, OpenAgentSessionDto, ProfileDto, ProfilePresetsDto,
+    RegisterColibriModelDto, RegistryDetailsDto, RegistryFileDto, RegistrySearchDto, RunDetailDto,
+    RuntimeStatusDto, SceneBodyDto, SceneDetailDto, StartRunDto, StoryBodyDto, SubmitJobDto,
+    TrainableModelDto, TrainerStatusDto, UpdateDatasetDto, UpdateDatasetFrameDto,
 };
 use crate::compat::FitVerdict;
 use crate::config::Config;
@@ -545,6 +546,354 @@ pub async fn export_dataset_by_id(
         },
     )
     .await
+}
+
+// --- training orchestrator (spec `2026-09-16-training-orchestrator-design`) -
+
+/// Longest trigger word the form accepts. A trigger is a made-up token the
+/// LoRA binds to, prepended to every caption — long ones cost caption budget
+/// and start colliding with real vocabulary.
+const MAX_TRIGGER_WORD_CHARS: usize = 30;
+
+/// How many sample prompts a run may carry: one so there is something to look
+/// at, at most three so the sampling pass stays a rounding error next to the
+/// training step it interrupts.
+const MAX_SAMPLE_PROMPTS: usize = 3;
+
+/// Lines of `train.log` [`get_training_run`] returns.
+const LOG_TAIL_LINES: usize = 40;
+
+/// How far back into `train.log` the tail reads. A long run's log is
+/// megabytes of redrawn progress bars; the last chunk is all the UI shows.
+const LOG_TAIL_BYTES: u64 = 64 * 1024;
+
+/// `GET /training/status` — the Training tab's header.
+pub fn trainer_status(app: &App) -> TrainerStatusDto {
+    TrainerStatusDto {
+        installed: app.training.is_installed(),
+        installing: app.training.is_installing(),
+        env_broken: app.training.env_broken(),
+        install_state: app.training.install_state(),
+        detail: crate::runtime::RuntimeAdapter::detail(app.training.as_ref()).unwrap_or_default(),
+        alive_run_id: app.training.alive_run(),
+    }
+}
+
+/// `POST /training/install` — kick off the pinned `ai-toolkit` install in the
+/// background. Same contract as [`install_comfyui`]: `"started"` /
+/// `"already_installed"`, errors up front on offline mode or an in-flight run.
+pub fn install_trainer(app: &App) -> Result<&'static str> {
+    if app.offline() {
+        return Err(CoreError::Config(
+            "offline mode is on — cannot download the trainer".into(),
+        ));
+    }
+    if app.training.is_installed() {
+        return Ok("already_installed");
+    }
+    if app.training.is_installing() {
+        return Err(CoreError::Config(
+            "a trainer install is already running".into(),
+        ));
+    }
+
+    let training = app.training.clone();
+    let offline = app.offline();
+    tokio::spawn(async move {
+        if let Err(e) = training.install(offline).await {
+            tracing::error!(error = %e, "trainer install failed");
+        }
+    });
+    Ok("started")
+}
+
+/// `POST /training/probe` — ask the trainer venv what PyTorch it has. The one
+/// check that distinguishes "the files are there" from "a run would start";
+/// it sets or clears `env_broken` as a side effect.
+pub async fn probe_trainer(app: &App) -> Result<crate::runtime::training::Probe> {
+    app.training.probe().await
+}
+
+/// `GET /training/profiles` — the static registry, joined with the two facts
+/// only the library knows: whether each profile's base weights are staged,
+/// and which library models resolve to it.
+pub async fn list_training_profiles(app: &App) -> Result<Vec<ProfileDto>> {
+    use crate::training::profile::{find_for_model, find_staged_base, PROFILES};
+
+    let models = app.db.models().list().await?;
+    let mut out = Vec::with_capacity(PROFILES.len());
+    for profile in PROFILES {
+        let candidates = app.db.models().for_role(profile.base.role).await?;
+        // The exact rule the runner's preflight resolves a real run's base
+        // directory with, so this badge cannot promise what Start refuses.
+        let base_installed = find_staged_base(profile, &candidates).is_some();
+
+        let trainable_models = models
+            .iter()
+            .filter(|m| {
+                find_for_model(m.family.as_deref(), &m.name, m.param_count)
+                    .is_some_and(|p| p.family == profile.family)
+            })
+            .map(|m| TrainableModelDto {
+                id: m.id.clone(),
+                name: m.name.clone(),
+                family: m.family.clone().unwrap_or_default(),
+            })
+            .collect();
+
+        out.push(ProfileDto {
+            family: profile.family,
+            label: profile.label,
+            arch: profile.arch,
+            data_kind: profile.data_kind,
+            fit: profile.vram.fit,
+            fit_label: profile.vram.fit.label(),
+            reserve_mb: profile.vram.reserve_mb,
+            base_repo: profile.base.repo,
+            base_role: profile.base.role,
+            base_required_files: profile.base.required_files,
+            base_approx_gb: profile.base.approx_gb,
+            base_download_command: crate::training::bases::find_base(profile.family)
+                .map(|base| {
+                    crate::training::bases::hf_download_command(base, &app.config.store_path)
+                })
+                .unwrap_or_default(),
+            base_installed,
+            caption_order: profile.caption_order,
+            license_note: profile.license_note,
+            presets: ProfilePresetsDto {
+                fast: profile.fast,
+                balanced: profile.balanced,
+                thorough: profile.thorough,
+            },
+            trainable_models,
+        });
+    }
+    Ok(out)
+}
+
+/// `GET /training/runs` — every run, newest first.
+pub async fn list_training_runs(app: &App) -> Result<Vec<crate::db::TrainingRun>> {
+    app.db.training_runs().list().await
+}
+
+/// The trigger word as it will be stored, or a sentence saying why it cannot
+/// be. Checked here rather than in the runner so the form can reject it
+/// before anything touches the GPU or the disk.
+fn check_trigger_word(raw: &str) -> Result<String> {
+    let trigger = raw.trim();
+    if trigger.is_empty() {
+        return Err(CoreError::Config(
+            "the trigger word is what you will type to call this LoRA — it cannot be empty".into(),
+        ));
+    }
+    if trigger.chars().any(char::is_whitespace) {
+        return Err(CoreError::Config(format!(
+            "the trigger word must be a single word without spaces — got {trigger:?}"
+        )));
+    }
+    if trigger.chars().count() > MAX_TRIGGER_WORD_CHARS {
+        return Err(CoreError::Config(format!(
+            "the trigger word is too long: keep it under {MAX_TRIGGER_WORD_CHARS} characters"
+        )));
+    }
+    Ok(trigger.to_string())
+}
+
+/// The sample prompts as they will be stored. The runner re-checks that at
+/// least one survives; this is the friendlier, earlier half of the same rule.
+fn check_sample_prompts(raw: &[String]) -> Result<Vec<String>> {
+    let prompts: Vec<String> = raw
+        .iter()
+        .map(|p| p.split_whitespace().collect::<Vec<_>>().join(" "))
+        .filter(|p| !p.is_empty())
+        .collect();
+    if prompts.is_empty() {
+        return Err(CoreError::Config(
+            "add at least one sample prompt so you can see what the run learns".into(),
+        ));
+    }
+    if prompts.len() > MAX_SAMPLE_PROMPTS {
+        return Err(CoreError::Config(format!(
+            "at most {MAX_SAMPLE_PROMPTS} sample prompts — every extra one pauses the training \
+             to render"
+        )));
+    }
+    Ok(prompts)
+}
+
+/// `POST /training/runs` — validate the form, then create the row and launch
+/// the detached trainer. Everything the preflight refuses comes back as a
+/// plain sentence with a 400.
+/// ADR-009: refuse to drive the trainer while offline mode is on.
+///
+/// Staged base weights are not enough. On a family's first run `ai-toolkit`
+/// fetches two more pieces from the Hub itself — the Qwen3 text encoder and
+/// the FLUX.2 VAE live in *different* repos from the base checkpoint (see
+/// [`crate::training::bases`]) — which the real 4B run demonstrated by
+/// downloading 8 GB of `Qwen/Qwen3-4B` after the local blob had already
+/// loaded. Without this a run started offline would spend minutes loading a
+/// model and then die on a download, so it is refused in the first second
+/// instead, as a sentence the Training tab can show as-is.
+fn check_trainer_online(app: &App) -> Result<()> {
+    if app.offline() {
+        return Err(crate::training::training_refusal(
+            "offline mode is on — the trainer needs the Hugging Face Hub on a family's \
+             first run (Qwen3 text encoder, FLUX.2 VAE); turn offline mode off for this run",
+        ));
+    }
+    Ok(())
+}
+
+pub async fn start_training_run(app: &App, body: StartRunDto) -> Result<crate::db::TrainingRun> {
+    check_trainer_online(app)?;
+    let trigger_word = check_trigger_word(&body.trigger_word)?;
+    let sample_prompts = check_sample_prompts(&body.sample_prompts)?;
+
+    app.training_runner
+        .create_and_start(crate::training::runner::StartRequest {
+            name: body.name,
+            target_model_id: body.target_model_id,
+            dataset_id: body.dataset_id,
+            trigger_word,
+            preset: body.preset,
+            hyperparams: body.hyperparams,
+            sample_prompts,
+        })
+        .await
+}
+
+/// The directory a run's output actually lives in: the path recorded on the
+/// row (a run started before the data folder moved keeps its own), falling
+/// back to the runner's derived path for a row that never got one.
+fn run_work_dir(app: &App, run: &crate::db::TrainingRun) -> PathBuf {
+    let recorded = run.work_dir.trim();
+    if recorded.is_empty() {
+        app.training_runner.work_dir(&run.id)
+    } else {
+        PathBuf::from(recorded)
+    }
+}
+
+/// The sample images ai-toolkit wrote alongside the latest checkpoint,
+/// newest-checkpoint first. Never returned to a caller as paths — see
+/// [`RunDetailDto::latest_samples`].
+fn latest_sample_paths(app: &App, run: &crate::db::TrainingRun) -> Vec<PathBuf> {
+    let dir = crate::training::config::training_folder(&run_work_dir(app, run)).join(&run.name);
+    crate::training::progress::scan_work_dir(&dir, &run.name)
+        .map(|state| state.latest_samples)
+        .unwrap_or_else(|e| {
+            tracing::debug!(run = %run.id, error = %e, "could not scan a run's work directory");
+            Vec::new()
+        })
+}
+
+/// The last [`LOG_TAIL_LINES`] updates of a run's `train.log`. A missing log
+/// is not an error — a run that has not written one yet simply has no tail.
+async fn log_tail(app: &App, run: &crate::db::TrainingRun) -> Vec<String> {
+    let path = run_work_dir(app, run).join("train.log");
+    let Ok(meta) = tokio::fs::metadata(&path).await else {
+        return Vec::new();
+    };
+    let from = meta.len().saturating_sub(LOG_TAIL_BYTES);
+    let Ok((chunk, _)) = crate::training::progress::tail_log(&path, from).await else {
+        return Vec::new();
+    };
+    let lines: Vec<String> = crate::training::progress::split_updates(&chunk)
+        .map(str::to_string)
+        .collect();
+    let start = lines.len().saturating_sub(LOG_TAIL_LINES);
+    lines[start..].to_vec()
+}
+
+/// `GET /training/runs/{id}` — the row plus the two things that live on disk.
+/// `None` when there is no such run (the route answers 404).
+pub async fn get_training_run(app: &App, id: &str) -> Result<Option<RunDetailDto>> {
+    let Some(run) = app.db.training_runs().get(id).await? else {
+        return Ok(None);
+    };
+    let latest_samples = (0..latest_sample_paths(app, &run).len())
+        .map(|i| i.to_string())
+        .collect();
+    let log_tail = log_tail(app, &run).await;
+    Ok(Some(RunDetailDto {
+        work_dir: run_work_dir(app, &run).to_string_lossy().into_owned(),
+        latest_samples,
+        log_tail,
+        run,
+    }))
+}
+
+/// The stored row after a lifecycle call, so the caller never has to refetch
+/// to learn what the transition actually settled on (a `pause` on a process
+/// that had already vanished lands in `interrupted`, not `paused`).
+async fn reload_run(app: &App, id: &str) -> Result<crate::db::TrainingRun> {
+    app.db
+        .training_runs()
+        .get(id)
+        .await?
+        .ok_or_else(|| CoreError::Config(format!("no such training run {id}")))
+}
+
+/// `POST /training/runs/{id}/pause` — stop the process, keep the checkpoints.
+pub async fn pause_training_run(app: &App, id: &str) -> Result<crate::db::TrainingRun> {
+    app.training_runner.pause(id).await?;
+    reload_run(app, id).await
+}
+
+/// `POST /training/runs/{id}/resume` — relaunch from the latest checkpoint.
+pub async fn resume_training_run(app: &App, id: &str) -> Result<crate::db::TrainingRun> {
+    check_trainer_online(app)?;
+    app.training_runner.resume(id).await?;
+    reload_run(app, id).await
+}
+
+/// `POST /training/runs/{id}/cancel` — stop for good. The work directory and
+/// its checkpoints survive; only [`delete_training_run`] with `purge` removes
+/// them.
+pub async fn cancel_training_run(app: &App, id: &str) -> Result<crate::db::TrainingRun> {
+    app.training_runner.cancel(id).await?;
+    reload_run(app, id).await
+}
+
+/// `DELETE /training/runs/{id}` — drop a finished run from the history.
+/// Refused while the run is still going: the row is what the poller and the
+/// recovery sweep track a live process by, so removing it would orphan a
+/// trainer nobody could then stop. `purge` also removes the work directory
+/// (checkpoints and preview images included) — off by default, because those
+/// files are the user's.
+pub async fn delete_training_run(app: &App, id: &str, purge: bool) -> Result<()> {
+    let run = reload_run(app, id).await?;
+    if !run.state.is_terminal() {
+        return Err(CoreError::Config(format!(
+            "\"{}\" is still {} — cancel it before deleting it",
+            run.name,
+            run.state.as_str()
+        )));
+    }
+    if purge {
+        let dir = run_work_dir(app, &run);
+        if dir.is_dir() {
+            if let Err(e) = tokio::fs::remove_dir_all(&dir).await {
+                tracing::warn!(run = %run.id, error = %e, "could not remove a run's work directory");
+            }
+        }
+    }
+    app.db.training_runs().delete(id).await
+}
+
+/// The file behind `GET /training/runs/{id}/samples/{n}` — the `n`-th of the
+/// latest sample images. The request contributes only the index: the path
+/// itself comes from re-scanning the run's own work directory, exactly like
+/// `dataset_frame_image_path` resolves a frame id.
+pub async fn training_sample_path(app: &App, id: &str, n: usize) -> Result<Option<PathBuf>> {
+    let Some(run) = app.db.training_runs().get(id).await? else {
+        return Ok(None);
+    };
+    Ok(latest_sample_paths(app, &run)
+        .into_iter()
+        .nth(n)
+        .filter(|p| p.is_file()))
 }
 
 pub async fn list_models(app: &App) -> Result<Vec<Model>> {

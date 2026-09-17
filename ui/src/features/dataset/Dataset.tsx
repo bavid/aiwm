@@ -55,7 +55,13 @@ function frameImageUrl(coreApiPort: number, frame: DatasetFrame): string {
   return frame.job_id ? datasetFrameImageUrl(coreApiPort, frame.job_id, frame.id) : "";
 }
 
-export function DatasetStudio() {
+type Props = {
+  /** Hands the just-exported dataset to the Training tab (App owns the tab
+   *  switch and the hand-over state). */
+  onTrainLora: (datasetId: string) => void;
+};
+
+export function DatasetStudio({ onTrainLora }: Props) {
   const about = useAbout();
   const { data: jobs, refetch: refetchJobs } = useJobs({ limit: 50 });
   const { data: datasets, refetch: refetchDatasets } = useDatasets();
@@ -552,6 +558,7 @@ export function DatasetStudio() {
             isClipMode={isClipMode}
             state={exportState}
             onExport={runExport}
+            onTrainLora={() => activeDatasetId && onTrainLora(activeDatasetId)}
           />
         )}
       </div>

@@ -12,9 +12,9 @@ use aiwm_core::api::dto::{
     ConceptSummaryDto, ConfigUpdate, EnqueueDownloadDto, ExportDatasetDto, FeaturedModelDto,
     JobDetailDto, KnownModelDto, LaunchExternalDto, LocalApiStatusDto, LocationBodyDto,
     ModelStackDto, NewAgentDto, NewSessionDto, NewVoiceIdentityDto, NpcBodyDto,
-    OpenAgentSessionDto, RegisterColibriModelDto, RegistryDetailsDto, RegistrySearchDto,
-    RuntimeStatusDto, SceneBodyDto, SceneDetailDto, StoryBodyDto, SubmitJobDto, UpdateDatasetDto,
-    UpdateDatasetFrameDto,
+    OpenAgentSessionDto, ProfileDto, RegisterColibriModelDto, RegistryDetailsDto,
+    RegistrySearchDto, RunDetailDto, RuntimeStatusDto, SceneBodyDto, SceneDetailDto, StartRunDto,
+    StoryBodyDto, SubmitJobDto, TrainerStatusDto, UpdateDatasetDto, UpdateDatasetFrameDto,
 };
 use aiwm_core::api::handlers;
 use aiwm_core::capability::dataset::{CaptionerStatus, ExportSummary};
@@ -23,11 +23,12 @@ use aiwm_core::db::Document;
 use aiwm_core::db::{
     Agent, AgentSession, Benchmark, Character, CharacterLogEntry, CharacterRelationship, Dataset,
     DatasetConcept, DatasetFrame, Download, Job, JobFilter, Location, Model, Npc, SceneImage,
-    Session, Story, VoiceIdentity,
+    Session, Story, TrainingRun, VoiceIdentity,
 };
 use aiwm_core::model::{ImportOutcome, ImportRequest};
 use aiwm_core::orchestrator::JobState;
 use aiwm_core::registry::{Fetched, RemoteModel};
+use aiwm_core::runtime::training::Probe;
 use aiwm_core::runtime::DetectedEngine;
 use aiwm_core::telemetry::SystemTelemetry;
 use aiwm_core::{api, app, App, LaunchInfo};
@@ -421,6 +422,84 @@ async fn export_dataset_by_id(
 #[tauri::command]
 async fn delete_document(app: tauri::State<'_, Arc<App>>, id: String) -> Result<(), String> {
     to_ipc(handlers::delete_document(&app, &id).await)
+}
+
+// --- training orchestrator ---
+
+#[tauri::command]
+fn training_status(app: tauri::State<'_, Arc<App>>) -> TrainerStatusDto {
+    handlers::trainer_status(&app)
+}
+
+#[tauri::command]
+async fn install_trainer(app: tauri::State<'_, Arc<App>>) -> Result<String, String> {
+    to_ipc(handlers::install_trainer(&app).map(str::to_string))
+}
+
+#[tauri::command]
+async fn probe_trainer(app: tauri::State<'_, Arc<App>>) -> Result<Probe, String> {
+    to_ipc(handlers::probe_trainer(&app).await)
+}
+
+#[tauri::command]
+async fn list_training_profiles(
+    app: tauri::State<'_, Arc<App>>,
+) -> Result<Vec<ProfileDto>, String> {
+    to_ipc(handlers::list_training_profiles(&app).await)
+}
+
+#[tauri::command]
+async fn list_training_runs(app: tauri::State<'_, Arc<App>>) -> Result<Vec<TrainingRun>, String> {
+    to_ipc(handlers::list_training_runs(&app).await)
+}
+
+#[tauri::command]
+async fn start_training_run(
+    app: tauri::State<'_, Arc<App>>,
+    body: StartRunDto,
+) -> Result<TrainingRun, String> {
+    to_ipc(handlers::start_training_run(&app, body).await)
+}
+
+#[tauri::command]
+async fn get_training_run(
+    app: tauri::State<'_, Arc<App>>,
+    id: String,
+) -> Result<Option<RunDetailDto>, String> {
+    to_ipc(handlers::get_training_run(&app, &id).await)
+}
+
+#[tauri::command]
+async fn pause_training_run(
+    app: tauri::State<'_, Arc<App>>,
+    id: String,
+) -> Result<TrainingRun, String> {
+    to_ipc(handlers::pause_training_run(&app, &id).await)
+}
+
+#[tauri::command]
+async fn resume_training_run(
+    app: tauri::State<'_, Arc<App>>,
+    id: String,
+) -> Result<TrainingRun, String> {
+    to_ipc(handlers::resume_training_run(&app, &id).await)
+}
+
+#[tauri::command]
+async fn cancel_training_run(
+    app: tauri::State<'_, Arc<App>>,
+    id: String,
+) -> Result<TrainingRun, String> {
+    to_ipc(handlers::cancel_training_run(&app, &id).await)
+}
+
+#[tauri::command]
+async fn delete_training_run(
+    app: tauri::State<'_, Arc<App>>,
+    id: String,
+    purge: bool,
+) -> Result<(), String> {
+    to_ipc(handlers::delete_training_run(&app, &id, purge).await)
 }
 
 // --- Story Studio (Phase 1: text + plain image, docs/TODO.md) ---
@@ -1123,6 +1202,17 @@ fn try_run() -> anyhow::Result<()> {
             assign_concept,
             unassign_concept,
             export_dataset_by_id,
+            training_status,
+            install_trainer,
+            probe_trainer,
+            list_training_profiles,
+            list_training_runs,
+            start_training_run,
+            get_training_run,
+            pause_training_run,
+            resume_training_run,
+            cancel_training_run,
+            delete_training_run,
             list_agents,
             create_agent,
             delete_agent,

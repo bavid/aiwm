@@ -17,6 +17,7 @@ mod runtimes;
 mod sessions;
 mod settings;
 pub mod stories;
+mod training_runs;
 mod voice_identities;
 
 pub use agents::{Agent, AgentRepo, AgentSession, AgentSessionEvent, AgentSessionState, NewAgent};
@@ -37,6 +38,7 @@ pub use stories::{
     NewLocation, NewNpc, NewScene, Npc, NpcRepo, NpcUpdate, Scene, SceneImage, SceneImageRepo,
     SceneRepo, SceneUpdate, Story, StoryRepo, StoryUpdate,
 };
+pub use training_runs::{NewTrainingRun, Preset, RunState, TrainingRun, TrainingRunRepo};
 pub use voice_identities::{VoiceIdentity, VoiceIdentityRepo};
 
 use std::path::Path;
@@ -167,6 +169,10 @@ impl Database {
 
     pub fn concepts(&self) -> ConceptRepo<'_> {
         ConceptRepo::new(&self.pool)
+    }
+
+    pub fn training_runs(&self) -> TrainingRunRepo<'_> {
+        TrainingRunRepo::new(&self.pool)
     }
 
     /// Names of the application tables (excludes SQLite internals). Test helper.

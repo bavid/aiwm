@@ -248,6 +248,110 @@ pub struct NewVoiceIdentityDto {
     pub reference_transcript: String,
 }
 
+// --- training orchestrator (spec `2026-09-16-training-orchestrator-design`) -
+
+/// `GET /training/status` — everything the Training tab's header needs to
+/// decide between "set up the trainer", "wait", "repair" and "start a run".
+/// `install_state` is the adapter's own serialised shape, identical to the
+/// ComfyUI install card's, so both cards can share one renderer.
+#[derive(Debug, Clone, Serialize)]
+pub struct TrainerStatusDto {
+    pub installed: bool,
+    pub installing: bool,
+    /// The last import probe found the venv unusable — offer a repair, not a
+    /// doomed run.
+    pub env_broken: bool,
+    pub install_state: crate::runtime::training::InstallState,
+    /// The adapter's own one-line status, ready to show verbatim.
+    pub detail: String,
+    /// The run currently holding the GPU, if any.
+    pub alive_run_id: Option<String>,
+}
+
+/// One library model a profile can train, for the target-model dropdown.
+#[derive(Debug, Clone, Serialize)]
+pub struct TrainableModelDto {
+    pub id: String,
+    pub name: String,
+    /// The library's own `family` string, not the profile's — the two differ
+    /// for today's generic `flux2`/`wan` entries (see
+    /// [`crate::training::profile::find_for_model`]).
+    pub family: String,
+}
+
+/// A profile's three starting points, flattened out of the registry entry so
+/// the UI can index them by the preset name it already has.
+#[derive(Debug, Clone, Serialize)]
+pub struct ProfilePresetsDto {
+    pub fast: crate::training::profile::PresetValues,
+    pub balanced: crate::training::profile::PresetValues,
+    pub thorough: crate::training::profile::PresetValues,
+}
+
+/// `GET /training/profiles` — one trainable model family, with the two facts
+/// the registry itself cannot know: whether its base weights are staged in
+/// the library (`base_installed`) and which library models resolve to it.
+#[derive(Debug, Clone, Serialize)]
+pub struct ProfileDto {
+    pub family: &'static str,
+    pub label: &'static str,
+    pub arch: &'static str,
+    pub data_kind: crate::training::profile::DataKind,
+    pub fit: crate::training::profile::Fit,
+    /// `fit` in plain English, so the UI never has to translate the enum.
+    pub fit_label: &'static str,
+    pub reserve_mb: u64,
+    pub base_repo: &'static str,
+    pub base_role: &'static str,
+    pub base_required_files: &'static [&'static str],
+    pub base_approx_gb: u32,
+    /// The exact `hf` CLI line that stages this base under the configured
+    /// model store, built by [`crate::training::bases::hf_download_command`]
+    /// so the command the preflight shows and the manifest the runner
+    /// verifies against can never disagree about the exclusions or the
+    /// target directory.
+    pub base_download_command: String,
+    /// A library directory model with `base_role` whose folder holds every
+    /// one of `base_required_files`.
+    pub base_installed: bool,
+    pub caption_order: crate::capability::dataset::CaptionOrder,
+    pub license_note: &'static str,
+    pub presets: ProfilePresetsDto,
+    pub trainable_models: Vec<TrainableModelDto>,
+}
+
+/// Body for `POST /training/runs` — everything the Training tab's form
+/// collects. `hyperparams` and `sample_prompts` default so a minimal client
+/// can omit them and get the preset's own values (the handler still requires
+/// at least one prompt).
+#[derive(Debug, Clone, Deserialize)]
+pub struct StartRunDto {
+    pub name: String,
+    pub target_model_id: String,
+    pub dataset_id: String,
+    pub trigger_word: String,
+    pub preset: crate::db::Preset,
+    #[serde(default)]
+    pub hyperparams: crate::training::config::Hyperparams,
+    #[serde(default)]
+    pub sample_prompts: Vec<String>,
+}
+
+/// `GET /training/runs/{id}` — the stored row plus the two things that live
+/// on disk rather than in the database.
+#[derive(Debug, Clone, Serialize)]
+pub struct RunDetailDto {
+    pub run: crate::db::TrainingRun,
+    /// Opaque tokens for `GET /training/runs/{id}/samples/{n}`, newest
+    /// checkpoint first. Deliberately *not* file paths: the work dir never
+    /// leaves the core, and the route resolves the token by re-scanning.
+    pub latest_samples: Vec<String>,
+    /// The tail of `train.log`, already split on `\r` *and* `\n` (ai-toolkit
+    /// redraws its progress bar in place) and trimmed of empty updates.
+    pub log_tail: Vec<String>,
+    pub work_dir: String,
+}
+
 // --- Story Studio (Phase 1: text + plain image, docs/TODO.md) -------------
 
 /// Body for `POST /stories` and `PUT /stories/{id}` — every editable Story
