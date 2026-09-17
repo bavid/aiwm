@@ -362,6 +362,21 @@
   font-weight: 600;
 }
 
+.tile__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+/* An inline edit form standing in for a tile's body: flush with the tile
+ * (no outer margin/border of its own) so the tile still reads as one card. */
+.inline-form--tile {
+  margin-top: 0;
+  border: 0;
+  border-radius: 0;
+}
+
 .tile__actions {
   display: flex;
   gap: var(--space-2);
