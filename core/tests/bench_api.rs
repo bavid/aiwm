@@ -176,6 +176,59 @@ async fn benchmark_refuses_an_unknown_suite() {
     );
 }
 
+/// A body that *claims* to be JSON but is not must be refused, never quietly
+/// treated as "no body at all" (which would silently downgrade a suite run to
+/// the single-prompt quick test). The `Option<Json<_>>` extractor only means
+/// "no `Content-Type` at all"; everything else has to fail loudly — and
+/// nothing may reach the job queue.
+#[tokio::test]
+async fn benchmark_refuses_a_malformed_body_instead_of_falling_back() {
+    let (server, _tmp, _app, model_id) = fixture().await;
+    let base = format!("http://{}", server.addr);
+    let client = reqwest::Client::new();
+    let url = format!("{base}/models/{model_id}/benchmark");
+
+    let post = |content_type: &'static str, body: &'static str| {
+        let req = client
+            .post(&url)
+            .header(reqwest::header::CONTENT_TYPE, content_type)
+            .body(body);
+        async move { req.send().await.unwrap().status().as_u16() }
+    };
+
+    // Truncated JSON and an empty body are both syntax errors.
+    assert_eq!(post("application/json", "{").await, 400);
+    assert_eq!(post("application/json", "").await, 400);
+    // A non-JSON content type is refused before parsing.
+    assert_eq!(post("text/plain", "suite=chat-v1").await, 415);
+    // Well-formed JSON that cannot become the DTO (`runs` is a `u32`).
+    assert_eq!(post("application/json", r#"{"runs": -1}"#).await, 422);
+
+    let jobs: serde_json::Value = reqwest::get(format!("{base}/jobs"))
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(
+        jobs.as_array().unwrap().is_empty(),
+        "a refused body must not queue anything: {jobs}"
+    );
+}
+
+/// A `limit` that is not a number is a malformed request, not a reason to fall
+/// back to the default page size.
+#[tokio::test]
+async fn history_refuses_a_non_numeric_limit() {
+    let (server, _tmp, _app, _model) = fixture().await;
+    let base = format!("http://{}", server.addr);
+
+    let resp = reqwest::get(format!("{base}/benchmarks/history?limit=abc"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 400);
+}
+
 #[tokio::test]
 async fn history_returns_every_row_and_filters_by_suite() {
     let (server, _tmp, app, first) = fixture().await;
