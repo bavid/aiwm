@@ -1524,6 +1524,27 @@ export interface Benchmark {
   created_at: string;
 }
 
+/** Whether `POST /models/{id}/benchmark` will accept this model at all. The
+ *  core refuses anything but llama.cpp / GGUF ("benchmarking is llama.cpp /
+ *  GGUF models only for now"), so both the Model Library's "Test model" button
+ *  and the Benchmark tab's picker gate on exactly this, rather than each
+ *  guessing its own rule and drifting from the API. */
+export const isBenchmarkable = (model: Model): boolean => model.format === "gguf";
+
+/** Job states that mean "not finished yet" — queued, waiting for VRAM, or
+ *  actually working. A `bench` job in one of these is a test in flight. */
+const ACTIVE_JOB_STATES: ReadonlySet<string> = new Set<JobState>([
+  "queued",
+  "scheduled",
+  "blocked",
+  "preparing",
+  "running",
+  "post",
+]);
+
+/** True while `job` still has work ahead of it — see {@link ACTIVE_JOB_STATES}. */
+export const isJobActive = (job: Job): boolean => ACTIVE_JOB_STATES.has(job.state);
+
 /** The latest benchmark for every model that has one — join by `model_id`. */
 export const listBenchmarks = () => invoke<Benchmark[]>("list_benchmarks");
 /** Every benchmark run for one model, newest first. */

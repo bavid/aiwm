@@ -14,6 +14,8 @@ import {
   benchmarkModel,
   enqueueDownload,
   importModel,
+  isBenchmarkable,
+  isJobActive,
   registryModel,
   renameModel,
   setModelRoles,
@@ -77,9 +79,6 @@ const gbBytes = (b: number) => `${(b / 1024 ** 3).toFixed(2)} GB`;
 const params = (n: number | null) =>
   n == null ? "—" : n >= 1e9 ? `${(n / 1e9).toFixed(1)} B` : `${(n / 1e6).toFixed(0)} M`;
 const ctx = (n: number | null) => (n == null ? "—" : n >= 1024 ? `${Math.round(n / 1024)}K` : `${n}`);
-
-/** Not-yet-finished job states — a `bench` job in one of these means "testing". */
-const ACTIVE_JOB = new Set(["queued", "scheduled", "blocked", "preparing", "running", "post"]);
 
 const scoreBand = (score: number) =>
   score >= 70 ? "ok" : score >= 40 ? "warn" : "crit";
@@ -180,7 +179,7 @@ function ModelLibrary({ models, error }: { models: Model[] | null; error: string
   const activeOf = (type: string) =>
     new Set(
       (jobs ?? [])
-        .filter((j: Job) => j.job_type === type && ACTIVE_JOB.has(j.state))
+        .filter((j: Job) => j.job_type === type && isJobActive(j))
         .map(targetOf),
     );
   const testing = activeOf("bench");
@@ -309,7 +308,7 @@ function ScoreCell({
   testing: boolean;
 }) {
   const [err, setErr] = useState(false);
-  const canTest = model.format === "gguf";
+  const canTest = isBenchmarkable(model);
 
   const run = async () => {
     setErr(false);

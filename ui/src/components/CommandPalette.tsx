@@ -18,6 +18,7 @@ const TAB_ENTRIES: { tab: string; label: string }[] = [
   { tab: "jobs", label: "Jobs" },
   { tab: "agents", label: "Agents" },
   { tab: "models", label: "Models" },
+  { tab: "benchmark", label: "Benchmark" },
   { tab: "diagnostics", label: "Diagnostics" },
   { tab: "settings", label: "Settings" },
 ];

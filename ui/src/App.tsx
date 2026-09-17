@@ -1,5 +1,6 @@
 import { useCallback, useState, type ReactNode } from "react";
 import { AgentsWorkbench } from "./features/agents/Agents";
+import { Benchmark } from "./features/benchmark/Benchmark";
 import { Chat } from "./features/chat/Chat";
 import { Dashboard } from "./features/dashboard/Dashboard";
 import { DatasetStudio } from "./features/dataset/Dataset";
@@ -29,6 +30,7 @@ type Tab =
   | "jobs"
   | "agents"
   | "models"
+  | "benchmark"
   | "diagnostics"
   | "settings";
 
@@ -146,6 +148,17 @@ const TABS: { id: Tab; label: string; icon: ReactNode }[] = [
         <ellipse cx="10" cy="4.8" rx="6.8" ry="2.3" />
         <path d="M3.2 4.8V15c0 1.27 3.04 2.3 6.8 2.3s6.8-1.03 6.8-2.3V4.8" />
         <path d="M3.2 10c0 1.27 3.04 2.3 6.8 2.3s6.8-1.03 6.8-2.3" />
+      </svg>
+    ),
+  },
+  {
+    id: "benchmark",
+    label: "Benchmark",
+    icon: (
+      <svg viewBox="0 0 20 20">
+        <path d="M3.4 15.5a7.4 7.4 0 1 1 13.2 0" />
+        <path d="M10 12.2 13.6 7" />
+        <circle cx="10" cy="12.8" r="1.2" fill="currentColor" />
       </svg>
     ),
   },
@@ -309,6 +322,9 @@ export default function App() {
         </div>
         <div hidden={tab !== "models"}>
           <Models />
+        </div>
+        <div hidden={tab !== "benchmark"}>
+          <Benchmark onNavigate={navigate} />
         </div>
         <div hidden={tab !== "diagnostics"}>
           <Diagnostics />

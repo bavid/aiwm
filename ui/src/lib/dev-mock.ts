@@ -624,9 +624,25 @@ const BENCH_SUITES: AnyRecord[] = [
 const BENCH_PASS_MS = 900;
 /** Extra time after the last pass, standing in for the scoring + store write. */
 const BENCH_SETTLE_MS = 600;
+/** `core::bench::BenchRequest::from_params` clamps the requested passes to
+ *  this range; the API deliberately passes the raw number through, so the
+ *  clamp belongs on the job side here too. */
+const BENCH_RUNS_MIN = 1;
+const BENCH_RUNS_MAX = 10;
+/** `GET /benchmarks/history` defaults to 50 rows and clamps to 1..=200. */
+const BENCH_HISTORY_LIMIT_DEFAULT = 50;
+const BENCH_HISTORY_LIMIT_MAX = 200;
 
 function benchSuite(id: string | null): AnyRecord | null {
   return BENCH_SUITES.find((s) => s.id === id) ?? null;
+}
+
+/** The passes-per-prompt a job actually runs: the params value clamped the way
+ *  the core clamps it, with anything unparseable falling back to the default. */
+function benchRuns(raw: unknown, fallback: number): number {
+  const n = Number(raw ?? fallback);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(BENCH_RUNS_MAX, Math.max(BENCH_RUNS_MIN, Math.floor(n)));
 }
 
 /** The per-pass tok/s a bench job was born with — fixed at submit time so the
@@ -641,7 +657,7 @@ function benchPassRates(j: AnyRecord): number[] {
 function benchPassLabels(j: AnyRecord): { label: string | null; runs: number; pass: number; promptId: string | null }[] {
   const params = (j.params ?? {}) as AnyRecord;
   const suite = benchSuite(params.suite ? String(params.suite) : null);
-  const runs = Number(params.runs ?? (suite ? 2 : 3));
+  const runs = benchRuns(params.runs, suite ? 2 : 3);
   if (!suite) {
     return Array.from({ length: runs }, (_, i) => ({ label: null, runs, pass: i + 1, promptId: null }));
   }
@@ -676,13 +692,17 @@ function benchEvents(j: AnyRecord): AnyRecord[] {
         : `benchmarking “${model?.name ?? j.model_id}” — ${runs} run(s), ${tokens} tokens each`,
     },
   ];
-  const elapsed = Date.now() - Date.parse(String(j.started_at ?? j.created_at));
+  const startedAt = Date.parse(String(j.started_at ?? j.created_at));
+  const elapsed = Date.now() - startedAt;
   const done = Math.min(rates.length, Math.floor(elapsed / BENCH_PASS_MS));
   for (let i = 0; i < done; i++) {
     const step = labels[i];
     const tps = rates[i];
     events.push({
-      ts: now(),
+      // When that pass *finished*, not when this poll happened — a wall-clock
+      // `now()` here would make every already-logged line's timestamp jump on
+      // every poll, which is not how an append-only event trail behaves.
+      ts: new Date(startedAt + (i + 1) * BENCH_PASS_MS).toISOString(),
       level: "info",
       message: step.label
         ? `${step.label} — pass ${step.pass}/${step.runs}: ${tps.toFixed(1)} tok/s`
@@ -1885,12 +1905,20 @@ export function installDevMock(): void {
         progressBenchJobs();
         return BENCHMARKS.filter((b) => b.model_id === a.id);
       case "bench_suites":
-        return BENCH_SUITES;
+        // Fresh copies: the catalogue is static on the core side, and a caller
+        // that mutated a suite here would corrupt every later read.
+        return BENCH_SUITES.map((s) => ({
+          ...s,
+          prompts: (s.prompts as AnyRecord[]).map((p) => ({ ...p })),
+        }));
       case "benchmark_history": {
         progressBenchJobs();
         const suite = a.suite == null ? null : String(a.suite);
         if (suite && !benchSuite(suite)) throw new Error(`unknown benchmark suite "${suite}"`);
-        const limit = Math.min(200, Math.max(1, Number(a.limit ?? 50)));
+        const asked = Number(a.limit ?? BENCH_HISTORY_LIMIT_DEFAULT);
+        const limit = Number.isFinite(asked)
+          ? Math.min(BENCH_HISTORY_LIMIT_MAX, Math.max(1, asked))
+          : BENCH_HISTORY_LIMIT_DEFAULT;
         return BENCHMARKS.filter((b) => suite == null || b.suite === suite).slice(0, limit);
       }
       case "benchmark_model": {
