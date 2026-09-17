@@ -305,6 +305,12 @@ pub struct ProfileDto {
     pub base_role: &'static str,
     pub base_required_files: &'static [&'static str],
     pub base_approx_gb: u32,
+    /// The exact `hf` CLI line that stages this base under the configured
+    /// model store, built by [`crate::training::bases::hf_download_command`]
+    /// so the command the preflight shows and the manifest the runner
+    /// verifies against can never disagree about the exclusions or the
+    /// target directory.
+    pub base_download_command: String,
     /// A library directory model with `base_role` whose folder holds every
     /// one of `base_required_files`.
     pub base_installed: bool,

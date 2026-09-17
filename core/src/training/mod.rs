@@ -14,7 +14,11 @@
 //! [`profile`] is the static registry of trainable model families: which
 //! `ai-toolkit` architecture each one maps to, its VRAM strategy, its base
 //! weights, and its three preset (fast/balanced/thorough) starting points.
+//! [`bases`] is its download-and-verify counterpart: the repo, the exclusion
+//! patterns and the pinned per-file sizes and SHA-256 sums of each family's
+//! base snapshot.
 
+pub mod bases;
 pub mod config;
 pub mod process;
 pub mod profile;

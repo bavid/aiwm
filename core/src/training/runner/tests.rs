@@ -47,6 +47,10 @@ async fn fixture() -> Fx {
     let runtimes = RuntimeRegistry::new();
     runtimes.register(adapter.clone());
     let scheduler = Arc::new(HybridScheduler::new(runtimes.clone(), 24_576));
+    // Base-weight verification is off for the shared fixture: its stand-in
+    // files are seven bytes each, and no test can stage 16 GB of real
+    // weights. `preflight_refuses_base_weights_that_do_not_match_the_pinned_manifest`
+    // is the one test that keeps the real verifier.
     let runner = Runner::new(
         db.clone(),
         adapter.clone(),
@@ -54,7 +58,8 @@ async fn fixture() -> Fx {
         runtimes.clone(),
         root.join("training"),
         root.join("store"),
-    );
+    )
+    .with_base_verifier(|_, _, _| Ok(()));
     Fx {
         _tmp: tmp,
         db,
@@ -467,6 +472,40 @@ async fn cancel_of_a_finished_run_completes_it_instead() {
 }
 
 #[tokio::test]
+async fn preflight_refuses_base_weights_that_do_not_match_the_pinned_manifest() {
+    // `install_base_weights` writes a seven-byte stand-in for each required
+    // file: complete enough for `find_staged_base`, nothing like the real
+    // 7.7 GB transformer. With the real verifier in place -- the one every
+    // production `Runner` gets -- that is exactly the corrupt/truncated
+    // download the manifest exists to catch, and it has to be caught here
+    // rather than an hour into the run.
+    let (fx, target, ds) = ready_fixture().await;
+    let runner = Runner::new(
+        fx.db.clone(),
+        fx.adapter.clone(),
+        fx.scheduler.clone(),
+        fx.runtimes.clone(),
+        fx.root.join("training"),
+        fx.root.join("store"),
+    );
+
+    let err = runner
+        .create_and_start(start_request(&target, &ds))
+        .await
+        .expect_err("base weights that do not match their manifest must not start a run");
+
+    let msg = err.to_string();
+    assert!(
+        msg.contains("transformer/diffusion_pytorch_model.safetensors"),
+        "the refusal must name the offending file: {msg}"
+    );
+    assert!(
+        msg.contains("black-forest-labs/FLUX.2-klein-base-4B"),
+        "the refusal must say what to download again: {msg}"
+    );
+}
+
+#[tokio::test]
 async fn preflight_blocks_when_the_disk_is_nearly_full() {
     let (fx, target, ds) = ready_fixture().await;
     let runner = Runner::new(
@@ -477,6 +516,7 @@ async fn preflight_blocks_when_the_disk_is_nearly_full() {
         fx.root.join("training"),
         fx.root.join("store"),
     )
+    .with_base_verifier(|_, _, _| Ok(()))
     .with_free_space_probe(|_| Some((5 * 1024 * 1024 * 1024, 200 * 1024 * 1024 * 1024)));
 
     let err = runner
@@ -500,6 +540,7 @@ async fn preflight_passes_when_the_volume_is_unknown() {
         fx.root.join("training"),
         fx.root.join("store"),
     )
+    .with_base_verifier(|_, _, _| Ok(()))
     .with_free_space_probe(|_| None);
 
     // The fake install's `python` is not a real interpreter, so the run

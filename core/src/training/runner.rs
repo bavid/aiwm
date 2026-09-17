@@ -101,6 +101,12 @@ pub struct StartRequest {
 /// preflight disk check can be driven from a test.
 pub type FreeSpaceProbe = fn(&Path) -> Option<(u64, u64)>;
 
+/// [`crate::training::bases::verify_base_dir`], behind a function pointer so
+/// the preflight base-weight check can be driven from a test. The real one
+/// compares a staged snapshot against sizes and SHA-256 sums pinned from a
+/// 16 GB download; no test can arrange weights that satisfy it.
+pub type BaseVerifier = fn(&Path, &crate::training::bases::TrainingBase, bool) -> Result<()>;
+
 /// A trainer command that replaces `python run.py` — set only by tests
 /// (Task 8's `aiwm-fake-trainer`), never in production. `image` is the name
 /// the stand-in's process shows up as in `tasklist`/`taskkill`, which is what
@@ -125,6 +131,7 @@ pub struct Runner {
     polls: Mutex<BTreeMap<String, PollState>>,
     trainer_command: Option<TrainerCommand>,
     free_space: FreeSpaceProbe,
+    verify_base: BaseVerifier,
     /// Held across preflight + create + launch. Preflight refuses a second
     /// concurrent run by reading the database, which is only a decision about
     /// the state it saw; this is what stops two Start clicks from both
@@ -166,6 +173,7 @@ impl Runner {
             polls: Mutex::new(BTreeMap::new()),
             trainer_command: None,
             free_space: crate::cleanup::volume_free,
+            verify_base: crate::training::bases::verify_base_dir,
             start_lock: AsyncMutex::new(()),
             #[cfg(test)]
             rolled_back: Mutex::new(Vec::new()),
@@ -178,6 +186,15 @@ impl Runner {
     #[must_use]
     pub fn with_free_space_probe(mut self, probe: FreeSpaceProbe) -> Self {
         self.free_space = probe;
+        self
+    }
+
+    /// Replace the base-weight verifier the preflight check uses. Test seam
+    /// only — see [`BaseVerifier`].
+    #[cfg(test)]
+    #[must_use]
+    pub fn with_base_verifier(mut self, verify: BaseVerifier) -> Self {
+        self.verify_base = verify;
         self
     }
 

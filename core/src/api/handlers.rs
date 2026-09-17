@@ -653,6 +653,11 @@ pub async fn list_training_profiles(app: &App) -> Result<Vec<ProfileDto>> {
             base_role: profile.base.role,
             base_required_files: profile.base.required_files,
             base_approx_gb: profile.base.approx_gb,
+            base_download_command: crate::training::bases::find_base(profile.family)
+                .map(|base| {
+                    crate::training::bases::hf_download_command(base, &app.config.store_path)
+                })
+                .unwrap_or_default(),
             base_installed,
             caption_order: profile.caption_order,
             license_note: profile.license_note,

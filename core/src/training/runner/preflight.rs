@@ -13,6 +13,7 @@ use super::{Runner, BYTES_PER_GB, MIN_FREE_DISK_BYTES};
 use crate::db::{DatasetMode, TrainingRun};
 use crate::runtime::training::RUNTIME_ID as TRAINING_RUNTIME_ID;
 use crate::scheduler::Scheduler;
+use crate::training::bases::find_base;
 use crate::training::config::Hyperparams;
 use crate::training::profile::{find_for_model, find_staged_base, TrainingProfile};
 use crate::training::{training_err, training_refusal};
@@ -186,14 +187,24 @@ impl Runner {
                 profile.label, profile.base.repo
             )));
         }
-        find_staged_base(profile, &candidates)
+        let dir = find_staged_base(profile, &candidates)
             .map(Path::to_path_buf)
             .ok_or_else(|| {
                 training_refusal(format!(
                     "the base weights for \"{}\" are incomplete — download {} again",
                     profile.label, profile.base.repo
                 ))
-            })
+            })?;
+
+        // Complete is not the same as intact. `find_staged_base` only asks
+        // whether the files are there; this asks whether they are the files
+        // we pinned, at their pinned sizes, with the smallest of the weights
+        // hashed. A snapshot with no pinned hashes yet passes trivially --
+        // see `crate::training::bases`.
+        if let Some(base) = find_base(profile.family) {
+            (self.verify_base)(&dir, base, false)?;
+        }
+        Ok(dir)
     }
 
     /// Free every runtime's non-pinned models so the trainer gets the GPU.
