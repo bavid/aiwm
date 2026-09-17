@@ -2005,6 +2005,21 @@ export function installDevMock(): void {
               vram_estimate_mb: 9_200,
               fit: { level: "yellow", reason: "needs ~9.0 GB of your ~14.8 GB VRAM budget — little head-room for a longer context or a second resident model" },
             },
+            // No size estimate from the source -> the core can't judge it:
+            // the `unknown` tier, so the preview shows all four.
+            {
+              path: `${repo}-q6_k.gguf`, size_bytes: 6_300_000_000,
+              sha256: "cc".repeat(32), quant: "Q6_K", shard: null,
+              download_url: `https://huggingface.co/${mid}/resolve/main/model-q6_k.gguf`,
+              vram_estimate_mb: null, fit: { level: "unknown" },
+            },
+            {
+              path: `${repo}-f16.gguf`, size_bytes: 15_240_000_000,
+              sha256: "dd".repeat(32), quant: "F16", shard: null,
+              download_url: `https://huggingface.co/${mid}/resolve/main/model-f16.gguf`,
+              vram_estimate_mb: 17_600,
+              fit: { level: "red", reason: "needs ~17.2 GB of your ~14.8 GB VRAM budget — it would have to offload most layers to system RAM" },
+            },
           ],
         };
       }

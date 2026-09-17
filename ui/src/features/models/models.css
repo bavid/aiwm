@@ -269,13 +269,6 @@
   border-top: 1px solid var(--border);
 }
 
-.up__dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  flex-shrink: 0;
-}
-
 .up__id {
   font-family: var(--font-mono);
   font-weight: 600;
@@ -560,22 +553,8 @@
 .known__badges {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: var(--space-1);
-}
-
-.known__fit {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-size: var(--text-xs);
-  color: var(--muted);
-}
-
-.known__fitdot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  flex-shrink: 0;
 }
 
 .badge--pick {
@@ -802,6 +781,7 @@
 .discover__title {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: var(--space-2);
   font-weight: 600;
   word-break: break-all;
@@ -851,15 +831,9 @@
 .discover__file {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: var(--space-2);
   font-size: var(--text-xs);
-}
-
-.discover__dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  flex-shrink: 0;
 }
 
 .discover__quant {
@@ -868,10 +842,25 @@
   word-break: break-all;
 }
 
-.discover__fitnote {
-  color: var(--load-warn);
+.filelist__head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
   font-size: var(--text-xs);
-  cursor: help;
+}
+
+.filelist__summary {
+  color: var(--muted);
+}
+
+.filelist__filter {
+  font-size: var(--text-xs);
+}
+
+.filelist__hidden {
+  margin: 0;
+  font-size: var(--text-xs);
 }
 
 .discover__dlbtn {

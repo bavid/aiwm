@@ -1304,9 +1304,19 @@ ist Backlog für spätere Slices, absteigend nach Aufwand geordnet:
   Abschnitt unten. `core::pipeline` unterstützt eine LoRA-Kette mit
   Pro-LoRA-Stärke seit längerem (`LoraSpec`/`apply_loras`); die UI-Seite
   fehlte bzw. traf die Spec nicht genau.
-- **Hardware-Fit-Badge im Discover-Tab** — Modelle nach VRAM-Fit in Tiers
-  einsortieren (passt/knapp/zu groß) statt nur einer binären Warnung;
-  kleiner, in sich geschlossener Slice.
+- **Hardware-Fit-Badge im Discover-Tab** — ✅ umgesetzt (2026-09-18). Statt
+  des farbigen Punkts mit `title=`-Tooltip jetzt ein beschriftetes
+  Tier-Badge (`Fits` / `Tight` / `Too big` / `Unknown`, je mit eigener Form,
+  VRAM-Schätzung und der Begründung des Cores als aufklappbarer, per
+  Tastatur und Screenreader erreichbarer Text) — geteilt von Discover,
+  Katalog und Upgrade-Check. Die Dateiliste eines aufgelösten Modells wird
+  nach Tier sortiert (stabil innerhalb eines Tiers), zeigt eine
+  Tier-Zusammenfassung ("3 fit · 2 tight · 4 too big for this GPU") und
+  einen Filter "Hide files that won't fit" (aus by default, nennt beim
+  Filtern immer die Zahl der ausgeblendeten Zeilen). Kein Core-Change nötig:
+  `core::compat` liefert `FitVerdict` samt Begründung längst, es fehlte nur
+  die Darstellung; ein "Too big"-File bleibt weiterhin herunterladbar — das
+  Badge informiert, es blockiert nicht.
 - **Kompaktions-Records für lange Chats** — statt eines einzigen
   "Zusammenfassung ab Index N", mehrere stapelbare Kompaktions-Einträge,
   jeweils an die **ID** der letzten ersetzten Nachricht verankert (überlebt

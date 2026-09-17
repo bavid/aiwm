@@ -3,12 +3,10 @@ import { useCivitaiSearch, useModels, useRegistrySearch } from "../../lib/hooks"
 import {
   cancelJob,
   civitaiModel,
-  enqueueDownload,
   jobDetail,
   registryModel,
   submitJob,
   type CivitaiSearchParams,
-  type FitVerdict,
   type Freshness,
   type JobState,
   type ModelType,
@@ -16,11 +14,13 @@ import {
   type RecommendKind,
   type RecommendReport,
   type RegistryDetails,
-  type RegistryFile,
   type RegistrySearchParams,
   type RemoteModel,
 } from "../../lib/ipc";
 import { filterDisplayTags } from "../../lib/tags";
+import { FileList } from "./FileList";
+import { FitBadge } from "./FitBadge";
+import { weightFiles } from "./registry-files";
 
 /** Which Discover source is active. Civitai has no "ask my local model"
  *  ranking integration (yet) — that toggle only ever applies to the Hugging
@@ -75,37 +75,9 @@ const RECOMMEND_KINDS: { value: RecommendKind; label: string }[] = [
 
 const JOB_DONE: JobState[] = ["completed", "failed", "cancelled"];
 
-const gb = (bytes: number) => `${(bytes / 1024 ** 3).toFixed(2)} GB`;
 const count = (n: number) =>
   n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}k` : `${n}`;
 const params = (n: number | null) => (n == null ? "—" : n >= 1e9 ? `${(n / 1e9).toFixed(1)}B` : `${(n / 1e6).toFixed(0)}M`);
-
-const FIT_COLOR: Record<FitVerdict["level"], string> = {
-  green: "var(--load-ok)",
-  yellow: "var(--load-warn)",
-  red: "var(--load-crit)",
-  unknown: "var(--border)",
-};
-
-/** A `.gguf` file can never be a checkpoint/VAE/LoRA (`core::model::kind`'s
- *  own rule -- those only ever accept `.safetensors`). The repo-level format
- *  guess that picked `modelType` upstream (`importTypeFor`/`guessModelType`)
- *  trusts Hugging Face's own tags, and a community repo that never got
- *  tagged `gguf` reports as `other` even though its real files are .gguf --
- *  correct it here from the one thing that's always trustworthy: the actual
- *  file being downloaded. */
-function safeModelType(modelType: ModelType, path: string): ModelType {
-  const isGguf = path.toLowerCase().endsWith(".gguf");
-  const ggufIncompatible: ModelType[] = ["checkpoint", "vae", "lora"];
-  return isGguf && ggufIncompatible.includes(modelType) ? "chat" : modelType;
-}
-
-function fitTitle(fit: FitVerdict, vramMb: number | null): string {
-  const est = vramMb ? ` · ~${(vramMb / 1024).toFixed(1)} GB VRAM` : "";
-  if (fit.level === "green") return `Fits comfortably${est}`;
-  if (fit.level === "unknown") return "Fit unknown";
-  return `${fit.reason}${est}`;
-}
 
 function freshnessNote(f: Freshness, sourceLabel = "Hugging Face"): string | null {
   if (f.kind === "live") return null;
@@ -610,16 +582,13 @@ function CivitaiResultCard({
           <div className="discover__files">
             {loading && <p className="muted">Loading files…</p>}
             {err && <p className="import__err">{err}</p>}
-            {details?.files.map((f) => (
-              <FileRow
-                key={f.path}
-                file={f}
+            {details && (
+              <FileList
+                files={details.files}
                 gated={false}
-                modelType={safeModelType(modelType, f.path)}
+                modelType={modelType}
+                emptyNote="No files listed for this model."
               />
-            ))}
-            {details && details.files.length === 0 && (
-              <p className="muted">No files listed for this model.</p>
             )}
           </div>
         )}
@@ -685,18 +654,13 @@ function ResultCard({ model, onUseType }: { model: RemoteModel; onUseType: (t: M
           <div className="discover__files">
             {loading && <p className="muted">Loading files…</p>}
             {err && <p className="import__err">{err}</p>}
-            {details?.files
-              .filter((f) => f.quant || f.vram_estimate_mb != null)
-              .map((f) => (
-                <FileRow
-                  key={f.path}
-                  file={f}
-                  gated={model.gated !== "no"}
-                  modelType={importTypeFor(model.format)}
-                />
-              ))}
-            {details && details.files.every((f) => !f.quant && f.vram_estimate_mb == null) && (
-              <p className="muted">No weight files detected in this repo.</p>
+            {details && (
+              <FileList
+                files={weightFiles(details)}
+                gated={model.gated !== "no"}
+                modelType={importTypeFor(model.format)}
+                emptyNote="No weight files detected in this repo."
+              />
             )}
           </div>
         )}
@@ -747,11 +711,7 @@ function RecommendCard({ candidate, kind }: { candidate: RecommendCandidate; kin
           </a>
           {candidate.gated && <span className="badge badge--warn">gated</span>}
           {candidate.llm_ranked && <span className="badge">picked by your local model</span>}
-          <span
-            className="discover__dot"
-            style={{ background: FIT_COLOR[candidate.fit.level] }}
-            title={candidate.fit.level === "yellow" || candidate.fit.level === "red" ? candidate.fit.reason : undefined}
-          />
+          <FitBadge fit={candidate.fit} subject={candidate.id} />
         </div>
         <p className="recommend__why">{candidate.why}</p>
         <div className="discover__meta numeric">
@@ -772,19 +732,14 @@ function RecommendCard({ candidate, kind }: { candidate: RecommendCandidate; kin
           <div className="discover__files">
             {loading && <p className="muted">Loading files…</p>}
             {err && <p className="import__err">{err}</p>}
-            {details?.files
-              .filter((f) => f.quant || f.vram_estimate_mb != null)
-              .map((f) => (
-                <FileRow
-                  key={f.path}
-                  file={f}
-                  gated={candidate.gated}
-                  modelType={guessModelType(kind, candidate.format)}
-                  roles={rolesFor(kind)}
-                />
-              ))}
-            {details && details.files.every((f) => !f.quant && f.vram_estimate_mb == null) && (
-              <p className="muted">No weight files detected in this repo.</p>
+            {details && (
+              <FileList
+                files={weightFiles(details)}
+                gated={candidate.gated}
+                modelType={guessModelType(kind, candidate.format)}
+                roles={rolesFor(kind)}
+                emptyNote="No weight files detected in this repo."
+              />
             )}
           </div>
         )}
@@ -813,138 +768,6 @@ function DiscoverTags({ tags }: { tags: string[] }) {
           {t}
         </span>
       ))}
-    </div>
-  );
-}
-
-/** Civitai's own malware-scan verdicts for one file, surfaced prominently —
- *  never silently hidden. A non-`"Success"` result (or a scan that hasn't
- *  finished yet) gets a warning badge naming the exact verdict; a clean scan
- *  gets a quiet, low-key note. `null`/`null` (Hugging Face, which runs no
- *  such scan) renders nothing.
- *
- *  This is informational only, deliberately: it does not gate the download
- *  button. AIWM's own import-time Pickle-format guard (`resolve_kind`) is
- *  the real enforcement and runs unconditionally on the actual downloaded
- *  file regardless of what Civitai's self-reported scan claims — trusting
- *  a "Danger" verdict to silently block, same as trusting a "Success"
- *  verdict to silently allow, would both mean trusting Civitai's own
- *  self-report instead of AIWM's own check. Showing the verdict lets the
- *  user make an informed choice; the guard is what actually protects them. */
-function ScanBadge({ pickle, virus }: { pickle: string | null; virus: string | null }) {
-  if (!pickle && !virus) return null;
-  const issues = [
-    pickle && pickle !== "Success" ? `pickle: ${pickle}` : null,
-    virus && virus !== "Success" ? `virus: ${virus}` : null,
-  ].filter((s): s is string => s != null);
-
-  if (issues.length > 0) {
-    return (
-      <span
-        className="badge badge--warn"
-        title={`Civitai's own malware scan flagged this file (${issues.join(
-          ", ",
-        )}). AIWM's own import guard still applies regardless — review before downloading.`}
-      >
-        ⚠ {issues.join(", ")}
-      </span>
-    );
-  }
-  return (
-    <span className="discover__scanok" title="Civitai's own malware scan: clean (pickle + virus)">
-      scan ok
-    </span>
-  );
-}
-
-/** One resolved file row: fit dot, quant, size, "Download & import", "Copy
- *  link". Shared by Discover's own results and the Models tab's Featured
- *  catalog (`Models.tsx`), which passes `roles` so a coding pick actually
- *  gets the `coding` role on import, and `recommended` to flag the curated
- *  quant among every option Hugging Face offers. */
-export function FileRow({
-  file,
-  gated,
-  modelType,
-  roles,
-  recommended,
-}: {
-  file: RegistryFile;
-  gated: boolean;
-  modelType: ModelType;
-  /** Roles to stamp on import (e.g. `["chat", "coding"]`); omit for a plain
-   *  download. */
-  roles?: string[];
-  /** Marks this as the curated "pick this one" quant among several shown. */
-  recommended?: boolean;
-}) {
-  const [copied, setCopied] = useState(false);
-  const [dl, setDl] = useState<"idle" | "queued" | "error">("idle");
-
-  const copy = async () => {
-    try {
-      await navigator.clipboard.writeText(file.download_url);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    } catch {
-      /* clipboard blocked — the link is in the title attr */
-    }
-  };
-
-  const download = async () => {
-    setDl("idle");
-    try {
-      await enqueueDownload({
-        url: file.download_url,
-        filename: file.path,
-        model_type: safeModelType(modelType, file.path),
-        sha256: file.sha256 ?? undefined,
-        size_bytes: file.size_bytes,
-        roles,
-      });
-      setDl("queued");
-    } catch {
-      setDl("error");
-    }
-  };
-
-  const warn = file.fit.level === "yellow" || file.fit.level === "red";
-  // Split files need every part — no one-click for those yet (6.4).
-  const canDownload = !file.shard && !gated;
-
-  return (
-    <div className="discover__file">
-      <span
-        className="discover__dot"
-        style={{ background: FIT_COLOR[file.fit.level] }}
-        title={fitTitle(file.fit, file.vram_estimate_mb)}
-      />
-      <span className="discover__quant">
-        {file.quant ?? file.path}
-        {file.shard && ` · part ${file.shard[0]}/${file.shard[1]}`}
-        {recommended && <span className="badge badge--pick">★</span>}
-      </span>
-      <span className="numeric muted">{gb(file.size_bytes)}</span>
-      {warn && "reason" in file.fit && (
-        <span className="discover__fitnote" title={file.fit.reason}>
-          {file.fit.level === "red" ? "won’t fit" : "tight"}
-        </span>
-      )}
-      {gated && <span className="badge badge--warn">accept licence on HF</span>}
-      <ScanBadge pickle={file.pickle_scan_result} virus={file.virus_scan_result} />
-      {canDownload && (
-        <button
-          type="button"
-          className="discover__dlbtn"
-          disabled={dl === "queued"}
-          onClick={download}
-        >
-          {dl === "queued" ? "Queued ✓" : dl === "error" ? "Failed — retry" : "Download & import"}
-        </button>
-      )}
-      <button type="button" className="discover__copy" title={file.download_url} onClick={copy}>
-        {copied ? "Copied ✓" : "Copy link"}
-      </button>
     </div>
   );
 }
