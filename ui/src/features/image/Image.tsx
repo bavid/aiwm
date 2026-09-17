@@ -32,6 +32,8 @@ import {
   type LoraParam,
   type UpscaleParams,
 } from "../../lib/ipc";
+import { HiresFixField } from "./HiresFixField";
+import { DEFAULT_HIRES, toHiresParams, type HiresFixSettings } from "./hires-fix";
 import "./image.css";
 
 const DONE: JobState[] = ["completed", "failed", "cancelled"];
@@ -100,6 +102,7 @@ export function ImageStudio({ prefill = null, onPrefillConsumed }: Props = {}) {
   const [seed, setSeed] = useState("");
   const [modelId, setModelId] = useState("auto");
   const [loras, setLoras] = useState<LoraParam[]>([]);
+  const [hires, setHires] = useState<HiresFixSettings>(DEFAULT_HIRES);
   const [sendError, setSendError] = useState<string | null>(null);
   const [sourceJob, setSourceJob] = useState("none");
   const [sourcePath, setSourcePath] = useState("");
@@ -209,6 +212,8 @@ export function ImageStudio({ prefill = null, onPrefillConsumed }: Props = {}) {
     const s = Number(seed);
     if (seed.trim() !== "" && Number.isFinite(s) && s >= 0) params.seed = Math.floor(s);
     if (loras.length > 0) params.loras = loras;
+    // Text-to-image only — an edit keeps the source image's own size.
+    if (!editing && hires.enabled) params.hires = toHiresParams(hires);
 
     try {
       const job = await submitJob({
@@ -502,6 +507,16 @@ export function ImageStudio({ prefill = null, onPrefillConsumed }: Props = {}) {
             <p className="muted">
               FLUX.2 Klein is fast/distilled — low CFG (≈1.5–2) and few steps (≈8) is typical.
             </p>
+          )}
+
+          {!editing && (
+            <HiresFixField
+              value={hires}
+              onChange={setHires}
+              width={clampDim(width)}
+              height={clampDim(height)}
+              steps={steps}
+            />
           )}
 
           <div className="imgform__grid">
@@ -813,7 +828,20 @@ function Result({
               <>
                 <dt>Size</dt>
                 <dd className="numeric">
-                  {p.width}×{p.height} · {p.steps ?? "?"} steps · cfg {p.cfg ?? "?"}
+                  {/* Hi-Res-Fix finishes bigger than it was asked for — the
+                      engine writes the real output size back. */}
+                  {p.output_width ?? p.width}×{p.output_height ?? p.height} · {p.steps ?? "?"} steps
+                  · cfg {p.cfg ?? "?"}
+                </dd>
+              </>
+            )}
+            {p.hires && p.width && p.height && (
+              <>
+                <dt>Hi-res fix</dt>
+                <dd className="numeric">
+                  {p.width}×{p.height} → {p.output_width ?? p.width}×{p.output_height ?? p.height} ·
+                  denoise {p.hires.denoise} · {p.hires.steps ?? "?"} steps ·{" "}
+                  {p.hires.upscale_method ?? "nearest-exact"}
                 </dd>
               </>
             )}

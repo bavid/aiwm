@@ -341,6 +341,73 @@
   margin-top: var(--space-3);
 }
 
+/* --- hi-res fix --- */
+
+.hiresfix {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: 0;
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.hiresfix legend {
+  padding: 0 var(--space-1);
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.hiresfix__check {
+  display: flex;
+  align-items: start;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+
+.hiresfix__check input {
+  margin-top: 0.15em;
+  accent-color: var(--accent);
+}
+
+.hiresfix__value {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.hiresfix__slider {
+  width: 100%;
+  align-self: center;
+  accent-color: var(--accent);
+}
+
+.hiresfix__hint {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+}
+
+.hiresfix__advbtn {
+  align-self: start;
+}
+
+.hiresfix__adv {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-2) var(--space-3);
+}
+
+.hiresfix__adv[hidden] {
+  display: none;
+}
+
 @media (max-width: 860px) {
   .image {
     grid-template-columns: 1fr;
