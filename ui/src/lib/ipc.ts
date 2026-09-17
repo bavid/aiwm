@@ -1531,21 +1531,27 @@ export interface Benchmark {
  *  guessing its own rule and drifting from the API. */
 export const isBenchmarkable = (model: Model): boolean => model.format === "gguf";
 
-/** Job states that mean "not finished yet" — queued, waiting for VRAM, or
- *  actually working. A `bench` job in one of these is a test in flight.
- *  Typed as a set *of `JobState`*, so adding a state to the union without
- *  deciding which side of this line it falls on is a build error. */
-const ACTIVE_JOB_STATES: ReadonlySet<JobState> = new Set<JobState>([
-  "queued",
-  "scheduled",
-  "blocked",
-  "preparing",
-  "running",
-  "post",
-]);
+/** Whether each job state still has work ahead of it — queued, waiting for
+ *  VRAM, or actually working. A `bench` job in one of the `true` ones is a
+ *  test in flight.
+ *
+ *  A total `Record<JobState, …>` rather than a set of the active ones: adding
+ *  a state to {@link JobState} fails to compile until someone says which side
+ *  of this line it falls on, instead of defaulting to "finished". */
+const JOB_ACTIVE: Record<JobState, boolean> = {
+  queued: true,
+  scheduled: true,
+  blocked: true,
+  preparing: true,
+  running: true,
+  post: true,
+  completed: false,
+  failed: false,
+  cancelled: false,
+};
 
 /** True while a job in this state still has work ahead of it. */
-export const isJobActive = (state: JobState): boolean => ACTIVE_JOB_STATES.has(state);
+export const isJobActive = (state: JobState): boolean => JOB_ACTIVE[state];
 
 /** The latest benchmark for every model that has one — join by `model_id`. */
 export const listBenchmarks = () => invoke<Benchmark[]>("list_benchmarks");

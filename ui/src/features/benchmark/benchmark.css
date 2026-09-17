@@ -47,11 +47,25 @@
   overflow: hidden;
 }
 
-/* The gap between "the job finished" and "its row arrived from the store". */
+/* Stands in for the result card when the stored row is not (yet, or ever)
+   reachable from this view — the gap after a run finishes, a run measured with
+   another suite, or a suite-less quick test. */
 .bench__reading {
   margin: 0;
   color: var(--muted);
   font-size: var(--text-sm);
+}
+
+.bench__reading--action {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.bench__reading .chip:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 .bench__warn {
@@ -264,6 +278,14 @@
 
 .bench__live-dot[data-state="failed"] {
   background: var(--load-crit);
+}
+
+/* The one line that is announced as the run progresses. Quiet next to the
+   heading: it repeats often, so it must not shout. */
+.bench__live-state {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-sm);
 }
 
 /* The job's own model and suite — an adopted run (page reload, or a test

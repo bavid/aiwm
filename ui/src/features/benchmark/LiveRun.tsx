@@ -59,15 +59,18 @@ export function LiveRun({ detail, total, suite, modelName }: Props) {
   return (
     <section className="card bench__live" aria-label="Current benchmark run">
       <header className="bench__live-head">
+        {/* The heading stays put; a heading whose text keeps changing is a
+            moving landmark for anyone navigating by headings. */}
         <h2 className="bench__live-title">
           <span className="bench__live-dot" data-state={job.state} />
-          {/* One line, announced as a whole: a screen reader hears "generating
-              — pass 4 of 6", not a stream of half-sentences. The event trail
-              below stays out of it -- it would read every engine line aloud. */}
-          <span className="bench__live-state numeric" aria-live="polite" aria-atomic="true">
-            {STATE_TEXT[job.state]} — pass {done} of {total || "?"}
-          </span>
+          Current run
         </h2>
+        {/* Its own line, announced as a whole: a screen reader hears
+            "generating — pass 4 of 6", not a stream of half-sentences. The
+            event trail stays out of it -- it would read every engine line. */}
+        <p className="bench__live-state numeric" aria-live="polite" aria-atomic="true">
+          {STATE_TEXT[job.state]} — pass {done} of {total || "?"}
+        </p>
         <span className="bench__live-target">
           {modelName}
           {suite && ` · ${suite.title}`}

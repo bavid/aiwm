@@ -5,11 +5,25 @@
 
 import {
   isBenchmarkable,
+  isJobActive,
   type BenchPromptResult,
   type Benchmark,
   type BenchSuite,
+  type Job,
   type Model,
 } from "../../lib/ipc";
+
+/** The newest `bench` job that has not finished, whoever started it — what the
+ *  tab adopts when it is not already watching one. `null` when nothing is
+ *  running. */
+export function liveBenchJob(jobs: readonly Job[] | null): Job | null {
+  return (jobs ?? [])
+    .filter((j) => j.job_type === "bench" && isJobActive(j.state))
+    .reduce<Job | null>(
+      (newest, j) => (!newest || j.created_at > newest.created_at ? j : newest),
+      null,
+    );
+}
 
 /** The role a model must claim to be worth a chat/coding throughput test. */
 const CHAT_ROLE = "chat";
@@ -61,7 +75,12 @@ export function parsePassEvent(message: string): PassEvent | null {
 
 /** Where a parsed pass sits in the suite — `{ index, of }`, 1-based, or `null`
  *  when the line named no prompt this suite knows (an older suite version, or
- *  a suite-less quick test). Lets the live panel say "prompt 2/3". */
+ *  a suite-less quick test). Lets the live panel say "prompt 2/3".
+ *
+ *  Matched by *title*, not id, because the title is all the event line carries
+ *  — `core::bench` writes "{suite} · {prompt title} — pass i/n", never the
+ *  prompt id. A retitled prompt in a new suite version therefore stops
+ *  matching, which is correct: that is a different prompt. */
 export function promptPosition(
   suite: BenchSuite | null,
   title: string | null,
