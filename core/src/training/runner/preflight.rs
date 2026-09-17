@@ -14,8 +14,8 @@ use crate::db::{DatasetMode, TrainingRun};
 use crate::runtime::training::RUNTIME_ID as TRAINING_RUNTIME_ID;
 use crate::scheduler::Scheduler;
 use crate::training::config::Hyperparams;
-use crate::training::profile::{find_for_model, TrainingProfile};
-use crate::training::training_err;
+use crate::training::profile::{find_for_model, find_staged_base, TrainingProfile};
+use crate::training::{training_err, training_refusal};
 use crate::Result;
 
 /// Everything preflight resolved for one run — the profile it maps to and the
@@ -41,51 +41,51 @@ impl Runner {
         prompts: Vec<String>,
     ) -> Result<Prepared> {
         if !self.adapter.is_installed() {
-            return Err(training_err(
+            return Err(training_refusal(
                 "the trainer is not installed yet — set it up in Settings first",
             ));
         }
         if self.adapter.env_broken() {
-            return Err(training_err(
+            return Err(training_refusal(
                 "the trainer environment is broken — set it up again in Settings",
             ));
         }
 
         if let Some(other) = self.adapter.alive_run() {
-            return Err(training_err(format!(
+            return Err(training_refusal(format!(
                 "only one training can run at a time — run {other} is still going"
             )));
         }
         if let Some(other) = self.db.training_runs().list_recoverable().await?.first() {
-            return Err(training_err(format!(
+            return Err(training_refusal(format!(
                 "only one training can run at a time — \"{}\" is still going",
                 other.name
             )));
         }
 
         let target_model_id = target_model_id
-            .ok_or_else(|| training_err("this run has no target model to train on"))?;
+            .ok_or_else(|| training_refusal("this run has no target model to train on"))?;
         let model = self
             .db
             .models()
             .get(target_model_id)
             .await?
-            .ok_or_else(|| training_err("the model you picked is no longer in the library"))?;
+            .ok_or_else(|| training_refusal("the model you picked is no longer in the library"))?;
         let profile = find_for_model(model.family.as_deref(), &model.name, model.param_count)
             .ok_or_else(|| {
-                training_err(format!("\"{}\" cannot be trained in AIWM yet", model.name))
+                training_refusal(format!("\"{}\" cannot be trained in AIWM yet", model.name))
             })?;
 
         let dataset_id =
-            dataset_id.ok_or_else(|| training_err("this run has no dataset to learn from"))?;
+            dataset_id.ok_or_else(|| training_refusal("this run has no dataset to learn from"))?;
         let dataset = self
             .db
             .datasets()
             .get(dataset_id)
             .await?
-            .ok_or_else(|| training_err("the dataset you picked no longer exists"))?;
+            .ok_or_else(|| training_refusal("the dataset you picked no longer exists"))?;
         if !profile.data_kind.accepts(dataset.mode) {
-            return Err(training_err(format!(
+            return Err(training_refusal(format!(
                 "\"{}\" learns from {} — the dataset \"{}\" holds {}",
                 profile.label,
                 describe_kind(profile.data_kind),
@@ -99,21 +99,21 @@ impl Runner {
             .map(str::trim)
             .filter(|d| !d.is_empty())
             .ok_or_else(|| {
-                training_err(format!(
+                training_refusal(format!(
                     "the dataset \"{}\" has not been exported yet — prepare it first",
                     dataset.name
                 ))
             })?;
         let dataset_dir = PathBuf::from(export);
         if !dataset_dir.is_dir() {
-            return Err(training_err(format!(
+            return Err(training_refusal(format!(
                 "the export folder of \"{}\" is gone ({}) — export the dataset again",
                 dataset.name,
                 dataset_dir.display()
             )));
         }
         if media_count(&dataset_dir) == 0 {
-            return Err(training_err(format!(
+            return Err(training_refusal(format!(
                 "the export folder of \"{}\" contains no images or clips — export it again",
                 dataset.name
             )));
@@ -127,7 +127,7 @@ impl Runner {
             .filter(|p| !p.is_empty())
             .collect();
         if prompts.is_empty() {
-            return Err(training_err(
+            return Err(training_refusal(
                 "at least one sample prompt is required so you can see what the run learns",
             ));
         }
@@ -138,7 +138,7 @@ impl Runner {
         self.release_gpu().await;
         let free = self.scheduler.free_mb();
         if free < profile.vram.reserve_mb {
-            return Err(training_err(format!(
+            return Err(training_refusal(format!(
                 "not enough free video memory for \"{}\": it needs {} MB and only {} MB is \
                  free{}",
                 profile.label,
@@ -175,27 +175,21 @@ impl Runner {
     }
 
     /// The library's directory model for `profile.base.role` whose folder
-    /// actually holds every file the trainer needs.
+    /// actually holds every file the trainer needs. The completeness rule
+    /// itself lives in [`find_staged_base`], shared with the profile list, so
+    /// the UI's "base weights ready" badge and this check cannot drift apart.
     async fn base_weights_dir(&self, profile: &TrainingProfile) -> Result<PathBuf> {
         let candidates = self.db.models().for_role(profile.base.role).await?;
         if candidates.is_empty() {
-            return Err(training_err(format!(
+            return Err(training_refusal(format!(
                 "the base weights for \"{}\" are not in the library yet — download {} first",
                 profile.label, profile.base.repo
             )));
         }
-        candidates
-            .iter()
-            .map(|m| PathBuf::from(&m.file_path))
-            .find(|dir| {
-                profile
-                    .base
-                    .required_files
-                    .iter()
-                    .all(|f| dir.join(f).is_file())
-            })
+        find_staged_base(profile, &candidates)
+            .map(Path::to_path_buf)
             .ok_or_else(|| {
-                training_err(format!(
+                training_refusal(format!(
                     "the base weights for \"{}\" are incomplete — download {} again",
                     profile.label, profile.base.repo
                 ))
@@ -262,7 +256,7 @@ impl Runner {
         if free >= MIN_FREE_DISK_BYTES {
             return Ok(());
         }
-        Err(training_err(format!(
+        Err(training_refusal(format!(
             "only {} GB free on {}, at least {} GB needed for the checkpoints and \
              preview images this run writes",
             free / BYTES_PER_GB,

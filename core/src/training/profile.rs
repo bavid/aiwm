@@ -7,8 +7,10 @@
 //! in the UI — adding support for a new family is a new [`PROFILES`] entry
 //! plus tests, never a new subsystem.
 
+use std::path::Path;
+
 use crate::capability::dataset::CaptionOrder;
-use crate::db::{DatasetMode, Preset};
+use crate::db::{DatasetMode, Model, Preset};
 
 /// Plain-English VRAM headroom, shown in the UI before a run starts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
@@ -337,6 +339,32 @@ pub const PROFILES: &[TrainingProfile] = &[
     },
 ];
 
+/// The library directory that actually holds every file `profile`'s base
+/// weights need, or `None` if no single candidate is complete.
+///
+/// "Complete" means *one* directory with all of [`BaseWeight::required_files`]
+/// in it. Half a checkpoint in one folder and half in another is not a staged
+/// base: the trainer is pointed at a single directory and would fail partway
+/// in, long after the run looked like it had started. Both the preflight that
+/// resolves the directory for a real run and the profile list that reports
+/// `base_installed` to the UI go through here, so the badge in the Training
+/// tab can never disagree with what pressing Start does.
+pub fn find_staged_base<'a>(
+    profile: &TrainingProfile,
+    candidates: &'a [Model],
+) -> Option<&'a Path> {
+    candidates
+        .iter()
+        .map(|m| Path::new(m.file_path.as_str()))
+        .find(|dir| {
+            profile
+                .base
+                .required_files
+                .iter()
+                .all(|f| dir.join(f).is_file())
+        })
+}
+
 /// Find the profile whose `family` matches the library's `models.family`
 /// value for a target model. `None` for a family AIWM cannot train yet.
 pub fn find_for_family(family: &str) -> Option<&'static TrainingProfile> {
@@ -420,6 +448,84 @@ pub fn find_for_model(
 mod tests {
     use super::*;
     use std::collections::HashSet;
+
+    /// A library row standing for a staged base-weights directory: only
+    /// `file_path` matters to [`find_staged_base`].
+    fn dir_model(dir: &Path) -> Model {
+        Model {
+            id: "m".into(),
+            publisher: None,
+            name: "base weights".into(),
+            family: None,
+            format: "dir".into(),
+            quant: None,
+            arch: None,
+            param_count: None,
+            file_path: dir.to_string_lossy().into_owned(),
+            sha256: None,
+            size_bytes: 0,
+            ctx_max: None,
+            vram_estimate_mb: None,
+            ram_estimate_mb: None,
+            source: "manual".into(),
+            source_revision: None,
+            imported_at: String::new(),
+            last_used_at: None,
+            use_count: 0,
+            n_layers: None,
+            n_embd: None,
+            n_heads: None,
+            n_kv_heads: None,
+            roles: vec![],
+            runtimes: vec![],
+        }
+    }
+
+    fn touch(dir: &Path, relative: &str) {
+        let path = dir.join(relative);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).expect("create parent dir");
+        }
+        std::fs::write(&path, b"x").expect("write file");
+    }
+
+    #[test]
+    fn find_staged_base_needs_every_required_file_under_one_candidate() {
+        let profile = find_for_family("sdxl").expect("sdxl profile");
+        let tmp = tempfile::tempdir().expect("tempdir");
+
+        // The first candidate is a half-finished download: one required file
+        // present, the rest missing.
+        let partial = tmp.path().join("partial");
+        std::fs::create_dir_all(&partial).expect("create partial dir");
+        touch(&partial, profile.base.required_files[0]);
+
+        let complete = tmp.path().join("complete");
+        std::fs::create_dir_all(&complete).expect("create complete dir");
+        for file in profile.base.required_files {
+            touch(&complete, file);
+        }
+
+        // Only the partial one: not staged at all.
+        let only_partial = vec![dir_model(&partial)];
+        assert_eq!(find_staged_base(profile, &only_partial), None);
+
+        // Both, partial first: the complete one wins rather than the first hit.
+        let both = vec![dir_model(&partial), dir_model(&complete)];
+        assert_eq!(find_staged_base(profile, &both), Some(complete.as_path()));
+
+        // A file missing from an otherwise complete directory disqualifies it
+        // -- the trainer would fail partway in, not at the start.
+        std::fs::remove_file(complete.join(profile.base.required_files[1]))
+            .expect("remove one required file");
+        assert_eq!(find_staged_base(profile, &both), None);
+    }
+
+    #[test]
+    fn find_staged_base_is_none_without_candidates() {
+        let profile = find_for_family("sdxl").expect("sdxl profile");
+        assert_eq!(find_staged_base(profile, &[]), None);
+    }
 
     #[test]
     fn every_profile_has_a_unique_family_and_arch() {

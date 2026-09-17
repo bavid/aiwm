@@ -11,40 +11,56 @@ use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 
 use aiwm_core::db::{DatasetMode, NewTrainingRun, Preset, RunState};
-use aiwm_core::{ApiServer, App, AppPaths};
+use aiwm_core::{ApiServer, App, AppOptions, AppPaths};
 
 /// A live server over a fresh store. The `TempDir` must outlive the test (it
 /// backs the `App`'s data directory).
+///
+/// The training poller is off. These tests write `running` rows by hand and
+/// then assert on them; the live poller re-reads every such row every few
+/// seconds, finds no process behind it, and reconciles it to `interrupted` —
+/// correctly, but racing the assertions. Startup recovery still runs (it only
+/// ever sees rows from a previous process, and the store is empty here).
+/// What is under test is the HTTP surface; the poller has its own tests in
+/// `core::training::runner`.
 async fn fixture() -> (ApiServer, tempfile::TempDir, Arc<App>) {
     let tmp = tempfile::tempdir().unwrap();
-    let app = Arc::new(App::load(AppPaths::rooted(tmp.path())).await.unwrap());
+    let app = Arc::new(
+        App::load_with(
+            AppPaths::rooted(tmp.path()),
+            AppOptions {
+                training_poller: false,
+            },
+        )
+        .await
+        .unwrap(),
+    );
     let server = ApiServer::bind(app.clone(), SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
         .await
         .unwrap();
     (server, tmp, app)
 }
 
+fn new_run() -> NewTrainingRun {
+    NewTrainingRun {
+        name: "anime_style_v1".into(),
+        profile_family: "flux2-klein-4b".into(),
+        target_model_id: None,
+        dataset_id: None,
+        data_kind: DatasetMode::Frames,
+        trigger_word: "ghibli_xy".into(),
+        preset: Preset::Fast,
+        hyperparams_json: "{}".into(),
+        sample_prompts_json: "[\"ghibli_xy portrait\"]".into(),
+        work_dir: "E:\\Data\\training\\does-not-exist".into(),
+    }
+}
+
 /// A `running`-looking row written straight through the repo — the poller and
 /// the runner are not involved, which is the point: the read routes must work
 /// off the stored row alone.
 async fn insert_running_run(app: &App) -> String {
-    let run = app
-        .db
-        .training_runs()
-        .create(NewTrainingRun {
-            name: "anime_style_v1".into(),
-            profile_family: "flux2-klein-4b".into(),
-            target_model_id: None,
-            dataset_id: None,
-            data_kind: DatasetMode::Frames,
-            trigger_word: "ghibli_xy".into(),
-            preset: Preset::Fast,
-            hyperparams_json: "{}".into(),
-            sample_prompts_json: "[\"ghibli_xy portrait\"]".into(),
-            work_dir: "E:\\Data\\training\\does-not-exist".into(),
-        })
-        .await
-        .unwrap();
+    let run = app.db.training_runs().create(new_run()).await.unwrap();
     app.db
         .training_runs()
         .set_state(&run.id, RunState::Running)
@@ -86,6 +102,56 @@ async fn installing_the_trainer_is_refused_in_offline_mode() {
         body["error"].as_str().unwrap().contains("offline"),
         "got: {body}"
     );
+}
+
+#[tokio::test]
+async fn probing_without_a_trainer_is_a_refusal_not_a_fault() {
+    let (server, _tmp, _app) = fixture().await;
+    let resp = reqwest::Client::new()
+        .post(format!("http://{}/training/probe", server.addr))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 400);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let message = body["error"].as_str().unwrap();
+    assert!(
+        message.contains("not installed") || message.contains("set it up"),
+        "got: {body}"
+    );
+}
+
+/// The counterweight to every "a refusal is a 400" assertion above: a fault
+/// the user cannot act on must stay a 500. `hyperparams_json` is written by
+/// us and read back by us, so a row whose copy is unreadable is a corrupt
+/// store, not a mistake anyone made in the form.
+#[tokio::test]
+async fn an_unreadable_stored_row_is_a_fault_not_a_refusal() {
+    let (server, _tmp, app) = fixture().await;
+    let run = app
+        .db
+        .training_runs()
+        .create(NewTrainingRun {
+            hyperparams_json: "{ this is not json".into(),
+            ..new_run()
+        })
+        .await
+        .unwrap();
+    let runs = app.db.training_runs();
+    runs.set_state(&run.id, RunState::Running).await.unwrap();
+    runs.set_state(&run.id, RunState::Interrupted)
+        .await
+        .unwrap();
+
+    let resp = reqwest::Client::new()
+        .post(format!(
+            "http://{}/training/runs/{}/resume",
+            server.addr, run.id
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 500, "a corrupt row is not the user's fault");
 }
 
 #[tokio::test]
@@ -237,6 +303,74 @@ async fn runs_are_listed_read_and_only_deletable_once_terminal() {
         .await
         .unwrap();
     assert_eq!(listed, serde_json::json!([]));
+}
+
+#[tokio::test]
+async fn pause_resume_and_cancel_move_a_run_through_its_lifecycle() {
+    let (server, _tmp, app) = fixture().await;
+    let base = format!("http://{}", server.addr);
+    let http = reqwest::Client::new();
+    let run_id = insert_running_run(&app).await;
+
+    // Pausing a run whose process is already gone cannot report a pause that
+    // never happened: the runner reconciles it from the log and checkpoints
+    // instead, and a silent disappearance is `interrupted`, never `failed`.
+    let paused = http
+        .post(format!("{base}/training/runs/{run_id}/pause"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(paused.status(), 200);
+    let run: serde_json::Value = paused.json().await.unwrap();
+    assert_eq!(run["state"], "interrupted", "got: {run}");
+
+    // Continuing it needs a trainer, and there is none in a fresh store --
+    // the refusal is the user's to act on, so 400 with a readable sentence.
+    let resumed = http
+        .post(format!("{base}/training/runs/{run_id}/resume"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resumed.status(), 400);
+    let body: serde_json::Value = resumed.json().await.unwrap();
+    let message = body["error"].as_str().unwrap();
+    assert!(
+        message.contains("not installed") || message.contains("set it up"),
+        "got: {body}"
+    );
+
+    // A failed resume leaves the run exactly where it was.
+    let detail: serde_json::Value = http
+        .get(format!("{base}/training/runs/{run_id}"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(detail["run"]["state"], "interrupted");
+
+    let cancelled = http
+        .post(format!("{base}/training/runs/{run_id}/cancel"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(cancelled.status(), 200);
+    let run: serde_json::Value = cancelled.json().await.unwrap();
+    assert_eq!(run["state"], "cancelled", "got: {run}");
+
+    // And a second pause is a refusal, not a 500: the run is terminal now.
+    let again = http
+        .post(format!("{base}/training/runs/{run_id}/pause"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(again.status(), 400);
+    let body: serde_json::Value = again.json().await.unwrap();
+    assert!(
+        body["error"].as_str().unwrap().contains("only a running"),
+        "got: {body}"
+    );
 }
 
 #[tokio::test]

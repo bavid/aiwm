@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use super::profile::{PresetValues, TrainingProfile};
-use super::training_err;
+use super::{training_err, training_refusal};
 use crate::db::DatasetMode;
 use crate::Result;
 
@@ -69,7 +69,7 @@ impl Hyperparams {
     pub fn validate(&self) -> Result<()> {
         if let Some(lr) = self.lr {
             if !LR_RANGE.contains(&lr) {
-                return Err(training_err(format!(
+                return Err(training_refusal(format!(
                     "lr {lr} is outside the allowed range {}..={}",
                     LR_RANGE.start(),
                     LR_RANGE.end()
@@ -78,7 +78,7 @@ impl Hyperparams {
         }
         if let Some(rank) = self.rank {
             if !RANK_RANGE.contains(&rank) {
-                return Err(training_err(format!(
+                return Err(training_refusal(format!(
                     "rank {rank} is outside the allowed range {}..={}",
                     RANK_RANGE.start(),
                     RANK_RANGE.end()
@@ -87,7 +87,7 @@ impl Hyperparams {
         }
         if let Some(steps) = self.steps {
             if !STEPS_RANGE.contains(&steps) {
-                return Err(training_err(format!(
+                return Err(training_refusal(format!(
                     "steps {steps} is outside the allowed range {}..={}",
                     STEPS_RANGE.start(),
                     STEPS_RANGE.end()
@@ -96,7 +96,7 @@ impl Hyperparams {
         }
         if let Some(resolution) = self.resolution {
             if !RESOLUTION_RANGE.contains(&resolution) {
-                return Err(training_err(format!(
+                return Err(training_refusal(format!(
                     "resolution {resolution} is outside the allowed range {}..={}",
                     RESOLUTION_RANGE.start(),
                     RESOLUTION_RANGE.end()
@@ -371,7 +371,7 @@ pub fn render_yaml(input: &RenderInput<'_>) -> Result<String> {
         .filter_map(|p| clean_prompt(p))
         .collect();
     if prompts.is_empty() {
-        return Err(training_err("at least one sample prompt is required"));
+        return Err(training_refusal("at least one sample prompt is required"));
     }
 
     let is_clips = input.data_kind == DatasetMode::Clips;

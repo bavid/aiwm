@@ -30,12 +30,29 @@ use crate::CoreError;
 /// id and blocks image/video jobs behind it.
 pub const TRAINING_MODEL_ID: &str = "training-run";
 
-/// Every error this subsystem reports, tagged with the same runtime name so
-/// the UI can group them — mirrors
-/// [`crate::capability::dataset`]'s `dataset_err`.
+/// A **fault**: something went wrong that the user did not ask for and cannot
+/// fix from the UI — a directory that would not create, a config that would
+/// not write, a row that vanished from under us. Tagged with the runtime name
+/// so the UI can group them, mirroring [`crate::capability::dataset`]'s
+/// `dataset_err`. Reaches HTTP as a 500.
 pub fn training_err(msg: impl std::fmt::Display) -> CoreError {
     CoreError::Runtime {
         runtime: "training".into(),
         message: msg.to_string(),
     }
+}
+
+/// A **refusal**: the answer to a request that was never going to work, phrased
+/// as a sentence the user can act on — "the trainer is not installed", "the
+/// dataset has not been exported yet", "only a running training can be paused".
+/// Nothing is broken; the request was.
+///
+/// The distinction is not cosmetic. It is the difference between a 400 and a
+/// 500 at the API boundary (see [`crate::api::http`]'s `ApiError`), which is
+/// in turn the difference between the Training tab showing the sentence and
+/// the Training tab reporting a bug. Choosing between this and
+/// [`training_err`] is therefore part of writing the check, not a mapping some
+/// later layer can guess at.
+pub fn training_refusal(msg: impl std::fmt::Display) -> CoreError {
+    CoreError::Config(msg.to_string())
 }

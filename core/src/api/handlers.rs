@@ -567,23 +567,6 @@ const LOG_TAIL_LINES: usize = 40;
 /// megabytes of redrawn progress bars; the last chunk is all the UI shows.
 const LOG_TAIL_BYTES: u64 = 64 * 1024;
 
-/// The trainer subsystem phrases every refusal the user can act on — "not
-/// installed", "no dataset", "not enough VRAM" — as a `CoreError::Runtime`
-/// tagged `training`, because at that layer it genuinely is a runtime fact.
-/// At the API boundary that distinction inverts: a sentence the user is meant
-/// to read and act on is a 400, not the 500 a runtime fault maps to. Rewrite
-/// exactly those, keeping the message verbatim.
-fn as_user_error(e: CoreError) -> CoreError {
-    match e {
-        CoreError::Runtime { runtime, message }
-            if runtime == crate::runtime::training::RUNTIME_ID =>
-        {
-            CoreError::Config(message)
-        }
-        other => other,
-    }
-}
-
 /// `GET /training/status` — the Training tab's header.
 pub fn trainer_status(app: &App) -> TrainerStatusDto {
     TrainerStatusDto {
@@ -628,29 +611,22 @@ pub fn install_trainer(app: &App) -> Result<&'static str> {
 /// check that distinguishes "the files are there" from "a run would start";
 /// it sets or clears `env_broken` as a side effect.
 pub async fn probe_trainer(app: &App) -> Result<crate::runtime::training::Probe> {
-    app.training.probe().await.map_err(as_user_error)
+    app.training.probe().await
 }
 
 /// `GET /training/profiles` — the static registry, joined with the two facts
 /// only the library knows: whether each profile's base weights are staged,
 /// and which library models resolve to it.
 pub async fn list_training_profiles(app: &App) -> Result<Vec<ProfileDto>> {
-    use crate::training::profile::{find_for_model, PROFILES};
+    use crate::training::profile::{find_for_model, find_staged_base, PROFILES};
 
     let models = app.db.models().list().await?;
     let mut out = Vec::with_capacity(PROFILES.len());
     for profile in PROFILES {
         let candidates = app.db.models().for_role(profile.base.role).await?;
-        // Same rule the runner's preflight applies: one directory holding
-        // *every* required file, not the files scattered across several.
-        let base_installed = candidates.iter().any(|m| {
-            let dir = PathBuf::from(&m.file_path);
-            profile
-                .base
-                .required_files
-                .iter()
-                .all(|f| dir.join(f).is_file())
-        });
+        // The exact rule the runner's preflight resolves a real run's base
+        // directory with, so this badge cannot promise what Start refuses.
+        let base_installed = find_staged_base(profile, &candidates).is_some();
 
         let trainable_models = models
             .iter()
@@ -759,7 +735,6 @@ pub async fn start_training_run(app: &App, body: StartRunDto) -> Result<crate::d
             sample_prompts,
         })
         .await
-        .map_err(as_user_error)
 }
 
 /// The directory a run's output actually lives in: the path recorded on the
@@ -836,16 +811,13 @@ async fn reload_run(app: &App, id: &str) -> Result<crate::db::TrainingRun> {
 
 /// `POST /training/runs/{id}/pause` — stop the process, keep the checkpoints.
 pub async fn pause_training_run(app: &App, id: &str) -> Result<crate::db::TrainingRun> {
-    app.training_runner.pause(id).await.map_err(as_user_error)?;
+    app.training_runner.pause(id).await?;
     reload_run(app, id).await
 }
 
 /// `POST /training/runs/{id}/resume` — relaunch from the latest checkpoint.
 pub async fn resume_training_run(app: &App, id: &str) -> Result<crate::db::TrainingRun> {
-    app.training_runner
-        .resume(id)
-        .await
-        .map_err(as_user_error)?;
+    app.training_runner.resume(id).await?;
     reload_run(app, id).await
 }
 
@@ -853,10 +825,7 @@ pub async fn resume_training_run(app: &App, id: &str) -> Result<crate::db::Train
 /// its checkpoints survive; only [`delete_training_run`] with `purge` removes
 /// them.
 pub async fn cancel_training_run(app: &App, id: &str) -> Result<crate::db::TrainingRun> {
-    app.training_runner
-        .cancel(id)
-        .await
-        .map_err(as_user_error)?;
+    app.training_runner.cancel(id).await?;
     reload_run(app, id).await
 }
 

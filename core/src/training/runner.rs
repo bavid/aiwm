@@ -53,7 +53,7 @@ use crate::training::config::{
 };
 use crate::training::process::{is_alive, kill_tree, read_pid_file, write_pid_file};
 use crate::training::profile::{find_for_family, preset_values};
-use crate::training::{training_err, TRAINING_MODEL_ID};
+use crate::training::{training_err, training_refusal, TRAINING_MODEL_ID};
 use crate::Result;
 
 /// How often the poller re-reads every alive run's log, work dir and PID.
@@ -227,7 +227,7 @@ impl Runner {
         let _one_at_a_time = self.start_lock.lock().await;
         let name = req.name.trim();
         if name.is_empty() {
-            return Err(training_err("the training run needs a name"));
+            return Err(training_refusal("the training run needs a name"));
         }
         let prep = self
             .preflight(
@@ -283,7 +283,7 @@ impl Runner {
         let _one_at_a_time = self.start_lock.lock().await;
         let run = self.run(run_id).await?;
         if run.state != RunState::Preparing {
-            return Err(training_err(format!(
+            return Err(training_refusal(format!(
                 "this run is {} — only a run that has not started yet can be started",
                 run.state.as_str()
             )));
@@ -302,7 +302,7 @@ impl Runner {
     pub async fn pause(&self, run_id: &str) -> Result<()> {
         let run = self.run(run_id).await?;
         if run.state != RunState::Running {
-            return Err(training_err(format!(
+            return Err(training_refusal(format!(
                 "this run is {} — only a running training can be paused",
                 run.state.as_str()
             )));
@@ -322,7 +322,7 @@ impl Runner {
         let _one_at_a_time = self.start_lock.lock().await;
         let run = self.run(run_id).await?;
         if !matches!(run.state, RunState::Paused | RunState::Interrupted) {
-            return Err(training_err(format!(
+            return Err(training_refusal(format!(
                 "this run is {} — only a paused or interrupted training can be continued",
                 run.state.as_str()
             )));
@@ -342,13 +342,13 @@ impl Runner {
     pub async fn cancel(&self, run_id: &str) -> Result<()> {
         let run = self.run(run_id).await?;
         if run.state.is_terminal() {
-            return Err(training_err(format!(
+            return Err(training_refusal(format!(
                 "this run is already {} — there is nothing to cancel",
                 run.state.as_str()
             )));
         }
         if run.state == RunState::Finishing {
-            return Err(training_err(
+            return Err(training_refusal(
                 "this run is importing its result — it will be done in a moment",
             ));
         }
@@ -460,7 +460,9 @@ impl Runner {
             .training_runs()
             .get(run_id)
             .await?
-            .ok_or_else(|| training_err(format!("there is no training run {run_id}")))
+            // A request naming a run that is not there is a refusal, not a
+            // fault: the row was deleted, or the id was never real.
+            .ok_or_else(|| training_refusal(format!("there is no training run {run_id}")))
     }
 
     /// Render the config, spawn the detached trainer, take the reservation.

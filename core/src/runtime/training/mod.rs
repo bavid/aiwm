@@ -36,7 +36,7 @@ pub use self::install::TrainerInstallPhase;
 pub use self::install::{marker_file, PINNED_COMMIT};
 use super::download::{CmdRunner, SystemRunner};
 use super::{Health, LoadedModel, RuntimeAdapter, RuntimeKind, SpawnSpec};
-use crate::training::{training_err, TRAINING_MODEL_ID};
+use crate::training::{training_err, training_refusal, TRAINING_MODEL_ID};
 use crate::Result;
 
 /// Adapter id — also the `runtimes` table key and the registry key.
@@ -174,7 +174,7 @@ impl TrainingAdapter {
     /// environment that failed the last probe has just been rebuilt.
     pub async fn install(&self, offline: bool) -> Result<()> {
         let Ok(_guard) = self.install_lock.try_lock() else {
-            return Err(training_err("a trainer install is already running"));
+            return Err(training_refusal("a trainer install is already running"));
         };
         self.set_install_state(InstallState::Running {
             phase: TrainerInstallPhase::Downloading,
@@ -214,7 +214,7 @@ impl TrainingAdapter {
     /// so the UI can offer a repair instead of launching a doomed run.
     pub async fn probe(&self) -> Result<Probe> {
         if !self.is_installed() {
-            return Err(training_err(
+            return Err(training_refusal(
                 "the trainer is not installed yet — set it up first",
             ));
         }
@@ -224,7 +224,7 @@ impl TrainingAdapter {
         let probe = self.runner.run_capture(&python, &["-c", PROBE_SCRIPT], &[]);
         let Ok(captured) = tokio::time::timeout(self.probe_timeout, probe).await else {
             self.env_broken.store(true, Ordering::Relaxed);
-            return Err(training_err(format!(
+            return Err(training_refusal(format!(
                 "trainer environment probe timed out after {} s — set it up again",
                 self.probe_timeout.as_secs()
             )));
@@ -233,14 +233,14 @@ impl TrainingAdapter {
             Ok(raw) => raw,
             Err(e) => {
                 self.env_broken.store(true, Ordering::Relaxed);
-                return Err(training_err(format!(
+                return Err(training_refusal(format!(
                     "trainer environment is broken — set it up again: {e}"
                 )));
             }
         };
         let parsed: ProbeJson = serde_json::from_str(raw.trim()).map_err(|e| {
             self.env_broken.store(true, Ordering::Relaxed);
-            training_err(format!(
+            training_refusal(format!(
                 "trainer environment is broken — set it up again: its probe printed \
                  something unreadable ({e}): {}",
                 raw.trim()

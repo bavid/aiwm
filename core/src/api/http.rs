@@ -1146,7 +1146,14 @@ async fn training_sample(
         return Ok(no_such_run());
     };
     let bytes = tokio::fs::read(&path).await.map_err(CoreError::Io)?;
-    let content_type = match path.extension().and_then(|e| e.to_str()) {
+    // ai-toolkit writes `.jpg`, but a sampler configured for another format
+    // (or a filesystem that hands the name back upper-cased) must not silently
+    // become a PNG — compare case-insensitively.
+    let extension = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_ascii_lowercase);
+    let content_type = match extension.as_deref() {
         Some("jpg" | "jpeg") => "image/jpeg",
         Some("webp") => "image/webp",
         _ => "image/png",
