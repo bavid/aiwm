@@ -27,6 +27,13 @@ use serde::Serialize;
 use tokio::sync::Mutex as AsyncMutex;
 
 pub use self::install::TrainerInstallPhase;
+/// The two pieces of the install layout that cannot be derived from the
+/// adapter's own accessors ([`TrainingAdapter::python_bin`] /
+/// [`TrainingAdapter::source_dir`] cover the rest): the commit-stamped marker
+/// file [`is_installed`](TrainingAdapter::is_installed) looks for, and the
+/// commit it is stamped with. Re-exported so `core/tests/training_run.rs` can
+/// stage a complete-looking install without a multi-GB download.
+pub use self::install::{marker_file, PINNED_COMMIT};
 use super::download::{CmdRunner, SystemRunner};
 use super::{Health, LoadedModel, RuntimeAdapter, RuntimeKind, SpawnSpec};
 use crate::training::{training_err, TRAINING_MODEL_ID};
