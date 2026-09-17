@@ -97,6 +97,54 @@ Fragments return small structs of `Link<'static>`-like owned ids (`String` node 
 ### Task 8: Real measurements and docs
 
 **Files:** `docs/TODO.md` (replace the "ComfyUI Workflow-Engine (geplant)" block with "✅ Phase A + Hi-Res-Fix umgesetzt (2026-09-17)"), `docs/superpowers/plans/…` (this file: measured numbers appended).
-- [ ] Start the real app (`aiwm-cored` from this worktree with `AIWM_DATA_DIR=E:\AI\data`), run: SDXL 1024² without hires, with 1.5×, with 2× (same seed/prompt); FLUX.2 klein 9B fp8 (or 4B if installed) 1024² without and with 1.5×. Record wall time, peak VRAM (telemetry), output resolution, and whether the 2× run fits on 16 GB (if OOM: record it; do not tune away the truth). Save the four PNGs under `E:\AI\.smoke-hires\` (gitignored) and note their paths.
-- [ ] docs/TODO.md block in the existing German/✅ style: what shipped (graph builder, fragments, golden fixtures, Hi-Res-Fix recipes, toggle), the measured table, leftovers (Face-Restore, ControlNet, global quality tiers, video hires, sampler per pass). Full gates. Commit `feat(pipeline): docs + measured Hi-Res-Fix numbers`.
+- [x] Start the real app (`aiwm-cored` from this worktree with `AIWM_DATA_DIR=E:\AI\data`), run: SDXL 1024² without hires, with 1.5×, with 2× (same seed/prompt); FLUX.2 klein 9B fp8 (or 4B if installed) 1024² without and with 1.5×. Record wall time, peak VRAM (telemetry), output resolution, and whether the 2× run fits on 16 GB (if OOM: record it; do not tune away the truth). Save the four PNGs under `E:\AI\.smoke-hires\` (gitignored) and note their paths.
+- [x] docs/TODO.md block in the existing German/✅ style: what shipped (graph builder, fragments, golden fixtures, Hi-Res-Fix recipes, toggle), the measured table, leftovers (Face-Restore, ControlNet, global quality tiers, video hires, sampler per pass). Full gates. Commit `feat(pipeline): docs + measured Hi-Res-Fix numbers`.
 - [ ] Hand back: final whole-branch review → controller re-verifies gates → merge `--no-ff` → push.
+---
+
+## Measured 2026-09-17 (RTX 4080 SUPER, 16 GB)
+
+Real `aiwm-cored` from this worktree (`AIWM_DATA_DIR=E:\AI\data`) against the
+app-managed ComfyUI v0.34.0 — no fixtures. Prompt "a lighthouse on a rocky coast
+at golden hour, dramatic clouds, highly detailed", negative "blurry, lowres",
+1024x1024, 25 first-pass steps; Hi-Res at denoise 0.45, 12 executed steps,
+`nearest-exact`. Each row is the median of >= 3 runs, **each with its own seed** —
+ComfyUI caches node outputs, so a repeated seed returns the finished image in
+~1.5 s without rendering anything. Peak VRAM = max of `nvidia-smi` sampled 5x/s
+across the whole job, i.e. whole-card usage including ~1.4 GB desktop baseline
+and the resident model.
+
+| Modell | Auflösung | Hi-Res | Wandzeit warm | VRAM-Spitze | Ausgabe | Ergebnis/Anmerkung |
+|---|---|---|---|---|---|---|
+| SDXL base 1.0 (safetensors, cfg 7, euler/normal) | 1024×1024 | aus | **5,7 s** (3×5,7) | 10 573 MB | 1024×1024 | Referenzlauf |
+| SDXL base 1.0 | 1024×1024 | 1,5× | **12,6 s** (12,0–13,2) | 14 005 MB | 1536×1536 | +6,9 s, Faktor 2,2. Mehr Fels-/Gischtdetail; das Web-/Gittermuster des Basisbilds im Wasser verschwindet. Komposition bleibt. |
+| SDXL base 1.0 | 1024×1024 | 2,0× | **19,8 s** (18,0–21,1) | 14 701 MB | 2048×2048 | **Passt in 16 GB** — kein OOM, keine Planer-Absage, ~1,7 GB Luft. Aber die Komposition verschiebt sich sichtbar; 2,0× bei denoise 0,45 interpretiert um. |
+| FLUX.2 [klein] 9B fp8mixed (safetensors → KSampler-Familie, guidance 4) | 1024×1024 | aus | **15,6 s** (3×15,6) | 13 075 MB | 1024×1024 | Referenzlauf |
+| FLUX.2 [klein] 9B fp8mixed | 1024×1024 | 1,5× | **34,4 s** (33,0–35,8) | 14 095 MB | 1536×1536 | +18,8 s, Faktor 2,2. Deutlich mehr Textur bei praktisch identischer Komposition — bestes Qualität/Zeit-Verhältnis der Reihe. |
+| FLUX.2 [klein] **GGUF** (`SamplerCustomAdvanced`-Zweig) | — | — | — | — | — | **Nicht messbar** — kein GGUF-klein-Modell installiert; nur fixture-bewiesen (`flux2_klein_txt2img_hires.json`). |
+
+**Cold start (one-off, excluded from the table):** first image job of a session
+(ComfyUI boot + model load + render), SDXL 1024² without hires: **45.6 s**. First
+klein job after that (server up, SDXL evicted, klein + Qwen text encoder loaded):
+**23.3 s**. Switching back and forth between SDXL and klein mid-session costs
+24–41 s instead of the warm 15.6 s — the reload dominates, not the sampling.
+
+**Honest gaps.** (1) The klein-GGUF branch is unmeasured — no such model is
+installed. (2) klein + 1.5× sits on the VRAM limit: the planner charges
+`13 092 MB` (import estimate) as `10 532 MB` weights + `2 560 MB` headroom and
+scales the headroom by 2.25 (1.5² pixels) → **16 292 MB** against a 16 376 MB
+budget, i.e. 99.5 %. With klein already resident (or an otherwise empty card) the
+job runs; with SDXL still resident it never reaches the renderer and is `blocked`,
+verbatim: "not enough VRAM for flux-2-klein-9b-fp8mixed: 16292 MB needed, but
+this GPU only has 6176 MB usable in total — this model doesn't fit this card no
+matter what else is running. Try a smaller quant/model." The message is also
+misleading in that situation (the card *did* just carry the model, only not
+alongside SDXL) — a calibration/wording item for later, not a Hi-Res regression.
+(3) The 2.0× row proves "fits", not "is good".
+
+**Proof images** (gitignored, `E:\AI\.smoke-hires\`): `sdxl-seed202-base-1024.png`
+/ `sdxl-seed202-hires1.5x-1536.png`, `sdxl-seed523-base-1024.png` /
+`sdxl-seed523-hires2.0x-2048.png`, `klein9b-seed302-base-1024.png` /
+`klein9b-seed302-hires1.5x-1536.png` — each pair shares a seed, so the base image
+*is* the hires run's first pass — plus the side-by-side crops `cmp-*.png`.
+Resolutions above were read from the PNG headers, not from the job params.
