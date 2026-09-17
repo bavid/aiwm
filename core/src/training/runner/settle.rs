@@ -16,6 +16,7 @@ use crate::model::{import_model, ImportRequest};
 use crate::runtime::RuntimeAdapter;
 use crate::scheduler::Scheduler;
 use crate::training::config::training_folder;
+use crate::training::process::read_pid_file;
 use crate::training::progress::{
     parse_marker, parse_progress, scan_work_dir, split_updates, tail_log, Marker,
 };
@@ -56,6 +57,30 @@ pub(super) struct ImportedLora {
 
 impl Runner {
     pub(super) async fn poll_run(&self, run: &TrainingRun) -> Result<()> {
+        // A launch still in flight. `finish` clears the PID when an attempt
+        // ends, and `adopt` records the new one only once the trainer is
+        // actually running, so a `preparing`/`resuming` row with no PID sits
+        // between those two points. The stale PID file next to it belongs to
+        // the attempt that already ended and would read as "dead" — which is
+        // true, and entirely beside the point.
+        if run.pid.is_none() && matches!(run.state, RunState::Preparing | RunState::Resuming) {
+            return Ok(());
+        }
+
+        // Neither a recorded PID nor a PID file: there is no evidence about
+        // this run at all, and "we cannot tell" is not "it died". Startup
+        // recovery still settles such a row — there the absence *is* the
+        // evidence, because nothing survived the restart.
+        if run.pid.is_none()
+            && read_pid_file(&self.work_dir(&run.id))
+                .await
+                .ok()
+                .flatten()
+                .is_none()
+        {
+            return Ok(());
+        }
+
         // Liveness **before** the reads in `observe`, not after them. A
         // trainer writes its last words — the final checkpoint, the
         // completion block, an `Error running job:` — in the instant before

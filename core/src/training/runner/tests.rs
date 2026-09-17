@@ -680,6 +680,61 @@ async fn metadata_that_cannot_be_finalised_still_links_the_lora() {
 }
 
 #[tokio::test]
+async fn poll_leaves_a_relaunch_in_flight_alone() {
+    let fx = fixture().await;
+    let run = running_run(&fx, "").await;
+    // Exactly the window `resume` opens: the row is `resuming`, the PID
+    // of the attempt that ended is cleared, and the new trainer has not
+    // written its PID file yet — so the *stale* file beside it still
+    // names the dead process from last time.
+    for next in [RunState::Interrupted, RunState::Resuming] {
+        fx.db
+            .training_runs()
+            .set_state(&run.id, next)
+            .await
+            .expect("into the relaunch window");
+    }
+    fx.db
+        .training_runs()
+        .set_pid(&run.id, None)
+        .await
+        .expect("clear the old pid");
+
+    fx.runner.poll_once().await.expect("poll");
+
+    assert_eq!(
+        reload(&fx, &run.id).await.state,
+        RunState::Resuming,
+        "a run whose relaunch is still in flight must not be settled as dead"
+    );
+}
+
+#[tokio::test]
+async fn poll_leaves_a_run_it_has_no_evidence_about_alone() {
+    let fx = fixture().await;
+    let run = running_run(&fx, "").await;
+    // No recorded PID and no PID file: nothing on disk says this run died,
+    // only that we cannot tell. (`running_run` writes both, so both go.)
+    std::fs::remove_file(crate::training::process::pid_file(
+        &fx.runner.work_dir(&run.id),
+    ))
+    .expect("drop the pid file");
+    fx.db
+        .training_runs()
+        .set_pid(&run.id, None)
+        .await
+        .expect("drop the pid");
+
+    fx.runner.poll_once().await.expect("poll");
+
+    assert_eq!(
+        reload(&fx, &run.id).await.state,
+        RunState::Running,
+        "\"we cannot tell\" must not be reported as \"it died\""
+    );
+}
+
+#[tokio::test]
 async fn recover_marks_dead_runs_interrupted() {
     let fx = fixture().await;
     let run = running_run(&fx, "").await;

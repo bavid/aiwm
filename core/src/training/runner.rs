@@ -382,6 +382,14 @@ impl Runner {
     /// One pass over every `running`/`resuming` run. Never fails because one
     /// run misbehaved — a per-run error is logged and the others still run.
     pub async fn poll_once(&self) -> Result<()> {
+        // Serialised against `start`/`resume`, which hold this from preflight
+        // until the relaunched trainer's PID is on disk. Without it a poll
+        // that lands inside that window sees a `resuming` row whose only PID
+        // file still names the *previous*, dead process and settles the run
+        // as `interrupted` — killing a relaunch that was seconds from
+        // printing its first step. A poll pass is a log tail and a
+        // `tasklist`, so the Start button never waits long for it.
+        let _not_while_starting = self.start_lock.lock().await;
         for run in self.db.training_runs().list_recoverable().await? {
             if let Err(e) = self.poll_run(&run).await {
                 tracing::warn!(run = %run.id, error = %e, "polling a training run failed");
@@ -672,14 +680,16 @@ impl Runner {
     }
 }
 
-/// Recover any runs left behind by the previous session, then poll every
-/// [`POLL_INTERVAL`] forever. Logged, never panicking — one bad poll must not
-/// take the loop down with it.
+/// Poll every [`POLL_INTERVAL`] forever. Logged, never panicking — one bad
+/// poll must not take the loop down with it.
+///
+/// Recovery is **not** done here. It has to finish before anything can create
+/// a run, or a run started in the first instants of a session is indis-
+/// tinguishable from one left behind by the previous session and gets settled
+/// as `interrupted` on the spot; so [`crate::App::load`] awaits
+/// [`Runner::recover`] itself and only then spawns this loop.
 pub fn spawn_poller(runner: Arc<Runner>) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
-        if let Err(e) = runner.recover().await {
-            tracing::warn!(error = %e, "training-run recovery failed");
-        }
         loop {
             if let Err(e) = runner.poll_once().await {
                 tracing::warn!(error = %e, "the training poller hit an error");
