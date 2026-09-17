@@ -4,9 +4,8 @@ import {
   HIRES_DENOISE_MIN,
   HIRES_DENOISE_STEP,
   HIRES_SCALES,
-  HIRES_STEPS_MAX,
-  HIRES_STEPS_MIN,
   HIRES_UPSCALE_METHODS,
+  clampHiresSteps,
   hiresAutoSteps,
   hiresFinalDim,
   hiresWorkFactor,
@@ -66,7 +65,12 @@ export function HiresFixField({ value, onChange, width, height, steps }: Props) 
             </label>
             <label className="imgform__field">
               <span>
-                Denoise <span className="hiresfix__value">{value.denoise.toFixed(2)}</span>
+                {/* The slider itself announces its value, so the visible
+                    read-out would only churn the label's accessible name. */}
+                Denoise{" "}
+                <span className="hiresfix__value" aria-hidden="true">
+                  {value.denoise.toFixed(2)}
+                </span>
               </span>
               <input
                 type="range"
@@ -97,33 +101,42 @@ export function HiresFixField({ value, onChange, width, height, steps }: Props) 
           >
             Advanced
           </button>
-          <div className="hiresfix__adv" id={advancedId} hidden={!advancedOpen}>
-            <label className="imgform__field">
-              <span>Steps</span>
-              <input
-                type="number"
-                min={HIRES_STEPS_MIN}
-                max={HIRES_STEPS_MAX}
-                step={1}
-                value={value.steps}
-                placeholder={String(hiresAutoSteps(steps))}
-                onChange={(e) => patch({ steps: e.target.value.replace(/[^\d]/g, "") })}
-              />
-            </label>
-            <label className="imgform__field">
-              <span>Upscale method</span>
-              <select
-                value={value.upscaleMethod}
-                onChange={(e) => patch({ upscaleMethod: e.target.value })}
-              >
-                {HIRES_UPSCALE_METHODS.map((m) => (
-                  <option key={m} value={m}>
-                    {m}
-                  </option>
-                ))}
-              </select>
-            </label>
-          </div>
+          {/* Unmounted, not hidden: a `hidden` panel's out-of-range number
+              input still takes part in the form's constraint validation, and
+              the browser then refuses to submit a control it cannot focus.
+              The parent owns every value, so nothing is lost by unmounting. */}
+          {advancedOpen && (
+            <div className="hiresfix__adv" id={advancedId}>
+              <label className="imgform__field">
+                <span>Steps</span>
+                <input
+                  type="number"
+                  inputMode="numeric"
+                  step={1}
+                  value={value.steps}
+                  placeholder={String(hiresAutoSteps(steps))}
+                  onChange={(e) => patch({ steps: e.target.value.replace(/[^\d]/g, "") })}
+                  onBlur={(e) => {
+                    const v = e.target.value;
+                    patch({ steps: v === "" ? "" : String(clampHiresSteps(Number(v))) });
+                  }}
+                />
+              </label>
+              <label className="imgform__field">
+                <span>Upscale method</span>
+                <select
+                  value={value.upscaleMethod}
+                  onChange={(e) => patch({ upscaleMethod: e.target.value })}
+                >
+                  {HIRES_UPSCALE_METHODS.map((m) => (
+                    <option key={m} value={m}>
+                      {m}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+          )}
         </>
       )}
     </fieldset>

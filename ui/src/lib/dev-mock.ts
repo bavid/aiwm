@@ -5,6 +5,7 @@
  *  logic. Media URLs (`/jobs/{id}/output`) will not resolve here — the layout
  *  and controls are what this is for. */
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
+import { HIRES_UPSCALE_METHODS } from "../features/image/hires-fix";
 
 type AnyRecord = Record<string, unknown>;
 
@@ -73,8 +74,6 @@ function mkJob(id: string, jobType: string, state: string, over: AnyRecord): Any
   };
 }
 
-const HIRES_UPSCALE_METHODS = ["nearest-exact", "bilinear", "area", "bicubic", "bislerp"];
-
 function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);
 }
@@ -89,7 +88,7 @@ function resolveHires(hires: AnyRecord | null, firstPassSteps: number): AnyRecor
     scale_by: clamp(Number(hires.scale_by ?? 1.5), 1.25, 2),
     denoise: clamp(Number(hires.denoise ?? 0.45), 0.2, 0.7),
     steps: clamp(Math.trunc(Number(hires.steps ?? Math.floor(firstPassSteps / 2))), 4, 60),
-    upscale_method: HIRES_UPSCALE_METHODS.includes(method) ? method : "nearest-exact",
+    upscale_method: HIRES_UPSCALE_METHODS.some((m) => m === method) ? method : "nearest-exact",
   };
 }
 

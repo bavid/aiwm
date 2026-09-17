@@ -14,7 +14,7 @@ export const HIRES_UPSCALE_METHODS = [
   "area",
   "bicubic",
   "bislerp",
-];
+] as const;
 
 /** One latent unit is 8 px — `LatentUpscaleBy` rounds in latent units. */
 const LATENT_PX = 8;
@@ -46,6 +46,13 @@ export function snapDenoise(n: number): number {
   return Number(clamp(stepped, HIRES_DENOISE_MIN, HIRES_DENOISE_MAX).toFixed(2));
 }
 
+/** The engine's own 4–60 clamp on the second pass's step count. The form
+ *  applies it on blur so a typed-out-of-range value is corrected in place
+ *  rather than only on submit. */
+export function clampHiresSteps(n: number): number {
+  return clamp(Math.floor(n), HIRES_STEPS_MIN, HIRES_STEPS_MAX);
+}
+
 /** What the engine pins back when `steps` is left blank — half the first
  *  pass, inside the same 4–60 clamp (`ImageRequest`'s Hi-Res-Fix parsing). */
 export function hiresAutoSteps(firstPassSteps: number): number {
@@ -75,7 +82,7 @@ export function toHiresParams(value: HiresFixSettings): HiresFixParams {
   };
   const n = Number(value.steps);
   if (value.steps.trim() !== "" && Number.isFinite(n)) {
-    params.steps = clamp(Math.floor(n), HIRES_STEPS_MIN, HIRES_STEPS_MAX);
+    params.steps = clampHiresSteps(n);
   }
   return params;
 }
