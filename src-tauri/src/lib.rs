@@ -7,22 +7,23 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 use aiwm_core::api::dto::{
-    AboutDto, AgentPermissionDto, AgentSessionDetailDto, AttachExternalDto, CharacterBodyDto,
-    CivitaiSearchDto, ColibriModelDto, ConfigUpdate, EnqueueDownloadDto, FeaturedModelDto,
+    AboutDto, AgentPermissionDto, AgentSessionDetailDto, AssignedDto, AttachExternalDto,
+    CharacterBodyDto, CivitaiSearchDto, ColibriModelDto, ConceptBodyDto, ConceptFramesDto,
+    ConceptSummaryDto, ConfigUpdate, EnqueueDownloadDto, ExportDatasetDto, FeaturedModelDto,
     JobDetailDto, KnownModelDto, LaunchExternalDto, LocalApiStatusDto, LocationBodyDto,
     ModelStackDto, NewAgentDto, NewSessionDto, NewVoiceIdentityDto, NpcBodyDto,
     OpenAgentSessionDto, RegisterColibriModelDto, RegistryDetailsDto, RegistrySearchDto,
-    RuntimeStatusDto, SceneBodyDto, SceneDetailDto, StoryBodyDto, SubmitJobDto,
+    RuntimeStatusDto, SceneBodyDto, SceneDetailDto, StoryBodyDto, SubmitJobDto, UpdateDatasetDto,
     UpdateDatasetFrameDto,
 };
 use aiwm_core::api::handlers;
-use aiwm_core::capability::dataset::ExportSummary;
+use aiwm_core::capability::dataset::{CaptionerStatus, ExportSummary};
 use aiwm_core::config::Config;
 use aiwm_core::db::Document;
 use aiwm_core::db::{
-    Agent, AgentSession, Benchmark, Character, CharacterLogEntry, CharacterRelationship,
-    DatasetFrame, Download, Job, JobFilter, Location, Model, Npc, SceneImage, Session, Story,
-    VoiceIdentity,
+    Agent, AgentSession, Benchmark, Character, CharacterLogEntry, CharacterRelationship, Dataset,
+    DatasetConcept, DatasetFrame, Download, Job, JobFilter, Location, Model, Npc, SceneImage,
+    Session, Story, VoiceIdentity,
 };
 use aiwm_core::model::{ImportOutcome, ImportRequest};
 use aiwm_core::orchestrator::JobState;
@@ -307,6 +308,114 @@ async fn export_dataset(
     dest_dir: String,
 ) -> Result<ExportSummary, String> {
     to_ipc(handlers::export_dataset(&app, &job_id, &dest_dir).await)
+}
+
+#[tauri::command]
+async fn list_captioners(app: tauri::State<'_, Arc<App>>) -> Result<Vec<CaptionerStatus>, String> {
+    to_ipc(handlers::list_captioners(&app).await)
+}
+
+#[tauri::command]
+async fn list_datasets(app: tauri::State<'_, Arc<App>>) -> Result<Vec<Dataset>, String> {
+    to_ipc(handlers::list_datasets(&app).await)
+}
+
+#[tauri::command]
+async fn get_dataset(
+    app: tauri::State<'_, Arc<App>>,
+    id: String,
+) -> Result<Option<Dataset>, String> {
+    to_ipc(handlers::get_dataset(&app, &id).await)
+}
+
+#[tauri::command]
+async fn update_dataset(
+    app: tauri::State<'_, Arc<App>>,
+    id: String,
+    body: UpdateDatasetDto,
+) -> Result<Dataset, String> {
+    to_ipc(handlers::update_dataset(&app, &id, body).await)
+}
+
+#[tauri::command]
+async fn delete_dataset(app: tauri::State<'_, Arc<App>>, id: String) -> Result<(), String> {
+    to_ipc(handlers::delete_dataset(&app, &id).await)
+}
+
+#[tauri::command]
+async fn list_dataset_frames_for_dataset(
+    app: tauri::State<'_, Arc<App>>,
+    dataset_id: String,
+) -> Result<Vec<DatasetFrame>, String> {
+    to_ipc(handlers::list_dataset_frames_for_dataset(&app, &dataset_id).await)
+}
+
+#[tauri::command]
+async fn frame_concept_map(
+    app: tauri::State<'_, Arc<App>>,
+    dataset_id: String,
+) -> Result<BTreeMap<String, Vec<String>>, String> {
+    // A `HashMap` would serialize identically; `BTreeMap` keeps the dev-tools
+    // view of the payload stable, same as `storage_report`'s breakdown.
+    to_ipc(handlers::frame_concept_map(&app, &dataset_id).await).map(|m| m.into_iter().collect())
+}
+
+#[tauri::command]
+async fn list_concepts(
+    app: tauri::State<'_, Arc<App>>,
+    dataset_id: String,
+) -> Result<Vec<ConceptSummaryDto>, String> {
+    to_ipc(handlers::list_concepts(&app, &dataset_id).await)
+}
+
+#[tauri::command]
+async fn create_concept(
+    app: tauri::State<'_, Arc<App>>,
+    dataset_id: String,
+    body: ConceptBodyDto,
+) -> Result<DatasetConcept, String> {
+    to_ipc(handlers::create_concept(&app, &dataset_id, body).await)
+}
+
+#[tauri::command]
+async fn update_concept(
+    app: tauri::State<'_, Arc<App>>,
+    id: String,
+    body: ConceptBodyDto,
+) -> Result<(), String> {
+    to_ipc(handlers::update_concept(&app, &id, body).await)
+}
+
+#[tauri::command]
+async fn delete_concept(app: tauri::State<'_, Arc<App>>, id: String) -> Result<(), String> {
+    to_ipc(handlers::delete_concept(&app, &id).await)
+}
+
+#[tauri::command]
+async fn assign_concept(
+    app: tauri::State<'_, Arc<App>>,
+    concept_id: String,
+    body: ConceptFramesDto,
+) -> Result<AssignedDto, String> {
+    to_ipc(handlers::assign_concept(&app, &concept_id, body).await)
+}
+
+#[tauri::command]
+async fn unassign_concept(
+    app: tauri::State<'_, Arc<App>>,
+    concept_id: String,
+    body: ConceptFramesDto,
+) -> Result<(), String> {
+    to_ipc(handlers::unassign_concept(&app, &concept_id, body).await)
+}
+
+#[tauri::command]
+async fn export_dataset_by_id(
+    app: tauri::State<'_, Arc<App>>,
+    dataset_id: String,
+    body: ExportDatasetDto,
+) -> Result<ExportSummary, String> {
+    to_ipc(handlers::export_dataset_by_id(&app, &dataset_id, body).await)
 }
 
 #[tauri::command]
@@ -1000,6 +1109,20 @@ fn try_run() -> anyhow::Result<()> {
             list_dataset_frames,
             update_dataset_frame,
             export_dataset,
+            list_captioners,
+            list_datasets,
+            get_dataset,
+            update_dataset,
+            delete_dataset,
+            list_dataset_frames_for_dataset,
+            frame_concept_map,
+            list_concepts,
+            create_concept,
+            update_concept,
+            delete_concept,
+            assign_concept,
+            unassign_concept,
+            export_dataset_by_id,
             list_agents,
             create_agent,
             delete_agent,

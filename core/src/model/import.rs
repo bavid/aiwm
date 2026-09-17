@@ -361,9 +361,10 @@ fn sha256_file(path: &Path) -> Result<String> {
 /// (`<store>/image/checkpoints/<file>`) to match ComfyUI's own layout. A name
 /// clash is broken with an 8-char hash.
 ///
-/// Dia's two directory-shaped kinds are the one exception: they always keep
-/// their exact original filename with no hash-suffix, even on a "collision"
-/// (see [`unique_destination`]'s doc below for why that's actually safe).
+/// Dia's two directory-shaped kinds, plus the WD tagger's `model.onnx` +
+/// `selected_tags.csv` pair, are the exception: they always keep their exact
+/// original filename with no hash-suffix, even on a "collision" (see
+/// [`unique_destination`]'s doc below for why that's actually safe).
 fn unique_destination(
     store_root: &Path,
     kind: ModelKind,
@@ -393,13 +394,20 @@ fn unique_destination(
     // `DiaForConditionalGeneration::from_pretrained` (and `AutoProcessor` for
     // the codec) read a *directory* of siblings by their real Hugging Face
     // filenames -- renaming one to `config-a1b2c3d4.json` on a "collision"
-    // would just make the directory unloadable. There is no real collision
+    // would just make the directory unloadable. The WD tagger's Python
+    // sidecar (`vision.tag_frame`) is the same shape: it opens `model.onnx`
+    // and `selected_tags.csv` by their fixed names in one directory, so a
+    // hash-suffixed `model-a1b2c3d4.onnx` from a re-import would silently
+    // strand the sidecar with no model to find. There is no real collision
     // to avoid here: each kind gets its own fixed subdirectory
     // (`ModelKind::store_subdir`), so nothing else's file ever lands next to
     // it under the same name. A leftover file already at the destination (a
     // stale partial import that never reached the DB insert below) is
     // deliberately overwritten by `place_file`, not renamed around.
-    if matches!(kind, ModelKind::DiaEngine | ModelKind::DiaCodec) {
+    if matches!(
+        kind,
+        ModelKind::DiaEngine | ModelKind::DiaCodec | ModelKind::WdTagger
+    ) {
         return type_dir.join(&filename);
     }
 
@@ -982,6 +990,101 @@ mod tests {
         assert_ne!(engine_p, codec_p);
         assert!(Path::new(&engine_p).is_file());
         assert!(Path::new(&codec_p).is_file());
+    }
+
+    #[tokio::test]
+    async fn wd_tagger_files_import_with_their_exact_original_filenames_into_a_dedicated_subdir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = tmp.path().join("store");
+        let db = Database::connect_in_memory().await.unwrap();
+
+        let model = write_safetensors(tmp.path(), "model.onnx", b"onnx-bytes-v1");
+        let model_out = import_model(
+            &db,
+            &store,
+            ImportRequest {
+                model_type: Some("wd_tagger".into()),
+                ..req(&model)
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(model_out.model.roles, ["vision_wd_tagger"]);
+        assert!(
+            model_out.model.runtimes.is_empty(),
+            "no runtime scans this itself, same as the voice/dia kinds"
+        );
+        let model_p = model_out.model.file_path.replace('\\', "/");
+        assert!(
+            model_p.ends_with("/vision/wd-tagger/model.onnx"),
+            "{model_p}"
+        );
+
+        // The tag list is a differently-named sibling in the same directory.
+        let tags = write_safetensors(
+            tmp.path(),
+            "selected_tags.csv",
+            b"tag_id,name,category,count",
+        );
+        let tags_out = import_model(
+            &db,
+            &store,
+            ImportRequest {
+                model_type: Some("wd_tagger".into()),
+                ..req(&tags)
+            },
+        )
+        .await
+        .unwrap();
+        let tags_p = tags_out.model.file_path.replace('\\', "/");
+        assert!(
+            tags_p.ends_with("/vision/wd-tagger/selected_tags.csv"),
+            "{tags_p}"
+        );
+        assert_eq!(
+            Path::new(&tags_out.model.file_path).parent(),
+            Path::new(&model_out.model.file_path).parent(),
+            "the model and its tag list must be siblings in the same directory"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_stale_leftover_wd_tagger_file_is_overwritten_not_hash_suffixed() {
+        // Same reasoning as the Dia test below: a previous import that copied
+        // `model.onnx` into the store but crashed before the DB insert (or a
+        // corrected re-download) must land back on the exact same filename --
+        // the sidecar looks for `model.onnx` by that literal name, never a
+        // `model-a1b2c3d4.onnx` it would never find.
+        let tmp = tempfile::tempdir().unwrap();
+        let store = tmp.path().join("store");
+        let db = Database::connect_in_memory().await.unwrap();
+
+        let stale_dest = store.join("vision/wd-tagger/model.onnx");
+        std::fs::create_dir_all(stale_dest.parent().unwrap()).unwrap();
+        std::fs::write(&stale_dest, b"stale-leftover-bytes").unwrap();
+
+        let fresh = write_safetensors(tmp.path(), "model.onnx", b"the-real-current-onnx-bytes");
+        let out = import_model(
+            &db,
+            &store,
+            ImportRequest {
+                model_type: Some("wd_tagger".into()),
+                ..req(&fresh)
+            },
+        )
+        .await
+        .unwrap();
+
+        let p = out.model.file_path.replace('\\', "/");
+        assert!(
+            p.ends_with("/vision/wd-tagger/model.onnx"),
+            "must not have been hash-suffixed: {p}"
+        );
+        assert_eq!(
+            std::fs::read(&out.model.file_path).unwrap(),
+            b"the-real-current-onnx-bytes"
+        );
     }
 
     #[tokio::test]

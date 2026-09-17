@@ -1559,6 +1559,32 @@ mod tests {
         assert!(messages.iter().any(|m| m.contains("post -> completed")));
     }
 
+    /// The `dataset_prep` branch of `resolve_target` reserves whatever the
+    /// *chosen* captioner needs — nothing at all when the run only extracts,
+    /// filters and curates.
+    #[tokio::test]
+    async fn dataset_prep_reserves_vram_only_for_the_chosen_captioner() {
+        let fx = fixture(16_384).await;
+
+        let mut plain = NewJob::new("dataset_prep");
+        plain.params = serde_json::json!({ "root": "x" });
+        let plain = fx.engine.submit(plain).await.unwrap();
+        let target = fx.engine.resolve_target(&plain).await.unwrap();
+        assert_eq!(target.model_id, DATASET_VISION_MODEL_ID);
+        assert_eq!(target.vram_mb, 0, "no captioner, nothing to reserve");
+
+        let mut with_florence = NewJob::new("dataset_prep");
+        with_florence.params =
+            serde_json::json!({ "root": "x", "captioner": "florence2", "escalate": false });
+        let with_florence = fx.engine.submit(with_florence).await.unwrap();
+        let target = fx.engine.resolve_target(&with_florence).await.unwrap();
+        assert_eq!(target.model_id, DATASET_VISION_MODEL_ID);
+        assert_eq!(
+            target.vram_mb,
+            crate::capability::dataset::FLORENCE2_VRAM_FALLBACK_MB
+        );
+    }
+
     #[tokio::test]
     async fn run_next_is_none_when_idle() {
         let fx = fixture(16_384).await;

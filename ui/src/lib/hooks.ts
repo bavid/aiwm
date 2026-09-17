@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import {
   about,
@@ -14,7 +14,12 @@ import {
   listBenchmarks,
   listCharacterRelationships,
   listCharacters,
+  listCaptioners,
+  listConcepts,
   listDatasetFrames,
+  listDatasetFramesForDataset,
+  listDatasets,
+  frameConceptMap,
   listDocuments,
   listFeaturedModels,
   listJobs,
@@ -42,7 +47,10 @@ import {
   type Character,
   type CharacterLogEntry,
   type CharacterRelationship,
+  type Captioner,
   type CivitaiSearchParams,
+  type Dataset,
+  type DatasetConcept,
   type DatasetFrame,
   type Document,
   type Download,
@@ -198,7 +206,10 @@ function usePolled<T>(key: string, fetcher: () => Promise<T>, intervalMs: number
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key, intervalMs, nonce]);
 
-  const refetch = () => setNonce((n) => n + 1);
+  // Stable across renders: consumers put `refetch` in their own `useCallback`
+  // dep arrays, and a fresh closure here would invalidate those handlers on
+  // every poll tick -- which is what defeats `React.memo` further down.
+  const refetch = useCallback(() => setNonce((n) => n + 1), []);
   return { data, error, refetch };
 }
 
@@ -210,6 +221,38 @@ export const useDatasetFrames = (jobId: string | null) =>
     `dataset-frames:${jobId ?? ""}`,
     () => (jobId ? listDatasetFrames(jobId) : Promise.resolve([])),
     1500,
+  );
+
+/** The captioner registry with its install state — the "Beschreiben mit"
+ *  dropdown. Polled slowly: it only changes when a model is imported. */
+export const useCaptioners = () => usePolled<Captioner[]>("captioners", listCaptioners, 5000);
+
+/** Every curation set, newest prep run included. */
+export const useDatasets = () => usePolled<Dataset[]>("datasets", listDatasets, 3000);
+
+/** A dataset's curation set. Unlike {@link useDatasetFrames} this keeps
+ *  working once the prep job is gone; `null` disables polling. */
+export const useDatasetFramesForDataset = (datasetId: string | null) =>
+  usePolled<DatasetFrame[]>(
+    `dataset-frames-by-dataset:${datasetId ?? ""}`,
+    () => (datasetId ? listDatasetFramesForDataset(datasetId) : Promise.resolve([])),
+    3000,
+  );
+
+/** A dataset's concepts with their frame counts; `null` disables polling. */
+export const useConcepts = (datasetId: string | null) =>
+  usePolled<DatasetConcept[]>(
+    `concepts:${datasetId ?? ""}`,
+    () => (datasetId ? listConcepts(datasetId) : Promise.resolve([])),
+    3000,
+  );
+
+/** frame id -> concept ids, for the grid's per-item concept chips. */
+export const useFrameConceptMap = (datasetId: string | null) =>
+  usePolled<Record<string, string[]>>(
+    `frame-concepts:${datasetId ?? ""}`,
+    () => (datasetId ? frameConceptMap(datasetId) : Promise.resolve({})),
+    3000,
   );
 
 export const useJobs = (opts?: { states?: JobState[]; limit?: number }) =>

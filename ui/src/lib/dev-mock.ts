@@ -175,13 +175,50 @@ const SCENES: AnyRecord[] = [
 ];
 
 const DATASET_FRAMES: AnyRecord[] = [];
+const DATASETS: AnyRecord[] = [];
+const CONCEPTS: AnyRecord[] = [];
+/** `{ frame_id, concept_id }` pairs — the join table's mock stand-in. */
+const FRAME_CONCEPTS: { frame_id: string; concept_id: string }[] = [];
 const DATASET_TAGS = ["Ghibli", "Cyberpunk"];
 const DATASET_MOCK_TOTAL_FRAMES = 18;
+
+/** Clips mode produces one row per source video, not per still. These stand
+ *  in for what `ffprobe` + the preview-still extraction would report: a mix of
+ *  lengths, and one clip the pipeline could not read at all (`unusable` — no
+ *  duration, no preview still, nothing to trim). */
+const DATASET_MOCK_CLIPS: { file: string; duration: number | null; rejection: string }[] = [
+  { file: "opening_pan.mp4", duration: 12.5, rejection: "" },
+  { file: "market_walk.mp4", duration: 48, rejection: "" },
+  { file: "rooftop_cut.mp4", duration: 3, rejection: "" },
+  { file: "corrupt_take.mp4", duration: null, rejection: "unusable" },
+  { file: "night_drive.mp4", duration: 96.4, rejection: "" },
+  { file: "closing_shot.mp4", duration: 7.2, rejection: "" },
+];
+
+/** Loosely mirrors `capability::dataset::compose::COMMON_WORDS` — enough for
+ *  the dev preview to show the inline "pick a made-up token" warning. */
+const COMMON_TOKEN_WORDS = [
+  "anime", "manga", "photo", "picture", "image", "art", "style", "character",
+  "person", "man", "woman", "boy", "girl", "foot", "hand", "face", "city",
+];
+
+function mockTokenWarning(token: string): string | null {
+  const t = String(token).trim();
+  if (!t) return "Token is empty — use something like 'kenji_xy'.";
+  if (/\s/.test(t)) {
+    return `Token contains spaces — use one word, e.g. '${t.split(/\s+/).join("_").toLowerCase()}_xy'.`;
+  }
+  const lower = t.toLowerCase();
+  return COMMON_TOKEN_WORDS.includes(lower)
+    ? `'${t}' is an ordinary word the base model already knows — use a made-up token like '${lower}_xy'.`
+    : null;
+}
 
 function mkDatasetFrame(id: string, jobId: string, tag: string, over: AnyRecord): AnyRecord {
   return {
     id,
     job_id: jobId,
+    dataset_id: null,
     tag,
     source_path: `E:\\Data\\Demo\\${tag}\\clip.mp4`,
     frame_path: `E:\\Data\\Demo\\${tag}\\clip_0001.png`,
@@ -189,9 +226,34 @@ function mkDatasetFrame(id: string, jobId: string, tag: string, over: AnyRecord)
     caption: "",
     caption_engine: "",
     excluded: false,
+    rejection_reason: "",
+    duration_secs: null,
+    clip_start_secs: null,
+    clip_end_secs: null,
     created_at: now(),
     ...over,
   };
+}
+
+/** The dataset row a running `dataset_prep` job produces, created on the
+ *  job's first tick so the Dataset tab has something to select. */
+function datasetForJob(job: AnyRecord): AnyRecord {
+  const existing = DATASETS.find((d) => d.prep_job_id === job.id);
+  if (existing) return existing;
+  const params = (job.params ?? {}) as AnyRecord;
+  const root = String(params.root ?? "E:\\Data\\Demo");
+  const dataset: AnyRecord = {
+    id: `ds-${String(job.id)}`,
+    name: root.split(/[\\/]/).filter(Boolean).pop() ?? "Dataset",
+    mode: params.mode === "clips" ? "clips" : "frames",
+    source_root: root,
+    trigger_word: "",
+    prep_job_id: job.id,
+    export_dir: null,
+    created_at: now(),
+  };
+  DATASETS.push(dataset);
+  return dataset;
 }
 
 /** Grows a running `dataset_prep` job's curation set by one frame per tick
@@ -204,17 +266,46 @@ function progressDatasetJobs(): void {
   for (const j of JOBS) {
     if (j.job_type !== "dataset_prep" || j.state !== "running") continue;
     const jobId = String(j.id);
+    const dataset = datasetForJob(j);
+    const clips = dataset.mode === "clips";
+    const target = clips ? DATASET_MOCK_CLIPS.length : DATASET_MOCK_TOTAL_FRAMES;
     const existing = DATASET_FRAMES.filter((f) => f.job_id === jobId);
-    if (existing.length >= DATASET_MOCK_TOTAL_FRAMES) {
+    if (existing.length >= target) {
       j.state = "completed";
       j.finished_at = now();
       continue;
     }
     const idx = existing.length + 1;
     const tag = DATASET_TAGS[existing.length % DATASET_TAGS.length];
+
+    if (clips) {
+      const spec = DATASET_MOCK_CLIPS[existing.length];
+      const unusable = spec.rejection === "unusable";
+      DATASET_FRAMES.push(
+        mkDatasetFrame(`${jobId}-c${idx}`, jobId, tag, {
+          dataset_id: dataset.id,
+          source_path: `E:\\Data\\Demo\\${tag}\\${spec.file}`,
+          // No readable stream means no preview still was ever written.
+          frame_path: unusable ? "" : `E:\\Data\\Demo\\${tag}\\${spec.file}.preview.png`,
+          timestamp_secs: null,
+          caption: unusable ? "" : `${tag} clip, dev-mock: ${spec.file}`,
+          caption_engine: unusable ? "" : "florence2",
+          rejection_reason: spec.rejection,
+          duration_secs: spec.duration,
+          clip_start_secs: null,
+          clip_end_secs: null,
+        }),
+      );
+      continue;
+    }
+
     const escalated = idx % 6 === 0;
+    // A slice of every run is auto-rejected, so the "verworfen" filter and the
+    // "doch behalten" button have something to act on in the dev preview.
+    const rejection = idx % 7 === 0 ? "blur" : idx % 11 === 0 ? "cap" : "";
     DATASET_FRAMES.push(
       mkDatasetFrame(`${jobId}-f${idx}`, jobId, tag, {
+        dataset_id: dataset.id,
         source_path: `E:\\Data\\Demo\\${tag}\\clip.mp4`,
         frame_path: `E:\\Data\\Demo\\${tag}\\clip_${String(idx).padStart(4, "0")}.png`,
         timestamp_secs: idx * 0.7,
@@ -222,6 +313,8 @@ function progressDatasetJobs(): void {
           ? `${tag} scene, dev-mock: the figure turns and walks toward the doorway`
           : `${tag} scene, dev-mock caption ${idx}`,
         caption_engine: escalated ? "qwen2.5-vl" : "florence2",
+        rejection_reason: rejection,
+        duration_secs: null,
       }),
     );
   }
@@ -1009,6 +1102,11 @@ export function installDevMock(): void {
           frame.caption = body.caption;
           frame.caption_engine = "";
         }
+        if (body.restore === true) frame.rejection_reason = "";
+        // Three-valued, like the Rust DTO: an absent key keeps the stored
+        // bound, an explicit `null` clears it.
+        if ("clip_start_secs" in body) frame.clip_start_secs = body.clip_start_secs ?? null;
+        if ("clip_end_secs" in body) frame.clip_end_secs = body.clip_end_secs ?? null;
         return { ...frame };
       }
       case "export_dataset": {
@@ -1017,6 +1115,146 @@ export function installDevMock(): void {
           throw new Error("nothing to export — every frame is excluded from this dataset");
         }
         return { exported: kept.length, dest_dir: String(a.destDir ?? "") };
+      }
+      case "list_captioners":
+        return [
+          {
+            id: "florence2", name: "Florence-2 (prose)", style: "prose", role: "vision_florence2",
+            vram_mb: 2600, license: "MIT", supports_escalation: true, required_files: [],
+            installed: false,
+          },
+          {
+            id: "wd-eva02-tagger-v3", name: "WD EVA02 Tagger v3 (Danbooru tags)", style: "tags",
+            role: "vision_wd_tagger", vram_mb: 0, license: "Apache-2.0",
+            supports_escalation: false, required_files: ["model.onnx", "selected_tags.csv"],
+            installed: true,
+          },
+        ];
+      case "list_datasets":
+        progressDatasetJobs();
+        return DATASETS.map((d) => ({ ...d }));
+      case "get_dataset": {
+        const dataset = DATASETS.find((d) => d.id === a.id);
+        return dataset ? { ...dataset } : null;
+      }
+      case "update_dataset": {
+        const dataset = DATASETS.find((d) => d.id === a.id);
+        if (!dataset) throw new Error(`no such dataset ${a.id}`);
+        const body = (a.body ?? {}) as AnyRecord;
+        if (typeof body.trigger_word === "string") dataset.trigger_word = body.trigger_word.trim();
+        return { ...dataset };
+      }
+      case "delete_dataset": {
+        const dropped = CONCEPTS.filter((c) => c.dataset_id === a.id).map((c) => c.id);
+        removeWhere(FRAME_CONCEPTS, (fc) => dropped.includes(fc.concept_id));
+        removeWhere(CONCEPTS, (c) => c.dataset_id === a.id);
+        removeWhere(DATASET_FRAMES, (f) => f.dataset_id === a.id);
+        removeWhere(DATASETS, (d) => d.id === a.id);
+        return null;
+      }
+      case "list_dataset_frames_for_dataset":
+        progressDatasetJobs();
+        return DATASET_FRAMES.filter((f) => f.dataset_id === a.datasetId).map((f) => ({ ...f }));
+      case "frame_concept_map": {
+        const ids = CONCEPTS.filter((c) => c.dataset_id === a.datasetId).map((c) => c.id);
+        const map: Record<string, string[]> = {};
+        for (const fc of FRAME_CONCEPTS) {
+          if (!ids.includes(fc.concept_id)) continue;
+          (map[fc.frame_id] ??= []).push(fc.concept_id);
+        }
+        return map;
+      }
+      case "list_concepts":
+        return CONCEPTS.filter((c) => c.dataset_id === a.datasetId).map((c) => ({
+          ...c,
+          frame_count: FRAME_CONCEPTS.filter((fc) => fc.concept_id === c.id).length,
+          token_warning: mockTokenWarning(String(c.token)),
+        }));
+      case "create_concept": {
+        const body = (a.body ?? {}) as AnyRecord;
+        const name = String(body.name ?? "").trim();
+        const token = String(body.token ?? "").trim();
+        if (!name || !token) throw new Error("concept name and token must not be empty");
+        const clash = CONCEPTS.some((c) => c.dataset_id === a.datasetId && c.token === token);
+        if (clash) {
+          throw new Error(`token "${token}" is already used by another concept in this dataset`);
+        }
+        const concept: AnyRecord = {
+          id: `concept-${seq++}`,
+          dataset_id: a.datasetId,
+          name,
+          token,
+          description: String(body.description ?? "").trim(),
+          created_at: now(),
+        };
+        CONCEPTS.push(concept);
+        // The real command answers with the stored row only -- `frame_count`
+        // and `token_warning` come from `list_concepts`.
+        return { ...concept };
+      }
+      case "update_concept": {
+        const concept = CONCEPTS.find((c) => c.id === a.id);
+        if (!concept) throw new Error(`no such concept ${a.id}`);
+        const body = (a.body ?? {}) as AnyRecord;
+        const name = String(body.name ?? "").trim();
+        const token = String(body.token ?? "").trim();
+        if (!name || !token) throw new Error("concept name and token must not be empty");
+        const clash = CONCEPTS.some(
+          (c) => c.dataset_id === concept.dataset_id && c.token === token && c.id !== concept.id,
+        );
+        if (clash) {
+          throw new Error(`token "${token}" is already used by another concept in this dataset`);
+        }
+        concept.name = name;
+        concept.token = token;
+        concept.description = String(body.description ?? "").trim();
+        return null;
+      }
+      case "delete_concept": {
+        removeWhere(FRAME_CONCEPTS, (fc) => fc.concept_id === a.id);
+        removeWhere(CONCEPTS, (c) => c.id === a.id);
+        return null;
+      }
+      case "assign_concept": {
+        const conceptId = String(a.conceptId);
+        const concept = CONCEPTS.find((c) => c.id === conceptId);
+        const body = (a.body ?? {}) as AnyRecord;
+        const frameIds = (body.frame_ids as string[]) ?? [];
+        let attached = 0;
+        for (const frameId of frameIds) {
+          const frame = DATASET_FRAMES.find((f) => f.id === frameId);
+          // Same guard as the real INSERT ... WHERE EXISTS: a frame from
+          // another dataset is skipped, not an error.
+          if (!concept || !frame || frame.dataset_id !== concept.dataset_id) continue;
+          if (FRAME_CONCEPTS.some((fc) => fc.frame_id === frameId && fc.concept_id === conceptId)) {
+            continue;
+          }
+          FRAME_CONCEPTS.push({ frame_id: frameId, concept_id: conceptId });
+          attached += 1;
+        }
+        return { requested: frameIds.length, attached };
+      }
+      case "unassign_concept": {
+        const body = (a.body ?? {}) as AnyRecord;
+        const frameIds = (body.frame_ids as string[]) ?? [];
+        removeWhere(
+          FRAME_CONCEPTS,
+          (fc) => fc.concept_id === a.conceptId && frameIds.includes(fc.frame_id),
+        );
+        return null;
+      }
+      case "export_dataset_by_id": {
+        const body = (a.body ?? {}) as AnyRecord;
+        const kept = DATASET_FRAMES.filter(
+          (f) => f.dataset_id === a.datasetId && !f.excluded && !f.rejection_reason,
+        );
+        if (kept.length === 0) {
+          throw new Error("nothing to export — every item is excluded from this dataset");
+        }
+        const destDir = String(body.dest_dir ?? "");
+        const dataset = DATASETS.find((d) => d.id === a.datasetId);
+        if (dataset) dataset.export_dir = destDir;
+        return { exported: kept.length, dest_dir: destDir };
       }
       case "storage_report": {
         const kindOf = (m: AnyRecord): string => {

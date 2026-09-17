@@ -396,6 +396,35 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 
 ### Task 2: Frames belong to datasets; rejected frames and clip fields
 
+> **Amendment after Task 1 review (2026-09-16):** the quality review proved that
+> `dataset_frames.job_id ON DELETE CASCADE` (from 0014) silently deleted every
+> frame of a dataset when its prep job was deleted, leaving an empty `datasets`
+> row. Migration 0015 now *rebuilds* `dataset_frames` with `job_id TEXT
+> REFERENCES jobs(id) ON DELETE SET NULL` (nullable) and `dataset_id ... ON
+> DELETE CASCADE`: **a frame's lifecycle is governed by its dataset, not the
+> producing job.** Consequences for this task: `DatasetFrame.job_id` becomes
+> `Option<String>`; `NewDatasetFrame.job_id` stays `String` (always set at
+> insert); `list_for_job` is unchanged; every caller that reads `frame.job_id`
+> (the `GET /jobs/{id}/dataset-frames/{frame_id}/image` handler, the UI's
+> `datasetFrameImageUrl(port, frame.job_id, frame.id)`) must handle `None` —
+> Task 11 adds a dataset-keyed image route `GET /datasets/{id}/frames/{frame_id}/image`
+> and the UI switches to it; until then treat `job_id == None` as "serve by
+> frame id only". Add a test: a frame with both ids set survives job deletion
+> with `job_id == None` and is removed when its dataset is deleted (Task 1
+> already has this scenario in `datasets.rs`; move the assertion on the frame's
+> `job_id` here once the field is optional).
+>
+> **Why the `Option<String>` change is a correctness fix, not a nicety:** the
+> Task 1 quality reviewer probed a row whose `job_id` the new `ON DELETE SET
+> NULL` had legitimately nulled and found that sqlx-sqlite decodes that SQL
+> `NULL` into an empty Rust `String` for a non-`Option` field — silently, no
+> error. Until this task lands, any read of such a row lies. This task must
+> therefore (1) make the field optional first, and (2) add a field-level
+> regression test asserting `frame.job_id == None` after the job is deleted
+> (`deleting_the_job_keeps_a_dataset_frame_with_job_id_none`), plus strengthen
+> the interim `deleting_the_job_makes_the_frame_unreachable_by_job_id` test
+> with the same field assertion.
+
 **Files:**
 - Modify: `core/src/db/dataset.rs`
 
@@ -1682,7 +1711,7 @@ def test_tag_frame_is_dispatched_over_json_rpc(
     monkeypatch: pytest.MonkeyPatch, image_file: str, model_dir: str
 ) -> None:
     monkeypatch.setattr(vision, "_load_wd_tagger", lambda _dir: FakeWdTagger())
-    response = main.handle_request(
+    response = main.handle(
         {
             "jsonrpc": "2.0",
             "id": 7,
@@ -1703,7 +1732,7 @@ def test_preprocess_produces_448_bgr_float_batch(image_file: str) -> None:
     assert batch[0, 224, 224, 2] == pytest.approx(200.0)
 ```
 
-(If `main.handle_request` is not the actual name of the sidecar's request dispatcher, use the function the existing `test_vision_captioning.py` dispatch test calls — search that file for `"method": "caption_frame"` and mirror it exactly.)
+(If `main.handle` is not the actual name of the sidecar's request dispatcher, use the function the existing `test_vision_captioning.py` dispatch test calls — search that file for `"method": "caption_frame"` and mirror it exactly.)
 
 - [ ] **Step 2: Run** `cd sidecar && uv run pytest tests/test_wd_tagger.py -q` → fails: `vision` has no attribute `_wd_tagger_cache` / `tag_frame`.
 
@@ -1856,33 +1885,39 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 ```rust
     #[tokio::test]
     async fn resolve_captioner_dir_uses_the_registry_role() {
+        use super::super::captioner::{find_captioner, FLORENCE2_ID, WD_TAGGER_ID};
         let db = empty_db().await;
-        db.models()
-            .insert(NewModel {
-                name: "model.onnx".into(),
-                format: "onnx".into(),
-                file_path: "E:\\AI\\models\\vision\\wd-tagger\\model.onnx".into(),
-                size_bytes: 1,
-                source: "manual".into(),
-                roles: vec!["vision_wd_tagger".into()],
-                ..NewModel::default()
-            })
-            .await
-            .unwrap();
-        let c = super::super::captioner::find(super::super::captioner::WD_TAGGER_ID).unwrap();
+        // Both companion files must be present (Task 6 review decision):
+        // the tag list alone is "not installed".
+        for (name, format) in [("selected_tags.csv", "csv"), ("model.onnx", "onnx")] {
+            db.models()
+                .insert(NewModel {
+                    name: name.into(),
+                    format: format.into(),
+                    file_path: format!("E:\\AI\\models\\vision\\wd-tagger\\{name}"),
+                    size_bytes: 1,
+                    source: "manual".into(),
+                    roles: vec![crate::model::WD_TAGGER_ROLE.into()],
+                    ..NewModel::default()
+                })
+                .await
+                .unwrap();
+        }
+        let c = find_captioner(WD_TAGGER_ID).unwrap();
         let dir = resolve_captioner_dir(&db, c).await.unwrap();
         assert!(dir.to_string_lossy().replace('\\', "/").ends_with("vision/wd-tagger"));
 
-        let florence = super::super::captioner::find(super::super::captioner::FLORENCE2_ID).unwrap();
+        let florence = find_captioner(FLORENCE2_ID).unwrap();
         let err = resolve_captioner_dir(&db, florence).await.unwrap_err();
         assert!(err.to_string().contains("Florence-2"), "{err}");
     }
 
     #[test]
     fn rpc_method_and_engine_label_follow_the_captioner() {
-        let wd = super::super::captioner::find(super::super::captioner::WD_TAGGER_ID).unwrap();
+        use super::super::captioner::{find_captioner, FLORENCE2_ID, WD_TAGGER_ID};
+        let wd = find_captioner(WD_TAGGER_ID).unwrap();
         assert_eq!(rpc_method_for(wd), "tag_frame");
-        let fl = super::super::captioner::find(super::super::captioner::FLORENCE2_ID).unwrap();
+        let fl = find_captioner(FLORENCE2_ID).unwrap();
         assert_eq!(rpc_method_for(fl), "caption_frame");
     }
 ```
@@ -1895,7 +1930,21 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 use super::captioner::{Captioner, FLORENCE2_ID};
 
 pub async fn resolve_captioner_dir(db: &Database, c: &Captioner) -> Result<std::path::PathBuf> {
-    resolve_model_dir(db, c.role, c.name.split(" (").next().unwrap_or(c.name)).await
+    // Task 6 review decision: "installed" means every `required_files` entry
+    // sits in one directory (tagger: model.onnx + selected_tags.csv), so the
+    // resolver wraps `installed_captioner_dir` instead of taking the first
+    // row carrying the role. Keep the same error wording as
+    // `resolve_model_dir` (label = name up to " (", e.g. "Florence-2").
+    let label = c.name.split(" (").next().unwrap_or(c.name);
+    super::captioner::installed_captioner_dir(db, c)
+        .await?
+        .ok_or_else(|| {
+            vision_err(format!(
+                "no {label} imported — import it on the Models tab (Add models \u{2192} point at \
+                 its downloaded snapshot folder \u{2192} role \u{201c}{}\u{201d})",
+                c.role
+            ))
+        })
 }
 
 /// Which sidecar JSON-RPC method serves this captioner.
@@ -2106,6 +2155,9 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 **Files:**
 - Modify: `core/src/capability/dataset/mod.rs`
 - Modify: `core/src/orchestrator/engine.rs` (VRAM already reads the request; only the `run` call changes if its signature does — it does not)
+- Modify: `core/src/api/handlers.rs` — ONLY the existing job-keyed `export_dataset` handler (~line 310), which must call `export_dataset_for_job` once Step 6 changes `export_dataset`'s signature; otherwise the crate does not compile. (Task 11 adds the dataset-keyed handler.) Also the `db/dataset.rs` doc link to `export_dataset` (~line 173) stays valid because the function keeps its name.
+
+Note (Task 9 review): there is no existing engine test for the `dataset_prep` target; Step 7 writes the first one by calling the private `resolve_target` from inside `engine.rs`'s own test module (same-module tests can reach private methods), building the engine the way the neighbouring tests do.
 
 This is the integration task; keep each step's tests green before the next.
 
@@ -2186,7 +2238,7 @@ In `from_params`, after `root`:
         let captioner = match params.get("captioner").and_then(Value::as_str).map(str::trim) {
             None | Some("") => None,
             Some(id) => {
-                captioner::find(id).ok_or_else(|| dataset_err(format!("unknown captioner {id:?}")))?;
+                captioner::find_captioner(id).ok_or_else(|| dataset_err(format!("unknown captioner {id:?}")))?;
                 Some(id.to_string())
             }
         };
@@ -2206,7 +2258,7 @@ In `from_params`, after `root`:
 
 ```rust
     pub fn vram_estimate_mb(&self) -> u64 {
-        let Some(c) = self.captioner.as_deref().and_then(captioner::find) else {
+        let Some(c) = self.captioner.as_deref().and_then(captioner::find_captioner) else {
             return 0;
         };
         c.vram_mb + if self.escalate && c.supports_escalation { caption::QWEN_VL_VRAM_FALLBACK_MB } else { 0 }
@@ -2270,7 +2322,7 @@ pub async fn run(
     // Resolve the captioner (and its escalation partner) *before* touching
     // the disk, so a missing model fails fast — but only when one was asked
     // for. Extraction/filtering/curation never need a model.
-    let captioner = req.captioner.as_deref().and_then(captioner::find);
+    let captioner = req.captioner.as_deref().and_then(captioner::find_captioner);
     let captioner_dir = match captioner {
         Some(c) => Some(caption::resolve_captioner_dir(db, c).await?),
         None => None,
@@ -2588,7 +2640,7 @@ pub async fn export_dataset(db: &Database, req: &ExportRequest) -> Result<Export
             .get(&frame.id)
             .map(|ids| ids.iter().filter_map(|id| by_id.get(id.as_str())).map(|c| compose::ConceptPart { token: &c.token, description: &c.description }).collect())
             .unwrap_or_default();
-        let style = captioner::find(&frame.caption_engine).map_or(compose::CaptionStyle::Prose, |c| c.style);
+        let style = captioner::find_captioner(&frame.caption_engine).map_or(compose::CaptionStyle::Prose, |c| c.style);
         let caption = compose::compose_caption(req.caption_order, &dataset.trigger_word, &parts, &frame.caption, style);
 
         let src = if dataset.mode == DatasetMode::Clips { &frame.source_path } else { &frame.frame_path };
@@ -2674,6 +2726,15 @@ pub struct ConceptFramesDto {
     pub frame_ids: Vec<String>,
 }
 
+/// Response of `POST /concepts/{id}/frames`: how many of the requested
+/// frames were newly attached (the rest were already assigned or belong to
+/// another dataset).
+#[derive(Debug, Clone, Serialize)]
+pub struct AssignedDto {
+    pub requested: usize,
+    pub attached: u64,
+}
+
 /// Extends the frame edit: `restore: true` clears a rejection.
 #[derive(Debug, Clone, Deserialize)]
 pub struct UpdateDatasetFrameDto {
@@ -2715,7 +2776,7 @@ pub struct ConceptSummaryDto {
 
 ```rust
 pub async fn list_captioners(app: &App) -> Result<Vec<crate::capability::dataset::CaptionerStatus>> {
-    crate::capability::dataset::captioner::statuses(&app.db).await
+    crate::capability::dataset::captioner::captioner_statuses(&app.db).await
 }
 
 pub async fn list_datasets(app: &App) -> Result<Vec<crate::db::Dataset>> {
@@ -2758,6 +2819,15 @@ pub async fn create_concept(app: &App, dataset_id: &str, body: ConceptBodyDto) -
     if body.name.trim().is_empty() || body.token.trim().is_empty() {
         return Err(CoreError::Config("concept name and token must not be empty".into()));
     }
+    // A duplicate token is a user mistake, not a server fault: the UNIQUE
+    // (dataset_id, token) violation would otherwise surface as CoreError::Sqlx
+    // -> HTTP 500 (Task 3 review finding). Pre-check and answer 400.
+    let token = body.token.trim();
+    if app.db.concepts().list_for_dataset(dataset_id).await?.iter().any(|c| c.token == token) {
+        return Err(CoreError::Config(format!(
+            "token {token:?} is already used by another concept in this dataset"
+        )));
+    }
     app.db
         .concepts()
         .create(crate::db::NewConcept { dataset_id: dataset_id.to_string(), name: body.name, token: body.token, description: body.description })
@@ -2765,6 +2835,20 @@ pub async fn create_concept(app: &App, dataset_id: &str, body: ConceptBodyDto) -
 }
 
 pub async fn update_concept(app: &App, id: &str, body: ConceptBodyDto) -> Result<()> {
+    if body.name.trim().is_empty() || body.token.trim().is_empty() {
+        return Err(CoreError::Config("concept name and token must not be empty".into()));
+    }
+    let current = app.db.concepts().get(id).await?
+        .ok_or_else(|| CoreError::Config(format!("no such concept {id}")))?;
+    let token = body.token.trim();
+    // Same duplicate-token pre-check as create_concept, excluding this concept itself.
+    if app.db.concepts().list_for_dataset(&current.dataset_id).await?
+        .iter().any(|c| c.id != id && c.token == token)
+    {
+        return Err(CoreError::Config(format!(
+            "token {token:?} is already used by another concept in this dataset"
+        )));
+    }
     app.db.concepts().update(id, &body.name, &body.token, &body.description).await
 }
 
@@ -2772,8 +2856,16 @@ pub async fn delete_concept(app: &App, id: &str) -> Result<()> {
     app.db.concepts().delete(id).await
 }
 
-pub async fn assign_concept(app: &App, concept_id: &str, body: ConceptFramesDto) -> Result<()> {
-    app.db.concepts().assign(concept_id, &body.frame_ids).await
+/// Returns how many frames were newly attached (Task 3 review decision):
+/// already-assigned frames and frames from another dataset are silently
+/// skipped by the repo, so the UI can say "18 of 20 assigned" instead of
+/// pretending. First change `ConceptRepo::assign` to `Result<u64>` by summing
+/// `rows_affected()` over the per-frame inserts inside its transaction (add a
+/// mixed-batch test: in-dataset + already-assigned + other-dataset frames in
+/// one call → count equals only the genuinely new ones).
+pub async fn assign_concept(app: &App, concept_id: &str, body: ConceptFramesDto) -> Result<AssignedDto> {
+    let attached = app.db.concepts().assign(concept_id, &body.frame_ids).await?;
+    Ok(AssignedDto { requested: body.frame_ids.len(), attached })
 }
 
 pub async fn unassign_concept(app: &App, concept_id: &str, body: ConceptFramesDto) -> Result<()> {
@@ -2793,7 +2885,19 @@ pub async fn export_dataset_by_id(app: &App, dataset_id: &str, body: ExportDatas
 }
 ```
 
-Extend the existing `update_dataset_frame` handler: `if body.restore == Some(true) { set_rejection_reason(frame_id, "") }`; `if body.clip_start_secs.is_some() || body.clip_end_secs.is_some() { set_clip_range(frame_id, body.clip_start_secs.flatten(), body.clip_end_secs.flatten()) }`. Point the existing job-keyed `export_dataset` handler at `export_dataset_for_job`.
+Extend the existing `update_dataset_frame` handler: `if body.restore == Some(true) { set_rejection_reason(frame_id, "") }`. For the clip range, **read-merge-write** — `set_clip_range` writes both bounds unconditionally, so a request carrying only one field must not wipe the other (Task 2 review finding):
+
+```rust
+    if body.clip_start_secs.is_some() || body.clip_end_secs.is_some() {
+        let current = app.db.dataset_frames().get(frame_id).await?
+            .ok_or_else(|| CoreError::Config(format!("no such dataset frame {frame_id}")))?;
+        let start = body.clip_start_secs.unwrap_or(current.clip_start_secs);
+        let end = body.clip_end_secs.unwrap_or(current.clip_end_secs);
+        app.db.dataset_frames().set_clip_range(frame_id, start, end).await?;
+    }
+```
+
+(`Option<Option<f64>>`: outer `None` = field absent → keep current; `Some(None)` = explicit null → clear that bound.) Add a handler test: set both, then send only `clip_end_secs: null`, assert start is unchanged and end is cleared. Point the existing job-keyed `export_dataset` handler at `export_dataset_for_job`.
 
 - [ ] **Step 3: Routes** (`http.rs` router), after the existing dataset routes:
 
@@ -2802,6 +2906,7 @@ Extend the existing `update_dataset_frame` handler: `if body.restore == Some(tru
         .route("/datasets", get(list_datasets))
         .route("/datasets/{id}", get(get_dataset).put(update_dataset).delete(delete_dataset))
         .route("/datasets/{id}/frames", get(list_dataset_frames_for_dataset))
+        .route("/datasets/{id}/frames/{frame_id}/image", get(dataset_frame_image))
         .route("/datasets/{id}/frame-concepts", get(frame_concept_map))
         .route("/datasets/{id}/concepts", get(list_concepts).post(create_concept))
         .route("/datasets/{id}/export", post(export_dataset_by_id))
@@ -2813,7 +2918,7 @@ with thin axum fns in the same shape as `list_dataset_frames`/`update_dataset_fr
 
 - [ ] **Step 4: Tauri commands** (`src-tauri/src/lib.rs`): `list_captioners`, `list_datasets`, `get_dataset`, `update_dataset(id, body)`, `delete_dataset(id)`, `list_dataset_frames_for_dataset(dataset_id)`, `frame_concept_map(dataset_id)`, `list_concepts(dataset_id)`, `create_concept(dataset_id, body)`, `update_concept(id, body)`, `delete_concept(id)`, `assign_concept(concept_id, body)`, `unassign_concept(concept_id, body)`, `export_dataset_by_id(dataset_id, body)` — each `to_ipc(handlers::...)`, each added to `generate_handler!`.
 
-- [ ] **Step 5: `ipc.ts`** — add types and bindings:
+- [ ] **Step 5: `ipc.ts`** — add types and bindings. (Task 6 review finding: the existing `ModelType` union in `ipc.ts` (~line 806) does not list `"wd_tagger"`; add it there so the model library UI can show the tagger's kind.)
 
 ```ts
 export type DatasetMode = "frames" | "clips";
@@ -2869,10 +2974,20 @@ export const createConcept = (datasetId: string, body: { name: string; token: st
 export const updateConcept = (id: string, body: { name: string; token: string; description?: string }) =>
   invoke<void>("update_concept", { id, body });
 export const deleteConcept = (id: string) => invoke<void>("delete_concept", { id });
+export interface AssignedSummary {
+  requested: number;
+  attached: number;
+}
 export const assignConcept = (conceptId: string, frameIds: string[]) =>
-  invoke<void>("assign_concept", { conceptId, body: { frame_ids: frameIds } });
+  invoke<AssignedSummary>("assign_concept", { conceptId, body: { frame_ids: frameIds } });
 export const unassignConcept = (conceptId: string, frameIds: string[]) =>
   invoke<void>("unassign_concept", { conceptId, body: { frame_ids: frameIds } });
+/** Dataset-keyed still image — replaces `datasetFrameImageUrl(port, frame.job_id, id)`
+ *  now that `frame.job_id` can be null (a frame outlives its prep job). The
+ *  existing job-keyed route stays for old callers. */
+export const datasetFrameImageUrlByDataset = (coreApiPort: number, datasetId: string, frameId: string) =>
+  `http://127.0.0.1:${coreApiPort}/datasets/${datasetId}/frames/${frameId}/image`;
+
 export const exportDatasetById = (datasetId: string, destDir: string, captionOrder: CaptionOrder) =>
   invoke<ExportDatasetSummary>("export_dataset_by_id", { datasetId, body: { dest_dir: destDir, caption_order: captionOrder } });
 ```
@@ -3043,7 +3158,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 
 - [ ] **Step 1: Clip mode in the grid** — when `dataset.mode === "clips"`, `FrameCard` renders the preview still, `duration_secs` formatted `m:ss`, the source file name, and two number inputs **Start (s)** / **End (s)** committed via `updateDatasetFrame(id, { clip_start_secs, clip_end_secs })` (blank = whole clip); `Unusable` rejected clips show their badge with no thumbnail. Export button text becomes `Export n clip(s)`.
 
-- [ ] **Step 2: `docs/TODO.md`** — in the "Lokale KI-Trainings-Engine" section, add a "Teilsystem 1 — Erweiterungen (Plan 1) ✅" block in the existing German/✅ style covering: datasets as objects (migration 0015), rejected frames with reasons + restore, filter level C, captioning optional with the recommendation text, captioner registry (Florence-2 + WD tagger, JoyCaption deferred with the llama.cpp `--mmproj` check still open), concepts + learn mode, clip mode, composed export with order; and the explicit leftovers: similarity grouping needs a stored hash column (Plan 2), JoyCaption, Wan-clip training itself. Reference the spec and this plan by path.
+- [ ] **Step 2: `docs/TODO.md`** — in the "Lokale KI-Trainings-Engine" section, add a "Teilsystem 1 — Erweiterungen (Plan 1) ✅" block in the existing German/✅ style covering: datasets as objects (migration 0015), rejected frames with reasons + restore, filter level C, captioning optional with the recommendation text, captioner registry (Florence-2 + WD tagger, JoyCaption deferred with the llama.cpp `--mmproj` check still open), concepts + learn mode, clip mode, composed export with order; and the explicit leftovers: similarity grouping needs a stored hash column (Plan 2), JoyCaption, Wan-clip training itself, plus the review follow-ups collected during Plan 1: the three sidecar engine caches (`_florence2_cache`, `_qwen_vl_cache`, `_wd_tagger_cache`) key on the raw `model_dir` string without path normalisation (trailing slash / case / symlink double-loads a model); the WD tagger's classify logic lives in `tag_frame` rather than on the engine class; Task 10's wiring should decode each frame once and share the image across `is_blurry`/`is_dead_frame`/`phash_of` instead of three `image::open` calls; `pipeline::filter_groups` decodes images synchronously inside the async `run` (pre-existing; wrap in `tokio::task::spawn_blocking` once real runs show it matters); `export_dataset_for_job` finds the dataset via `list()` + `find` (add `DatasetRepo::find_by_prep_job` if dataset counts grow); export copies/trims media sequentially; UI (Task 12 review): the frame grid is not virtualised and `FrameCard` is not memoised (fine at `PAGE_SIZE` 60, revisit for thousand-frame datasets), the prep/export/concept forms are `<div>`s rather than semantic `<form onSubmit>` (no Enter-to-submit), and `ui/eslint.config.js` has no `eslint-plugin-jsx-a11y` (would have caught the `alt=""`/unlabelled-input findings). Reference the spec and this plan by path.
 
 - [ ] **Step 3: Full gates on the worktree**
 
@@ -3072,4 +3187,4 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 
 - **Spec coverage:** 3 (datasets table, rejection reasons, optional captioning, filter C, clip mode) → Tasks 1, 2, 4, 10, 14; 3A concepts → Tasks 3, 11, 12; 3C recommendation text → Task 12; 3D registry + WD tagger + order-by-profile → Tasks 6, 7, 8, 5 (order is a request field now; Plan 2 wires the profile default); 3E not-included → recorded in Task 14 docs; 4B learn sets → Task 13 (similarity grouping by real hash deferred and recorded); 5 tests → every task has failing-first tests, Task 11 has the HTTP integration test, Task 7 Step 5 is the one real tagger run.
 - **Placeholders:** the only `<paste …>` markers are in Task 6 Step 3 and are the deliberate "compute the hash, never guess it" instruction; every other code block is complete.
-- **Type consistency:** `DatasetMode` (db) is reused by the request; `RejectionReason::as_str` values match the migration comment and the UI chip labels; `CaptionOrder` serialises as `tags_first`/`prose_first` on both sides; `Captioner.style: CaptionStyle` is the same enum `compose_caption` takes; `caption_with` returns the engine label that `captioner::find(&frame.caption_engine)` looks up at export (`"florence2"` and `"wd-eva02-tagger-v3"` are the registry ids, and the sidecar returns exactly those).
+- **Type consistency:** `DatasetMode` (db) is reused by the request; `RejectionReason::as_str` values match the migration comment and the UI chip labels; `CaptionOrder` serialises as `tags_first`/`prose_first` on both sides; `Captioner.style: CaptionStyle` is the same enum `compose_caption` takes; `caption_with` returns the engine label that `captioner::find_captioner(&frame.caption_engine)` looks up at export (`"florence2"` and `"wd-eva02-tagger-v3"` are the registry ids, and the sidecar returns exactly those).

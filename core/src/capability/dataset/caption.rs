@@ -35,6 +35,7 @@ use crate::db::Database;
 use crate::runtime::VisionAdapter;
 use crate::Result;
 
+use super::captioner::{installed_captioner_dir, Captioner, FLORENCE2_ID};
 use super::dataset_err;
 
 /// Model-library roles a Florence-2 / Qwen2.5-VL checkpoint is imported
@@ -77,6 +78,16 @@ fn vision_err(msg: impl std::fmt::Display) -> crate::CoreError {
     dataset_err(msg)
 }
 
+/// The shared "not imported" error both `resolve_model_dir` and
+/// `resolve_captioner_dir` report — same wording, same Models-tab pointer,
+/// just parameterized by what's missing and which role to assign it.
+fn not_imported_err(label: &str, role: &str) -> crate::CoreError {
+    vision_err(format!(
+        "no {label} imported — import it on the Models tab (Add models \u{2192} point at its \
+         downloaded snapshot folder \u{2192} role \u{201c}{role}\u{201d})"
+    ))
+}
+
 /// The default single-image task Florence-2 is asked to perform. `<CAPTION>`
 /// is Florence-2's shortest task; `<DETAILED_CAPTION>` is the documented
 /// middle ground between that and `<MORE_DETAILED_CAPTION>` (verbose enough
@@ -115,44 +126,65 @@ pub fn is_low_confidence_caption(
 /// names the shared directory" shape.
 async fn resolve_model_dir(db: &Database, role: &str, label: &str) -> Result<std::path::PathBuf> {
     let files = db.models().for_role(role).await?;
-    let first = files.first().ok_or_else(|| {
-        vision_err(format!(
-            "no {label} imported — import it on the Models tab (Add models \u{2192} point at \
-             its downloaded snapshot folder \u{2192} role \u{201c}{role}\u{201d})"
-        ))
-    })?;
+    let first = files.first().ok_or_else(|| not_imported_err(label, role))?;
     Path::new(&first.file_path)
         .parent()
         .map(Path::to_path_buf)
         .ok_or_else(|| vision_err(format!("{label} file has no parent directory")))
 }
 
-pub async fn resolve_florence2_dir(db: &Database) -> Result<std::path::PathBuf> {
-    resolve_model_dir(db, FLORENCE2_ROLE, "Florence-2").await
-}
-
 pub async fn resolve_qwen_vl_dir(db: &Database) -> Result<std::path::PathBuf> {
     resolve_model_dir(db, QWEN_VL_ROLE, "Qwen2.5-VL").await
 }
 
-/// One Florence-2 caption for a single frame.
-pub async fn caption_frame(
+/// Directory holding the captioner's files, or the same "import it on the
+/// Models tab" error `resolve_model_dir` gives. "Installed" means every one
+/// of the captioner's `required_files` sits in one directory (tagger:
+/// `model.onnx` + `selected_tags.csv`), so a half-imported tagger is
+/// reported as missing rather than resolved to a directory that will fail
+/// at caption time.
+pub async fn resolve_captioner_dir(db: &Database, c: &Captioner) -> Result<std::path::PathBuf> {
+    // Registry display names follow "Name (style hint)" — the label is just
+    // the name part.
+    let label = c.name.split_once(" (").map_or(c.name, |(label, _)| label);
+    installed_captioner_dir(db, c)
+        .await?
+        .ok_or_else(|| not_imported_err(label, c.role))
+}
+
+/// Which sidecar JSON-RPC method serves this captioner.
+pub fn rpc_method_for(c: &Captioner) -> &'static str {
+    if c.id == FLORENCE2_ID {
+        "caption_frame"
+    } else {
+        "tag_frame"
+    }
+}
+
+/// One auto caption for a single frame from whichever captioner the run
+/// picked. Returns `(caption, engine_label)`; the label is what lands in
+/// `dataset_frames.caption_engine`.
+pub async fn caption_with(
     vision: &VisionAdapter,
+    c: &Captioner,
     model_dir: &Path,
     image_path: &Path,
-) -> Result<String> {
+) -> Result<(String, String)> {
     let client = vision.client().await?;
-    let result = client
-        .call(
-            "caption_frame",
-            json!({
-                "image_path": image_path.to_string_lossy(),
-                "model_dir": model_dir.to_string_lossy(),
-                "task_prompt": FLORENCE2_TASK_PROMPT,
-            }),
-        )
-        .await?;
-    extract_caption(&result)
+    let mut params = json!({
+        "image_path": image_path.to_string_lossy(),
+        "model_dir": model_dir.to_string_lossy(),
+    });
+    if c.id == FLORENCE2_ID {
+        params["task_prompt"] = json!(FLORENCE2_TASK_PROMPT);
+    }
+    let result = client.call(rpc_method_for(c), params).await?;
+    let engine = result
+        .get("engine")
+        .and_then(Value::as_str)
+        .unwrap_or(c.id)
+        .to_string();
+    Ok((extract_caption(&result)?, engine))
 }
 
 /// A temporal-context re-caption from Qwen2.5-VL: `image_path` is the
@@ -239,40 +271,35 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn resolve_florence2_dir_reports_a_clear_error_when_not_imported() {
+    async fn resolve_qwen_vl_dir_reports_a_clear_error_when_not_imported() {
         let db = empty_db().await;
-        let err = resolve_florence2_dir(&db).await.unwrap_err();
-        assert!(err.to_string().contains("Florence-2"), "{err}");
+        let err = resolve_qwen_vl_dir(&db).await.unwrap_err();
+        assert!(err.to_string().contains("Qwen2.5-VL"), "{err}");
     }
 
+    /// Pins `resolve_model_dir`'s "any file in the role names the shared
+    /// directory" shape — the parent of the imported row, not the row itself.
     #[tokio::test]
-    async fn resolve_florence2_dir_finds_the_snapshot_folder() {
+    async fn resolve_qwen_vl_dir_finds_the_snapshot_folder() {
         let db = empty_db().await;
         db.models()
             .insert(NewModel {
-                name: "florence-2-large".into(),
+                name: "qwen2.5-vl-7b-instruct".into(),
                 format: "safetensors".into(),
-                file_path: "E:\\AI\\models\\vision\\florence-2-large\\model.safetensors".into(),
+                file_path: "E:\\AI\\models\\vision\\qwen2.5-vl-7b\\model.safetensors".into(),
                 size_bytes: 1,
                 source: "manual".into(),
-                roles: vec![FLORENCE2_ROLE.into()],
+                roles: vec![QWEN_VL_ROLE.into()],
                 ..NewModel::default()
             })
             .await
             .unwrap();
 
-        let dir = resolve_florence2_dir(&db).await.unwrap();
+        let dir = resolve_qwen_vl_dir(&db).await.unwrap();
         assert_eq!(
             dir.to_string_lossy().replace('\\', "/"),
-            "E:/AI/models/vision/florence-2-large"
+            "E:/AI/models/vision/qwen2.5-vl-7b"
         );
-    }
-
-    #[tokio::test]
-    async fn resolve_qwen_vl_dir_reports_a_clear_error_when_not_imported() {
-        let db = empty_db().await;
-        let err = resolve_qwen_vl_dir(&db).await.unwrap_err();
-        assert!(err.to_string().contains("Qwen2.5-VL"), "{err}");
     }
 
     #[test]
@@ -283,5 +310,67 @@ mod tests {
         );
         assert!(extract_caption(&json!({ "caption": "   " })).is_err());
         assert!(extract_caption(&json!({})).is_err());
+    }
+
+    #[tokio::test]
+    async fn resolve_captioner_dir_uses_the_registry_role() {
+        use super::super::captioner::{find_captioner, FLORENCE2_ID, WD_TAGGER_ID};
+        let db = empty_db().await;
+        // Both companion files must be present (Task 6 review decision):
+        // the tag list alone is "not installed".
+        for (name, format) in [("selected_tags.csv", "csv"), ("model.onnx", "onnx")] {
+            db.models()
+                .insert(NewModel {
+                    name: name.into(),
+                    format: format.into(),
+                    file_path: format!("E:\\AI\\models\\vision\\wd-tagger\\{name}"),
+                    size_bytes: 1,
+                    source: "manual".into(),
+                    roles: vec![crate::model::WD_TAGGER_ROLE.into()],
+                    ..NewModel::default()
+                })
+                .await
+                .unwrap();
+        }
+        let c = find_captioner(WD_TAGGER_ID).unwrap();
+        let dir = resolve_captioner_dir(&db, c).await.unwrap();
+        assert!(dir
+            .to_string_lossy()
+            .replace('\\', "/")
+            .ends_with("vision/wd-tagger"));
+
+        let florence = find_captioner(FLORENCE2_ID).unwrap();
+        let err = resolve_captioner_dir(&db, florence).await.unwrap_err();
+        assert!(err.to_string().contains("Florence-2"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn resolve_captioner_dir_rejects_a_half_imported_tagger() {
+        use super::super::captioner::{find_captioner, WD_TAGGER_ID};
+        let db = empty_db().await;
+        db.models()
+            .insert(NewModel {
+                name: "selected_tags.csv".into(),
+                format: "csv".into(),
+                file_path: "E:\\AI\\models\\vision\\wd-tagger\\selected_tags.csv".into(),
+                size_bytes: 1,
+                source: "manual".into(),
+                roles: vec![crate::model::WD_TAGGER_ROLE.into()],
+                ..NewModel::default()
+            })
+            .await
+            .unwrap();
+        let c = find_captioner(WD_TAGGER_ID).unwrap();
+        let err = resolve_captioner_dir(&db, c).await.unwrap_err();
+        assert!(err.to_string().contains("WD EVA02 Tagger v3"), "{err}");
+    }
+
+    #[test]
+    fn rpc_method_and_engine_label_follow_the_captioner() {
+        use super::super::captioner::{find_captioner, FLORENCE2_ID, WD_TAGGER_ID};
+        let wd = find_captioner(WD_TAGGER_ID).unwrap();
+        assert_eq!(rpc_method_for(wd), "tag_frame");
+        let fl = find_captioner(FLORENCE2_ID).unwrap();
+        assert_eq!(rpc_method_for(fl), "caption_frame");
     }
 }
