@@ -4,12 +4,16 @@
 //! on-disk layout it writes checkpoints and samples into.
 //!
 //! `ai-toolkit` redraws its `tqdm` bar in place with `\r`, so one chunk read
-//! from the log can contain many stale bars followed by the current one;
-//! [`split_updates`] and [`latest_step_from_updates`] exist so callers never
-//! have to reason about that themselves. Markers ([`Marker`]) are the
+//! from the log can contain many stale bars — including a final, still-being
+//! -written fragment with no closing `]` — followed by the current complete
+//! one; [`split_updates`] and [`latest_step_from_updates`] exist so callers
+//! never have to reason about that themselves. Markers ([`Marker`]) are the
 //! handful of fixed, non-tqdm lines `ai-toolkit` prints for lifecycle events
 //! that a progress bar can't express (resuming from a checkpoint, OOM
-//! back-off, job completion or failure).
+//! back-off, job completion or failure). [`tail_log`] also copes with the
+//! log file being truncated or recreated shorter than the reader's last
+//! offset, treating that as "read from the start again" rather than
+//! "nothing new".
 //!
 //! No `regex` dependency: the line shapes are fixed enough (verified against
 //! the pinned `ai-toolkit` commit) that hand-parsing with `split`/`find` is
@@ -73,15 +77,15 @@ pub fn split_updates(buf: &str) -> impl Iterator<Item = &str> {
 /// isn't a progress bar.
 ///
 /// The bar format is `<desc>: <pct>%|<fill>| <n>/<total> [<elapsed><<remaining>, <rate>, <postfix>]`.
-/// `desc` (`job.name`) may itself contain spaces and colons, so this anchors
-/// on the fixed `N/M [` shape right before the bracketed section rather than
-/// trying to parse the description.
+/// `desc` (`job.name`) may itself contain spaces, colons or even brackets
+/// (e.g. `my [job]: 12%|...`), so this anchors on the *last* `[...]` pair in
+/// the line — the closing `]` via `rfind`, then the matching `[` via
+/// `rfind` on everything before it — rather than the first `[`, and takes
+/// the `N/M` step/total from the last whitespace-separated token before
+/// that bracket rather than trying to parse the description.
 pub fn parse_progress(line: &str) -> Option<Progress> {
-    let open = line.find('[')?;
     let close = line.rfind(']')?;
-    if close <= open {
-        return None;
-    }
+    let open = line[..close].rfind('[')?;
     let before = line[..open].trim();
     let inside = &line[open + 1..close];
 
@@ -131,12 +135,31 @@ fn parse_duration(s: &str) -> Option<u64> {
     }
 }
 
-/// Find `label` (e.g. `"lr:"`) in `postfix` and parse the whitespace-
-/// delimited token right after it as an `f64`.
+/// Find `label` (e.g. `"lr:"`) in `postfix` at a token boundary — preceded
+/// by whitespace, a comma, or the start of the string — and parse the
+/// whitespace-delimited token right after it as an `f64`. The boundary
+/// check keeps a look-alike key from shadowing the real one, e.g.
+/// `avg_loss: 9.999 loss: 3.123e-01` must still yield `loss: 3.123e-01`,
+/// not the digits inside `avg_loss:`.
 fn parse_labeled_f64(postfix: &str, label: &str) -> Option<f64> {
-    let after = postfix.split_once(label)?.1.trim_start();
-    let value: String = after.chars().take_while(|c| !c.is_whitespace()).collect();
-    value.parse().ok()
+    let mut search_from = 0;
+    while let Some(rel_idx) = postfix[search_from..].find(label) {
+        let idx = search_from + rel_idx;
+        let at_boundary = idx == 0
+            || postfix[..idx]
+                .chars()
+                .next_back()
+                .is_some_and(|c| c.is_whitespace() || c == ',');
+        if at_boundary {
+            let after = postfix[idx + label.len()..].trim_start();
+            let value: String = after.chars().take_while(|c| !c.is_whitespace()).collect();
+            if let Ok(parsed) = value.parse() {
+                return Some(parsed);
+            }
+        }
+        search_from = idx + label.len();
+    }
+    None
 }
 
 /// Find the exact text between `start` and the next `end` in `s`.
@@ -199,6 +222,11 @@ pub fn latest_step_from_updates(buf: &str) -> Option<Progress> {
 /// decoded (lossy UTF-8) chunk and the new offset. A missing file is not an
 /// error: it just hasn't been created yet, so this returns an empty chunk
 /// at the same offset.
+///
+/// If `from` is *past* the file's current length — the log was truncated or
+/// recreated shorter than where the reader last left off — this resets to
+/// offset 0 and reads from the start instead of treating it as "nothing
+/// new". Only `from == len` genuinely means there is nothing new yet.
 pub async fn tail_log(path: &Path, from: u64) -> Result<(String, u64)> {
     use tokio::io::{AsyncReadExt, AsyncSeekExt};
 
@@ -209,17 +237,18 @@ pub async fn tail_log(path: &Path, from: u64) -> Result<(String, u64)> {
     };
 
     let len = file.metadata().await.map_err(CoreError::Io)?.len();
-    if from >= len {
-        return Ok((String::new(), from));
+    let start = if from > len { 0 } else { from };
+    if start == len {
+        return Ok((String::new(), start));
     }
 
-    file.seek(std::io::SeekFrom::Start(from))
+    file.seek(std::io::SeekFrom::Start(start))
         .await
         .map_err(CoreError::Io)?;
-    let mut bytes = Vec::with_capacity((len - from) as usize);
+    let mut bytes = Vec::with_capacity((len - start) as usize);
     file.read_to_end(&mut bytes).await.map_err(CoreError::Io)?;
 
-    let new_offset = from + bytes.len() as u64;
+    let new_offset = start + bytes.len() as u64;
     let chunk = String::from_utf8_lossy(&bytes).into_owned();
     Ok((chunk, new_offset))
 }
@@ -473,5 +502,58 @@ mod tests {
         let missing = dir.path().join("does_not_exist");
         let state = scan_work_dir(&missing, "my_lora").expect("scan of missing dir");
         assert_eq!(state, WorkDirState::default());
+    }
+
+    #[tokio::test]
+    async fn tail_log_restarts_from_zero_after_truncation() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let log_path = dir.path().join("log.txt");
+
+        tokio::fs::write(&log_path, vec![b'a'; 100])
+            .await
+            .expect("write 100 bytes");
+        let (_chunk, offset) = tail_log(&log_path, 0).await.expect("read from start");
+        assert_eq!(offset, 100);
+
+        // Simulate the log being truncated (or recreated) and written to
+        // again — a shorter file at an offset the reader hasn't caught up
+        // to yet, not "nothing new".
+        let restarted: &[u8] = b"01234567890123456789";
+        tokio::fs::write(&log_path, restarted)
+            .await
+            .expect("rewrite (truncate)");
+
+        let (chunk, offset2) = tail_log(&log_path, offset)
+            .await
+            .expect("restart from zero after truncation");
+        assert_eq!(chunk, std::str::from_utf8(restarted).unwrap());
+        assert_eq!(offset2, restarted.len() as u64);
+    }
+
+    #[test]
+    fn desc_with_brackets_still_parses() {
+        let line = "my [job]:  12%|██        | 240/2000 [01:02<07:35,  3.86it/s, lr: 1.0e-04 loss: 3.123e-01]";
+        let p = parse_progress(line).expect("should parse despite brackets in desc");
+        assert_eq!(p.step, 240);
+        assert_eq!(p.total, 2000);
+    }
+
+    #[test]
+    fn look_alike_postfix_keys_do_not_shadow_loss() {
+        let line = "job:  12%|██        | 240/2000 [01:02<07:35,  3.86it/s, avg_loss: 9.999 loss_2: 1.111 loss: 3.123e-01]";
+        let p = parse_progress(line).expect("should parse");
+        assert!((p.loss.expect("loss") - 0.3123).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_partial_trailing_bar_is_skipped_and_the_last_complete_one_wins() {
+        let complete =
+            "job:  10%|█         | 10/100 [00:01<00:09,  10.0it/s, lr: 1.0e-04 loss: 1.000e+00]";
+        // A `\r`-updated bar mid-write: no closing `]` yet.
+        let partial = "job:  11%|█         | 11/100 [00:01<00:09,  10.0it/s, lr: 1.0e-04 loss: 9";
+        let buf = format!("{complete}\r{partial}");
+
+        let latest = latest_step_from_updates(&buf).expect("should find the last complete bar");
+        assert_eq!(latest.step, 10);
     }
 }
