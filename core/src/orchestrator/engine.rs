@@ -1908,6 +1908,60 @@ mod tests {
         assert_eq!(media_vram_mb(&model, width, height, 1), expected);
     }
 
+    /// Neither an edit nor a reference render honours Hi-Res-Fix, so a
+    /// `hires` block in their params must not move the headroom: `plan_comfyui`
+    /// sizes the charge from `final_size`, and charging 2.25x for a second pass
+    /// that never runs would both over-reserve VRAM and show a size the render
+    /// cannot produce.
+    #[tokio::test]
+    async fn an_edit_or_reference_job_is_not_charged_for_hires_headroom() {
+        let db = Database::connect_in_memory().await.unwrap();
+        let model = model_with(&db, Some("sdxl"), 8_000).await;
+
+        let charge = |params: serde_json::Value| {
+            let req = image::ImageRequest::from_params(&params).unwrap();
+            let (width, height) = req.final_size();
+            (req.hires, media_vram_mb(&model, width, height, 1))
+        };
+
+        let plain = charge(serde_json::json!({
+            "prompt": "x",
+            "width": 1024,
+            "height": 1024,
+            "source_image": "job-abc"
+        }));
+        let with_hires = charge(serde_json::json!({
+            "prompt": "x",
+            "width": 1024,
+            "height": 1024,
+            "source_image": "job-abc",
+            "hires": { "scale_by": 1.5, "denoise": 0.45 }
+        }));
+        assert_eq!(with_hires.0, None, "an edit drops hires at the boundary");
+        assert_eq!(with_hires.1, plain.1);
+
+        let reference = charge(serde_json::json!({
+            "prompt": "x",
+            "width": 1024,
+            "height": 1024,
+            "reference_image": "job-abc",
+            "hires": { "scale_by": 1.5, "denoise": 0.45 }
+        }));
+        assert_eq!(reference.0, None);
+        assert_eq!(reference.1, plain.1);
+
+        // The guard is worth having: the same params without the edit/reference
+        // key really would cost more.
+        let txt2img = charge(serde_json::json!({
+            "prompt": "x",
+            "width": 1024,
+            "height": 1024,
+            "hires": { "scale_by": 1.5, "denoise": 0.45 }
+        }));
+        assert!(txt2img.0.is_some());
+        assert!(txt2img.1 > plain.1);
+    }
+
     #[test]
     fn parse_recommend_params_reads_query_and_kind() {
         let (query, kind) = parse_recommend_params(&serde_json::json!({

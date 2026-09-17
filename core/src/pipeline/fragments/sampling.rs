@@ -69,9 +69,11 @@ pub struct CustomAdvancedIds<'a> {
 
 /// Parameters the chain needs. `width`/`height` are [`Dim`]s because
 /// `flux2_klein_edit` sizes its `Flux2Scheduler` from a `GetImageSize` node
-/// rather than from fixed inputs. `sigmas_override` lets a caller (e.g. a
-/// future Hi-Res-Fix second pass) feed a different sigmas source than this
-/// chain's own `Flux2Scheduler`; `None` reproduces today's graph exactly.
+/// rather than from fixed inputs.
+///
+/// The sigmas always come from this chain's own `Flux2Scheduler`: the
+/// Hi-Res-Fix second pass does not reuse this node, it builds its own
+/// `SamplerCustomAdvanced` over a fresh scheduler (see [`super::hires`]).
 #[derive(Debug, Clone)]
 pub struct CustomAdvancedParams<'a> {
     pub seed: i64,
@@ -80,7 +82,6 @@ pub struct CustomAdvancedParams<'a> {
     pub height: Dim,
     pub sampler: &'a str,
     pub cfg: f64,
-    pub sigmas_override: Option<OwnedLink>,
 }
 
 /// The three links a `SamplerCustomAdvanced` consumes besides its sigmas and
@@ -106,8 +107,8 @@ pub struct CustomAdvancedChain {
 
 /// `KSamplerSelect` + `Flux2Scheduler` + `RandomNoise` + `CFGGuider` +
 /// `SamplerCustomAdvanced` — FLUX.2 \[klein\]'s sampling chain. Exact keys
-/// from `flux2_klein_txt2img`; `sigmas` is the override when given, else the
-/// chain's own scheduler node's output slot 0.
+/// from `flux2_klein_txt2img`; `sigmas` is the chain's own scheduler node's
+/// output slot 0.
 pub fn custom_advanced(
     g: &mut Graph,
     ids: &CustomAdvancedIds,
@@ -134,10 +135,6 @@ pub fn custom_advanced(
             "cfg": p.cfg
         }),
     );
-    let sigmas = match &p.sigmas_override {
-        Some(link) => link.json(),
-        None => OwnedLink::new(ids.scheduler, 0).json(),
-    };
     let links = CustomAdvancedLinks {
         noise: OwnedLink::new(ids.noise, 0),
         guider: OwnedLink::new(ids.guider, 0),
@@ -150,7 +147,7 @@ pub fn custom_advanced(
             "noise": links.noise.json(),
             "guider": links.guider.json(),
             "sampler": links.sampler.json(),
-            "sigmas": sigmas,
+            "sigmas": OwnedLink::new(ids.scheduler, 0).json(),
             "latent_image": latent.json()
         }),
     );
@@ -405,7 +402,6 @@ mod tests {
                 height: Dim::Fixed(1024),
                 sampler: "euler",
                 cfg: 7.0,
-                sigmas_override: None,
             },
         );
         assert_eq!(out.sampled, OwnedLink::new("3", 0));
@@ -464,41 +460,6 @@ mod tests {
     }
 
     #[test]
-    fn custom_advanced_uses_the_sigmas_override_when_given() {
-        let mut g = Graph::default();
-        let model = OwnedLink::new("12", 0);
-        let positive = OwnedLink::new("6", 0);
-        let negative = OwnedLink::new("27", 0);
-        let latent = OwnedLink::new("32", 0);
-        let ids = CustomAdvancedIds {
-            select: "28",
-            scheduler: "29",
-            noise: "30",
-            guider: "31",
-            sampler: "3",
-        };
-        let override_link = OwnedLink::new("60", 0);
-        custom_advanced(
-            &mut g,
-            &ids,
-            &model,
-            &positive,
-            &negative,
-            &latent,
-            &CustomAdvancedParams {
-                seed: 42,
-                steps: 25,
-                width: Dim::Fixed(1024),
-                height: Dim::Fixed(1024),
-                sampler: "euler",
-                cfg: 7.0,
-                sigmas_override: Some(override_link),
-            },
-        );
-        assert_eq!(g.input("3", "sigmas"), Some(&json!(["60", 0])));
-    }
-
-    #[test]
     fn custom_advanced_scheduler_takes_link_dimensions() {
         let mut g = Graph::default();
         let ids = CustomAdvancedIds {
@@ -522,7 +483,6 @@ mod tests {
                 height: Dim::Link(OwnedLink::new("99", 1)),
                 sampler: "euler",
                 cfg: 1.5,
-                sigmas_override: None,
             },
         );
         assert_eq!(g.input("62", "width"), Some(&json!(["99", 0])));

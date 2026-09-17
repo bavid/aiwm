@@ -197,7 +197,6 @@ pub fn flux2_klein_txt2img(i: &Txt2ImgInputs, m: &Flux2KleinModels, loras: &[Lor
             height: i.height.into(),
             sampler: i.sampler,
             cfg: i.cfg,
-            sigmas_override: None,
         },
     );
     // The second pass reuses the first chain's noise, guider and sampler, so
@@ -364,7 +363,6 @@ pub fn flux2_klein_edit(i: &EditInputs, m: &Flux2KleinModels, loras: &[LoraSpec]
             height: size.height,
             sampler: i.sampler,
             cfg: i.cfg,
-            sigmas_override: None,
         },
     );
     output::decode_and_save(

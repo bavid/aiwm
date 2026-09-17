@@ -10,7 +10,13 @@ sorted; array order — link pairs like `["4", 0]` — preserved).
 Most recipes have one fixture, rendered with a LoRA chain. Two also have a
 `*_no_loras` variant (`checkpoint_txt2img`, `flux2_klein_edit`): an absent
 chain is a genuinely different graph from a present one, and the with-LoRAs
-fixtures alone never pinned that shape.
+fixtures alone never pinned that shape. Those two were added in `e1b7767`,
+i.e. **generated from the new code, not recorded from a pre-refactor
+baseline** — the refactor had already landed by then, so there was no earlier
+output to record. What backs them is the with-LoRAs fixture of the same
+recipe, which *is* a pre-refactor recording: the no-LoRA graph is that graph
+minus the chain, so a wrong shape here would have to be wrong in the recorded
+one too.
 
 Two more — `checkpoint_txt2img_hires` and `flux2_klein_txt2img_hires` — pin
 the Hi-Res-Fix second pass, one per sampler family (`KSampler` and

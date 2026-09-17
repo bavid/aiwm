@@ -315,6 +315,34 @@ mod tests {
         );
     }
 
+    /// The worked examples above are one point each; this is the whole
+    /// clamped input range the request parser can produce (`steps` 4..=60,
+    /// `denoise` 0.20..=0.70 in the UI's 0.05 increments). `hires.steps` means
+    /// EXECUTED steps, so for every one of those points the schedule
+    /// `schedule_steps` asks for must come back out of the denoise cut as
+    /// exactly `hires.steps` again.
+    #[test]
+    fn schedule_steps_round_trips_over_the_whole_clamped_range() {
+        for steps in 4..=60u32 {
+            for step_index in 0..=10u32 {
+                let denoise = 0.20 + 0.05 * f64::from(step_index);
+                let h = HiresFix {
+                    steps,
+                    denoise,
+                    ..hires()
+                };
+                let schedule = schedule_steps(&h);
+                let executed = (f64::from(schedule) * denoise).round();
+                assert_eq!(
+                    executed,
+                    f64::from(steps),
+                    "steps {steps} at denoise {denoise}: a {schedule}-step schedule \
+                     executes {executed}, not {steps}"
+                );
+            }
+        }
+    }
+
     #[test]
     fn ksampler_pass_upscales_then_resamples_at_the_hires_denoise() {
         let mut g = Graph::default();

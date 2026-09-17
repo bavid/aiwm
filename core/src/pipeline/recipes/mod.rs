@@ -71,8 +71,10 @@ pub(crate) fn finish(g: Graph, applied: Result<(), PipelineError>) -> Value {
 /// what this module reserves globally. Two recipes that can never appear in
 /// the same graph may reuse an id: Story Studio's IP-Adapter chain and the
 /// Hi-Res-Fix fragment both sit at 40–43, which is fine precisely because no
-/// txt2img recipe emits an IP-Adapter chain and no Story Studio recipe takes a
-/// `hires` input.
+/// txt2img recipe emits an IP-Adapter chain and no Story Studio recipe
+/// *honours* a `hires` input — they take the same [`crate::pipeline::Txt2ImgInputs`]
+/// struct and ignore the field, which is what the `debug_assert!`s at the top
+/// of each of them pin.
 ///
 /// | Range | Concern | Recipe file |
 /// |-------|---------|-------------|

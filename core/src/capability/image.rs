@@ -114,7 +114,9 @@ pub struct ImageRequest {
     /// ([`Self::source_image`]) has no latent of its own to upscale, and a
     /// reference-anchored render ([`Self::reference_image`]) deliberately
     /// skips it: Story Studio trades resolution for character consistency
-    /// (spec §3).
+    /// (spec §3). Both cases are forced to `None` in
+    /// [`Self::from_params`], so this field is never `Some` for a request the
+    /// renderer would ignore it on.
     pub hires: Option<HiresFix>,
 }
 
@@ -172,6 +174,17 @@ impl ImageRequest {
                 v.clamp(MIN_REFERENCE_WEIGHT, MAX_REFERENCE_WEIGHT)
             });
 
+        // Only the four text-to-image recipes honour Hi-Res-Fix: an edit has
+        // no canvas of its own and a reference render trades resolution for
+        // consistency. Dropping it here — at the parse boundary, not at
+        // render time — keeps `final_size`, `apply_to` and the VRAM plan
+        // honest about what the render will actually produce.
+        let hires = if source_image.is_some() || reference_image.is_some() {
+            None
+        } else {
+            parse_hires(params, steps)
+        };
+
         Ok(Self {
             prompt,
             negative,
@@ -186,12 +199,16 @@ impl ImageRequest {
             source_image,
             reference_image,
             reference_weight,
-            hires: parse_hires(params, steps),
+            hires,
         })
     }
 
     /// The pixel size the finished image actually has: `width`×`height` for a
     /// single-pass render, the second pass's size when Hi-Res-Fix is on.
+    ///
+    /// True for *every* request, not just the four text-to-image recipes,
+    /// because [`Self::from_params`] already dropped `hires` for the edit and
+    /// reference paths that would ignore it.
     ///
     /// The second pass's size is decided by `LatentUpscaleBy`, so the formula
     /// belongs to the layer that builds the graph: this is
@@ -720,6 +737,10 @@ async fn run_reference(
         // Studio's consistency path, where a second pass at a low denoise
         // would pull the subject away from the reference for the sake of
         // resolution (spec §3). The Image tab's toggle is the place for it.
+        //
+        // Doubly guaranteed since `ImageRequest::from_params` drops `hires`
+        // for any request carrying a `reference_image`, so `req.hires` is
+        // already `None` here — and the story recipes `debug_assert!` it.
         hires: None,
     };
     let workflow = match recipe {
@@ -1480,6 +1501,51 @@ mod tests {
         let malformed =
             ImageRequest::from_params(&serde_json::json!({ "prompt": "x", "hires": 1.5 })).unwrap();
         assert_eq!(malformed.hires, None);
+    }
+
+    /// An *edit* has no canvas of its own to upscale — `run_edit` builds its
+    /// `EditInputs` without a `hires` field at all — so carrying a parsed
+    /// `HiresFix` past the parse boundary would only make `final_size` and the
+    /// VRAM plan lie about a second pass that never runs.
+    #[test]
+    fn from_params_drops_hires_for_an_edit_request() {
+        let r = ImageRequest::from_params(&serde_json::json!({
+            "prompt": "make it snow",
+            "width": 1024,
+            "height": 1024,
+            "source_image": "job-abc",
+            "hires": { "scale_by": 1.5, "denoise": 0.45 }
+        }))
+        .unwrap();
+        assert_eq!(r.hires, None);
+        assert_eq!(r.final_size(), (1024, 1024));
+
+        // And the drop is visible to callers: `apply_to` writes it back.
+        let mut params = serde_json::json!({
+            "prompt": "make it snow",
+            "source_image": "job-abc",
+            "hires": { "scale_by": 1.5 }
+        });
+        r.apply_to(&mut params);
+        assert_eq!(params["hires"], Value::Null);
+        assert!(params.get("output_width").is_none());
+    }
+
+    /// A reference-anchored render deliberately trades resolution for
+    /// character consistency (`run_reference` pins `hires: None`), so the
+    /// request must not advertise a second pass either.
+    #[test]
+    fn from_params_drops_hires_for_a_reference_request() {
+        let r = ImageRequest::from_params(&serde_json::json!({
+            "prompt": "the same fox, on a boat",
+            "width": 1024,
+            "height": 1024,
+            "reference_image": "job-abc",
+            "hires": { "scale_by": 2.0, "denoise": 0.45 }
+        }))
+        .unwrap();
+        assert_eq!(r.hires, None);
+        assert_eq!(r.final_size(), (1024, 1024));
     }
 
     #[test]

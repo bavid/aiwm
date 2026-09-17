@@ -30,6 +30,11 @@ pub(crate) const MAX_LORAS: usize = 5;
 /// consumer of the same model link (see [`super::hires`]); most recipes name
 /// exactly one.
 ///
+/// At most [`MAX_LORAS`] entries are spliced — anything past that is dropped
+/// rather than written to a node id outside the reserved window. The request
+/// parser ([`crate::capability::media::parse_loras`]) already caps the list,
+/// so in practice this only holds the line for other callers.
+///
 /// Errs only if one of `model_consumers` or `clip_consumers` names a node the
 /// graph does not have — a recipe bug, never a user input.
 pub fn apply(
@@ -46,7 +51,7 @@ pub fn apply(
     let mut ids = NextId::new(LORA_ID_BASE);
     let mut model_link = model_source.clone();
     let mut clip_link = clip_source.clone();
-    for lora in loras {
+    for lora in loras.iter().take(MAX_LORAS) {
         let id = ids.take();
         g.node(
             &id,
@@ -93,6 +98,56 @@ mod tests {
         );
         g.node("3", "KSampler", json!({ "model": ["4", 0] }));
         g
+    }
+
+    /// The doc on [`LORA_ID_BASE`] promises the chain never leaves the
+    /// 90–94 window. The request parser caps a job at [`MAX_LORAS`], but this
+    /// fragment is also reachable from any other caller, so the cap is
+    /// enforced here too rather than trusted: a sixth entry would otherwise
+    /// write node "95", straight into no-man's-land.
+    #[test]
+    fn a_chain_longer_than_max_loras_is_truncated_to_the_reserved_window() {
+        let files = [
+            "a.safetensors",
+            "b.safetensors",
+            "c.safetensors",
+            "d.safetensors",
+            "e.safetensors",
+            "f.safetensors",
+        ];
+        assert_eq!(files.len(), MAX_LORAS + 1);
+        let specs: Vec<LoraSpec> = files
+            .iter()
+            .map(|file| LoraSpec {
+                file,
+                strength: 1.0,
+            })
+            .collect();
+
+        let mut g = graph_with_consumers();
+        apply(
+            &mut g,
+            &specs,
+            &OwnedLink::new("4", 0),
+            &OwnedLink::new("4", 1),
+            &["3"],
+            &["6", "7"],
+        )
+        .unwrap();
+
+        let v = g.into_value();
+        assert!(
+            v.get("95").is_none(),
+            "the sixth LoRA must not write outside the reserved 90-94 window"
+        );
+        assert!(v.get("94").is_some(), "the fifth still writes the last id");
+        // The consumers read the END of the truncated chain, not a dangling
+        // node id that was never built.
+        assert_eq!(v["3"]["inputs"]["model"], json!(["94", 0]));
+        assert_eq!(v["6"]["inputs"]["clip"], json!(["94", 1]));
+        assert_eq!(v["7"]["inputs"]["clip"], json!(["94", 1]));
+        // The dropped entry is the last one, not one from the middle.
+        assert_eq!(v["94"]["inputs"]["lora_name"], "e.safetensors");
     }
 
     #[test]

@@ -686,6 +686,27 @@ fn loras_apply_to_both_passes() {
         "the second pass reads the end of the LoRA chain, not the raw loader"
     );
 
+    // FLUX.1 GGUF: same KSampler family, different loader -- the chain starts
+    // at the UnetLoaderGGUF/CLIPLoader pair rather than a checkpoint.
+    let g = flux_txt2img(&hires_inputs(), &flux_models(), &loras);
+    assert_eq!(g["90"]["inputs"]["model"], json!(["12", 0]));
+    assert_eq!(g["3"]["inputs"]["model"], json!(["91", 0]));
+    assert_eq!(
+        g["41"]["inputs"]["model"],
+        json!(["91", 0]),
+        "the second pass reads the end of the LoRA chain, not the raw loader"
+    );
+
+    // FLUX.2 [klein] .safetensors: the UNETLoader variant, also KSampler.
+    let g = flux2_klein_txt2img_safetensors(&hires_inputs(), &klein_models(), &loras);
+    assert_eq!(g["90"]["inputs"]["model"], json!(["12", 0]));
+    assert_eq!(g["3"]["inputs"]["model"], json!(["91", 0]));
+    assert_eq!(
+        g["41"]["inputs"]["model"],
+        json!(["91", 0]),
+        "the second pass reads the end of the LoRA chain, not the raw loader"
+    );
+
     // klein GGUF: the second pass reuses the first chain's CFGGuider, which is
     // itself repointed at the LoRA chain -- so the LoRAs reach it for free.
     let g = flux2_klein_txt2img(&hires_inputs(), &klein_models(), &loras);

@@ -22,8 +22,12 @@
 //! stays out of the MVP.
 
 // The graph builder, the fragment layer and the recipe bodies are
-// implementation detail: nothing outside `pipeline` touches them, callers go
-// through the re-exported recipe functions below.
+// implementation detail: callers go through the re-exported recipe functions
+// below. One deliberate exception: `capability::media` imports
+// `fragments::loras::MAX_LORAS`, because the request parser's cap on how many
+// LoRAs a job may carry is exactly what makes that fragment's reserved node-id
+// window finite — the two have to move together, so the cap lives with the
+// window rather than being restated at the boundary.
 pub(crate) mod fragments;
 pub(crate) mod graph;
 pub(crate) mod recipes;

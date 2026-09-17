@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::db::Database;
+use crate::pipeline::fragments::loras::MAX_LORAS;
 use crate::{CoreError, Result};
 
 /// A LoRA a job asked for, as submitted — a library reference, not yet a file
@@ -27,10 +28,10 @@ pub struct LoraRef {
 const MAX_LORA_STRENGTH: f64 = 5.0;
 const MIN_LORA_STRENGTH: f64 = -5.0;
 const DEFAULT_LORA_STRENGTH: f64 = 1.0;
-/// The cap on how many LoRAs a request may carry. Defined next to the node-id
-/// window it bounds (see [`MAX_LORAS`]'s own doc comment) so the cap and the
-/// reserved ids can never drift apart.
-use crate::pipeline::fragments::loras::MAX_LORAS;
+// The cap on how many LoRAs a request may carry is `MAX_LORAS`, imported at
+// the top of this file. It is defined next to the node-id window it bounds
+// rather than here, so the cap and the reserved ids can never drift apart —
+// see its own doc comment.
 
 /// Read `params["loras"]` — an array of `{ model_id, strength }` — dropping
 /// any entry with a blank/missing id and clamping strength. Absent or

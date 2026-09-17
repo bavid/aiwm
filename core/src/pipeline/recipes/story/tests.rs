@@ -6,7 +6,7 @@
 use serde_json::json;
 
 use super::*;
-use crate::pipeline::{Flux2KleinModels, IpAdapterSpec, LoraSpec, Txt2ImgInputs};
+use crate::pipeline::{Flux2KleinModels, HiresFix, IpAdapterSpec, LoraSpec, Txt2ImgInputs};
 
 fn inputs() -> Txt2ImgInputs<'static> {
     Txt2ImgInputs {
@@ -216,4 +216,74 @@ fn flux2_klein_reference_safetensors_graph_splices_a_lora_before_the_sampler_and
     assert_eq!(g["90"]["inputs"]["clip"], json!(["11", 0]));
     assert_eq!(g["3"]["inputs"]["model"], json!(["90", 0]));
     assert_eq!(g["6"]["inputs"]["clip"], json!(["90", 1]));
+}
+
+/// Every Story Studio recipe takes the same [`Txt2ImgInputs`] the text-to-image
+/// recipes do, `hires` field and all — but none of them honours it, and ids
+/// 40–43 (which the Hi-Res-Fix fragment would want) are already the IP-Adapter
+/// chain here. Silently ignoring a `Some` would render a graph that disagrees
+/// with what `ImageRequest::final_size` advertised, so the recipes carry a
+/// `debug_assert!` and these tests pin it.
+///
+/// Debug-only on purpose: `debug_assert!` compiles out of a release build, so
+/// there is nothing to assert about there. The production-side guarantee is
+/// `capability::image::run_reference`, which hard-codes `hires: None`, and
+/// `ImageRequest::from_params`, which already dropped it for any request
+/// carrying a `reference_image`.
+#[cfg(debug_assertions)]
+mod hires_is_rejected {
+    use super::*;
+
+    fn hires_inputs() -> Txt2ImgInputs<'static> {
+        Txt2ImgInputs {
+            hires: Some(HiresFix {
+                scale_by: 1.5,
+                denoise: 0.45,
+                steps: 12,
+                upscale_method: HiresFix::DEFAULT_METHOD,
+            }),
+            ..inputs()
+        }
+    }
+
+    fn klein_models() -> Flux2KleinModels<'static> {
+        Flux2KleinModels {
+            unet: "flux-2-klein-9b-fp8mixed.safetensors",
+            clip: "qwen_3_8b_fp8mixed.safetensors",
+            vae: "flux2-vae.safetensors",
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "story recipes have no Hi-Res-Fix pass")]
+    fn checkpoint_ipadapter_txt2img_rejects_a_hires_input() {
+        let _ = checkpoint_ipadapter_txt2img(
+            &hires_inputs(),
+            "sd_xl_base_1.0.safetensors",
+            &ipadapter_spec(),
+            &[],
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "story recipes have no Hi-Res-Fix pass")]
+    fn flux2_klein_reference_txt2img_rejects_a_hires_input() {
+        let _ = flux2_klein_reference_txt2img(
+            &hires_inputs(),
+            &klein_models(),
+            "job-portrait.png",
+            &[],
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "story recipes have no Hi-Res-Fix pass")]
+    fn flux2_klein_reference_txt2img_safetensors_rejects_a_hires_input() {
+        let _ = flux2_klein_reference_txt2img_safetensors(
+            &hires_inputs(),
+            &klein_models(),
+            "job-portrait.png",
+            &[],
+        );
+    }
 }

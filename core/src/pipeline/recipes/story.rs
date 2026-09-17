@@ -8,6 +8,14 @@
 //! original name and signature, and produces exactly the graph its inline
 //! `json!` predecessor did — the golden fixtures in
 //! `core/tests/pipeline_goldens.rs` pin that byte-for-byte.
+//!
+//! All three take the same [`Txt2ImgInputs`] the text-to-image recipes do, so
+//! they carry a `hires` field — and none of them honours it: there is no
+//! second pass here, and ids 40–43 are already this file's IP-Adapter chain.
+//! Each recipe therefore opens with a `debug_assert!` rather than ignoring a
+//! `Some` silently; the production guarantee is
+//! `capability::image::run_reference`, which hard-codes `hires: None`, and
+//! `ImageRequest::from_params`, which drops it for any reference request.
 
 use serde_json::Value;
 
@@ -68,6 +76,10 @@ pub fn checkpoint_ipadapter_txt2img(
     ip: &IpAdapterSpec,
     loras: &[LoraSpec],
 ) -> Value {
+    debug_assert!(
+        i.hires.is_none(),
+        "story recipes have no Hi-Res-Fix pass and ids 40-43 are the IP-Adapter chain"
+    );
     let mut g = Graph::default();
     let loaded = loaders::checkpoint(&mut g, "4", checkpoint);
     let canvas = latent::empty(&mut g, "5", i.width, i.height);
@@ -141,6 +153,10 @@ pub fn flux2_klein_reference_txt2img(
     reference_image: &str,
     loras: &[LoraSpec],
 ) -> Value {
+    debug_assert!(
+        i.hires.is_none(),
+        "story recipes have no Hi-Res-Fix pass and ids 40-43 are the IP-Adapter chain"
+    );
     let mut g = Graph::default();
     let loaded = loaders::flux2_klein_gguf(&mut g, &KLEIN_LOADER_IDS, m.unet, m.clip, m.vae);
     let guiding = reference::guiding_latent(
@@ -173,7 +189,6 @@ pub fn flux2_klein_reference_txt2img(
             height: i.height.into(),
             sampler: i.sampler,
             cfg: i.cfg,
-            sigmas_override: None,
         },
     );
     // Story Studio takes no Hi-Res-Fix: a reference render is about keeping a
@@ -210,6 +225,10 @@ pub fn flux2_klein_reference_txt2img_safetensors(
     loras: &[LoraSpec],
 ) -> Value {
     let guidance = i.cfg.clamp(FLUX_GUIDANCE_RANGE.0, FLUX_GUIDANCE_RANGE.1);
+    debug_assert!(
+        i.hires.is_none(),
+        "story recipes have no Hi-Res-Fix pass and ids 40-43 are the IP-Adapter chain"
+    );
     let mut g = Graph::default();
     let loaded = loaders::flux2_klein_safetensors(&mut g, &KLEIN_LOADER_IDS, m.unet, m.clip, m.vae);
     let guiding = reference::guiding_latent(
