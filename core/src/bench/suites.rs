@@ -10,9 +10,12 @@
 //! `coding-v1` measures **throughput on coding-shaped output** (denser tokens,
 //! more punctuation and identifiers than prose), **not** correctness: nothing
 //! here runs or checks the generated code (ADR-024 — there is no local quality
-//! benchmark). The prompts are written for this project; none are taken from
-//! HumanEval, MBPP, Exercism or any other benchmark suite, to avoid both
-//! licence questions and training-set contamination.
+//! benchmark). The prompts were written for this project — no text is copied
+//! from HumanEval, MBPP, Exercism or any other benchmark, which keeps the
+//! licence question simple. The task *shapes* are deliberately ordinary ones
+//! (explain, summarise, rewrite, implement, debug); since only speed is
+//! measured, a model having seen something similar in training does not change
+//! what the numbers mean.
 
 use serde::Serialize;
 

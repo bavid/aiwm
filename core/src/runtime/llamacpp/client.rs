@@ -24,9 +24,68 @@ pub enum GenerationEvent {
         tokens: u32,
         /// Generation (decode) rate the server reported.
         tokens_per_second: f64,
-        /// Prompt (prefill) rate the server reported; `0.0` when absent.
-        prompt_tokens_per_second: f64,
+        /// Prompt (prefill) rate the server reported, or `None` when it did not
+        /// report one. Deliberately not `0.0`: a missing rate must not be
+        /// averaged in as if the prefill really ran at zero tokens/sec.
+        prompt_tokens_per_second: Option<f64>,
     },
+}
+
+/// Sampling and cache knobs for one generation.
+///
+/// [`Default`] is "whatever the server does by default" and serialises to
+/// exactly the request body the chat path has always sent — the extra keys only
+/// appear when a caller asks for them. [`fixed_length`](Self::fixed_length) is
+/// the benchmark setting: every pass generates the same number of tokens, from
+/// the same prompt, without reusing a cached prefill.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct GenerationOptions {
+    /// Keep generating until `max_tokens` instead of stopping at the model's
+    /// end-of-turn token (llama-server: `ignore_eos`).
+    pub ignore_eos: bool,
+    /// Fixed sampling temperature; `None` leaves the server's default.
+    pub temperature: Option<f64>,
+    /// Fixed RNG seed; `None` leaves the server's default.
+    pub seed: Option<i64>,
+    /// `Some(false)` turns off the server's prompt-cache reuse, so the prefill
+    /// is really measured; `None` leaves the server's default.
+    pub cache_prompt: Option<bool>,
+}
+
+impl GenerationOptions {
+    /// Deterministic, always-exactly-`max_tokens` generation — what a benchmark
+    /// suite needs so two runs measure the same work.
+    pub fn fixed_length() -> Self {
+        Self {
+            ignore_eos: true,
+            temperature: Some(0.0),
+            seed: Some(0),
+            cache_prompt: Some(false),
+        }
+    }
+}
+
+/// The `/v1/chat/completions` request body. Kept in one place so the default
+/// shape can be pinned by a test.
+fn chat_body(prompt: &str, max_tokens: i32, opts: &GenerationOptions, stream: bool) -> Value {
+    let mut body = serde_json::json!({
+        "messages": [{ "role": "user", "content": prompt }],
+        "max_tokens": max_tokens,
+        "stream": stream,
+    });
+    if opts.ignore_eos {
+        body["ignore_eos"] = Value::Bool(true);
+    }
+    if let Some(temperature) = opts.temperature {
+        body["temperature"] = serde_json::json!(temperature);
+    }
+    if let Some(seed) = opts.seed {
+        body["seed"] = serde_json::json!(seed);
+    }
+    if let Some(cache_prompt) = opts.cache_prompt {
+        body["cache_prompt"] = Value::Bool(cache_prompt);
+    }
+    body
 }
 
 /// A `/health` (or `/props`) probe must return within this or the server counts
@@ -141,16 +200,13 @@ impl LlamaClient {
         port: u16,
         prompt: &str,
         max_tokens: i32,
+        opts: &GenerationOptions,
         tx: mpsc::Sender<GenerationEvent>,
     ) -> Result<()> {
         let mut resp = self
             .http
             .post(format!("{}/v1/chat/completions", self.base(port)))
-            .json(&serde_json::json!({
-                "messages": [{ "role": "user", "content": prompt }],
-                "max_tokens": max_tokens,
-                "stream": true,
-            }))
+            .json(&chat_body(prompt, max_tokens, opts, true))
             .send()
             .await
             .map_err(|e| llama_err(format!("chat request failed: {e}")))?
@@ -253,7 +309,7 @@ fn parse_sse_event(line: &[u8]) -> Option<GenerationEvent> {
             prompt_tokens_per_second: v
                 .pointer("/timings/prompt_per_second")
                 .and_then(Value::as_f64)
-                .unwrap_or(0.0),
+                .filter(|rate| *rate > 0.0),
         });
     }
     None
@@ -347,6 +403,34 @@ mod tests {
         );
     }
 
+    #[test]
+    fn default_options_keep_the_body_byte_identical() {
+        // Pinned on purpose: every existing caller (chat, agent sessions) must
+        // keep sending exactly this request.
+        let body =
+            serde_json::to_string(&chat_body("hi", 128, &GenerationOptions::default(), true))
+                .unwrap();
+        assert_eq!(
+            body,
+            r#"{"max_tokens":128,"messages":[{"content":"hi","role":"user"}],"stream":true}"#
+        );
+    }
+
+    #[test]
+    fn fixed_length_options_add_the_four_determinism_fields() {
+        let body = serde_json::to_string(&chat_body(
+            "hi",
+            256,
+            &GenerationOptions::fixed_length(),
+            true,
+        ))
+        .unwrap();
+        assert_eq!(
+            body,
+            r#"{"cache_prompt":false,"ignore_eos":true,"max_tokens":256,"messages":[{"content":"hi","role":"user"}],"seed":0,"stream":true,"temperature":0.0}"#
+        );
+    }
+
     /// One SSE line (`data: {…}`) for a content chunk.
     fn delta_line(c: &str) -> String {
         format!(
@@ -380,10 +464,12 @@ mod tests {
             Some(GenerationEvent::Done {
                 tokens: 2,
                 tokens_per_second: 50.0,
-                prompt_tokens_per_second: 300.0
+                prompt_tokens_per_second: Some(300.0)
             })
         );
-        // `usage.completion_tokens` is the fallback when `timings.predicted_n` is absent.
+        // `usage.completion_tokens` is the fallback when `timings.predicted_n` is
+        // absent; a missing prompt rate stays `None` so it is never averaged in
+        // as a real 0.0 tok/s sample.
         assert_eq!(
             parse_sse_event(
                 b"data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"completion_tokens\":9}}"
@@ -391,7 +477,7 @@ mod tests {
             Some(GenerationEvent::Done {
                 tokens: 9,
                 tokens_per_second: 0.0,
-                prompt_tokens_per_second: 0.0
+                prompt_tokens_per_second: None
             })
         );
         assert_eq!(parse_sse_event(b"\n"), None);
@@ -422,7 +508,7 @@ mod tests {
 
         let (tx, mut rx) = mpsc::channel(16);
         LlamaClient::new()
-            .complete_stream(port, "hi", 8, tx)
+            .complete_stream(port, "hi", 8, &GenerationOptions::default(), tx)
             .await
             .unwrap();
 
@@ -438,7 +524,7 @@ mod tests {
                 GenerationEvent::Done {
                     tokens: 2,
                     tokens_per_second: 50.0,
-                    prompt_tokens_per_second: 300.0
+                    prompt_tokens_per_second: Some(300.0)
                 },
             ]
         );
@@ -461,7 +547,7 @@ mod tests {
         let (tx, rx) = mpsc::channel(1);
         drop(rx); // no consumer
         LlamaClient::new()
-            .complete_stream(port, "hi", 8, tx)
+            .complete_stream(port, "hi", 8, &GenerationOptions::default(), tx)
             .await
             .unwrap();
     }

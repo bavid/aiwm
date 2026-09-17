@@ -23,7 +23,7 @@ use async_trait::async_trait;
 use serde::Serialize;
 use tokio::sync::Mutex as AsyncMutex;
 
-pub use self::client::GenerationEvent;
+pub use self::client::{GenerationEvent, GenerationOptions};
 
 use self::client::LlamaClient;
 use self::install::InstallPhase;
@@ -341,11 +341,26 @@ impl LlamaCppAdapter {
         max_tokens: i32,
         tx: tokio::sync::mpsc::Sender<GenerationEvent>,
     ) -> Result<()> {
+        self.stream_completion_with(prompt, max_tokens, &GenerationOptions::default(), tx)
+            .await
+    }
+
+    /// Like [`stream_completion`](Self::stream_completion), but with explicit
+    /// sampling / cache options — the benchmark suites use
+    /// [`GenerationOptions::fixed_length`] so every pass generates the same
+    /// number of tokens from an uncached prefill.
+    pub async fn stream_completion_with(
+        &self,
+        prompt: &str,
+        max_tokens: i32,
+        opts: &GenerationOptions,
+        tx: tokio::sync::mpsc::Sender<GenerationEvent>,
+    ) -> Result<()> {
         let port = self
             .loaded_port()
             .ok_or_else(|| llama_err("no model is loaded"))?;
         self.client
-            .complete_stream(port, prompt, max_tokens, tx)
+            .complete_stream(port, prompt, max_tokens, opts, tx)
             .await
     }
 

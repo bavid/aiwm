@@ -668,6 +668,13 @@ impl JobEngine {
         mut job: Job,
         mut cancel: watch::Receiver<bool>,
     ) -> Result<JobOutcome> {
+        // Params that cannot possibly work are rejected here, before the VRAM
+        // plan and a cold model load: a `bench` job naming a suite that does not
+        // exist should cost nothing (Task-1 review I-5).
+        if job.job_type == "bench" {
+            bench::validate_params(&job.params)?;
+        }
+
         let Target {
             runtime_id,
             model_id,

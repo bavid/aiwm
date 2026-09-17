@@ -23,7 +23,7 @@ use tokio::sync::{mpsc, watch};
 
 use crate::compat::{self, FitVerdict};
 use crate::db::{Database, EventLevel, Model, NewBenchmark};
-use crate::runtime::{GenerationEvent, LlamaCppAdapter};
+use crate::runtime::{GenerationEvent, GenerationOptions, LlamaCppAdapter};
 use crate::telemetry::{GpuStatus, SystemTelemetry};
 use crate::{CoreError, Result};
 
@@ -128,7 +128,11 @@ pub struct PromptResult {
     pub prompt_id: String,
     /// Mean generated tokens per pass, rounded.
     pub tokens: u64,
+    /// The token cap the passes ran at. `tokens` well below it means the model
+    /// stopped early despite `ignore_eos`, and the rate is over a shorter run.
+    pub max_tokens: i32,
     pub gen_tps: Option<f64>,
+    /// Mean prefill rate over the passes that reported one; `None` if none did.
     pub prompt_tps: Option<f64>,
 }
 
@@ -142,6 +146,10 @@ pub struct BenchReport {
     pub load_ms: Option<u64>,
     pub vram_peak_mb: Option<u64>,
     pub ram_peak_mb: Option<u64>,
+    /// `0..1`. For a suite this is the **mean of the per-prompt stabilities**:
+    /// each prompt is only compared with itself, because a coding prompt being
+    /// slower than a chat prompt is a property of the prompts, not jitter on
+    /// this machine. Without a suite it is the spread over all passes.
     pub stability_score: f64,
     pub overall_score: u8,
     pub notes: String,
@@ -201,7 +209,9 @@ pub fn overall_score(gen_tps: f64, stability: f64, fit: &FitVerdict) -> u8 {
 struct Pass {
     prompt_id: Option<&'static str>,
     tokens: u64,
-    prompt_tps: f64,
+    max_tokens: i32,
+    /// `None` when the server reported no prefill rate for this pass.
+    prompt_tps: Option<f64>,
     gen_tps: f64,
 }
 
@@ -214,6 +224,9 @@ struct Step {
     label: Option<String>,
     text: String,
     max_tokens: i32,
+    /// Suite steps run [`GenerationOptions::fixed_length`]; the legacy quick
+    /// test keeps the default request the chat path sends.
+    opts: GenerationOptions,
 }
 
 /// The prompts this request wants, in order. Errors on an unknown suite id —
@@ -226,10 +239,10 @@ fn plan(req: &BenchRequest) -> Result<Vec<Step>> {
             label: None,
             text: req.prompt.clone(),
             max_tokens: req.max_tokens,
+            opts: GenerationOptions::default(),
         }]);
     };
-    let suite = suites::find(id)
-        .ok_or_else(|| bench_err(format!("unknown benchmark suite \u{201c}{id}\u{201d}")))?;
+    let suite = find_suite(id)?;
     Ok(suite
         .prompts
         .iter()
@@ -238,13 +251,36 @@ fn plan(req: &BenchRequest) -> Result<Vec<Step>> {
             label: Some(format!("{} \u{b7} {}", suite.id, p.title)),
             text: p.text.to_string(),
             max_tokens: suite.max_tokens,
+            opts: GenerationOptions::fixed_length(),
         })
         .collect())
+}
+
+/// Look a suite up by id, with the error message the job reports.
+fn find_suite(id: &str) -> Result<&'static suites::Suite> {
+    suites::find(id)
+        .ok_or_else(|| bench_err(format!("unknown benchmark suite \u{201c}{id}\u{201d}")))
+}
+
+/// Reject an unknown suite id *before* anything expensive happens. The engine
+/// calls this as soon as it sees a `bench` job, so a typo fails the job instead
+/// of paying for a VRAM plan and a cold model load first.
+pub fn validate_params(params: &serde_json::Value) -> Result<()> {
+    match BenchRequest::from_params(params).suite.as_deref() {
+        Some(id) => find_suite(id).map(|_| ()),
+        None => Ok(()),
+    }
 }
 
 /// Run the benchmark against the resident model. `load` is the time the engine
 /// spent loading it (`None` when it was already resident). Samples the telemetry
 /// peak while it works; writes one [`crate::db::Benchmark`] row on success.
+///
+/// **A cancelled run records nothing.** The cancel is honoured before each pass
+/// *and* mid-generation, so a half-finished suite would only have numbers for
+/// some of its prompts — storing that would put a row in the history that is not
+/// comparable with the others. The job's event trail still shows what was
+/// measured before the stop.
 #[allow(clippy::too_many_arguments)]
 pub async fn run(
     db: &Database,
@@ -358,13 +394,15 @@ impl Runner<'_> {
     }
 
     /// Run one step `runs` times, one event per pass. `Ok(false)` means a cancel
-    /// was seen before a pass started.
+    /// was seen — either before a pass started or while one was generating.
     async fn run_passes(&mut self, step: &Step, runs: u32) -> Result<bool> {
         for i in 1..=runs {
             if *self.cancel.borrow_and_update() {
                 return Ok(false);
             }
-            let pass = one_pass(self.llama, step).await?;
+            let Some(pass) = one_pass(self.llama, step, &mut self.cancel).await? else {
+                return Ok(false);
+            };
             self.sample_peak();
             self.db
                 .jobs()
@@ -383,44 +421,78 @@ impl Runner<'_> {
 fn pass_line(step: &Step, i: u32, runs: u32, pass: &Pass) -> String {
     match &step.label {
         Some(label) => format!("{label} — pass {i}/{runs}: {:.1} tok/s", pass.gen_tps),
-        None => format!(
-            "run {i}/{runs}: {:.1} tok/s generation, {:.0} tok/s prompt",
-            pass.gen_tps, pass.prompt_tps
-        ),
+        None => {
+            let prompt = match pass.prompt_tps {
+                Some(rate) => format!(", {rate:.0} tok/s prompt"),
+                None => String::new(),
+            };
+            format!(
+                "run {i}/{runs}: {:.1} tok/s generation{prompt}",
+                pass.gen_tps
+            )
+        }
     }
 }
 
-/// One `stream_completion` pass; returns its prompt + generation rates.
-async fn one_pass(llama: &Arc<LlamaCppAdapter>, step: &Step) -> Result<Pass> {
+/// One `stream_completion` pass; returns its prompt + generation rates, or
+/// `None` when `cancel` flipped while the model was still generating (the
+/// receiver is dropped, which unwinds the stream on the client side).
+async fn one_pass(
+    llama: &Arc<LlamaCppAdapter>,
+    step: &Step,
+    cancel: &mut watch::Receiver<bool>,
+) -> Result<Option<Pass>> {
     let (tx, mut rx) = mpsc::channel::<GenerationEvent>(64);
     let stream = tokio::spawn({
         let llama = Arc::clone(llama);
         let prompt = step.text.clone();
         let max_tokens = step.max_tokens;
-        async move { llama.stream_completion(&prompt, max_tokens, tx).await }
+        let opts = step.opts.clone();
+        async move {
+            llama
+                .stream_completion_with(&prompt, max_tokens, &opts, tx)
+                .await
+        }
     });
 
     let mut done: Option<Pass> = None;
-    while let Some(ev) = rx.recv().await {
-        if let GenerationEvent::Done {
-            tokens,
-            tokens_per_second,
-            prompt_tokens_per_second,
-        } = ev
-        {
-            done = Some(Pass {
-                prompt_id: step.prompt_id,
-                tokens: u64::from(tokens),
-                prompt_tps: prompt_tokens_per_second,
-                gen_tps: tokens_per_second,
-            });
+    // Goes false once the cancel sender is gone — there is nothing left to wait
+    // for then, and `changed()` would otherwise return `Err` in a hot loop.
+    let mut watching = true;
+    let cancelled = loop {
+        tokio::select! {
+            event = rx.recv() => match event {
+                Some(GenerationEvent::Done { tokens, tokens_per_second, prompt_tokens_per_second }) => {
+                    done = Some(Pass {
+                        prompt_id: step.prompt_id,
+                        tokens: u64::from(tokens),
+                        max_tokens: step.max_tokens,
+                        prompt_tps: prompt_tokens_per_second,
+                        gen_tps: tokens_per_second,
+                    });
+                }
+                Some(GenerationEvent::Token(_)) => {}
+                None => break false,
+            },
+            changed = cancel.changed(), if watching => match changed {
+                Ok(()) if *cancel.borrow() => break true,
+                Ok(()) => {}
+                Err(_) => watching = false,
+            },
         }
+    };
+
+    if cancelled {
+        drop(rx); // the client sees the closed channel and stops streaming
+        let _ = stream.await;
+        return Ok(None);
     }
     stream
         .await
         .map_err(|e| bench_err(format!("benchmark stream task panicked: {e}")))??;
 
-    done.ok_or_else(|| bench_err("the model produced no timing data — is it really loaded?"))
+    done.map(Some)
+        .ok_or_else(|| bench_err("the model produced no timing data — is it really loaded?"))
 }
 
 fn mean(vals: impl Iterator<Item = f64>) -> Option<f64> {
@@ -430,6 +502,15 @@ fn mean(vals: impl Iterator<Item = f64>) -> Option<f64> {
 
 /// Overall and per-prompt means over the passes of one benchmark. Pure, so the
 /// arithmetic is testable without a model.
+///
+/// Two rules worth knowing:
+/// * **Prefill rates are only averaged when the server reported one.** A pass
+///   without a `prompt_per_second` contributes nothing instead of a fake `0.0`.
+/// * **Stability of a suite run is the mean of the per-prompt stabilities.**
+///   Prompts of a suite legitimately generate at different speeds (code is not
+///   prose), and pooling them would read that difference as instability. Within
+///   one prompt the passes *are* comparable, so that is where the spread is
+///   measured. A run without prompt ids keeps the old pooled behaviour.
 #[derive(Debug)]
 struct Aggregate {
     /// Passes actually executed.
@@ -444,33 +525,50 @@ struct Aggregate {
 fn aggregate(passes: &[Pass]) -> Aggregate {
     let gen_samples: Vec<f64> = passes.iter().map(|p| p.gen_tps).collect();
     let mut detail: Vec<PromptResult> = Vec::new();
+    let mut per_prompt_stability: Vec<f64> = Vec::new();
     for id in passes.iter().filter_map(|p| p.prompt_id) {
         if detail.iter().any(|d| d.prompt_id == id) {
             continue;
         }
         let mine = || passes.iter().filter(move |p| p.prompt_id == Some(id));
+        let samples: Vec<f64> = mine().map(|p| p.gen_tps).collect();
+        per_prompt_stability.push(stability_score(&samples));
         detail.push(PromptResult {
             prompt_id: id.to_string(),
             tokens: mean(mine().map(|p| p.tokens as f64)).map_or(0, |t| t.round() as u64),
-            gen_tps: mean(mine().map(|p| p.gen_tps)),
-            prompt_tps: mean(mine().map(|p| p.prompt_tps)),
+            max_tokens: mine().map(|p| p.max_tokens).max().unwrap_or(0),
+            gen_tps: mean(samples.iter().copied()),
+            prompt_tps: mean(mine().filter_map(|p| p.prompt_tps)),
         });
     }
+
+    let stability = if per_prompt_stability.is_empty() {
+        stability_score(&gen_samples)
+    } else {
+        mean(per_prompt_stability.iter().copied()).unwrap_or(1.0)
+    };
 
     Aggregate {
         runs: u32::try_from(passes.len()).unwrap_or(u32::MAX),
         gen_tps: mean(gen_samples.iter().copied()),
-        prompt_tps: mean(passes.iter().map(|p| p.prompt_tps)),
-        stability: stability_score(&gen_samples),
+        prompt_tps: mean(passes.iter().filter_map(|p| p.prompt_tps)),
+        stability,
         detail,
     }
 }
 
 /// The per-prompt breakdown as stored JSON; `None` for a legacy run.
 fn detail_json(detail: &[PromptResult]) -> Option<String> {
-    (!detail.is_empty())
-        .then(|| serde_json::to_string(detail).ok())
-        .flatten()
+    if detail.is_empty() {
+        return None;
+    }
+    match serde_json::to_string(detail) {
+        Ok(json) => Some(json),
+        Err(err) => {
+            tracing::warn!(%err, "could not serialise the benchmark's per-prompt detail");
+            None
+        }
+    }
 }
 
 fn summarise(
@@ -499,21 +597,44 @@ fn summarise(
         ram_peak_mb: (vram_peak.ram_used_mb > 0).then_some(vram_peak.ram_used_mb),
         stability_score: agg.stability,
         overall_score: overall,
-        notes: notes(req, agg.runs, load),
+        notes: notes(req, agg.runs, load, &agg.detail),
         suite: req.suite.clone(),
         detail: agg.detail,
     }
 }
 
-fn notes(req: &BenchRequest, runs: u32, load: Option<std::time::Duration>) -> String {
-    let load_note = match load {
-        Some(_) => "cold load",
-        None => "model already resident (load time not measured)",
+/// A prompt whose mean output is below this share of its token cap stopped
+/// early: the rate was measured over a shorter run than the others.
+const CAP_HIT_RATIO: f64 = 0.9;
+
+fn notes(
+    req: &BenchRequest,
+    runs: u32,
+    load: Option<std::time::Duration>,
+    detail: &[PromptResult],
+) -> String {
+    let base = match (&req.suite, load) {
+        (Some(suite), Some(_)) => format!("cold load; suite {suite}, {runs} pass(es) averaged"),
+        (Some(suite), None) => format!(
+            "model already resident (load time not measured); suite {suite}, \
+             {runs} pass(es) averaged"
+        ),
+        (None, Some(_)) => format!("cold load; {runs} run(s) averaged"),
+        (None, None) => format!("model already resident (load time not measured); {runs} run(s)"),
     };
-    match &req.suite {
-        Some(suite) => format!("{load_note}; suite {suite}, {runs} pass(es) averaged"),
-        None => format!("{load_note}; {runs} run(s) averaged"),
+
+    let short: Vec<&str> = detail
+        .iter()
+        .filter(|d| d.max_tokens > 0 && (d.tokens as f64) < CAP_HIT_RATIO * f64::from(d.max_tokens))
+        .map(|d| d.prompt_id.as_str())
+        .collect();
+    if short.is_empty() {
+        return base;
     }
+    format!(
+        "{base}; stopped early on {}; tok/s not comparable",
+        short.join(", ")
+    )
 }
 
 /// Running maxima pulled from the telemetry stream during a run. The sampler

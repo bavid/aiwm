@@ -1488,6 +1488,9 @@ export interface BenchPromptResult {
   prompt_id: string;
   /** Mean generated tokens per pass, rounded. */
   tokens: number;
+  /** The token cap those passes ran at. `tokens` well below it means the model
+   *  stopped early, so its tok/s covers a shorter run than the other prompts. */
+  max_tokens: number;
   gen_tps: number | null;
   prompt_tps: number | null;
 }

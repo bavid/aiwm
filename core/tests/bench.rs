@@ -27,6 +27,7 @@ fn fake_llama_bin() -> PathBuf {
 struct Harness {
     db: Database,
     engine: Arc<JobEngine>,
+    llama: Arc<LlamaCppAdapter>,
     model_id: String,
     _tel_tx: watch::Sender<SystemTelemetry>,
     _tmp: tempfile::TempDir,
@@ -69,6 +70,7 @@ async fn harness() -> Harness {
         ),
     );
     registry.register(llama.clone());
+    let probe = llama.clone();
     let comfyui = Arc::new(ComfyUiAdapter::with_launch(
         db.clone(),
         None,
@@ -115,6 +117,7 @@ async fn harness() -> Harness {
     Harness {
         db,
         engine,
+        llama: probe,
         model_id,
         _tel_tx: tel_tx,
         _tmp: tmp,
@@ -132,6 +135,18 @@ fn suite_job(model_id: &str, suite: &str) -> NewJob {
     let mut job = NewJob::new("bench").on("llamacpp", model_id, 6_000);
     job.params["suite"] = suite.into();
     job
+}
+
+/// The body of the last `/v1/chat/completions` the fixture served — fake-llama's
+/// test-only `GET /__test/last_request`.
+async fn last_request(h: &Harness) -> serde_json::Value {
+    let base = h.llama.base_url().expect("a loaded fake server");
+    reqwest::get(format!("{base}/__test/last_request"))
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap()
 }
 
 #[tokio::test]
@@ -187,6 +202,14 @@ async fn a_bench_job_measures_the_model_and_records_a_row() {
         events.iter().any(|m| m.contains("benchmark done")),
         "{events:?}"
     );
+
+    // The quick test keeps sending exactly the request it always sent.
+    let body = last_request(&h).await;
+    assert_eq!(body["max_tokens"], 32);
+    assert_eq!(body["stream"], true);
+    for field in ["ignore_eos", "temperature", "seed", "cache_prompt"] {
+        assert!(body.get(field).is_none(), "{field} leaked into {body}");
+    }
 }
 
 #[tokio::test]
@@ -217,6 +240,27 @@ async fn a_suite_job_runs_every_prompt_and_stores_the_detail() {
     let detail = bench.detail.expect("per-prompt detail");
     let entries = detail.as_array().expect("a JSON array");
     let suite = suites::find("chat-v1").expect("the shipped suite");
+
+    // Every suite pass is fixed-length, deterministic and uncached — otherwise
+    // the tok/s of two runs would not be measuring the same work.
+    let body = last_request(&h).await;
+    assert_eq!(body["max_tokens"], suite.max_tokens);
+    assert_eq!(body["ignore_eos"], true);
+    assert_eq!(body["temperature"], 0.0);
+    assert_eq!(body["seed"], 0);
+    assert_eq!(body["cache_prompt"], false);
+    assert_eq!(body["messages"][0]["content"], suite.prompts[2].text);
+
+    // …and each prompt really generated its full cap, so no honesty note.
+    assert!(entries
+        .iter()
+        .all(|e| e["tokens"] == i64::from(suite.max_tokens)));
+    assert!(entries
+        .iter()
+        .all(|e| e["max_tokens"] == i64::from(suite.max_tokens)));
+    let notes = bench.notes.clone().unwrap_or_default();
+    assert!(notes.contains("suite chat-v1"), "{notes}");
+    assert!(!notes.contains("stopped early"), "{notes}");
     let ids: Vec<&str> = entries
         .iter()
         .map(|e| e["prompt_id"].as_str().unwrap())
@@ -272,8 +316,8 @@ async fn an_unknown_suite_fails_the_job_with_a_clear_message() {
     assert_eq!(stored.state, JobState::Failed);
     assert!(stored
         .error_text
-        .unwrap()
-        .contains("unknown benchmark suite"));
+        .as_deref()
+        .is_some_and(|e| e.contains("unknown benchmark suite")));
     assert!(
         h.db.benchmarks()
             .latest_for(&h.model_id)
@@ -281,6 +325,23 @@ async fn an_unknown_suite_fails_the_job_with_a_clear_message() {
             .unwrap()
             .is_none(),
         "nothing is recorded for a suite that does not exist"
+    );
+
+    // The typo is caught before anything expensive: no model was loaded, and the
+    // job never even started running.
+    assert!(
+        h.llama.base_url().is_none(),
+        "a typo must not cost a cold model load"
+    );
+    assert!(stored.started_at.is_none(), "{stored:?}");
+    assert_eq!(
+        h.db.models()
+            .get(&h.model_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .use_count,
+        0
     );
 }
 

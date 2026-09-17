@@ -113,6 +113,11 @@ fn without_a_suite_the_plan_is_the_single_request_prompt() {
     assert_eq!(steps[0].label, None);
     assert_eq!(steps[0].text, "hello");
     assert_eq!(steps[0].max_tokens, 64);
+    assert_eq!(
+        steps[0].opts,
+        GenerationOptions::default(),
+        "the quick test keeps sending exactly what it always sent"
+    );
 }
 
 #[test]
@@ -133,6 +138,9 @@ fn a_suite_expands_into_its_prompts_at_the_suite_length() {
             step.label.as_deref(),
             Some(format!("{} · {}", suite.id, prompt.title).as_str())
         );
+        // Fixed length + fixed sampling + no prompt cache: two runs of the same
+        // suite measure the same work (review I-1/I-2).
+        assert_eq!(step.opts, GenerationOptions::fixed_length());
     }
 }
 
@@ -149,10 +157,16 @@ fn an_unknown_suite_is_a_clear_error() {
     );
 }
 
-fn pass(prompt_id: Option<&'static str>, tokens: u64, gen_tps: f64, prompt_tps: f64) -> Pass {
+fn pass(
+    prompt_id: Option<&'static str>,
+    tokens: u64,
+    gen_tps: f64,
+    prompt_tps: Option<f64>,
+) -> Pass {
     Pass {
         prompt_id,
         tokens,
+        max_tokens: 128,
         gen_tps,
         prompt_tps,
     }
@@ -161,9 +175,9 @@ fn pass(prompt_id: Option<&'static str>, tokens: u64, gen_tps: f64, prompt_tps: 
 #[test]
 fn aggregating_a_legacy_run_gives_means_and_no_detail() {
     let agg = aggregate(&[
-        pass(None, 40, 50.0, 400.0),
-        pass(None, 40, 60.0, 500.0),
-        pass(None, 40, 70.0, 600.0),
+        pass(None, 40, 50.0, Some(400.0)),
+        pass(None, 40, 60.0, Some(500.0)),
+        pass(None, 40, 70.0, Some(600.0)),
     ]);
     assert_eq!(agg.runs, 3);
     assert!((agg.gen_tps.unwrap() - 60.0).abs() < 1e-9);
@@ -175,10 +189,10 @@ fn aggregating_a_legacy_run_gives_means_and_no_detail() {
 #[test]
 fn aggregating_a_suite_run_means_per_prompt_and_overall() {
     let agg = aggregate(&[
-        pass(Some("a"), 100, 40.0, 400.0),
-        pass(Some("a"), 110, 60.0, 500.0),
-        pass(Some("b"), 41, 80.0, 600.0),
-        pass(Some("b"), 40, 100.0, 700.0),
+        pass(Some("a"), 100, 40.0, Some(400.0)),
+        pass(Some("a"), 110, 60.0, Some(500.0)),
+        pass(Some("b"), 41, 80.0, Some(600.0)),
+        pass(Some("b"), 40, 100.0, Some(700.0)),
     ]);
     assert_eq!(agg.runs, 4);
     assert!((agg.gen_tps.unwrap() - 70.0).abs() < 1e-9, "{agg:?}");
@@ -188,10 +202,64 @@ fn aggregating_a_suite_run_means_per_prompt_and_overall() {
     let ids: Vec<&str> = agg.detail.iter().map(|d| d.prompt_id.as_str()).collect();
     assert_eq!(ids, vec!["a", "b"]);
     assert_eq!(agg.detail[0].tokens, 105);
+    assert_eq!(agg.detail[0].max_tokens, 128);
     assert!((agg.detail[0].gen_tps.unwrap() - 50.0).abs() < 1e-9);
     assert!((agg.detail[0].prompt_tps.unwrap() - 450.0).abs() < 1e-9);
     assert_eq!(agg.detail[1].tokens, 41, "40.5 rounds up");
     assert!((agg.detail[1].gen_tps.unwrap() - 90.0).abs() < 1e-9);
+}
+
+#[test]
+fn a_missing_prompt_rate_is_skipped_rather_than_averaged_in_as_zero() {
+    let agg = aggregate(&[
+        pass(Some("a"), 40, 50.0, Some(400.0)),
+        pass(Some("a"), 40, 50.0, None), // server reported no prefill rate
+        pass(Some("b"), 40, 50.0, None),
+    ]);
+    assert!(
+        (agg.prompt_tps.unwrap() - 400.0).abs() < 1e-9,
+        "one usable sample, not 400/3: {agg:?}"
+    );
+    assert!((agg.detail[0].prompt_tps.unwrap() - 400.0).abs() < 1e-9);
+    assert!(
+        agg.detail[1].prompt_tps.is_none(),
+        "no usable sample at all stays None"
+    );
+}
+
+#[test]
+fn suite_stability_is_the_mean_of_the_per_prompt_stabilities() {
+    // Two prompts at very different speeds, each perfectly consistent with
+    // itself: that is a stable machine, not an unstable one (review I-3).
+    let agg = aggregate(&[
+        pass(Some("fast"), 40, 100.0, Some(400.0)),
+        pass(Some("fast"), 40, 100.0, Some(400.0)),
+        pass(Some("slow"), 40, 20.0, Some(400.0)),
+        pass(Some("slow"), 40, 20.0, Some(400.0)),
+    ]);
+    assert!((agg.stability - 1.0).abs() < 1e-9, "{agg:?}");
+    // Pooling all four samples instead would have punished it badly.
+    assert!(stability_score(&[100.0, 100.0, 20.0, 20.0]) < 0.5);
+
+    // A prompt that really is erratic still drags the mean down.
+    let jittery = aggregate(&[
+        pass(Some("fast"), 40, 100.0, Some(400.0)),
+        pass(Some("fast"), 40, 100.0, Some(400.0)),
+        pass(Some("slow"), 40, 10.0, Some(400.0)),
+        pass(Some("slow"), 40, 30.0, Some(400.0)),
+    ]);
+    assert!(jittery.stability < 0.8, "{jittery:?}");
+}
+
+#[test]
+fn aggregating_a_single_pass_is_that_pass() {
+    let agg = aggregate(&[pass(Some("only"), 77, 55.0, Some(410.0))]);
+    assert_eq!(agg.runs, 1);
+    assert!((agg.gen_tps.unwrap() - 55.0).abs() < 1e-9);
+    assert!((agg.prompt_tps.unwrap() - 410.0).abs() < 1e-9);
+    assert_eq!(agg.stability, 1.0, "one sample cannot disagree with itself");
+    assert_eq!(agg.detail.len(), 1);
+    assert_eq!(agg.detail[0].tokens, 77);
 }
 
 #[test]
@@ -202,6 +270,75 @@ fn aggregating_nothing_is_empty_rather_than_a_division_by_zero() {
     assert!(agg.prompt_tps.is_none());
     assert!(agg.detail.is_empty());
     assert_eq!(agg.stability, 1.0);
+}
+
+#[test]
+fn an_empty_detail_is_stored_as_null_not_as_an_empty_array() {
+    assert_eq!(detail_json(&[]), None);
+    let one = detail_json(&[PromptResult {
+        prompt_id: "a".into(),
+        tokens: 40,
+        max_tokens: 128,
+        gen_tps: Some(50.0),
+        prompt_tps: None,
+    }])
+    .unwrap();
+    assert!(one.starts_with("[{"), "{one}");
+    assert!(one.contains("\"max_tokens\":128"), "{one}");
+}
+
+// --- notes ---------------------------------------------------------------
+
+#[test]
+fn legacy_notes_keep_their_exact_wording() {
+    let req = BenchRequest::default();
+    assert_eq!(
+        notes(&req, 3, Some(std::time::Duration::from_secs(1)), &[]),
+        "cold load; 3 run(s) averaged"
+    );
+    assert_eq!(
+        notes(&req, 3, None, &[]),
+        "model already resident (load time not measured); 3 run(s)"
+    );
+}
+
+#[test]
+fn suite_notes_name_the_suite_and_flag_an_early_stop() {
+    let req = BenchRequest {
+        suite: Some("chat-v1".into()),
+        ..BenchRequest::default()
+    };
+    let full = vec![PromptResult {
+        prompt_id: "chat-v1-explain".into(),
+        tokens: 256,
+        max_tokens: 256,
+        gen_tps: Some(50.0),
+        prompt_tps: Some(400.0),
+    }];
+    assert_eq!(
+        notes(&req, 6, None, &full),
+        "model already resident (load time not measured); suite chat-v1, 6 pass(es) averaged"
+    );
+
+    let short = vec![
+        full[0].clone(),
+        PromptResult {
+            prompt_id: "chat-v1-rewrite".into(),
+            tokens: 90, // well under 0.9 × 256
+            max_tokens: 256,
+            gen_tps: Some(50.0),
+            prompt_tps: Some(400.0),
+        },
+    ];
+    let note = notes(&req, 6, None, &short);
+    assert!(
+        note.contains("stopped early on chat-v1-rewrite; tok/s not comparable"),
+        "{note}"
+    );
+    assert!(
+        !note.contains("chat-v1-explain;"),
+        "only the short prompt is named: {note}"
+    );
 }
 
 // --- `run` against a stand-in llama-server -------------------------------
@@ -237,6 +374,67 @@ async fn mock_llama() -> u16 {
         .route(
             "/v1/chat/completions",
             post(|| async {
+                (
+                    [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
+                    sse_completion(),
+                )
+            }),
+        );
+    let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+        .await
+        .unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        axum::serve(listener, router).await.unwrap();
+    });
+    port
+}
+
+/// A stand-in that streams one token every `token_ms` and never finishes within
+/// a test's patience — used to cancel a pass *while it generates*.
+async fn paced_llama(token_ms: u64) -> u16 {
+    use axum::response::sse::{Event, Sse};
+    use futures_util::stream::{self, StreamExt};
+
+    let router = Router::new()
+        .route("/health", get(|| async { axum::http::StatusCode::OK }))
+        .route(
+            "/v1/chat/completions",
+            post(move || async move {
+                let tokens = stream::iter(0..10_000).then(move |i| async move {
+                    tokio::time::sleep(std::time::Duration::from_millis(token_ms)).await;
+                    Ok::<_, std::convert::Infallible>(
+                        Event::default().data(
+                            serde_json::json!({
+                                "choices": [{ "delta": { "content": format!("w{i} ") },
+                                              "finish_reason": null }]
+                            })
+                            .to_string(),
+                        ),
+                    )
+                });
+                Sse::new(tokens)
+            }),
+        );
+    let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+        .await
+        .unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        axum::serve(listener, router).await.unwrap();
+    });
+    port
+}
+
+/// Like [`mock_llama`], but each pass takes `delay_ms` — long enough for a test
+/// to flip a cancel between two prompts of a suite.
+async fn delayed_llama(delay_ms: u64) -> u16 {
+    let router = Router::new()
+        .route("/health", get(|| async { axum::http::StatusCode::OK }))
+        .route(
+            "/v1/chat/completions",
+            post(move || async move {
+                tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
                 (
                     [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
                     sse_completion(),
@@ -335,6 +533,9 @@ async fn run_measures_records_and_reports() {
         "identical runs"
     );
     assert!(report.overall_score > 0);
+    assert!(report.suite.is_none(), "the quick test has no suite");
+    assert!(report.detail.is_empty(), "and no per-prompt breakdown");
+    assert_eq!(report.notes, "cold load; 3 run(s) averaged");
 
     // Persisted, and it is the latest for the model.
     let stored = db
@@ -344,6 +545,8 @@ async fn run_measures_records_and_reports() {
         .unwrap()
         .unwrap();
     assert_eq!(stored.job_id.as_deref(), Some(job.id.as_str()));
+    assert!(stored.suite.is_none());
+    assert!(stored.detail.is_none());
     assert_eq!(stored.runs, 3);
     assert_eq!(stored.gen_tps, report.gen_tps);
     assert_eq!(stored.overall_score, i64::from(report.overall_score));
@@ -476,4 +679,120 @@ async fn run_stops_when_cancelled_before_the_first_pass() {
         .await
         .unwrap()
         .is_none());
+}
+
+/// A tiny model + an attached stand-in on `port`, for the cancel tests.
+async fn cancellable_fixture(db: &Database, port: u16) -> (Model, String, Arc<LlamaCppAdapter>) {
+    let model = db
+        .models()
+        .insert(NewModel {
+            name: "M".into(),
+            format: "gguf".into(),
+            file_path: "E:\\AI\\models\\llm\\m\\m.gguf".into(),
+            size_bytes: 1_000 * 1024 * 1024,
+            source: "manual".into(),
+            ..NewModel::default()
+        })
+        .await
+        .unwrap();
+    let job = db.jobs().insert(NewJob::new("bench")).await.unwrap();
+    let llama = Arc::new(LlamaCppAdapter::with_binary(db.clone(), None));
+    llama.attach(port, &model.id, 1_000).await.unwrap();
+    (model, job.id, llama)
+}
+
+#[tokio::test]
+async fn a_cancel_mid_generation_does_not_wait_for_the_pass_to_finish() {
+    let db = Database::connect_in_memory().await.unwrap();
+    let port = paced_llama(20).await; // never reaches `finish_reason`
+    let (model, job_id, llama) = cancellable_fixture(&db, port).await;
+
+    let (_tel_tx, tel_rx) = watch::channel(telemetry(1_000, 10_000));
+    let (cancel_tx, cancel_rx) = watch::channel(false);
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(120)).await;
+        let _ = cancel_tx.send(true);
+    });
+
+    let outcome = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        run(
+            &db,
+            &llama,
+            tel_rx,
+            &job_id,
+            &model,
+            BenchRequest::default(),
+            None,
+            16_376,
+            cancel_rx,
+        ),
+    )
+    .await
+    .expect("a cancel must not wait for the generation to end")
+    .unwrap();
+
+    assert!(matches!(outcome, BenchOutcome::Cancelled), "{outcome:?}");
+    assert!(
+        db.benchmarks()
+            .latest_for(&model.id)
+            .await
+            .unwrap()
+            .is_none(),
+        "a cancelled benchmark records nothing"
+    );
+}
+
+#[tokio::test]
+async fn a_cancel_between_two_suite_prompts_stops_the_run() {
+    let db = Database::connect_in_memory().await.unwrap();
+    let port = delayed_llama(150).await;
+    let (model, job_id, llama) = cancellable_fixture(&db, port).await;
+
+    let (_tel_tx, tel_rx) = watch::channel(telemetry(1_000, 10_000));
+    let (cancel_tx, cancel_rx) = watch::channel(false);
+    // Flip the cancel as soon as the first prompt has reported a pass.
+    let watcher = {
+        let db = db.clone();
+        let job_id = job_id.clone();
+        tokio::spawn(async move {
+            loop {
+                let events = db.jobs().events(&job_id).await.unwrap();
+                if events.iter().any(|e| e.message.contains("pass 1/1")) {
+                    let _ = cancel_tx.send(true);
+                    return;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+            }
+        })
+    };
+
+    let outcome = run(
+        &db,
+        &llama,
+        tel_rx,
+        &job_id,
+        &model,
+        BenchRequest {
+            runs: 1,
+            suite: Some("chat-v1".into()),
+            ..BenchRequest::default()
+        },
+        None,
+        16_376,
+        cancel_rx,
+    )
+    .await
+    .unwrap();
+    watcher.abort();
+
+    assert!(matches!(outcome, BenchOutcome::Cancelled), "{outcome:?}");
+    assert!(
+        db.benchmarks()
+            .latest_for(&model.id)
+            .await
+            .unwrap()
+            .is_none(),
+        "a half-finished suite records nothing"
+    );
 }

@@ -90,10 +90,17 @@ struct Row {
 
 impl From<Row> for Benchmark {
     fn from(r: Row) -> Self {
-        let detail = r
-            .detail_json
-            .as_deref()
-            .and_then(|raw| serde_json::from_str(raw).ok());
+        let detail = r.detail_json.as_deref().and_then(|raw| {
+            serde_json::from_str(raw)
+                .inspect_err(|err| {
+                    tracing::warn!(
+                        benchmark = %r.id,
+                        %err,
+                        "stored benchmark detail is not valid JSON — dropping it"
+                    );
+                })
+                .ok()
+        });
         Self {
             id: r.id,
             model_id: r.model_id,
@@ -175,6 +182,13 @@ impl<'a> BenchRepo<'a> {
     }
 
     /// Every benchmark for one model, newest first.
+    ///
+    /// Deliberately **not** filtered by suite: a suite run is a perfectly good
+    /// "latest result" for a model. Its `gen_tps` is measured at a fixed token
+    /// length like the quick test's, and its `stability_score` is averaged
+    /// within each prompt, so a suite row is not penalised for mixing prose and
+    /// code prompts. Callers that need one suite's numbers use
+    /// [`list_all`](Self::list_all) with a filter.
     pub async fn list_for(&self, model_id: &str) -> Result<Vec<Benchmark>> {
         let rows: Vec<Row> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
             "SELECT {COLS} FROM benchmarks WHERE model_id = $1 ORDER BY created_at DESC, id DESC"
@@ -205,14 +219,15 @@ impl<'a> BenchRepo<'a> {
         )))
         .bind(limit);
         if let Some(suite) = suite {
-            query = query.bind(suite.to_string());
+            query = query.bind(suite);
         }
         let rows: Vec<Row> = query.fetch_all(self.pool).await?;
         Ok(rows.into_iter().map(Benchmark::from).collect())
     }
 
     /// The most recent benchmark for every model that has one — the Model Library
-    /// score column. Keyed by `model_id`.
+    /// score column. Keyed by `model_id`. Like [`latest_for`](Self::latest_for)
+    /// this mixes suite runs and quick tests on purpose; see that method's note.
     pub async fn latest_all(&self) -> Result<Vec<Benchmark>> {
         let rows: Vec<Row> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
             "SELECT {COLS} FROM benchmarks b

@@ -9,9 +9,18 @@
 //!
 //! `AIWM_FAKE_LLAMA_READY_MS=<n>` makes `/health` return `503` for the first `n`
 //! milliseconds, simulating a slow model load.
+//!
+//! Two test-only extras the real server does not have:
+//! * `GET /__test/last_request` returns the last `/v1/chat/completions` body, so
+//!   a test can assert *what* was asked for (sampling options, token cap).
+//! * With `"ignore_eos": true` the fixture reports `predicted_n = max_tokens`
+//!   and `finish_reason = "length"`, the way the real server behaves when it is
+//!   told to generate right up to the cap. It still streams only a handful of
+//!   chunks, so tests stay fast.
 
 use std::convert::Infallible;
 use std::net::Ipv4Addr;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use axum::extract::State;
@@ -30,6 +39,8 @@ struct Fixture {
     /// Chat stream shape — bumped in the cancel test so there is time to cancel.
     token_ms: u64,
     tokens: usize,
+    /// Last `/v1/chat/completions` body, for `GET /__test/last_request`.
+    last_request: Arc<Mutex<Option<Value>>>,
 }
 
 #[tokio::main]
@@ -67,6 +78,7 @@ async fn main() -> anyhow::Result<()> {
         ready_at: Instant::now() + ready_delay,
         token_ms,
         tokens,
+        last_request: Arc::new(Mutex::new(None)),
     };
 
     let app = Router::new()
@@ -74,6 +86,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/props", get(props))
         .route("/completion", post(completion))
         .route("/v1/chat/completions", post(chat_completions))
+        .route("/__test/last_request", get(last_request))
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, port)).await?;
@@ -114,6 +127,19 @@ async fn chat_completions(
     State(fx): State<Fixture>,
     body: Json<Value>,
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
+    if let Ok(mut slot) = fx.last_request.lock() {
+        *slot = Some(body.0.clone());
+    }
+    let ignore_eos = body
+        .0
+        .get("ignore_eos")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let max_tokens = body
+        .0
+        .get("max_tokens")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
     let prompt = body
         .0
         .pointer("/messages/0/content")
@@ -127,7 +153,14 @@ async fn chat_completions(
     while words.len() < fx.tokens {
         words.push(format!("word{} ", words.len()));
     }
-    let total = words.len() as u64;
+    // Told to ignore the end-of-turn token, the real server generates right up
+    // to the cap; report that instead of the handful of chunks we stream.
+    let streamed = words.len() as u64;
+    let (total, finish_reason) = if ignore_eos && max_tokens > 0 {
+        (max_tokens, "length")
+    } else {
+        (streamed, "stop")
+    };
     let token_ms = fx.token_ms;
 
     let tokens = stream::iter(words).then(move |w| async move {
@@ -140,7 +173,7 @@ async fn chat_completions(
     let finish = stream::once(async move {
         Ok(Event::default().data(
             json!({
-                "choices": [{ "index": 0, "delta": {}, "finish_reason": "stop" }],
+                "choices": [{ "index": 0, "delta": {}, "finish_reason": finish_reason }],
                 "usage": { "completion_tokens": total },
                 "timings": { "predicted_n": total, "predicted_per_second": 42.0, "prompt_per_second": 300.0 }
             })
@@ -150,4 +183,15 @@ async fn chat_completions(
     let done = stream::once(async { Ok(Event::default().data("[DONE]")) });
 
     Sse::new(tokens.chain(finish).chain(done))
+}
+
+/// Test-only: the body of the last chat completion this fixture served.
+async fn last_request(State(fx): State<Fixture>) -> Json<Value> {
+    let body = fx
+        .last_request
+        .lock()
+        .ok()
+        .and_then(|slot| slot.clone())
+        .unwrap_or(Value::Null);
+    Json(body)
 }

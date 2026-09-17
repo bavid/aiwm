@@ -33,7 +33,9 @@ pub use comfyui::{
 pub use external::{detect as detect_external_engines, DetectedEngine};
 pub use fake::{FakeConfig, FakeRuntimeAdapter};
 pub use job::JobObject;
-pub use llamacpp::{GenerationEvent, InstallState, LlamaCppAdapter, LlamaServerOptions};
+pub use llamacpp::{
+    GenerationEvent, GenerationOptions, InstallState, LlamaCppAdapter, LlamaServerOptions,
+};
 pub use registry::RuntimeRegistry;
 pub use supervisor::{RuntimeSupervisor, SupervisorState};
 pub use training::TrainingAdapter;

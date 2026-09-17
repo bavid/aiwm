@@ -731,7 +731,7 @@ function progressBenchJobs(): void {
       overall_score: Math.min(100, Math.round(gen * 1.15)),
       notes: "dev-mock",
       suite: suite ? String(suite.id) : null,
-      detail: suite ? benchDetail(labels, rates) : null,
+      detail: suite ? benchDetail(labels, rates, Number(suite.max_tokens ?? 256)) : null,
       created_at: now(),
     });
   }
@@ -742,6 +742,7 @@ function progressBenchJobs(): void {
 function benchDetail(
   labels: { promptId: string | null }[],
   rates: number[],
+  maxTokens: number,
 ): AnyRecord[] {
   const byPrompt = new Map<string, number[]>();
   labels.forEach((step, i) => {
@@ -750,7 +751,8 @@ function benchDetail(
   });
   return [...byPrompt].map(([prompt_id, tps]) => ({
     prompt_id,
-    tokens: 256,
+    tokens: maxTokens,
+    max_tokens: maxTokens,
     gen_tps: Math.round((tps.reduce((a, b) => a + b, 0) / tps.length) * 10) / 10,
     prompt_tps: 300 + Math.round(Math.random() * 180),
   }));
@@ -783,6 +785,7 @@ function mkBenchmark(
       ? prompts.map((p, i) => ({
           prompt_id: String(p.id),
           tokens: Number(suite?.max_tokens ?? 256),
+          max_tokens: Number(suite?.max_tokens ?? 256),
           gen_tps: Math.round((gen + (i - 1) * 2.4) * 10) / 10,
           prompt_tps: 360 + i * 25,
         }))
