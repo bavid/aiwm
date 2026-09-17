@@ -330,14 +330,14 @@ fn model_block(input: &RenderInput<'_>) -> ModelBlock {
     }
 }
 
-fn sample_block(input: &RenderInput<'_>, is_clips: bool) -> SampleBlock {
+fn sample_block(input: &RenderInput<'_>, is_clips: bool, prompts: Vec<String>) -> SampleBlock {
     SampleBlock {
         sampler: input.profile.noise_scheduler,
         sample_every: input.preset.sample_every,
         sample_start_step: SAMPLE_START_STEP,
         width: input.preset.resolution,
         height: input.preset.resolution,
-        prompts: input.prompts.to_vec(),
+        prompts,
         neg: "",
         seed: SAMPLE_SEED,
         walk_seed: true,
@@ -348,10 +348,30 @@ fn sample_block(input: &RenderInput<'_>, is_clips: bool) -> SampleBlock {
     }
 }
 
+/// Collapse a raw sample prompt into a single YAML-safe line: every run of
+/// whitespace (including `\n`/`\r`/`\t`) becomes one space, and leading/
+/// trailing whitespace is trimmed. Returns `None` if nothing survives.
+///
+/// This is what guarantees the invariant [`normalize_yaml_floats`] depends
+/// on — see that function's doc comment.
+fn clean_prompt(raw: &str) -> Option<String> {
+    let collapsed = raw.split_whitespace().collect::<Vec<_>>().join(" ");
+    (!collapsed.is_empty()).then_some(collapsed)
+}
+
 /// Render the ai-toolkit `config.yaml` document for one run.
 pub fn render_yaml(input: &RenderInput<'_>) -> Result<String> {
     if let Some(overrides) = &input.overrides {
         overrides.validate()?;
+    }
+
+    let prompts: Vec<String> = input
+        .prompts
+        .iter()
+        .filter_map(|p| clean_prompt(p))
+        .collect();
+    if prompts.is_empty() {
+        return Err(training_err("at least one sample prompt is required"));
     }
 
     let is_clips = input.data_kind == DatasetMode::Clips;
@@ -373,7 +393,7 @@ pub fn render_yaml(input: &RenderInput<'_>) -> Result<String> {
                 datasets: vec![dataset_block(input, is_clips)],
                 train: train_block(input),
                 model: model_block(input),
-                sample: sample_block(input, is_clips),
+                sample: sample_block(input, is_clips, prompts),
             }],
         },
         meta: MetaBlock {
@@ -419,6 +439,18 @@ const YAML_FLOAT_KEYS: [&str; 4] = ["lr", "caption_dropout_rate", "ema_decay", "
 /// form. It runs unconditionally (not only when `ryu` chose exponential
 /// notation) so every occurrence of these keys is guaranteed the same
 /// "always has a dot, never an exponent" shape.
+///
+/// **Invariant this relies on:** it matches lines by looking for one of
+/// [`YAML_FLOAT_KEYS`] immediately after the line's leading whitespace, up
+/// to the first `": "`. That is only safe because every other string field
+/// in the document is guaranteed single-line — in particular, sample
+/// prompts are flattened by [`clean_prompt`] before they ever reach the
+/// renderer. Without that guarantee, `serde_yaml_ng` would render a
+/// multi-line prompt as a `|-` block scalar whose body lines are emitted
+/// unquoted — the matching below strips leading whitespace before
+/// comparing, so an embedded line like `lr: 5` inside such a prompt would
+/// be indistinguishable from an actual `lr:` key and get corrupted into
+/// `lr: 5.0`.
 fn normalize_yaml_floats(yaml: &str) -> String {
     let mut out = yaml
         .lines()
@@ -837,5 +869,69 @@ meta:
 
         let err = render_yaml(&input).expect_err("out-of-range lr must be rejected");
         assert!(err.to_string().contains("lr"));
+    }
+
+    #[test]
+    fn multi_line_prompts_are_flattened_and_never_touched_by_the_float_normaliser() {
+        let base_dir = Path::new(r"E:\Models\training\flux2-klein-4b");
+        let dataset_dir = Path::new(r"E:\Data\training\anime\export");
+        let work_dir = Path::new(r"E:\Data\training\runs\anime_style_v1");
+        let prompts = vec!["portrait\nlr: 5\nmore".to_string()];
+        let input = flux2_4b_input(
+            find_for_family("flux2-klein-4b").unwrap().fast,
+            base_dir,
+            dataset_dir,
+            work_dir,
+            "ghibli_xy",
+            &prompts,
+        );
+
+        let yaml = render_yaml(&input).expect("render yaml");
+
+        // Flattened onto one quoted line — never a `|-` block scalar whose
+        // body could be mistaken for a real `lr:` key.
+        assert!(
+            yaml.contains("- 'portrait lr: 5 more'\n"),
+            "expected a single quoted, flattened prompt line, got:\n{yaml}"
+        );
+        assert!(!yaml.contains("|-"));
+
+        let value: serde_yaml_ng::Value = serde_yaml_ng::from_str(&yaml).expect("parse yaml");
+        let prompt = &value["config"]["process"][0]["sample"]["prompts"][0];
+        assert_eq!(prompt.as_str(), Some("portrait lr: 5 more"));
+
+        // The float normaliser must not have touched the real `lr:` key.
+        let lr = &value["config"]["process"][0]["train"]["lr"];
+        assert_eq!(lr.as_f64(), Some(1e-4));
+    }
+
+    #[test]
+    fn render_yaml_requires_at_least_one_non_empty_prompt() {
+        let base_dir = Path::new(r"E:\Models\training\flux2-klein-4b");
+        let dataset_dir = Path::new(r"E:\Data\training\anime\export");
+        let work_dir = Path::new(r"E:\Data\training\runs\anime_style_v1");
+        let prompts = vec!["   \n\t  ".to_string()];
+        let input = flux2_4b_input(
+            find_for_family("flux2-klein-4b").unwrap().fast,
+            base_dir,
+            dataset_dir,
+            work_dir,
+            "ghibli_xy",
+            &prompts,
+        );
+
+        let err = render_yaml(&input).expect_err("an all-whitespace prompt must be rejected");
+        assert!(err.to_string().contains("sample prompt"));
+
+        let empty: Vec<String> = vec![];
+        let input = flux2_4b_input(
+            find_for_family("flux2-klein-4b").unwrap().fast,
+            base_dir,
+            dataset_dir,
+            work_dir,
+            "ghibli_xy",
+            &empty,
+        );
+        assert!(render_yaml(&input).is_err());
     }
 }
