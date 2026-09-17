@@ -337,24 +337,45 @@ impl<'a> TrainingRunRepo<'a> {
             .await?
             .ok_or_else(|| CoreError::Db(format!("no training run {id}")))?;
         current.state.ensure_transition(next)?;
+        self.set_state_from(id, current.state, next).await
+    }
 
+    /// The compare-and-swap underlying [`Self::set_state`]: the `UPDATE`
+    /// only applies if the row is still in `expected` state, so a writer
+    /// that read a stale state (e.g. the poller observing a process death
+    /// concurrently with a user's Cancel) can never clobber a state change
+    /// that landed in between the read and the write.
+    pub(crate) async fn set_state_from(
+        &self,
+        id: &str,
+        expected: RunState,
+        next: RunState,
+    ) -> Result<()> {
         let now = now_rfc3339();
         let started = (next == RunState::Running).then(|| now.clone());
         let finished = next.is_terminal().then_some(now);
 
-        sqlx::query(
+        let result = sqlx::query(
             "UPDATE training_runs SET
                  state = $1,
                  started_at = COALESCE(started_at, $2),
                  finished_at = COALESCE(finished_at, $3)
-             WHERE id = $4",
+             WHERE id = $4 AND state = $5",
         )
         .bind(next.as_str())
         .bind(&started)
         .bind(&finished)
         .bind(id)
+        .bind(expected.as_str())
         .execute(self.pool)
         .await?;
+
+        if result.rows_affected() == 0 {
+            return Err(CoreError::Config(format!(
+                "training run {id}: state changed concurrently (expected {})",
+                expected.as_str()
+            )));
+        }
         Ok(())
     }
 
@@ -683,5 +704,76 @@ mod tests {
         assert!(alive_ids.contains(&resuming.id.as_str()));
         assert!(!alive_ids.contains(&preparing.id.as_str()));
         assert!(!alive_ids.contains(&cancelled.id.as_str()));
+    }
+
+    #[tokio::test]
+    async fn set_state_refuses_a_concurrent_change() {
+        let db = Database::connect_in_memory().await.unwrap();
+        let run = db.training_runs().create(sample_run()).await.unwrap();
+        db.training_runs()
+            .set_state(&run.id, RunState::Running)
+            .await
+            .unwrap();
+
+        // Simulate another writer (e.g. the poller noticing the process died)
+        // moving the run to `cancelled` without going through this repo.
+        sqlx::query("UPDATE training_runs SET state = 'cancelled' WHERE id = $1")
+            .bind(&run.id)
+            .execute(&db.pool)
+            .await
+            .unwrap();
+
+        // A caller that read the run while it was still `running` (stale by
+        // now) tries to move it to `paused`. The compare-and-swap must catch
+        // that the row no longer matches the state it was validated against.
+        let err = db
+            .training_runs()
+            .set_state_from(&run.id, RunState::Running, RunState::Paused)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, CoreError::Config(_)));
+        assert!(err.to_string().contains("changed concurrently"));
+
+        let unchanged = db.training_runs().get(&run.id).await.unwrap().unwrap();
+        assert_eq!(unchanged.state, RunState::Cancelled);
+    }
+
+    #[tokio::test]
+    async fn deleting_the_result_model_nulls_result_model_id() {
+        let db = Database::connect_in_memory().await.unwrap();
+        let run = db.training_runs().create(sample_run()).await.unwrap();
+
+        let lora = db
+            .models()
+            .insert(NewModel {
+                name: "Anime style v1".into(),
+                format: "safetensors".into(),
+                file_path: "E:\\Models\\loras\\anime-style-v1.safetensors".into(),
+                size_bytes: 128,
+                source: "training:run".into(),
+                roles: vec![],
+                ..NewModel::default()
+            })
+            .await
+            .unwrap();
+        db.training_runs()
+            .set_result(&run.id, &lora.id)
+            .await
+            .unwrap();
+        assert_eq!(
+            db.training_runs()
+                .get(&run.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .result_model_id
+                .as_deref(),
+            Some(lora.id.as_str())
+        );
+
+        db.models().delete(&lora.id).await.unwrap();
+
+        let got = db.training_runs().get(&run.id).await.unwrap().unwrap();
+        assert_eq!(got.result_model_id, None);
     }
 }
