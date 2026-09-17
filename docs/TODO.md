@@ -1357,6 +1357,40 @@ Stärke (0.80 / 1.55) im Image-Tab, Entfernen einer LoRA per Checkbox
 bestätigt (Regler verschwindet, andere LoRA bleibt unverändert), gleiches
 Verhalten im Video-Tab mit der neuen Wan-LoRA bestätigt.
 
+## Benchmark-Tab für Chat-/Coding-Modelle (Backlog, User-Wunsch 2026-09-17)
+
+**Ziel (User):** „Wie viele Tokens/s produziere ich mit Modell X?" — Modell
+wählen, einen vordefinierten Test starten, Ausgabe messen. Erst einmal nur
+Chat/Coding, bewusst einfach.
+
+**Was schon da ist:** `job_type=bench` (`core/src/bench/mod.rs`) läuft heute
+schon als Job über die JobEngine gegen llama.cpp und liefert einen
+`BenchReport` mit `tokens_per_second` (Generierung), `prompt_tokens_per_second`
+(Prompt-Verarbeitung), Kaltstart-Ladezeit und einem Score; Ergebnisse landen
+auf der Modell-Zeile (`for_role_with_benchmark`) und die Jobs-Seite listet
+`bench`-Jobs. **Was fehlt:** ein eigener Benchmark-Tab (Modell-Dropdown,
+Test-Set wählen, Start, Verlauf/Vergleich mehrerer Modelle nebeneinander) und
+ein vordefiniertes, versioniertes Test-Set für Chat und Coding (feste Prompts
+mit fester Ausgabelänge, damit tok/s vergleichbar sind; Coding-Prompts mit
+einer kleinen automatischen Korrektheitsprüfung, z. B. „schreibe eine Funktion
+… — Tests laufen lassen").
+
+**Vorgesehene Inspiration (Ideen, kein Code kopieren; Lizenz je prüfen):**
+- `ggml-org/llama.cpp` → `llama-bench` (Rohdurchsatz pp/tg pro Batchgröße;
+  das ist die Referenzmetrik für tok/s).
+- `Aider-AI/aider` → „polyglot benchmark" (Coding-Aufgaben aus Exercism mit
+  automatischer Testauswertung; guter Zuschnitt für „kann das Modell coden").
+- `EleutherAI/lm-evaluation-harness` (Standard-Tasks, zu groß für die App,
+  aber die Task-Definition als Vorbild).
+- `bigcode-project/bigcode-evaluation-harness` / `openai/human-eval`
+  (HumanEval-Stil: Funktion generieren, Tests ausführen — als kleine,
+  lokale Teilmenge).
+- `princeton-nlp/SWE-bench` (Repo-Level-Aufgaben; nur als Vorbild für die
+  Aufgabenform, nicht als Laufzeitabhängigkeit).
+
+**Nicht enthalten (bewusst):** Qualitäts-Benchmarks mit Judge-Modell,
+Bild-/Video-Benchmarks, Netz-Leaderboards. Die App bleibt offline-first.
+
 ## Offen / später zu entscheiden
 - App-Selbst-Update offline (manueller Installer + Signaturprüfung angenommen)
 - Parallele Jobs: Policy verfeinern (klein-LLM + Upscale gleichzeitig)
