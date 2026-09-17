@@ -72,8 +72,8 @@ pub fn vae_encode(g: &mut Graph, id: &str, pixels: &OwnedLink, vae: &OwnedLink) 
     OwnedLink::new(id, 0)
 }
 
-/// `LatentUpscaleBy` — a Hi-Res-Fix second pass's upscale step.
-#[allow(dead_code)] // wired up by fragments::hires in the next commit (Plan 3 Task 5)
+/// `LatentUpscaleBy` — a Hi-Res-Fix second pass's upscale step (see
+/// [`super::hires`]).
 pub fn upscale_by(
     g: &mut Graph,
     id: &str,

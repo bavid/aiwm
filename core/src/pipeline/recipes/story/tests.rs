@@ -20,6 +20,7 @@ fn inputs() -> Txt2ImgInputs<'static> {
         scheduler: "normal",
         seed: 42,
         filename_prefix: "job-abc",
+        hires: None,
     }
 }
 

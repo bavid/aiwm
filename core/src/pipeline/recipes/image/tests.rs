@@ -6,7 +6,9 @@
 use serde_json::json;
 
 use super::*;
-use crate::pipeline::{EditInputs, Flux2KleinModels, FluxModels, LoraSpec, Txt2ImgInputs};
+use crate::pipeline::{
+    EditInputs, Flux2KleinModels, FluxModels, HiresFix, LoraSpec, Txt2ImgInputs,
+};
 
 fn inputs() -> Txt2ImgInputs<'static> {
     Txt2ImgInputs {
@@ -20,6 +22,7 @@ fn inputs() -> Txt2ImgInputs<'static> {
         scheduler: "normal",
         seed: 42,
         filename_prefix: "job-abc",
+        hires: None,
     }
 }
 
@@ -421,4 +424,247 @@ fn flux_graph_splices_a_lora_between_the_gguf_loaders_and_the_sampler() {
     assert_eq!(g["3"]["inputs"]["model"], json!(["90", 0]));
     assert_eq!(g["6"]["inputs"]["clip"], json!(["90", 1]));
     assert_eq!(g["7"]["inputs"]["clip"], json!(["90", 1]));
+}
+
+// --- Hi-Res-Fix ---------------------------------------------------------------
+
+/// The knobs every Hi-Res-Fix test below uses: 1.5x bigger, a low denoise so
+/// the first pass's composition survives, and about half the first pass's
+/// steps.
+fn hires() -> HiresFix {
+    HiresFix {
+        scale_by: 1.5,
+        denoise: 0.45,
+        steps: 12,
+        upscale_method: HiresFix::DEFAULT_METHOD,
+    }
+}
+
+fn hires_inputs() -> Txt2ImgInputs<'static> {
+    Txt2ImgInputs {
+        hires: Some(hires()),
+        ..inputs()
+    }
+}
+
+fn flux_models() -> FluxModels<'static> {
+    FluxModels {
+        unet: "u",
+        t5: "t",
+        clip_l: "c",
+        vae: "v",
+    }
+}
+
+fn klein_models() -> Flux2KleinModels<'static> {
+    Flux2KleinModels {
+        unet: "u",
+        clip: "c",
+        vae: "v",
+    }
+}
+
+#[test]
+fn checkpoint_hires_inserts_latent_upscale_and_a_second_pass_then_decodes_from_it() {
+    let g = checkpoint_txt2img(&hires_inputs(), "sd_xl_base_1.0.safetensors", &[]);
+    assert_eq!(
+        g["40"],
+        json!({
+            "class_type": "LatentUpscaleBy",
+            "inputs": {
+                "samples": ["3", 0],
+                "upscale_method": "nearest-exact",
+                "scale_by": 1.5
+            }
+        })
+    );
+    assert_eq!(
+        g["41"],
+        json!({
+            "class_type": "KSampler",
+            "inputs": {
+                // Same seed as the first pass: the second pass continues that
+                // image, it does not roll a new one.
+                "seed": 42,
+                "steps": 12,
+                "cfg": 7.0,
+                "sampler_name": "euler",
+                "scheduler": "normal",
+                "denoise": 0.45,
+                "model": ["4", 0],
+                "positive": ["6", 0],
+                "negative": ["7", 0],
+                "latent_image": ["40", 0]
+            }
+        })
+    );
+    assert_eq!(
+        g["8"]["inputs"]["samples"],
+        json!(["41", 0]),
+        "the decode hangs off the second pass, not the first"
+    );
+    assert_eq!(g["3"]["inputs"]["denoise"], 1.0, "first pass is untouched");
+}
+
+#[test]
+fn flux_hires_second_pass_keeps_cfg_one_and_guidance() {
+    let g = flux_txt2img(&hires_inputs(), &flux_models(), &[]);
+    assert_eq!(g["40"]["inputs"]["samples"], json!(["3", 0]));
+    assert_eq!(g["40"]["inputs"]["scale_by"], 1.5);
+    assert_eq!(g["41"]["class_type"], "KSampler");
+    assert_eq!(
+        g["41"]["inputs"]["cfg"], 1.0,
+        "FLUX stays guidance-distilled on the second pass too"
+    );
+    assert_eq!(
+        g["41"]["inputs"]["positive"],
+        json!(["26", 0]),
+        "the second pass reads the same FluxGuidance conditioning"
+    );
+    assert_eq!(g["41"]["inputs"]["negative"], json!(["7", 0]));
+    assert_eq!(g["41"]["inputs"]["model"], json!(["12", 0]));
+    assert_eq!(g["41"]["inputs"]["scheduler"], "simple");
+    assert_eq!(g["41"]["inputs"]["sampler_name"], "euler");
+    assert_eq!(g["41"]["inputs"]["denoise"], 0.45);
+    assert_eq!(g["41"]["inputs"]["steps"], 12);
+    assert_eq!(g["41"]["inputs"]["latent_image"], json!(["40", 0]));
+    assert_eq!(g["8"]["inputs"]["samples"], json!(["41", 0]));
+}
+
+#[test]
+fn flux2_klein_safetensors_hires() {
+    let g = flux2_klein_txt2img_safetensors(&hires_inputs(), &klein_models(), &[]);
+    assert_eq!(g["40"]["inputs"]["samples"], json!(["3", 0]));
+    assert_eq!(g["41"]["class_type"], "KSampler");
+    assert_eq!(g["41"]["inputs"]["cfg"], 1.0);
+    assert_eq!(g["41"]["inputs"]["positive"], json!(["26", 0]));
+    assert_eq!(
+        g["41"]["inputs"]["negative"],
+        json!(["27", 0]),
+        "still the zeroed-out conditioning, same as the first pass"
+    );
+    assert_eq!(g["41"]["inputs"]["model"], json!(["12", 0]));
+    assert_eq!(g["41"]["inputs"]["denoise"], 0.45);
+    assert_eq!(g["41"]["inputs"]["latent_image"], json!(["40", 0]));
+    assert_eq!(g["8"]["inputs"]["samples"], json!(["41", 0]));
+}
+
+#[test]
+fn flux2_klein_gguf_hires_uses_flux2_scheduler_at_the_upscaled_size_and_split_sigmas_denoise() {
+    let g = flux2_klein_txt2img(&hires_inputs(), &klein_models(), &[]);
+    assert_eq!(
+        g["40"],
+        json!({
+            "class_type": "LatentUpscaleBy",
+            "inputs": {
+                "samples": ["3", 0],
+                "upscale_method": "nearest-exact",
+                "scale_by": 1.5
+            }
+        })
+    );
+    // Flux2Scheduler has no `denoise` input (ComfyUI v0.34.0,
+    // comfy_extras/nodes_flux.py) -- the schedule is cut by
+    // SplitSigmasDenoise instead, whose slot 1 is the low-sigma tail.
+    assert_eq!(
+        g["42"],
+        json!({
+            "class_type": "Flux2Scheduler",
+            "inputs": { "steps": 12, "width": 1536, "height": 1536 }
+        })
+    );
+    assert_eq!(
+        g["43"],
+        json!({
+            "class_type": "SplitSigmasDenoise",
+            "inputs": { "sigmas": ["42", 0], "denoise": 0.45 }
+        })
+    );
+    assert_eq!(
+        g["44"],
+        json!({
+            "class_type": "SamplerCustomAdvanced",
+            "inputs": {
+                "noise": ["30", 0],
+                "guider": ["31", 0],
+                "sampler": ["28", 0],
+                "sigmas": ["43", 1],
+                "latent_image": ["40", 0]
+            }
+        })
+    );
+    assert_eq!(g["8"]["inputs"]["samples"], json!(["44", 0]));
+    assert_eq!(
+        g["29"]["inputs"]["width"], 1024,
+        "the first pass's scheduler still runs at the original size"
+    );
+}
+
+#[test]
+fn flux2_klein_gguf_hires_rounds_the_scheduler_size_up_to_a_multiple_of_sixteen() {
+    let mut i = hires_inputs();
+    i.width = 1000;
+    i.height = 1024;
+    i.hires = Some(HiresFix {
+        scale_by: 1.25,
+        ..hires()
+    });
+    let g = flux2_klein_txt2img(&i, &klein_models(), &[]);
+    // 1000 * 1.25 = 1250 -> 1264; 1024 * 1.25 = 1280, already a multiple.
+    assert_eq!(g["42"]["inputs"]["width"], 1264);
+    assert_eq!(g["42"]["inputs"]["height"], 1280);
+}
+
+#[test]
+fn hires_none_leaves_the_graph_byte_identical() {
+    // The byte-level proof is the golden fixtures, recorded before Hi-Res-Fix
+    // existed and unchanged by it. This pins the structural claim in-crate:
+    // with `hires: None` no recipe emits anything in the reserved 40-44
+    // window, and every decode still reads the first sampler.
+    let i = inputs();
+    let graphs = [
+        checkpoint_txt2img(&i, "sd_xl_base_1.0.safetensors", &[]),
+        flux_txt2img(&i, &flux_models(), &[]),
+        flux2_klein_txt2img(&i, &klein_models(), &[]),
+        flux2_klein_txt2img_safetensors(&i, &klein_models(), &[]),
+    ];
+    for g in graphs {
+        for id in ["40", "41", "42", "43", "44"] {
+            assert!(
+                g.get(id).is_none(),
+                "no hires node {id} without a HiresFix, found {}",
+                g[id]
+            );
+        }
+        assert_eq!(g["8"]["inputs"]["samples"], json!(["3", 0]));
+    }
+}
+
+#[test]
+fn loras_apply_to_both_passes() {
+    let loras = [
+        LoraSpec {
+            file: "a.safetensors",
+            strength: 1.0,
+        },
+        LoraSpec {
+            file: "b.safetensors",
+            strength: 0.5,
+        },
+    ];
+    // KSampler family: the chain's model link is what the first pass reads,
+    // and the second pass is handed that same link.
+    let g = checkpoint_txt2img(&hires_inputs(), "x.safetensors", &loras);
+    assert_eq!(g["3"]["inputs"]["model"], json!(["91", 0]));
+    assert_eq!(
+        g["41"]["inputs"]["model"],
+        json!(["91", 0]),
+        "the second pass reads the end of the LoRA chain, not the raw loader"
+    );
+
+    // klein GGUF: the second pass reuses the first chain's CFGGuider, which is
+    // itself repointed at the LoRA chain -- so the LoRAs reach it for free.
+    let g = flux2_klein_txt2img(&hires_inputs(), &klein_models(), &loras);
+    assert_eq!(g["31"]["inputs"]["model"], json!(["91", 0]));
+    assert_eq!(g["44"]["inputs"]["guider"], json!(["31", 0]));
 }

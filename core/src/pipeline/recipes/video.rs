@@ -92,7 +92,7 @@ pub fn wan_ti2v(i: &VideoInputs, m: &WanModels, loras: &[LoraSpec]) -> Value {
         loras,
         &loaded.model,
         &loaded.clip,
-        "48",
+        &["48"],
         &["6", "7"],
     );
     finish(g, applied)
@@ -170,7 +170,7 @@ pub fn ltx_video(i: &VideoInputs, m: &LtxModels, loras: &[LoraSpec]) -> Value {
         loras,
         &loaded.model,
         &loaded.clip,
-        "72",
+        &["72"],
         &["6", "7"],
     );
     finish(g, applied)

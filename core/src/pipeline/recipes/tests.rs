@@ -8,7 +8,7 @@
 
 use serde_json::Value;
 
-use super::ids::{LORA_IDS, MAX_LORAS};
+use super::ids::{HIRES_IDS, LORA_IDS, MAX_LORAS};
 use crate::pipeline::{
     checkpoint_ipadapter_txt2img, checkpoint_txt2img, flux2_klein_edit,
     flux2_klein_reference_txt2img, flux2_klein_reference_txt2img_safetensors, flux2_klein_txt2img,
@@ -16,11 +16,6 @@ use crate::pipeline::{
     wan_ti2v, EditInputs, Flux2KleinModels, FluxModels, IpAdapterSpec, LoraSpec, LtxModels,
     Txt2ImgInputs, UpscaleImageInputs, UpscaleResize, UpscaleVideoInputs, VideoInputs, WanModels,
 };
-
-/// The ids the Hi-Res-Fix fragment will occupy in the txt2img recipes
-/// (`HIRES_ID_BASE` = 40 and the four after it). Reserved here before the
-/// fragment lands so the reservation is pinned, not assumed.
-const HIRES_IDS: std::ops::RangeInclusive<u32> = 40..=44;
 
 fn five_loras() -> Vec<LoraSpec<'static>> {
     let files = [
@@ -52,6 +47,7 @@ fn txt2img() -> Txt2ImgInputs<'static> {
         scheduler: "karras",
         seed: 4242,
         filename_prefix: "job-ids",
+        hires: None,
     }
 }
 

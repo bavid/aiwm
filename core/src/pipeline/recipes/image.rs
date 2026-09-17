@@ -1,19 +1,32 @@
 //! The image recipes, each composed from [`crate::pipeline::fragments`].
 //!
 //! Every function here is re-exported from [`crate::pipeline`] under its
-//! original name and signature, and produces exactly the graph its inline
-//! `json!` predecessor did — the golden fixtures in
-//! `core/tests/pipeline_goldens.rs` pin that byte-for-byte.
+//! original name and signature, and — with `Txt2ImgInputs::hires` at its
+//! `None` default — produces exactly the graph its inline `json!` predecessor
+//! did; the golden fixtures in `core/tests/pipeline_goldens.rs` pin that
+//! byte-for-byte. `hires: Some(..)` adds the [`crate::pipeline::fragments::hires`]
+//! second pass between the first sampler and the decode, and nothing else.
 
 use serde_json::Value;
 
-use crate::pipeline::fragments::{conditioning, latent, loaders, loras, output, sampling};
-use crate::pipeline::graph::Graph;
+use crate::pipeline::fragments::{conditioning, hires, latent, loaders, loras, output, sampling};
+use crate::pipeline::graph::{Graph, OwnedLink};
 use crate::pipeline::recipes::{
     finish, DENOISE_FULL, DISTILLED_SAMPLER_CFG, FLUX_GUIDANCE_RANGE, SOURCE_MEGAPIXELS,
     SOURCE_RESOLUTION_STEPS, SOURCE_UPSCALE_METHOD,
 };
 use crate::pipeline::{EditInputs, Flux2KleinModels, FluxModels, LoraSpec, Txt2ImgInputs};
+
+/// The node ids a LoRA chain's model link has to reach in a `KSampler`-family
+/// txt2img recipe: the first sampler, plus the Hi-Res-Fix second pass when
+/// there is one. Both passes must see the *same* patched model, or the second
+/// pass would quietly undo the LoRAs.
+fn model_consumers<'a>(first_sampler: &'a str, second_pass: &'a Option<OwnedLink>) -> Vec<&'a str> {
+    match second_pass {
+        Some(link) => vec![first_sampler, link.node.as_str()],
+        None => vec![first_sampler],
+    }
+}
 
 /// The canonical ComfyUI default graph: load a single-file checkpoint, encode
 /// both prompts, sample, VAE-decode, save. No custom nodes.
@@ -22,6 +35,14 @@ pub fn checkpoint_txt2img(i: &Txt2ImgInputs, checkpoint: &str, loras: &[LoraSpec
     let loaded = loaders::checkpoint(&mut g, "4", checkpoint);
     let canvas = latent::empty(&mut g, "5", i.width, i.height);
     let cond = conditioning::encode_pair(&mut g, "6", "7", &loaded.clip, i.positive, i.negative);
+    let first = sampling::SamplerParams {
+        seed: i.seed,
+        steps: i.steps,
+        cfg: i.cfg,
+        sampler: i.sampler,
+        scheduler: i.scheduler,
+        denoise: DENOISE_FULL,
+    };
     let sampled = sampling::ksampler(
         &mut g,
         "3",
@@ -29,17 +50,36 @@ pub fn checkpoint_txt2img(i: &Txt2ImgInputs, checkpoint: &str, loras: &[LoraSpec
         &cond.positive,
         &cond.negative,
         &canvas,
-        &sampling::SamplerParams {
-            seed: i.seed,
-            steps: i.steps,
-            cfg: i.cfg,
-            sampler: i.sampler,
-            scheduler: i.scheduler,
-            denoise: DENOISE_FULL,
-        },
+        &first,
     );
-    output::decode_and_save(&mut g, "8", "9", &sampled, &loaded.vae, i.filename_prefix);
-    let applied = loras::apply(&mut g, loras, &loaded.model, &loaded.clip, "3", &["6", "7"]);
+    let second_pass = i.hires.map(|h| {
+        hires::ksampler_pass(
+            &mut g,
+            &sampled,
+            &loaded.model,
+            &cond.positive,
+            &cond.negative,
+            &first,
+            &h,
+        )
+    });
+    let final_latent = second_pass.as_ref().unwrap_or(&sampled);
+    output::decode_and_save(
+        &mut g,
+        "8",
+        "9",
+        final_latent,
+        &loaded.vae,
+        i.filename_prefix,
+    );
+    let applied = loras::apply(
+        &mut g,
+        loras,
+        &loaded.model,
+        &loaded.clip,
+        &model_consumers("3", &second_pass),
+        &["6", "7"],
+    );
     finish(g, applied)
 }
 
@@ -64,6 +104,14 @@ pub fn flux_txt2img(i: &Txt2ImgInputs, m: &FluxModels, loras: &[LoraSpec]) -> Va
     let canvas = latent::empty_sd3(&mut g, "5", i.width, i.height);
     let cond = conditioning::encode_pair(&mut g, "6", "7", &loaded.clip, i.positive, i.negative);
     let guided = conditioning::flux_guidance(&mut g, "26", &cond.positive, guidance);
+    let first = sampling::SamplerParams {
+        seed: i.seed,
+        steps: i.steps,
+        cfg: DISTILLED_SAMPLER_CFG,
+        sampler: "euler",
+        scheduler: "simple",
+        denoise: DENOISE_FULL,
+    };
     let sampled = sampling::ksampler(
         &mut g,
         "3",
@@ -71,17 +119,36 @@ pub fn flux_txt2img(i: &Txt2ImgInputs, m: &FluxModels, loras: &[LoraSpec]) -> Va
         &guided,
         &cond.negative,
         &canvas,
-        &sampling::SamplerParams {
-            seed: i.seed,
-            steps: i.steps,
-            cfg: DISTILLED_SAMPLER_CFG,
-            sampler: "euler",
-            scheduler: "simple",
-            denoise: DENOISE_FULL,
-        },
+        &first,
     );
-    output::decode_and_save(&mut g, "8", "9", &sampled, &loaded.vae, i.filename_prefix);
-    let applied = loras::apply(&mut g, loras, &loaded.model, &loaded.clip, "3", &["6", "7"]);
+    let second_pass = i.hires.map(|h| {
+        hires::ksampler_pass(
+            &mut g,
+            &sampled,
+            &loaded.model,
+            &guided,
+            &cond.negative,
+            &first,
+            &h,
+        )
+    });
+    let final_latent = second_pass.as_ref().unwrap_or(&sampled);
+    output::decode_and_save(
+        &mut g,
+        "8",
+        "9",
+        final_latent,
+        &loaded.vae,
+        i.filename_prefix,
+    );
+    let applied = loras::apply(
+        &mut g,
+        loras,
+        &loaded.model,
+        &loaded.clip,
+        &model_consumers("3", &second_pass),
+        &["6", "7"],
+    );
     finish(g, applied)
 }
 
@@ -110,7 +177,7 @@ pub fn flux2_klein_txt2img(i: &Txt2ImgInputs, m: &Flux2KleinModels, loras: &[Lor
     let positive = conditioning::encode_single(&mut g, "6", &loaded.clip, i.positive);
     let negative = conditioning::zero_out(&mut g, "27", &positive);
     let canvas = latent::empty_flux2(&mut g, "32", i.width, i.height);
-    let sampled = sampling::custom_advanced(
+    let first = sampling::custom_advanced(
         &mut g,
         &sampling::CustomAdvancedIds {
             select: "28",
@@ -133,8 +200,22 @@ pub fn flux2_klein_txt2img(i: &Txt2ImgInputs, m: &Flux2KleinModels, loras: &[Lor
             sigmas_override: None,
         },
     );
-    output::decode_and_save(&mut g, "8", "9", &sampled, &loaded.vae, i.filename_prefix);
-    let applied = loras::apply(&mut g, loras, &loaded.model, &loaded.clip, "31", &["6"]);
+    // The second pass reuses the first chain's noise, guider and sampler, so
+    // the LoRA splice below (which repoints the *guider's* model input)
+    // reaches both passes with nothing extra to wire.
+    let second_pass = i.hires.map(|h| {
+        hires::custom_advanced_pass(&mut g, &first.sampled, &first.links, i.width, i.height, &h)
+    });
+    let final_latent = second_pass.as_ref().unwrap_or(&first.sampled);
+    output::decode_and_save(
+        &mut g,
+        "8",
+        "9",
+        final_latent,
+        &loaded.vae,
+        i.filename_prefix,
+    );
+    let applied = loras::apply(&mut g, loras, &loaded.model, &loaded.clip, &["31"], &["6"]);
     finish(g, applied)
 }
 
@@ -167,6 +248,14 @@ pub fn flux2_klein_txt2img_safetensors(
     let negative = conditioning::zero_out(&mut g, "27", &encoded);
     let positive = conditioning::flux_guidance(&mut g, "26", &encoded, guidance);
     let canvas = latent::empty_flux2(&mut g, "32", i.width, i.height);
+    let first = sampling::SamplerParams {
+        seed: i.seed,
+        steps: i.steps,
+        cfg: DISTILLED_SAMPLER_CFG,
+        sampler: i.sampler,
+        scheduler: i.scheduler,
+        denoise: DENOISE_FULL,
+    };
     let sampled = sampling::ksampler(
         &mut g,
         "3",
@@ -174,17 +263,36 @@ pub fn flux2_klein_txt2img_safetensors(
         &positive,
         &negative,
         &canvas,
-        &sampling::SamplerParams {
-            seed: i.seed,
-            steps: i.steps,
-            cfg: DISTILLED_SAMPLER_CFG,
-            sampler: i.sampler,
-            scheduler: i.scheduler,
-            denoise: DENOISE_FULL,
-        },
+        &first,
     );
-    output::decode_and_save(&mut g, "8", "9", &sampled, &loaded.vae, i.filename_prefix);
-    let applied = loras::apply(&mut g, loras, &loaded.model, &loaded.clip, "3", &["6"]);
+    let second_pass = i.hires.map(|h| {
+        hires::ksampler_pass(
+            &mut g,
+            &sampled,
+            &loaded.model,
+            &positive,
+            &negative,
+            &first,
+            &h,
+        )
+    });
+    let final_latent = second_pass.as_ref().unwrap_or(&sampled);
+    output::decode_and_save(
+        &mut g,
+        "8",
+        "9",
+        final_latent,
+        &loaded.vae,
+        i.filename_prefix,
+    );
+    let applied = loras::apply(
+        &mut g,
+        loras,
+        &loaded.model,
+        &loaded.clip,
+        &model_consumers("3", &second_pass),
+        &["6"],
+    );
     finish(g, applied)
 }
 
@@ -230,6 +338,12 @@ pub fn flux2_klein_edit(i: &EditInputs, m: &Flux2KleinModels, loras: &[LoraSpec]
     let zeroed = conditioning::zero_out(&mut g, "82", &instruction);
     let negative = conditioning::reference_latent(&mut g, "125", &zeroed, &source_latent);
     let canvas = latent::empty_flux2(&mut g, "66", size.width.clone(), size.height.clone());
+    // No Hi-Res-Fix here, deliberately: this recipe has no fixed canvas to
+    // scale. Its output size comes from a `GetImageSize` node at render time,
+    // so a second `Flux2Scheduler` could not be given the upscaled width and
+    // height as numbers — it would need the scaling done inside the graph
+    // (`GetImageSize` → arithmetic nodes), which is a different feature from
+    // the one this fragment ships. `EditInputs` therefore carries no `hires`.
     let sampled = sampling::custom_advanced(
         &mut g,
         &sampling::CustomAdvancedIds {
@@ -253,8 +367,15 @@ pub fn flux2_klein_edit(i: &EditInputs, m: &Flux2KleinModels, loras: &[LoraSpec]
             sigmas_override: None,
         },
     );
-    output::decode_and_save(&mut g, "65", "9", &sampled, &loaded.vae, i.filename_prefix);
-    let applied = loras::apply(&mut g, loras, &loaded.model, &loaded.clip, "63", &["74"]);
+    output::decode_and_save(
+        &mut g,
+        "65",
+        "9",
+        &sampled.sampled,
+        &loaded.vae,
+        i.filename_prefix,
+    );
+    let applied = loras::apply(&mut g, loras, &loaded.model, &loaded.clip, &["63"], &["74"]);
     finish(g, applied)
 }
 

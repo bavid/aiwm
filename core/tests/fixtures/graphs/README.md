@@ -12,6 +12,15 @@ Most recipes have one fixture, rendered with a LoRA chain. Two also have a
 chain is a genuinely different graph from a present one, and the with-LoRAs
 fixtures alone never pinned that shape.
 
+Two more — `checkpoint_txt2img_hires` and `flux2_klein_txt2img_hires` — pin
+the Hi-Res-Fix second pass, one per sampler family (`KSampler` and
+`SamplerCustomAdvanced`). Unlike the rest of this directory, these two were
+**generated from the code that introduced the feature**, not recorded from a
+pre-refactor baseline: they are new behaviour, so there is no earlier output
+to compare against. What proves the feature changed nothing else is the other
+fixtures, which are byte-identical before and after it (every recipe defaults
+to `hires: None`).
+
 They are the safety net for the ComfyUI workflow engine refactor (Plan 3:
 `docs/superpowers/plans/2026-09-17-comfyui-workflow-engine-plan-3.md`), which
 tears the current hand-built graphs apart into a small graph builder plus

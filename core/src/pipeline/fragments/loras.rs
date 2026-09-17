@@ -26,14 +26,18 @@ pub(crate) const MAX_LORAS: usize = 5;
 /// end of the chain. A no-op when `loras` is empty, so a graph without LoRAs
 /// keeps exactly the shape its fragments built.
 ///
-/// Errs only if `model_consumer` or one of `clip_consumers` names a node the
+/// `model_consumers` is a list because a Hi-Res-Fix second pass is a second
+/// consumer of the same model link (see [`super::hires`]); most recipes name
+/// exactly one.
+///
+/// Errs only if one of `model_consumers` or `clip_consumers` names a node the
 /// graph does not have — a recipe bug, never a user input.
 pub fn apply(
     g: &mut Graph,
     loras: &[LoraSpec],
     model_source: &OwnedLink,
     clip_source: &OwnedLink,
-    model_consumer: &str,
+    model_consumers: &[&str],
     clip_consumers: &[&str],
 ) -> Result<(), PipelineError> {
     if loras.is_empty() {
@@ -58,7 +62,9 @@ pub fn apply(
         model_link = OwnedLink::new(&id, 0);
         clip_link = OwnedLink::new(&id, 1);
     }
-    g.set_input(model_consumer, "model", model_link.json())?;
+    for consumer in model_consumers {
+        g.set_input(consumer, "model", model_link.json())?;
+    }
     for consumer in clip_consumers {
         g.set_input(consumer, "clip", clip_link.json())?;
     }
@@ -98,7 +104,7 @@ mod tests {
             &[],
             &OwnedLink::new("4", 0),
             &OwnedLink::new("4", 1),
-            "3",
+            &["3"],
             &["6", "7"],
         )
         .unwrap();
@@ -116,7 +122,7 @@ mod tests {
             }],
             &OwnedLink::new("4", 0),
             &OwnedLink::new("4", 1),
-            "3",
+            &["3"],
             &["6", "7"],
         )
         .unwrap();
@@ -156,7 +162,7 @@ mod tests {
             ],
             &OwnedLink::new("4", 0),
             &OwnedLink::new("4", 1),
-            "3",
+            &["3"],
             &["6"],
         )
         .unwrap();
@@ -181,7 +187,7 @@ mod tests {
             }],
             &OwnedLink::new("4", 0),
             &OwnedLink::new("4", 1),
-            "nope",
+            &["nope"],
             &[],
         )
         .unwrap_err();

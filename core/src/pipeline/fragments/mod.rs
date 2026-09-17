@@ -5,6 +5,7 @@
 //! inline `json!` graphs.
 
 pub mod conditioning;
+pub mod hires;
 pub mod ipadapter;
 pub mod latent;
 pub mod loaders;

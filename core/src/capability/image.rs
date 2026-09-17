@@ -300,6 +300,9 @@ pub async fn run(
         scheduler: &req.scheduler,
         seed: req.seed,
         filename_prefix: job_id,
+        // Plan 3 Task 6 wires this from `ImageRequest`; the pipeline plumbing
+        // lands first, so every render is still a single pass.
+        hires: None,
     };
     let workflow = match recipe {
         Recipe::Checkpoint => pipeline::checkpoint_txt2img(&inputs, model_file, &lora_specs),
@@ -576,6 +579,9 @@ async fn run_reference(
         scheduler: &req.scheduler,
         seed: req.seed,
         filename_prefix: job_id,
+        // Plan 3 Task 6 wires this from `ImageRequest`; the pipeline plumbing
+        // lands first, so every render is still a single pass.
+        hires: None,
     };
     let workflow = match recipe {
         Recipe::Checkpoint => {

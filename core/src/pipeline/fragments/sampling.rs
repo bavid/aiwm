@@ -83,6 +83,27 @@ pub struct CustomAdvancedParams<'a> {
     pub sigmas_override: Option<OwnedLink>,
 }
 
+/// The three links a `SamplerCustomAdvanced` consumes besides its sigmas and
+/// latent. [`custom_advanced`] hands them back so a second pass can reuse the
+/// same noise source, guider and sampler instead of rebuilding them — which
+/// is also what makes a LoRA chain reach the second pass for free, since
+/// [`super::loras::apply`] repoints the *guider's* `model` input.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CustomAdvancedLinks {
+    pub noise: OwnedLink,
+    pub guider: OwnedLink,
+    pub sampler: OwnedLink,
+}
+
+/// What [`custom_advanced`] built: the sampled latent plus the chain links
+/// behind it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CustomAdvancedChain {
+    /// `SamplerCustomAdvanced`'s output slot 0.
+    pub sampled: OwnedLink,
+    pub links: CustomAdvancedLinks,
+}
+
 /// `KSamplerSelect` + `Flux2Scheduler` + `RandomNoise` + `CFGGuider` +
 /// `SamplerCustomAdvanced` — FLUX.2 \[klein\]'s sampling chain. Exact keys
 /// from `flux2_klein_txt2img`; `sigmas` is the override when given, else the
@@ -95,8 +116,8 @@ pub fn custom_advanced(
     negative: &OwnedLink,
     latent: &OwnedLink,
     p: &CustomAdvancedParams,
-) -> OwnedLink {
-    ksampler_select(g, ids.select, p.sampler);
+) -> CustomAdvancedChain {
+    let sampler = ksampler_select(g, ids.select, p.sampler);
     g.node(
         ids.scheduler,
         "Flux2Scheduler",
@@ -117,18 +138,26 @@ pub fn custom_advanced(
         Some(link) => link.json(),
         None => OwnedLink::new(ids.scheduler, 0).json(),
     };
+    let links = CustomAdvancedLinks {
+        noise: OwnedLink::new(ids.noise, 0),
+        guider: OwnedLink::new(ids.guider, 0),
+        sampler,
+    };
     g.node(
         ids.sampler,
         "SamplerCustomAdvanced",
         json!({
-            "noise": OwnedLink::new(ids.noise, 0).json(),
-            "guider": OwnedLink::new(ids.guider, 0).json(),
-            "sampler": OwnedLink::new(ids.select, 0).json(),
+            "noise": links.noise.json(),
+            "guider": links.guider.json(),
+            "sampler": links.sampler.json(),
             "sigmas": sigmas,
             "latent_image": latent.json()
         }),
     );
-    OwnedLink::new(ids.sampler, 0)
+    CustomAdvancedChain {
+        sampled: OwnedLink::new(ids.sampler, 0),
+        links,
+    }
 }
 
 /// `SamplerCustom` always adds noise in the recipes here — it samples from
@@ -379,7 +408,17 @@ mod tests {
                 sigmas_override: None,
             },
         );
-        assert_eq!(out, OwnedLink::new("3", 0));
+        assert_eq!(out.sampled, OwnedLink::new("3", 0));
+        // The chain hands its own links back so a Hi-Res-Fix second pass can
+        // reuse them rather than build a second noise/guider/sampler trio.
+        assert_eq!(
+            out.links,
+            CustomAdvancedLinks {
+                noise: OwnedLink::new("30", 0),
+                guider: OwnedLink::new("31", 0),
+                sampler: OwnedLink::new("28", 0),
+            }
+        );
 
         let v = g.into_value();
         assert_eq!(

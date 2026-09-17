@@ -19,8 +19,9 @@ use aiwm_core::pipeline::{
     checkpoint_ipadapter_txt2img, checkpoint_txt2img, flux2_klein_edit,
     flux2_klein_reference_txt2img, flux2_klein_reference_txt2img_safetensors, flux2_klein_txt2img,
     flux2_klein_txt2img_safetensors, flux_txt2img, ltx_video, rtx_upscale_image, rtx_upscale_video,
-    wan_ti2v, EditInputs, Flux2KleinModels, FluxModels, IpAdapterSpec, LoraSpec, LtxModels,
-    Txt2ImgInputs, UpscaleImageInputs, UpscaleResize, UpscaleVideoInputs, VideoInputs, WanModels,
+    wan_ti2v, EditInputs, Flux2KleinModels, FluxModels, HiresFix, IpAdapterSpec, LoraSpec,
+    LtxModels, Txt2ImgInputs, UpscaleImageInputs, UpscaleResize, UpscaleVideoInputs, VideoInputs,
+    WanModels,
 };
 use serde_json::Value;
 
@@ -49,6 +50,21 @@ fn txt2img_inputs() -> Txt2ImgInputs<'static> {
         scheduler: SCHEDULER,
         seed: SEED,
         filename_prefix: FILENAME_PREFIX,
+        hires: None,
+    }
+}
+
+/// The same fixed inputs plus a Hi-Res-Fix second pass: 1.5x, denoise 0.45,
+/// half the first pass's steps (the defaults the Image tab will offer).
+fn hires_txt2img_inputs() -> Txt2ImgInputs<'static> {
+    Txt2ImgInputs {
+        hires: Some(HiresFix {
+            scale_by: 1.5,
+            denoise: 0.45,
+            steps: STEPS / 2,
+            upscale_method: HiresFix::DEFAULT_METHOD,
+        }),
+        ..txt2img_inputs()
     }
 }
 
@@ -289,6 +305,18 @@ fn checkpoint_txt2img_no_loras_golden() {
     check_golden("checkpoint_txt2img_no_loras", &g);
 }
 
+/// The `KSampler`-family Hi-Res-Fix shape: `LatentUpscaleBy` plus a second
+/// `KSampler`, with the LoRA chain reaching both passes.
+#[test]
+fn checkpoint_txt2img_hires_golden() {
+    let g = checkpoint_txt2img(
+        &hires_txt2img_inputs(),
+        "sd_xl_base_1.0.safetensors",
+        &checkpoint_loras(),
+    );
+    check_golden("checkpoint_txt2img_hires", &g);
+}
+
 #[test]
 fn flux_txt2img_golden() {
     let g = flux_txt2img(
@@ -307,6 +335,19 @@ fn flux2_klein_txt2img_golden() {
         &one_lora("flux2-realistic-detail.safetensors"),
     );
     check_golden("flux2_klein_txt2img", &g);
+}
+
+/// The `SamplerCustomAdvanced` Hi-Res-Fix shape: a second `Flux2Scheduler` at
+/// the upscaled size, cut by `SplitSigmasDenoise`, feeding a second sampler
+/// that reuses the first chain's noise/guider/sampler links.
+#[test]
+fn flux2_klein_txt2img_hires_golden() {
+    let g = flux2_klein_txt2img(
+        &hires_txt2img_inputs(),
+        &flux2_klein_gguf_models(),
+        &one_lora("flux2-realistic-detail.safetensors"),
+    );
+    check_golden("flux2_klein_txt2img_hires", &g);
 }
 
 #[test]

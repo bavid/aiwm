@@ -81,7 +81,7 @@ pub(crate) fn finish(g: Graph, applied: Result<(), PipelineError>) -> Value {
 /// | 26–32 | `FluxGuidance`/`ConditioningZeroOut` plus FLUX.2 \[klein\]'s `CFGGuider` chain and latent | [`image`], [`story`] |
 /// | 37–39, 44, 48, 55, 58–60, 69–73, 77–78 | The Wan and LTX video chains | [`video`] |
 /// | 40–43 | Story Studio's IP-Adapter chain (`CLIPVisionLoader`, `IPAdapterModelLoader`, `LoadImage`, `IPAdapterAdvanced`) | [`story`] |
-/// | 40–44 | **Hi-Res-Fix** (`HIRES_ID_BASE` = 40, five ids) — reserved in the four txt2img recipes only, which is why none of them uses 40–44 for anything else | `fragments::hires` (next commit) |
+/// | 40–44 | **Hi-Res-Fix** (`HIRES_ID_BASE` = 40, five ids) — reserved in the four txt2img recipes only, which is why none of them uses 40–44 for anything else | [`crate::pipeline::fragments::hires`] |
 /// | 50–54 | FLUX.2 \[klein\]'s reference-portrait chain | [`story`] |
 /// | 61–66, 70–76, 80, 82, 99, 123–125 | The `flux2_klein_edit` graph | [`image`] |
 /// | 90–94 | **LoRA chain** (`LORA_ID_BASE` = 90, `MAX_LORAS` = 5 ids) — reserved in *every* recipe | [`crate::pipeline::fragments::loras`] |
@@ -100,12 +100,20 @@ pub(crate) mod ids {
     use std::ops::RangeInclusive;
 
     #[cfg(test)]
+    pub(crate) use crate::pipeline::fragments::hires::HIRES_ID_BASE;
+    #[cfg(test)]
     pub(crate) use crate::pipeline::fragments::loras::{LORA_ID_BASE, MAX_LORAS};
 
     /// The ids a LoRA chain can occupy: `90 ..= 94`.
     #[cfg(test)]
     pub(crate) const LORA_IDS: RangeInclusive<u32> =
         LORA_ID_BASE..=LORA_ID_BASE + MAX_LORAS as u32 - 1;
+
+    /// The ids the Hi-Res-Fix fragment can occupy: `40 ..= 44` — the latent
+    /// upscale, the KSampler-family second pass, and klein-GGUF's
+    /// `Flux2Scheduler` + `SplitSigmasDenoise` + `SamplerCustomAdvanced`.
+    #[cfg(test)]
+    pub(crate) const HIRES_IDS: RangeInclusive<u32> = HIRES_ID_BASE..=HIRES_ID_BASE + 4;
 }
 
 #[cfg(test)]

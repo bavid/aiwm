@@ -58,6 +58,40 @@ pub struct Txt2ImgInputs<'a> {
     pub seed: i64,
     /// `SaveImage` prefix — the job id, so the output is easy to find.
     pub filename_prefix: &'a str,
+    /// `Some` → run a [`HiresFix`] second pass between the first sampler and
+    /// the decode. `None` → the graph is exactly what it was before Hi-Res-Fix
+    /// existed (the golden fixtures pin that).
+    pub hires: Option<HiresFix>,
+}
+
+/// A Hi-Res-Fix second pass: upscale the first pass's *latent*, then re-sample
+/// it at a low denoise. The model fills in detail at the larger size instead
+/// of re-composing the image, which is what makes it different from running
+/// the whole render at that resolution (faster, and no second composition to
+/// fight the first).
+///
+/// Clamping belongs to the request parser, not here — a recipe takes whatever
+/// numbers it is handed and wires them verbatim.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct HiresFix {
+    /// `LatentUpscaleBy`'s `scale_by`: how much bigger the second pass runs.
+    pub scale_by: f64,
+    /// The second pass's denoise. Low (≈0.2–0.7) — high values throw the
+    /// first pass's composition away.
+    pub denoise: f64,
+    /// Steps for the second pass. Usually about half the first pass's, since
+    /// only a fraction of the schedule actually runs at this denoise.
+    pub steps: u32,
+    /// `LatentUpscaleBy`'s `upscale_method` — one of ComfyUI's
+    /// `nearest-exact`, `bilinear`, `area`, `bicubic`, `bislerp`.
+    pub upscale_method: &'static str,
+}
+
+impl HiresFix {
+    /// What ComfyUI's own Hi-Res-Fix templates reach for: the latent is about
+    /// to be re-denoised anyway, so a cheap, artifact-free resample beats a
+    /// smart one.
+    pub const DEFAULT_METHOD: &str = "nearest-exact";
 }
 
 /// FLUX needs its diffusion model, both text encoders and the VAE as separate

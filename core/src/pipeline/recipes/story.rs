@@ -108,7 +108,7 @@ pub fn checkpoint_ipadapter_txt2img(
         loras,
         &loaded.model,
         &loaded.clip,
-        "43",
+        &["43"],
         &["6", "7"],
     );
     finish(g, applied)
@@ -176,8 +176,17 @@ pub fn flux2_klein_reference_txt2img(
             sigmas_override: None,
         },
     );
-    output::decode_and_save(&mut g, "8", "9", &sampled, &loaded.vae, i.filename_prefix);
-    let applied = loras::apply(&mut g, loras, &loaded.model, &loaded.clip, "31", &["6"]);
+    // Story Studio takes no Hi-Res-Fix: a reference render is about keeping a
+    // character consistent, not about resolution (spec §3).
+    output::decode_and_save(
+        &mut g,
+        "8",
+        "9",
+        &sampled.sampled,
+        &loaded.vae,
+        i.filename_prefix,
+    );
+    let applied = loras::apply(&mut g, loras, &loaded.model, &loaded.clip, &["31"], &["6"]);
     finish(g, applied)
 }
 
@@ -231,7 +240,7 @@ pub fn flux2_klein_reference_txt2img_safetensors(
         },
     );
     output::decode_and_save(&mut g, "8", "9", &sampled, &loaded.vae, i.filename_prefix);
-    let applied = loras::apply(&mut g, loras, &loaded.model, &loaded.clip, "3", &["6"]);
+    let applied = loras::apply(&mut g, loras, &loaded.model, &loaded.clip, &["3"], &["6"]);
     finish(g, applied)
 }
 
