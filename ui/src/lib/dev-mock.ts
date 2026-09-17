@@ -462,6 +462,12 @@ function mkTrainingProfile(
     family, label, arch, data_kind: "frames", fit: "comfortable",
     fit_label: "fits comfortably", reserve_mb: 12288, base_repo: "", base_role: "",
     base_required_files: ["model_index.json"], base_approx_gb: 16, base_installed: false,
+    // The real core builds this from `training::bases`; the shape is what the
+    // preflight panel shows and copies verbatim, so the mock spells out a
+    // plausible one rather than leaving the copy block empty.
+    base_download_command:
+      `hf download ${String(over.base_repo ?? "")} ` +
+      `--local-dir E:\\AI\\models\\training\\${family} --exclude "*.jpg"`,
     caption_order: "prose_first", license_note: "",
     presets: {
       fast: { steps: 600, lr: 1e-4, rank: 16, resolution: 768, save_every: 200, sample_every: 200 },

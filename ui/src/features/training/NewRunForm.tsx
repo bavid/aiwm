@@ -3,14 +3,15 @@ import {
   startTrainingRun,
   type Dataset,
   type TrainerStatus,
-  type TrainingHyperparams,
   type TrainingPreset,
   type TrainingPresetValues,
   type TrainingProfile,
 } from "../../lib/ipc";
+import { humanize } from "../../lib/errors";
 import { tokenWarning } from "../dataset/tokens";
-import { FineTune, type TuneDraft } from "./FineTune";
+import { FineTune } from "./FineTune";
 import { Preflight } from "./Preflight";
+import { parseTune, type TuneDraft } from "./tune";
 
 const MAX_TRIGGER = 30;
 /** Every fine-tuning field blank — the run uses the preset's own values. */
@@ -26,15 +27,6 @@ const PRESETS: { id: TrainingPreset; label: string }[] = [
 /** A trigger word is a made-up token, so whitespace is never meaningful in it —
  *  strip it as it is typed rather than rejecting the input afterwards. */
 const sanitizeTrigger = (raw: string) => raw.replace(/\s+/g, "").slice(0, MAX_TRIGGER);
-
-/** A blank fine-tuning field means "keep the preset's own value" — which the
- *  wire format spells as `null`, not as `0`. */
-function optionalNumber(raw: string): number | null {
-  const t = raw.trim();
-  if (t === "") return null;
-  const n = Number(t);
-  return Number.isFinite(n) && n > 0 ? n : null;
-}
 
 /** A sample-prompt slot. The text alone would not do as a React key: two empty
  *  slots collide, and removing one would re-key the survivors onto the wrong
@@ -56,18 +48,12 @@ function preflightPasses(
 const summarize = (p: TrainingPresetValues) =>
   `${p.steps} steps · rank ${p.rank} · ${p.resolution}px · lr ${p.lr}`;
 
-/** The core rejects a bad body with `configuration error: <what>`; the prefix
- *  is for the log, not for the person reading the form. */
-const humanize = (e: unknown) =>
-  (e instanceof Error ? e.message : String(e)).replace(/^(Error:\s*)?configuration error:\s*/i, "");
-
 type Props = {
   profiles: TrainingProfile[];
   status: TrainerStatus | null;
   datasets: Dataset[];
   /** Handed over by the Dataset tab's "Train LoRA" button; `null` otherwise. */
   initialDatasetId: string | null;
-  storePath: string;
   onStatusChanged: () => void;
   onStarted: () => void;
   onClose: () => void;
@@ -80,7 +66,6 @@ export function NewRunForm({
   status,
   datasets,
   initialDatasetId,
-  storePath,
   onStatusChanged,
   onStarted,
   onClose,
@@ -138,6 +123,8 @@ export function NewRunForm({
   const presetValues = profile?.presets[preset] ?? null;
   const triggerWarn = trigger === "" ? null : tokenWarning(trigger);
   const filledPrompts = prompts.map((p) => p.text.trim()).filter((p) => p !== "");
+  const parsedTune = useMemo(() => parseTune(tune), [tune]);
+  const tuneOk = Object.keys(parsedTune.errors).length === 0;
 
   const ready =
     preflightPasses(status, profile) &&
@@ -145,7 +132,8 @@ export function NewRunForm({
     datasetId !== "" &&
     name.trim() !== "" &&
     trigger !== "" &&
-    filledPrompts.length > 0;
+    filledPrompts.length > 0 &&
+    tuneOk;
 
   const editPrompt = (id: string, text: string) => {
     setPromptsDirty(true);
@@ -155,12 +143,6 @@ export function NewRunForm({
   const submit = async () => {
     setBusy(true);
     setError(null);
-    const hyperparams: TrainingHyperparams = {
-      steps: optionalNumber(tune.steps),
-      lr: optionalNumber(tune.lr),
-      rank: optionalNumber(tune.rank),
-      resolution: optionalNumber(tune.resolution),
-    };
     try {
       await startTrainingRun({
         name: name.trim(),
@@ -168,7 +150,7 @@ export function NewRunForm({
         dataset_id: datasetId,
         trigger_word: trigger,
         preset,
-        hyperparams,
+        hyperparams: parsedTune.values,
         sample_prompts: filledPrompts,
       });
       onStarted();
@@ -276,7 +258,12 @@ export function NewRunForm({
         ))}
       </fieldset>
 
-      <FineTune value={tune} onChange={setTune} preset={presetValues} />
+      <FineTune
+        value={tune}
+        onChange={setTune}
+        errors={parsedTune.errors}
+        preset={presetValues}
+      />
 
       <fieldset className="runform__presets">
         <legend>Sample prompts (1–{MAX_PROMPTS})</legend>
@@ -319,12 +306,7 @@ export function NewRunForm({
         </div>
       </fieldset>
 
-      <Preflight
-        status={status}
-        profile={profile}
-        storePath={storePath}
-        onStatusChanged={onStatusChanged}
-      />
+      <Preflight status={status} profile={profile} onStatusChanged={onStatusChanged} />
 
       <div className="runform__actions">
         <button type="submit" className="datasetform__go" disabled={!ready || busy}>

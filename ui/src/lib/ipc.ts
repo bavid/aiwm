@@ -1811,6 +1811,9 @@ export interface TrainingProfile {
   base_role: string;
   base_required_files: string[];
   base_approx_gb: number;
+  /** The exact `hf` line that stages this base, built server-side from the
+   *  same manifest the runner verifies the download against. */
+  base_download_command: string;
   /** A library directory model with `base_role` holding every required file. */
   base_installed: boolean;
   caption_order: CaptionOrder;

@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useId, useState } from "react";
+import { humanize } from "../../lib/errors";
 import { useTrainingRun } from "../../lib/hooks";
 import {
   cancelTrainingRun,
@@ -28,13 +29,16 @@ const STATE_LABEL: Record<TrainingRunState, string> = {
  *  polling the run detail for fresh samples without being expanded. */
 const LIVE: TrainingRunState[] = ["preparing", "running", "resuming", "finishing"];
 const DELETABLE: TrainingRunState[] = ["completed", "failed", "cancelled"];
+
+/** `finishing` is deliberately absent: the state machine only lets it go to
+ *  `completed` or `failed`, so a Cancel offered there would be a button that
+ *  cannot do what it says. The card explains the wait instead. */
 const CANCELLABLE: TrainingRunState[] = [
   "preparing",
   "running",
   "paused",
   "interrupted",
   "resuming",
-  "finishing",
 ];
 
 /** How long a run has to have been going before its step rate says anything. */
@@ -86,6 +90,7 @@ export function RunCard({
   onChanged,
   onTestLora,
 }: Props) {
+  const logId = useId();
   const [expanded, setExpanded] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [purge, setPurge] = useState(false);
@@ -104,7 +109,7 @@ export function RunCard({
       await fn();
       onChanged();
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(humanize(e));
     } finally {
       setBusy(false);
     }
@@ -148,6 +153,13 @@ export function RunCard({
           <span className="runcard__badge">LoRA in library{loraName ? `: ${loraName}` : ""}</span>
         )}
       </div>
+
+      {run.state === "finishing" && (
+        <p className="muted">
+          Training is done — importing its result into the model library. This cannot be cancelled;
+          it finishes on its own.
+        </p>
+      )}
 
       {run.error_text && <p className="runcard__err">{run.error_text}</p>}
 
@@ -218,8 +230,8 @@ export function RunCard({
         <button
           type="button"
           className="chip runcard__spacer"
-          aria-pressed={expanded}
           aria-expanded={expanded}
+          aria-controls={logId}
           onClick={() => setExpanded((v) => !v)}
         >
           Log
@@ -252,12 +264,14 @@ export function RunCard({
         </div>
       )}
 
-      {expanded && (
+      {/* Present even while collapsed so `aria-controls` above always resolves
+          to a real element; `hidden` keeps it out of the tree either way. */}
+      <div id={logId} hidden={!expanded}>
         <pre className="runcard__log">
           {detail?.log_tail.length ? detail.log_tail.join("\n") : "No log lines yet."}
         </pre>
-      )}
-      {expanded && detail && <p className="muted">{detail.work_dir}</p>}
+        {detail && <p className="muted">{detail.work_dir}</p>}
+      </div>
 
       {error && <p className="runcard__err">{error}</p>}
     </article>

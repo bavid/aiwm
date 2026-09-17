@@ -91,7 +91,6 @@ export function Training({ pendingDatasetId, onPendingDatasetConsumed, onTestLor
           status={status}
           datasets={datasets ?? []}
           initialDatasetId={seedDatasetId}
-          storePath={about?.store_path ?? ""}
           onStatusChanged={refetchStatus}
           onStarted={() => {
             setShowForm(false);
