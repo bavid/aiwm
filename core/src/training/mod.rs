@@ -17,6 +17,7 @@
 
 pub mod config;
 pub mod profile;
+pub mod progress;
 
 use crate::CoreError;
 
