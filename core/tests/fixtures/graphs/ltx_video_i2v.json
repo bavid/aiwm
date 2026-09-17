@@ -1,0 +1,185 @@
+{
+  "38": {
+    "class_type": "CLIPLoader",
+    "inputs": {
+      "clip_name": "t5xxl_fp8_e4m3fn.safetensors",
+      "device": "default",
+      "type": "ltxv"
+    }
+  },
+  "44": {
+    "class_type": "CheckpointLoaderSimple",
+    "inputs": {
+      "ckpt_name": "ltx-video-2b-v0.9.5.safetensors"
+    }
+  },
+  "58": {
+    "class_type": "CreateVideo",
+    "inputs": {
+      "fps": 24,
+      "images": [
+        "8",
+        0
+      ]
+    }
+  },
+  "59": {
+    "class_type": "SaveVideo",
+    "inputs": {
+      "codec": "auto",
+      "filename_prefix": "golden",
+      "format": "mp4",
+      "video": [
+        "58",
+        0
+      ]
+    }
+  },
+  "6": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "clip": [
+        "90",
+        1
+      ],
+      "text": "a lighthouse at dawn, painterly"
+    }
+  },
+  "69": {
+    "class_type": "LTXVConditioning",
+    "inputs": {
+      "frame_rate": 24,
+      "negative": [
+        "77",
+        1
+      ],
+      "positive": [
+        "77",
+        0
+      ]
+    }
+  },
+  "7": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "clip": [
+        "90",
+        1
+      ],
+      "text": "blurry, watermark"
+    }
+  },
+  "71": {
+    "class_type": "LTXVScheduler",
+    "inputs": {
+      "base_shift": 0.95,
+      "latent": [
+        "77",
+        2
+      ],
+      "max_shift": 2.05,
+      "steps": 24,
+      "stretch": true,
+      "terminal": 0.1
+    }
+  },
+  "72": {
+    "class_type": "SamplerCustom",
+    "inputs": {
+      "add_noise": true,
+      "cfg": 6.5,
+      "latent_image": [
+        "77",
+        2
+      ],
+      "model": [
+        "90",
+        0
+      ],
+      "negative": [
+        "69",
+        1
+      ],
+      "noise_seed": 4242,
+      "positive": [
+        "69",
+        0
+      ],
+      "sampler": [
+        "73",
+        0
+      ],
+      "sigmas": [
+        "71",
+        0
+      ]
+    }
+  },
+  "73": {
+    "class_type": "KSamplerSelect",
+    "inputs": {
+      "sampler_name": "euler"
+    }
+  },
+  "77": {
+    "class_type": "LTXVImgToVideo",
+    "inputs": {
+      "batch_size": 1,
+      "height": 1024,
+      "image": [
+        "78",
+        0
+      ],
+      "length": 81,
+      "negative": [
+        "7",
+        0
+      ],
+      "positive": [
+        "6",
+        0
+      ],
+      "strength": 0.15,
+      "vae": [
+        "44",
+        2
+      ],
+      "width": 1024
+    }
+  },
+  "78": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "golden-start.png"
+    }
+  },
+  "8": {
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": [
+        "72",
+        0
+      ],
+      "vae": [
+        "44",
+        2
+      ]
+    }
+  },
+  "90": {
+    "class_type": "LoraLoader",
+    "inputs": {
+      "clip": [
+        "38",
+        0
+      ],
+      "lora_name": "ltx-detail-enhancer.safetensors",
+      "model": [
+        "44",
+        0
+      ],
+      "strength_clip": 0.8,
+      "strength_model": 0.8
+    }
+  }
+}

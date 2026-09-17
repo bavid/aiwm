@@ -32,6 +32,14 @@ import {
   type LoraParam,
   type UpscaleParams,
 } from "../../lib/ipc";
+import { HiresFixField } from "./HiresFixField";
+import {
+  DEFAULT_HIRES,
+  hiresAutoSteps,
+  hiresFinalDim,
+  toHiresParams,
+  type HiresFixSettings,
+} from "./hires-fix";
 import "./image.css";
 
 const DONE: JobState[] = ["completed", "failed", "cancelled"];
@@ -40,6 +48,9 @@ const MIN_DIM = 512;
 const MAX_DIM = 2048;
 const DIM_STEP = 64;
 const GALLERY_PAGE_SIZE = 24;
+/** The first pass's step count a fresh form starts at, and the fallback when
+ *  a job's own params don't carry one. */
+const DEFAULT_STEPS = 25;
 
 const PRESETS = [
   { label: "Square", w: 1024, h: 1024 },
@@ -95,11 +106,12 @@ export function ImageStudio({ prefill = null, onPrefillConsumed }: Props = {}) {
   const [negative, setNegative] = useState("");
   const [width, setWidth] = useState(1024);
   const [height, setHeight] = useState(1024);
-  const [steps, setSteps] = useState(25);
+  const [steps, setSteps] = useState(DEFAULT_STEPS);
   const [cfg, setCfg] = useState(7);
   const [seed, setSeed] = useState("");
   const [modelId, setModelId] = useState("auto");
   const [loras, setLoras] = useState<LoraParam[]>([]);
+  const [hires, setHires] = useState<HiresFixSettings>(DEFAULT_HIRES);
   const [sendError, setSendError] = useState<string | null>(null);
   const [sourceJob, setSourceJob] = useState("none");
   const [sourcePath, setSourcePath] = useState("");
@@ -209,6 +221,8 @@ export function ImageStudio({ prefill = null, onPrefillConsumed }: Props = {}) {
     const s = Number(seed);
     if (seed.trim() !== "" && Number.isFinite(s) && s >= 0) params.seed = Math.floor(s);
     if (loras.length > 0) params.loras = loras;
+    // Text-to-image only — an edit keeps the source image's own size.
+    if (!editing && hires.enabled) params.hires = toHiresParams(hires);
 
     try {
       const job = await submitJob({
@@ -504,6 +518,16 @@ export function ImageStudio({ prefill = null, onPrefillConsumed }: Props = {}) {
             </p>
           )}
 
+          {!editing && (
+            <HiresFixField
+              value={hires}
+              onChange={setHires}
+              width={clampDim(width)}
+              height={clampDim(height)}
+              steps={steps}
+            />
+          )}
+
           <div className="imgform__grid">
             <label className="imgform__field">
               <span>Seed</span>
@@ -752,6 +776,16 @@ function Result({
   const modelName = job.model_id ? (modelNames.get(job.model_id) ?? job.model_id) : "—";
   const live = progress && progress.job_id === job.id ? progress : null;
 
+  // The engine writes `output_*` and the resolved second-pass steps back only
+  // once the job actually runs, so predict them the same way for a job that is
+  // still queued or blocked — otherwise it would read "1024×1024 → 1024×1024
+  // · ? steps". Both rows below use these, so they can never disagree.
+  const finalWidth =
+    p.output_width ?? (p.hires && p.width ? hiresFinalDim(p.width, p.hires.scale_by) : p.width);
+  const finalHeight =
+    p.output_height ?? (p.hires && p.height ? hiresFinalDim(p.height, p.hires.scale_by) : p.height);
+  const hiresSteps = p.hires?.steps ?? hiresAutoSteps(p.steps ?? DEFAULT_STEPS);
+
   return (
     <div className="result">
       <div className="result__canvas" data-state={job.state}>
@@ -813,7 +847,18 @@ function Result({
               <>
                 <dt>Size</dt>
                 <dd className="numeric">
-                  {p.width}×{p.height} · {p.steps ?? "?"} steps · cfg {p.cfg ?? "?"}
+                  {/* Hi-Res-Fix finishes bigger than it was asked for. */}
+                  {finalWidth}×{finalHeight} · {p.steps ?? "?"} steps · cfg {p.cfg ?? "?"}
+                </dd>
+              </>
+            )}
+            {p.hires && p.width && p.height && (
+              <>
+                <dt>Hi-res fix</dt>
+                <dd className="numeric">
+                  {p.width}×{p.height} → {finalWidth}×{finalHeight} · denoise{" "}
+                  {p.hires.denoise.toFixed(2)} · {hiresSteps} steps ·{" "}
+                  {p.hires.upscale_method ?? "nearest-exact"}
                 </dd>
               </>
             )}

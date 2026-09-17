@@ -74,7 +74,8 @@
 
 .imgform__field input:focus-visible,
 .imgform__field textarea:focus-visible,
-.imgform__field select:focus-visible {
+.imgform__field select:focus-visible,
+.hiresfix__check input:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
 }
@@ -339,6 +340,77 @@
   justify-content: center;
   gap: var(--space-3);
   margin-top: var(--space-3);
+}
+
+/* --- hi-res fix --- */
+
+.hiresfix {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: 0;
+  /* A fieldset's default min-inline-size is its content's — without this it
+     refuses to shrink with the form column. */
+  min-inline-size: 0;
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.hiresfix legend {
+  padding: 0 var(--space-1);
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.hiresfix__check {
+  display: flex;
+  align-items: start;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+
+.hiresfix__check input {
+  margin-top: 0.15em;
+  accent-color: var(--accent);
+}
+
+.hiresfix__value {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.hiresfix__slider {
+  width: 100%;
+  align-self: center;
+  accent-color: var(--accent);
+}
+
+.hiresfix__hint {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+}
+
+.hiresfix__advbtn {
+  align-self: start;
+}
+
+.hiresfix__advbtn[aria-expanded="true"] {
+  color: var(--accent);
+  border-color: color-mix(in oklab, var(--accent) 45%, var(--border));
+}
+
+.hiresfix__adv {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-2) var(--space-3);
 }
 
 @media (max-width: 860px) {

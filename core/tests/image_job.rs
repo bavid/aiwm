@@ -286,6 +286,78 @@ async fn an_image_job_with_a_lora_splices_a_loraloader_into_the_real_graph() {
     assert_eq!(chain[0]["strength"], 0.65);
 }
 
+/// Plan 3's Hi-Res-Fix, proved the same way the LoRA case above is: by asking
+/// the fake ComfyUI what graph it actually received. `params.hires` →
+/// `ImageRequest::from_params` → `Txt2ImgInputs.hires` →
+/// `fragments::hires::ksampler_pass` has to come out the far end as a real
+/// `LatentUpscaleBy` plus a *second* `KSampler`. The no-hires control runs on
+/// the same fixture first so the difference — not just the presence of the
+/// nodes — is what's being asserted.
+#[tokio::test]
+async fn an_image_job_with_hires_fix_submits_a_second_sampler_pass() {
+    let h = harness(true).await;
+
+    // --- control: the same job without `hires` ---------------------------
+    let plain = h.engine.submit(image_job("a quiet harbour")).await.unwrap();
+    let outcome = h.engine.run_next().await.unwrap().unwrap();
+    assert!(
+        matches!(&outcome, JobOutcome::Completed { job_id } if *job_id == plain.id),
+        "got {outcome:?}"
+    );
+    let port = port_from_detail(&h.comfyui.detail().expect("comfyui detail"));
+    let types = graph_node_types(port).await;
+    assert_eq!(count(&types, "KSampler"), 1, "{types:?}");
+    assert_eq!(count(&types, "LatentUpscaleBy"), 0, "{types:?}");
+
+    // --- the Hi-Res-Fix job ----------------------------------------------
+    let mut job = image_job("a quiet harbour, high detail");
+    job.params["steps"] = serde_json::json!(20);
+    job.params["hires"] = serde_json::json!({ "scale_by": 1.5, "denoise": 0.45 });
+    let job = h.engine.submit(job).await.unwrap();
+
+    let outcome = h.engine.run_next().await.unwrap().unwrap();
+    assert!(
+        matches!(&outcome, JobOutcome::Completed { job_id } if *job_id == job.id),
+        "got {outcome:?}"
+    );
+
+    let types = graph_node_types(port).await;
+    assert_eq!(count(&types, "LatentUpscaleBy"), 1, "{types:?}");
+    assert_eq!(count(&types, "KSampler"), 2, "{types:?}");
+
+    // The resolved request is pinned back onto the job: the second pass's
+    // steps defaulted to half the first pass's, and the finished pixel size
+    // is the upscaled one (512 px = 64 latent units, × 1.5 → 96 → 768 px).
+    let stored = h.db.jobs().get(&job.id).await.unwrap().unwrap();
+    assert_eq!(stored.params["hires"]["steps"], 10);
+    assert_eq!(stored.params["hires"]["scale_by"], 1.5);
+    assert_eq!(stored.params["hires"]["upscale_method"], "nearest-exact");
+    assert_eq!(stored.params["output_width"], 768);
+    assert_eq!(stored.params["output_height"], 768);
+}
+
+/// The `class_type`s of the last graph the fake ComfyUI received, in node-id
+/// order (its `/__test/last_graph_node_types`).
+async fn graph_node_types(port: u16) -> Vec<String> {
+    let resp: serde_json::Value = reqwest::get(format!(
+        "http://127.0.0.1:{port}/__test/last_graph_node_types"
+    ))
+    .await
+    .unwrap()
+    .json()
+    .await
+    .unwrap();
+    resp.as_array()
+        .expect("node type array")
+        .iter()
+        .map(|v| v.as_str().unwrap_or_default().to_string())
+        .collect()
+}
+
+fn count(types: &[String], class_type: &str) -> usize {
+    types.iter().filter(|t| *t == class_type).count()
+}
+
 #[tokio::test]
 async fn image_job_without_a_prompt_fails() {
     let h = harness(true).await;

@@ -1,0 +1,206 @@
+//! Node/id-agnostic graph builder used by [`crate::pipeline::fragments`].
+//!
+//! `Graph` wraps a `serde_json::Map` of ComfyUI API-format nodes
+//! (`{"<node id>": {"class_type", "inputs"}}`). `OwnedLink` is the owned
+//! equivalent of a `["<node id>", <slot>]` link pair — owned so fragment
+//! functions can hand links back to callers without borrowing from the graph
+//! (no lifetimes to thread through the fragment API).
+
+use serde_json::{json, Value};
+
+/// An owned `["<node id>", <slot>]` link. Owned (not borrowed from the
+/// graph) so fragment functions can return links to callers freely.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OwnedLink {
+    pub node: String,
+    pub slot: u32,
+}
+
+impl OwnedLink {
+    pub fn new(node: &str, slot: u32) -> Self {
+        Self {
+            node: node.to_string(),
+            slot,
+        }
+    }
+
+    /// The ComfyUI API-format link JSON: `["<node id>", <slot>]`.
+    pub fn json(&self) -> Value {
+        json!([self.node, self.slot])
+    }
+}
+
+/// A width/height input that is either a literal number or another node's
+/// output slot. Most recipes size a latent from fixed inputs, but
+/// `flux2_klein_edit` sizes both its `Flux2Scheduler` and its output canvas
+/// from a `GetImageSize` node, so the same fragments have to take either.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Dim {
+    /// A literal pixel count.
+    Fixed(u32),
+    /// A node output slot carrying the dimension (e.g. `GetImageSize`).
+    Link(OwnedLink),
+}
+
+impl Dim {
+    /// The JSON this dimension serialises to: a bare number, or a link pair.
+    pub fn json(&self) -> Value {
+        match self {
+            Self::Fixed(n) => json!(n),
+            Self::Link(link) => link.json(),
+        }
+    }
+}
+
+impl From<u32> for Dim {
+    fn from(n: u32) -> Self {
+        Self::Fixed(n)
+    }
+}
+
+impl From<OwnedLink> for Dim {
+    fn from(link: OwnedLink) -> Self {
+        Self::Link(link)
+    }
+}
+
+impl From<&OwnedLink> for Dim {
+    fn from(link: &OwnedLink) -> Self {
+        Self::Link(link.clone())
+    }
+}
+
+/// Failure modes for [`Graph::set_input`].
+#[derive(Debug, thiserror::Error)]
+pub enum PipelineError {
+    #[error("graph has no node {0:?}")]
+    MissingNode(String),
+}
+
+/// A ComfyUI API-format prompt graph under construction: explicit node ids
+/// to `{"class_type", "inputs"}` node bodies.
+#[derive(Debug, Default, Clone)]
+pub struct Graph {
+    nodes: serde_json::Map<String, Value>,
+}
+
+impl Graph {
+    /// Insert or overwrite the node at `id` with `{"class_type", "inputs"}`.
+    pub fn node(&mut self, id: &str, class_type: &str, inputs: Value) {
+        self.nodes.insert(
+            id.to_string(),
+            json!({ "class_type": class_type, "inputs": inputs }),
+        );
+    }
+
+    /// Set one input field on an existing node. Errs if `id` has no node.
+    pub fn set_input(&mut self, id: &str, key: &str, value: Value) -> Result<(), PipelineError> {
+        let node = self
+            .nodes
+            .get_mut(id)
+            .ok_or_else(|| PipelineError::MissingNode(id.to_string()))?;
+        node["inputs"][key] = value;
+        Ok(())
+    }
+
+    /// Read one input field of a node, if the node and field both exist.
+    ///
+    /// Test-only: production code builds graphs, it never reads one back —
+    /// the fragment and recipe tests use this (and [`Graph::contains`]) to
+    /// assert wiring without serialising the whole graph first.
+    #[cfg(test)]
+    pub fn input(&self, id: &str, key: &str) -> Option<&Value> {
+        self.nodes.get(id)?.get("inputs")?.get(key)
+    }
+
+    /// Whether a node with this id has been added. Test-only, see
+    /// [`Graph::input`].
+    #[cfg(test)]
+    pub fn contains(&self, id: &str) -> bool {
+        self.nodes.contains_key(id)
+    }
+
+    /// Consume the graph into the ComfyUI API-format prompt JSON.
+    pub fn into_value(self) -> Value {
+        Value::Object(self.nodes)
+    }
+}
+
+/// Allocates sequential string node ids ("90", "91", …) starting at `base`,
+/// clear of every fixed id an existing recipe uses.
+#[derive(Debug, Clone, Copy)]
+pub struct NextId(u32);
+
+impl NextId {
+    pub fn new(base: u32) -> Self {
+        Self(base)
+    }
+
+    /// Return the next id and advance past it.
+    pub fn take(&mut self) -> String {
+        let id = self.0;
+        self.0 += 1;
+        id.to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn node_ids_are_explicit_and_links_render_as_pairs() {
+        let mut g = Graph::default();
+        g.node(
+            "4",
+            "CheckpointLoaderSimple",
+            json!({ "ckpt_name": "x.safetensors" }),
+        );
+        let link = OwnedLink::new("4", 0);
+        assert_eq!(link.json(), json!(["4", 0]));
+        assert!(g.contains("4"));
+        assert_eq!(g.input("4", "ckpt_name"), Some(&json!("x.safetensors")));
+    }
+
+    #[test]
+    fn set_input_on_a_missing_node_is_an_error() {
+        let mut g = Graph::default();
+        let err = g.set_input("99", "foo", json!(1)).unwrap_err();
+        assert!(matches!(err, PipelineError::MissingNode(ref id) if id == "99"));
+    }
+
+    #[test]
+    fn next_id_allocates_from_a_base() {
+        let mut ids = NextId::new(90);
+        assert_eq!(ids.take(), "90");
+        assert_eq!(ids.take(), "91");
+        assert_eq!(ids.take(), "92");
+    }
+
+    #[test]
+    fn dim_renders_as_a_number_or_a_link() {
+        assert_eq!(Dim::from(1024u32).json(), json!(1024));
+        assert_eq!(Dim::from(OwnedLink::new("99", 1)).json(), json!(["99", 1]));
+        assert_eq!(Dim::from(&OwnedLink::new("99", 0)).json(), json!(["99", 0]));
+    }
+
+    #[test]
+    fn into_value_renders_the_api_format_prompt_object() {
+        let mut g = Graph::default();
+        g.node(
+            "4",
+            "CheckpointLoaderSimple",
+            json!({ "ckpt_name": "x.safetensors" }),
+        );
+        assert_eq!(
+            g.into_value(),
+            json!({
+                "4": {
+                    "class_type": "CheckpointLoaderSimple",
+                    "inputs": { "ckpt_name": "x.safetensors" }
+                }
+            })
+        );
+    }
+}

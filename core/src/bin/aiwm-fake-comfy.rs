@@ -16,7 +16,8 @@
 //! hands back the most recently submitted graph's `LoraLoader` chain — lets an
 //! integration test prove a job's `params.loras` actually reached ComfyUI as
 //! real nodes (file + strength, in chain order), not just that the job
-//! completed.
+//! completed. `GET /__test/last_graph_node_types` does the same for the
+//! graph's shape: every node's `class_type`, in node-id order.
 //!
 //! Fixture-only flags:
 //! - `--fake-ready-ms <n>`  — delay the socket bind by `n` ms (slow cold start).
@@ -64,6 +65,11 @@ struct Fixture {
     /// the ComfyUI graph as real `LoraLoader` nodes, not just that the job
     /// completed. Test-only surface; the real ComfyUI has no such endpoint.
     last_lora_chain: Arc<Mutex<Vec<LoraLink>>>,
+    /// Every `class_type` of the most recently submitted graph, in node-id
+    /// order — read back by `GET /__test/last_graph_node_types`. Same idea as
+    /// [`Fixture::last_lora_chain`] but for the graph's *shape*: it lets a
+    /// test prove a second sampler pass (Hi-Res-Fix) really reached ComfyUI.
+    last_graph_node_types: Arc<Mutex<Vec<String>>>,
 }
 
 /// One `LoraLoader` node's `lora_name` + `strength_model` (mirrors
@@ -124,6 +130,7 @@ async fn main() -> anyhow::Result<()> {
         input_dir: base_dir.join("input"),
         prompts: Arc::new(Mutex::new(HashMap::new())),
         last_lora_chain: Arc::new(Mutex::new(Vec::new())),
+        last_graph_node_types: Arc::new(Mutex::new(Vec::new())),
     };
 
     let app = Router::new()
@@ -134,6 +141,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/history/{id}", get(history))
         .route("/view", get(view))
         .route("/__test/last_lora_chain", get(last_lora_chain))
+        .route("/__test/last_graph_node_types", get(last_graph_node_types))
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, port)).await?;
@@ -172,8 +180,15 @@ async fn submit_prompt(State(fx): State<Fixture>, Json(body): Json<Value>) -> Js
     let mut is_video = false;
     let mut load_image = None;
     let mut lora_nodes: Vec<(u32, LoraLink)> = Vec::new();
+    let mut node_types: Vec<(u32, String)> = Vec::new();
     if let Some(nodes) = body.get("prompt").and_then(Value::as_object) {
         for (node_id, node) in nodes {
+            if let (Ok(id), Some(class_type)) = (
+                node_id.parse::<u32>(),
+                node.get("class_type").and_then(Value::as_str),
+            ) {
+                node_types.push((id, class_type.to_string()));
+            }
             match node.get("class_type").and_then(Value::as_str) {
                 Some("SaveVideo") => is_video = true,
                 Some("SaveImage") => {}
@@ -215,6 +230,12 @@ async fn submit_prompt(State(fx): State<Fixture>, Json(body): Json<Value>) -> Js
         *last = lora_chain;
     }
 
+    node_types.sort_by_key(|(id, _)| *id);
+    let types: Vec<String> = node_types.into_iter().map(|(_, class)| class).collect();
+    if let Ok(mut last) = fx.last_graph_node_types.lock() {
+        *last = types;
+    }
+
     let id = format!("p-{}", fx.prompts.lock().map(|m| m.len()).unwrap_or(0) + 1);
     if let Ok(mut prompts) = fx.prompts.lock() {
         prompts.insert(
@@ -241,6 +262,19 @@ async fn last_lora_chain(State(fx): State<Fixture>) -> Json<Value> {
         .map(|c| c.clone())
         .unwrap_or_default();
     Json(json!({ "loras": chain }))
+}
+
+/// Test-only introspection: the `class_type` of every node in the most
+/// recently submitted graph, in node-id order (numerically sorted), so an
+/// integration test can assert the graph's *shape* — e.g. that a Hi-Res-Fix
+/// request really produced a `LatentUpscaleBy` and a second sampler pass.
+async fn last_graph_node_types(State(fx): State<Fixture>) -> Json<Value> {
+    let types = fx
+        .last_graph_node_types
+        .lock()
+        .map(|t| t.clone())
+        .unwrap_or_default();
+    Json(json!(types))
 }
 
 async fn history(State(fx): State<Fixture>, Path(id): Path<String>) -> Json<Value> {

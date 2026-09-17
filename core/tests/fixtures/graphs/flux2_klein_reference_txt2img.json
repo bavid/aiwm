@@ -1,0 +1,207 @@
+{
+  "10": {
+    "class_type": "VAELoader",
+    "inputs": {
+      "vae_name": "flux2-vae.safetensors"
+    }
+  },
+  "11": {
+    "class_type": "CLIPLoader",
+    "inputs": {
+      "clip_name": "qwen_3_8b_fp8mixed.safetensors",
+      "type": "flux2"
+    }
+  },
+  "12": {
+    "class_type": "UnetLoaderGGUF",
+    "inputs": {
+      "unet_name": "flux-2-klein-9b-Q4_K_M.gguf"
+    }
+  },
+  "27": {
+    "class_type": "ConditioningZeroOut",
+    "inputs": {
+      "conditioning": [
+        "6",
+        0
+      ]
+    }
+  },
+  "28": {
+    "class_type": "KSamplerSelect",
+    "inputs": {
+      "sampler_name": "dpmpp_2m"
+    }
+  },
+  "29": {
+    "class_type": "Flux2Scheduler",
+    "inputs": {
+      "height": 1024,
+      "steps": 24,
+      "width": 1024
+    }
+  },
+  "3": {
+    "class_type": "SamplerCustomAdvanced",
+    "inputs": {
+      "guider": [
+        "31",
+        0
+      ],
+      "latent_image": [
+        "32",
+        0
+      ],
+      "noise": [
+        "30",
+        0
+      ],
+      "sampler": [
+        "28",
+        0
+      ],
+      "sigmas": [
+        "29",
+        0
+      ]
+    }
+  },
+  "30": {
+    "class_type": "RandomNoise",
+    "inputs": {
+      "noise_seed": 4242
+    }
+  },
+  "31": {
+    "class_type": "CFGGuider",
+    "inputs": {
+      "cfg": 6.5,
+      "model": [
+        "90",
+        0
+      ],
+      "negative": [
+        "54",
+        0
+      ],
+      "positive": [
+        "53",
+        0
+      ]
+    }
+  },
+  "32": {
+    "class_type": "EmptyFlux2LatentImage",
+    "inputs": {
+      "batch_size": 1,
+      "height": 1024,
+      "width": 1024
+    }
+  },
+  "50": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "golden-reference.png"
+    }
+  },
+  "51": {
+    "class_type": "ImageScaleToTotalPixels",
+    "inputs": {
+      "image": [
+        "50",
+        0
+      ],
+      "megapixels": 1.0,
+      "resolution_steps": 1,
+      "upscale_method": "lanczos"
+    }
+  },
+  "52": {
+    "class_type": "VAEEncode",
+    "inputs": {
+      "pixels": [
+        "51",
+        0
+      ],
+      "vae": [
+        "10",
+        0
+      ]
+    }
+  },
+  "53": {
+    "class_type": "ReferenceLatent",
+    "inputs": {
+      "conditioning": [
+        "6",
+        0
+      ],
+      "latent": [
+        "52",
+        0
+      ]
+    }
+  },
+  "54": {
+    "class_type": "ReferenceLatent",
+    "inputs": {
+      "conditioning": [
+        "27",
+        0
+      ],
+      "latent": [
+        "52",
+        0
+      ]
+    }
+  },
+  "6": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "clip": [
+        "90",
+        1
+      ],
+      "text": "a lighthouse at dawn, painterly"
+    }
+  },
+  "8": {
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": [
+        "3",
+        0
+      ],
+      "vae": [
+        "10",
+        0
+      ]
+    }
+  },
+  "9": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "filename_prefix": "golden",
+      "images": [
+        "8",
+        0
+      ]
+    }
+  },
+  "90": {
+    "class_type": "LoraLoader",
+    "inputs": {
+      "clip": [
+        "11",
+        0
+      ],
+      "lora_name": "flux2-realistic-detail.safetensors",
+      "model": [
+        "12",
+        0
+      ],
+      "strength_clip": 0.8,
+      "strength_model": 0.8
+    }
+  }
+}

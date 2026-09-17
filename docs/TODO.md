@@ -1162,75 +1162,135 @@ herunter — das kann die App nicht umgehen. Das 9B-Profil sagt das jetzt im
   weg und der Lauf wird nach dem Neustart als `interrupted` verbucht (dasselbe
   galt vorher für den Completion-Marker).
 
-## ComfyUI Workflow-Engine (geplant, 2026-09-16 — noch keine Implementierung)
+## ComfyUI Workflow-Engine — ✅ Phase A + Hi-Res-Fix umgesetzt (2026-09-17)
 
-**Ziel laut User:** bessere Bild-/Video-Ausgabequalität, nicht nur mehr
-Optionen. **Priorität entschieden (User, 2026-09-16):** erst eine
-wiederverwendbare Workflow-Template-Schicht bauen, dann die eigentlichen
-Qualitäts-Features als Templates darauf.
+Plan: `docs/superpowers/plans/2026-09-17-comfyui-workflow-engine-plan-3.md`,
+Design + Entscheidungstabelle:
+`docs/superpowers/specs/2026-09-17-comfyui-workflow-engine-design.md`.
 
-**Problem, das die Template-Schicht löst:** Jede Generierungs-"Lane"
-(`checkpoint_txt2img`, `flux_txt2img`, `flux2_klein_txt2img`,
-`flux2_klein_edit`, Upscale separat) ist heute eine von Hand geschriebene
-Rust-Funktion, die den ComfyUI-Graphen Node für Node neu zusammenbaut
-(`core/src/pipeline/mod.rs`). Eine neue Lane = eine neue ~100-Zeilen-
-Funktion + eigene Tests; ein neues Qualitäts-Feature (Hi-Res-Fix,
-ControlNet, Face-Restore) müsste in jede bestehende Lane einzeln von Hand
-verdrahtet werden — die Wartungskosten multiplizieren sich mit jeder
-Kombination. Schon heute duplizieren sich Checkpoint-Load/Prompt-Encode/
-KSampler-Verdrahtung leicht abgewandelt über vier Funktionen hinweg — eine
-reale, bereits sichtbare Redundanz, unabhängig von neuen Features.
+**Inspiration, keine Kopie:** Die Idee einer Fragment-Schicht stammt aus einem
+parallelen lokalen AI-Studio-Projekt (`E:\locally-uncensored`, AGPL-3.0);
+übernommen wurde ausschließlich das *Muster* „Graph-Bau in kleine, benannte,
+einzeln getestete Fragmente zerlegen", kein Code. Roh importierte
+Workflow-JSONs aus dem ComfyUI-Editor bleiben bewusst außen vor — das brächte
+genau die Node-Graph-Komplexität zurück, die die App vor dem Nutzer versteckt.
 
-**Inspiration, keine Kopie (siehe unten):** Ein paralleles lokales
-AI-Studio-Projekt (`E:\locally-uncensored`, AGPL-3.0 — Idee übernommen,
-kein Code kopiert) hat einen Workflow-Graphen + eine "Parameter-Map" —
-ein fester Satz generischer Achsen (Prompt, Seed, Steps, CFG, Größe,
-Sampler, Input-Bild, Frames/FPS, Model-Loader), auf `{Node-Id,
-Input-Key}`-Paare in einem konkreten Graphen abgebildet. Eine neue Lane
-wird dort zur Konfigurations-Aktion (Graph importieren + Felder mappen),
-nicht zu neuem Pipeline-Code. AIWM soll **nicht** roh importierte
-Workflow-JSON-Dateien aus dem ComfyUI-Editor unterstützen — das würde genau
-die Node-Graph-Komplexität zurückbringen, die die App bewusst vor dem
-Nutzer versteckt (siehe Story Studio: "keine neuen Nodes, keine neue
-Capability" für Bildgenerierung). Was portiert wird, ist die **Idee**:
-Graph-Bau in kleine, benannte, komponierbare, einzeln getestete Fragmente
-zerlegen (Checkpoint laden, Prompt encodieren, KSampler-Pass,
-Latent-Upscale, ControlNet anwenden, Face-Restore-Pass, LoRA-Kette — Letzteres
-existiert als `splice_loras` bereits genau in dieser Form) statt als
-Rust-Idee 1:1 aus einer anderen Codebase übernommen.
+**Phase A — Fragment-Schicht:**
+- `core/src/pipeline/graph.rs`: `Graph`, `OwnedLink`, `NextId`, `Dim` — der
+  Graph-Builder, auf dem alles andere sitzt.
+- `core/src/pipeline/fragments/{loaders,conditioning,latent,sampling,output,loras,ipadapter,reference,video,upscale,hires}.rs`
+  — je ein benanntes, einzeln getestetes Fragment.
+- `core/src/pipeline/recipes/{image,story,video,upscale}.rs` mit fester
+  Node-Id-Karte (`recipes::ids`: LoRA 90–94, Hi-Res 40–44).
+- `core/src/pipeline/mod.rs` schrumpft von 2187 auf 386 Zeilen und ist nur noch
+  Typen + öffentliche Fassade.
+- **Byte-identisch bewiesen:** 16 Golden-Fixtures (`core/tests/fixtures/graphs/`)
+  wurden *vor* dem Refactor aus den handgeschriebenen Graphen erzeugt; die
+  komponierten Rezepte liefern exakt dieselben JSONs. Dazu 2 neue
+  `*_hires.json`-Fixtures, die es vorher nicht geben konnte.
 
-**Architektur-Skizze (Plan, nicht gebaut):**
-- **Phase A — Fragment-Schicht:** bestehende Graph-Funktionen refactorn,
-  sodass sie aus wiederverwendbaren Fragment-Buildern komponiert werden
-  statt jede ihr eigenes Boilerplate zu duplizieren. Ein "Recipe" = eine
-  geordnete Fragment-Liste + ein Parameter-Struct; das Zusammensetzen
-  erzeugt das finale Graph-JSON — genau das Muster, das `splice_loras`
-  heute schon für die eine Fragment-Art (LoRA-Kette) vormacht, nur
-  verallgemeinert.
-- **Phase B — Qualitäts-Rezepte als Fragmente**, in dieser Reihenfolge
-  (steigender Aufwand):
-  1. **Hi-Res-Fix / Mehrpass-Refinement** (niedrig auflösend generieren →
-     Latent-Upscale → zweiter Low-Denoise-KSampler-Pass) — kein neues
-     externes Modell nötig, gut verstandene SDXL/Flux-Technik, guter
-     erster Test ob sich die Fragment-Schicht lohnt.
-  2. **Face-Restoration** als Post-Process — ein dediziertes, kleines
-     Modell/Node, überschaubarer Umfang, gutes Aufwand/Nutzen-Verhältnis.
-  3. **ControlNet/Region-Conditioning** (Referenzbild-gesteuerte Pose/
-     Tiefe/Kanten-Konditionierung) — braucht einen neuen Modell-Download-
-     Weg (ControlNet-Checkpoints) und Preprocessor-Nodes, größter Aufwand,
-     zuletzt.
+**Phase B.1 — Hi-Res-Fix:**
+- `HiresFix { scale_by 1,25–2,0, denoise 0,2–0,7, steps 4–60 (Default: halbe
+  First-Pass-Steps), upscale_method }` — geklemmt schon an der Param-Grenze
+  (`ImageRequest::from_params`), die Rezepte verdrahten ungeprüft weiter.
+- KSampler-Familie (SDXL-Checkpoint, FLUX.1 GGUF, FLUX.2 [klein] safetensors):
+  `"40"` `LatentUpscaleBy` → `"41"` `KSampler` mit `denoise`.
+- FLUX.2 [klein] GGUF (kein `KSampler`): `"42"` `Flux2Scheduler`
+  (`steps = round(steps/denoise)`) → `"43"` `SplitSigmasDenoise` → `"44"`
+  `SamplerCustomAdvanced`. Dadurch heißt `hires.steps` in **jeder** Familie
+  dasselbe: tatsächlich ausgeführte Schritte.
+- **Eine** Größenformel für Graph *und* Capability-Ebene:
+  `pipeline::latent_upscaled_px` = `round(px/8·s)·8` (`LatentUpscaleBy` rundet
+  im Latent, nicht in Pixeln — 1000 px × 1,25 sind 1248, nicht 1250). Die in
+  `output_width`/`output_height` zurückgeschriebene Größe kann deshalb nicht
+  von der echten Ausgabe abweichen.
+- VRAM-Headroom skaliert mit den Pixeln des **zweiten** Passes
+  (`ImageRequest::final_size()` → `media_vram_mb`, `orchestrator/engine.rs`).
+- API: `params.hires`; Edit- und Referenz-Renders (Story Studio) ignorieren den
+  Block bewusst — ein Edit hat kein eigenes Latent, und ein Referenz-Render
+  tauscht Auflösung gegen Charakter-Konsistenz.
+- Beweis am real gesendeten Graphen: `/__test/last_graph_node_types` im
+  `aiwm-fake-comfy` + `core/tests/image_job.rs`.
+- UI: Toggle im Image-Tab (`ui/src/features/image/HiresFixField.tsx`) — nicht im
+  Story Studio, nicht im Edit-Modus.
 
-**Ausdrücklich noch offen, bewusst nicht vorab entschieden:** welches
-ControlNet-Preprocessor-Node-Pack (braucht echte Recherche, gleiche
-Disziplin wie jede bisherige Custom-Node-Entscheidung diese Session); ob
-Hi-Res-Fix ein Per-Generation-Toggle oder eine globale Qualitätsstufe wird;
-der reale VRAM-/Zeit-Mehrkosten eines zweiten KSampler-Passes auf einer
-16-GB-Karte (an echter Hardware messen, nicht annehmen — gleiche Disziplin
-wie die VRAM-Kalibrierung oben); ob Face-Restore/ControlNet gleich gut für
-SDXL und Flux funktionieren oder pro Familie unterschiedliche Node-Packs
-brauchen (gleiche SDXL-vs-Flux-Reifegrad-Frage wie bei Story Studios
-IP-Adapter-Arbeit). **Keine Implementierung** — wie beim Trainings-
-Orchestrator erst vollständiges Design/Spec + User-Freigabe vor Code.
+### Gemessen (2026-09-17, RTX 4080 SUPER 16 GB)
+
+Echter `aiwm-cored` aus dem Worktree gegen das von der App verwaltete ComfyUI
+(`E:\AI\data\runtimes\comfyui`), keine Fixtures. Prompt „a lighthouse on a rocky
+coast at golden hour, dramatic clouds, highly detailed", Negativ „blurry,
+lowres", 1024×1024, 25 Steps im ersten Pass; Hi-Res mit denoise 0,45, 12
+ausgeführten Schritten, `nearest-exact`. Jede Zeile ist der Median aus ≥ 3
+Läufen mit **je eigenem Seed** — ComfyUI cached Node-Ausgaben, ein wiederholter
+Seed liefert dasselbe Bild in ~1,5 s zurück, ohne zu rendern. VRAM-Spitze =
+Maximum aus `nvidia-smi` mit 5 Messungen/s über den ganzen Job, **inklusive**
+~1,4 GB Desktop-Grundlast und des residenten Modells (also Karten-Gesamtbelegung,
+nicht der Anteil eines Passes).
+
+| Modell | Auflösung | Hi-Res | Wandzeit warm | VRAM-Spitze | Ausgabe | Ergebnis/Anmerkung |
+|---|---|---|---|---|---|---|
+| SDXL base 1.0 (safetensors, cfg 7, euler/normal) | 1024×1024 | aus | **5,7 s** (3×5,7) | 10 573 MB | 1024×1024 | Referenzlauf |
+| SDXL base 1.0 | 1024×1024 | 1,5× | **12,6 s** (12,0–13,2) | 14 005 MB | 1536×1536 | +6,9 s, Faktor 2,2. Sichtbar mehr Fels-/Gischtdetail; das Web-/Gittermuster, das das Basisbild im Wasser zeigt, verschwindet. Komposition bleibt erhalten. |
+| SDXL base 1.0 | 1024×1024 | 2,0× | **19,8 s** (18,0–21,1) | 14 701 MB | 2048×2048 | **Passt in 16 GB** — kein OOM, keine Planer-Absage, ~1,7 GB Luft. Aber: Bei 2,0× + denoise 0,45 verschiebt der zweite Pass die Komposition sichtbar (Leuchtturm wandert und schrumpft) — Detailgewinn ja, „nur schärfer" nein. |
+| FLUX.2 [klein] 9B fp8mixed (safetensors → KSampler-Familie, guidance 4) | 1024×1024 | aus | **15,6 s** (3×15,6) | 13 075 MB | 1024×1024 | Referenzlauf |
+| FLUX.2 [klein] 9B fp8mixed | 1024×1024 | 1,5× | **34,4 s** (33,0–35,8) | 14 095 MB | 1536×1536 | +18,8 s, Faktor 2,2. Deutlich mehr Textur in Fels, Gischt und Wolken bei praktisch identischer Komposition — bestes Qualität/Zeit-Verhältnis der Messreihe. |
+| FLUX.2 [klein] **GGUF** (`SamplerCustomAdvanced`-Zweig) | — | — | — | — | — | **Nicht messbar** — es ist kein GGUF-klein-Modell installiert. Dieser Zweig ist ausschließlich fixture-bewiesen (`flux2_klein_txt2img_hires.json`). |
+
+Belegbilder (gitignored, außerhalb des Repos versioniert):
+`E:\AI\.smoke-hires\` — `sdxl-seed202-base-1024.png` /
+`sdxl-seed202-hires1.5x-1536.png`, `sdxl-seed523-base-1024.png` /
+`sdxl-seed523-hires2.0x-2048.png`, `klein9b-seed302-base-1024.png` /
+`klein9b-seed302-hires1.5x-1536.png` (jedes Paar mit identischem Seed: das
+Basisbild *ist* der erste Pass des Hi-Res-Laufs) plus drei
+Seite-an-Seite-Ausschnitte `cmp-*.png`. Die Auflösungen oben sind aus den
+PNG-Headern gelesen, nicht aus den Job-Params.
+
+**Kaltstart (einmalig, nicht in der Tabelle):** Der erste Bildjob einer Sitzung
+startet zusätzlich den ComfyUI-Server und lädt das Modell — SDXL 1024²
+ohne Hi-Res: **45,6 s**. Der erste klein-Job danach (Server läuft, SDXL wird
+verdrängt, klein + Qwen-Text-Encoder werden geladen): **23,3 s**. Läufe, die
+mitten in einer Sitzung zwischen SDXL und klein hin- und herschalten, kosten
+24–41 s statt der warmen 15,6 s — das Umladen dominiert, nicht das Sampling.
+
+**Ehrliche Lücken der Messung:**
+- **FLUX.2 [klein] 1,5× ist am VRAM-Limit und wird situativ abgelehnt.** Der
+  Planer verrechnet `13 092 MB` (Import-Schätzung) als `10 532 MB` Gewichte +
+  `2 560 MB` Headroom, und skaliert den Headroom mit 2,25 (1,5² Pixel) →
+  **16 292 MB** gegen ein Budget von 16 376 MB, also 99,5 %. Ist klein bereits
+  geladen oder die Karte sonst leer, läuft der Job (siehe Tabelle); liegt noch
+  SDXL im Speicher, kommt der Job gar nicht erst zum Rendern, sondern wird
+  `blocked` — wörtlich: „not enough VRAM for flux-2-klein-9b-fp8mixed: 16292 MB
+  needed, but this GPU only has 6176 MB usable in total — this model doesn't fit
+  this card no matter what else is running. Try a smaller quant/model." Der Text
+  ist in dieser Situation außerdem irreführend: die Karte *hat* das Modell
+  gerade eben noch getragen, nur nicht zusätzlich zum residenten SDXL. Beides
+  ist ein Kalibrierungs-/Meldungs-Thema für später, keine Hi-Res-Fix-Regression.
+- **Der GGUF-klein-Zweig ist ungemessen** (kein Modell installiert), siehe
+  Tabellenzeile.
+- **Die 2,0×-Zeile misst „passt", nicht „ist gut":** technisch bestanden,
+  gestalterisch ist 2,0× bei denoise 0,45 schon eine Neuinterpretation. Wer
+  wirklich nur schärfen will, bleibt bei 1,25×–1,5× oder senkt denoise.
+
+**Offen / später:**
+- **Face-Restoration** als Post-Process-Fragment (Phase B.2, unverändert
+  eingeplant).
+- **ControlNet / Region-Conditioning** (Phase B.3) — braucht weiterhin die
+  echte Recherche, welches Preprocessor-Node-Pack genommen wird; bewusst noch
+  nicht entschieden.
+- **Globale Qualitätsstufen** statt (oder zusätzlich zu) dem Per-Generation-
+  Toggle: heute ist Hi-Res-Fix ausschließlich ein Schalter pro Bild.
+- **Hi-Res-Fix für Video** — die Video-Rezepte (`wan_ti2v`, `ltx_video`) haben
+  keine Hi-Res-Naht; das temporale Latent zweimal zu sampeln ist auf 16 GB
+  nicht ohne eigene Messreihe zu haben.
+- **Sampler/Scheduler pro Pass** — der zweite Pass erbt heute Sampler und
+  Scheduler des ersten; getrennte Wahl wäre ein eigener Slice.
+- **Rundungs-Gleichstand Python vs. Rust:** ComfyUI rundet die Latent-Größe mit
+  Pythons `round()` (Ties zur geraden Zahl), `latent_upscaled_px` mit Rusts
+  `f64::round` (Ties von der Null weg). Die beiden weichen nur ab, wenn ein
+  Gleichstand auf einem ungeraden Ergebnis landet (Latent-Breite 162,5: Python
+  162, Rust 163 → 8 px Unterschied). Nichts pinnt das Python-Verhalten heute
+  fest; die Rust-Semantik bleibt bewusst stehen, siehe Doc-Kommentar an
+  `pipeline::latent_upscaled_px`.
 
 ## Ideen aus `locally-uncensored` (recherchiert 2026-09-16, kein Code übernommen)
 

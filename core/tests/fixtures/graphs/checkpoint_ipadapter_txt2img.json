@@ -1,0 +1,147 @@
+{
+  "3": {
+    "class_type": "KSampler",
+    "inputs": {
+      "cfg": 6.5,
+      "denoise": 1.0,
+      "latent_image": [
+        "5",
+        0
+      ],
+      "model": [
+        "43",
+        0
+      ],
+      "negative": [
+        "7",
+        0
+      ],
+      "positive": [
+        "6",
+        0
+      ],
+      "sampler_name": "dpmpp_2m",
+      "scheduler": "karras",
+      "seed": 4242,
+      "steps": 24
+    }
+  },
+  "4": {
+    "class_type": "CheckpointLoaderSimple",
+    "inputs": {
+      "ckpt_name": "sd_xl_base_1.0.safetensors"
+    }
+  },
+  "40": {
+    "class_type": "CLIPVisionLoader",
+    "inputs": {
+      "clip_name": "CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors"
+    }
+  },
+  "41": {
+    "class_type": "IPAdapterModelLoader",
+    "inputs": {
+      "ipadapter_file": "ip-adapter-plus_sdxl_vit-h.safetensors"
+    }
+  },
+  "42": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "golden-portrait.png"
+    }
+  },
+  "43": {
+    "class_type": "IPAdapterAdvanced",
+    "inputs": {
+      "clip_vision": [
+        "40",
+        0
+      ],
+      "combine_embeds": "concat",
+      "embeds_scaling": "V only",
+      "end_at": 1.0,
+      "image": [
+        "42",
+        0
+      ],
+      "ipadapter": [
+        "41",
+        0
+      ],
+      "model": [
+        "90",
+        0
+      ],
+      "start_at": 0.0,
+      "weight": 0.8,
+      "weight_type": "linear"
+    }
+  },
+  "5": {
+    "class_type": "EmptyLatentImage",
+    "inputs": {
+      "batch_size": 1,
+      "height": 1024,
+      "width": 1024
+    }
+  },
+  "6": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "clip": [
+        "90",
+        1
+      ],
+      "text": "a lighthouse at dawn, painterly"
+    }
+  },
+  "7": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "clip": [
+        "90",
+        1
+      ],
+      "text": "blurry, watermark"
+    }
+  },
+  "8": {
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": [
+        "3",
+        0
+      ],
+      "vae": [
+        "4",
+        2
+      ]
+    }
+  },
+  "9": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "filename_prefix": "golden",
+      "images": [
+        "8",
+        0
+      ]
+    }
+  },
+  "90": {
+    "class_type": "LoraLoader",
+    "inputs": {
+      "clip": [
+        "4",
+        1
+      ],
+      "lora_name": "add-detail-xl.safetensors",
+      "model": [
+        "4",
+        0
+      ],
+      "strength_clip": 0.8,
+      "strength_model": 0.8
+    }
+  }
+}
