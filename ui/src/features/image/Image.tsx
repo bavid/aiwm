@@ -58,7 +58,24 @@ function promptOf(job: Job): string {
   return asImageParams(job.params).prompt ?? "";
 }
 
-export function ImageStudio() {
+/** Same middle-ground strength `LoraPicker` uses when a LoRA is ticked by
+ *  hand — a first test render should look like the picker's own default. */
+const PREFILL_LORA_STRENGTH = 0.8;
+
+/** A hand-over from another tab: a LoRA to stack and a prompt to start from.
+ *  Today the Training tab's "Test now" is the only source. */
+export type ImagePrefill = {
+  loraModelId: string;
+  prompt: string;
+};
+
+type Props = {
+  /** Applied once, then handed back via {@link Props.onPrefillConsumed}. */
+  prefill?: ImagePrefill | null;
+  onPrefillConsumed?: () => void;
+};
+
+export function ImageStudio({ prefill = null, onPrefillConsumed }: Props = {}) {
   const about = useAbout();
   const { data: models } = useModels();
   const { data: runtimes } = useRuntimes();
@@ -233,6 +250,20 @@ export function ImageStudio() {
       return p.trim() ? `${p.trim()}, ${suffix}` : `a candid photo, ${suffix}`;
     });
   };
+
+  // A hand-over from another tab (Training's "Test now"): stack the freshly
+  // trained LoRA and put its trigger word in the prompt, then clear the
+  // hand-over so switching back here later does not overwrite a new draft.
+  useEffect(() => {
+    if (!prefill) return;
+    setLoras((cur) =>
+      cur.some((l) => l.model_id === prefill.loraModelId)
+        ? cur
+        : [...cur, { model_id: prefill.loraModelId, strength: PREFILL_LORA_STRENGTH }],
+    );
+    setPrompt(prefill.prompt);
+    onPrefillConsumed?.();
+  }, [prefill, onPrefillConsumed]);
 
   const appendPrompt = (text: string) =>
     setPrompt((p) => (p.trim() ? `${p.trim()}, ${text}` : text));

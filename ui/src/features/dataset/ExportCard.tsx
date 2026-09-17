@@ -19,6 +19,9 @@ type Props = {
   isClipMode: boolean;
   state: ExportState;
   onExport: () => void;
+  /** Hands this dataset to the Training tab. Offered only once an export has
+   *  actually written the image/caption pairs a run reads from. */
+  onTrainLora: () => void;
 };
 
 /** The export card at the foot of the result column: destination folder,
@@ -32,6 +35,7 @@ export function ExportCard({
   isClipMode,
   state,
   onExport,
+  onTrainLora,
 }: Props) {
   const destDirId = useId();
   const orderId = useId();
@@ -80,9 +84,14 @@ export function ExportCard({
           : `Export ${keptCount} ${isClipMode ? "clip(s)" : "item(s)"}`}
       </button>
       {state.kind === "done" && (
-        <p className="dataset__done">
-          Exported {state.exported} item(s) to {state.destDir}.
-        </p>
+        <>
+          <p className="dataset__done">
+            Exported {state.exported} item(s) to {state.destDir}.
+          </p>
+          <button type="button" className="chip" onClick={onTrainLora}>
+            Train LoRA
+          </button>
+        </>
       )}
       {state.kind === "error" && <p className="dataset__err">{state.message}</p>}
     </div>

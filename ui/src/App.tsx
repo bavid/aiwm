@@ -1,14 +1,15 @@
-import { useState, type ReactNode } from "react";
+import { useCallback, useState, type ReactNode } from "react";
 import { AgentsWorkbench } from "./features/agents/Agents";
 import { Chat } from "./features/chat/Chat";
 import { Dashboard } from "./features/dashboard/Dashboard";
 import { DatasetStudio } from "./features/dataset/Dataset";
 import { Diagnostics } from "./features/diagnostics/Diagnostics";
-import { ImageStudio } from "./features/image/Image";
+import { ImageStudio, type ImagePrefill } from "./features/image/Image";
 import { Jobs } from "./features/jobs/Jobs";
 import { Models } from "./features/models/Models";
 import { Settings } from "./features/settings/Settings";
 import { Stories } from "./features/stories/Stories";
+import { Training } from "./features/training/Training";
 import { VideoStudio } from "./features/video/Video";
 import { Voice } from "./features/voice/Voice";
 import { CommandPalette } from "./components/CommandPalette";
@@ -24,6 +25,7 @@ type Tab =
   | "voice"
   | "stories"
   | "dataset"
+  | "training"
   | "jobs"
   | "agents"
   | "models"
@@ -107,6 +109,16 @@ const TABS: { id: Tab; label: string; icon: ReactNode }[] = [
     ),
   },
   {
+    id: "training",
+    label: "Training",
+    icon: (
+      <svg viewBox="0 0 20 20">
+        <path d="M2.5 15.5V9M7.2 15.5V5.5M11.8 15.5v-7M16.5 15.5v-11" />
+        <path d="M2 17.5h16" />
+      </svg>
+    ),
+  },
+  {
     id: "jobs",
     label: "Jobs",
     icon: (
@@ -169,6 +181,28 @@ export default function App() {
   const about = useAbout();
   const { data: runtimes } = useRuntimes();
   const navigate = (t: string) => setTab(t as Tab);
+
+  // Two cross-tab hand-overs. Every tab stays mounted (see the comment on
+  // <main> below), so these are plain lifted state rather than router state:
+  // the source tab sets one, switches tabs, and the target tab clears it once
+  // it has taken the value.
+  /** Dataset tab -> Training tab: "train a LoRA from this dataset". */
+  const [pendingTrainingDataset, setPendingTrainingDataset] = useState<string | null>(null);
+  /** Training tab -> Image tab: "test this LoRA with its trigger word". */
+  const [imagePrefill, setImagePrefill] = useState<ImagePrefill | null>(null);
+
+  const clearPendingTrainingDataset = useCallback(() => setPendingTrainingDataset(null), []);
+  const clearImagePrefill = useCallback(() => setImagePrefill(null), []);
+
+  const trainFromDataset = useCallback((datasetId: string) => {
+    setPendingTrainingDataset(datasetId);
+    setTab("training");
+  }, []);
+
+  const testLora = useCallback((loraModelId: string, prompt: string) => {
+    setImagePrefill({ loraModelId, prompt });
+    setTab("image");
+  }, []);
 
   const toggleCollapsed = () => {
     setCollapsed((c) => {
@@ -246,7 +280,7 @@ export default function App() {
           <Chat />
         </div>
         <div hidden={tab !== "image"}>
-          <ImageStudio />
+          <ImageStudio prefill={imagePrefill} onPrefillConsumed={clearImagePrefill} />
         </div>
         <div hidden={tab !== "video"}>
           <VideoStudio />
@@ -258,7 +292,14 @@ export default function App() {
           <Stories />
         </div>
         <div hidden={tab !== "dataset"}>
-          <DatasetStudio />
+          <DatasetStudio onTrainLora={trainFromDataset} />
+        </div>
+        <div hidden={tab !== "training"}>
+          <Training
+            pendingDatasetId={pendingTrainingDataset}
+            onPendingDatasetConsumed={clearPendingTrainingDataset}
+            onTestLora={testLora}
+          />
         </div>
         <div hidden={tab !== "jobs"}>
           <Jobs />
