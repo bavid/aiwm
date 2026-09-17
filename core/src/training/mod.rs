@@ -19,6 +19,7 @@ pub mod config;
 pub mod process;
 pub mod profile;
 pub mod progress;
+pub mod runner;
 
 use crate::CoreError;
 

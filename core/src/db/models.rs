@@ -304,6 +304,32 @@ impl<'a> ModelRepo<'a> {
             .ok_or_else(|| CoreError::Db("model vanished right after rename".into()))
     }
 
+    /// Overwrite the two provenance fields an import cannot infer for itself.
+    /// The training runner ([`crate::training::runner`]) is the one caller:
+    /// `model::import` derives `family` from the file name and always records
+    /// `source = "manual"`, neither of which is right for a LoRA this app just
+    /// trained — it belongs to the target model's inference family and its
+    /// provenance is the run that produced it (`training:<run_id>`).
+    pub async fn set_family_and_source(
+        &self,
+        id: &str,
+        family: Option<&str>,
+        source: &str,
+    ) -> Result<()> {
+        let res = sqlx::query("UPDATE models SET family = $1, source = $2 WHERE id = $3")
+            .bind(family)
+            .bind(source)
+            .bind(id)
+            .execute(self.pool)
+            .await?;
+        if res.rows_affected() == 0 {
+            return Err(CoreError::Config(format!(
+                "model {id} is not in the library"
+            )));
+        }
+        Ok(())
+    }
+
     pub async fn delete(&self, id: &str) -> Result<bool> {
         let res = sqlx::query("DELETE FROM models WHERE id = $1")
             .bind(id)

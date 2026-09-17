@@ -407,6 +407,18 @@ impl<'a> TrainingRunRepo<'a> {
         Ok(())
     }
 
+    /// Record the run's working directory. Separate from
+    /// [`Self::create`] because the directory is named after the run id,
+    /// which only exists once the row does.
+    pub async fn set_work_dir(&self, id: &str, work_dir: &str) -> Result<()> {
+        sqlx::query("UPDATE training_runs SET work_dir = $1 WHERE id = $2")
+            .bind(work_dir)
+            .bind(id)
+            .execute(self.pool)
+            .await?;
+        Ok(())
+    }
+
     pub async fn set_checkpoint_at(&self, id: &str, when: &str) -> Result<()> {
         sqlx::query("UPDATE training_runs SET last_checkpoint_at = $1 WHERE id = $2")
             .bind(when)

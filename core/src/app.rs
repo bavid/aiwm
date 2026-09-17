@@ -22,6 +22,7 @@ use crate::runtime::{
 };
 use crate::scheduler::HybridScheduler;
 use crate::telemetry::{GpuStatus, Sampler};
+use crate::training::runner::{spawn_poller, Runner as TrainingRunner};
 use crate::Result;
 
 /// Settings seeded on first run. `config.toml` remains the source of truth for
@@ -66,6 +67,11 @@ pub struct App {
     /// supervises no process: a training run is detached and reports its GPU
     /// hold as one synthetic loaded model (`training::TRAINING_MODEL_ID`).
     pub training: Arc<TrainingAdapter>,
+    /// Drives training runs: preflight, the detached launch, the 3 s poller,
+    /// pause/resume/cancel and the import of the finished LoRA. Separate from
+    /// [`jobs`](Self::jobs) on purpose — a run outlives the app (see
+    /// `crate::training`).
+    pub training_runner: Arc<TrainingRunner>,
     pub scheduler: Arc<HybridScheduler>,
     pub jobs: Arc<JobEngine>,
     /// Long-running agent sessions (Phase 5.1c) — its own subsystem, not a job.
@@ -229,6 +235,21 @@ impl App {
             offline.clone(),
         ));
 
+        // The training runner and its poller. Startup recovery for
+        // `running`/`resuming` rows happens inside the spawned task, which
+        // puts it after the job engine's own recovery in [`Self::seed`]:
+        // a detached trainer that survived the restart keeps its GPU
+        // reservation, anything else becomes `interrupted`.
+        let training_runner = Arc::new(TrainingRunner::new(
+            db.clone(),
+            training.clone(),
+            scheduler.clone(),
+            runtimes.clone(),
+            paths.root().join("training"),
+            config.store_path.clone(),
+        ));
+        spawn_poller(training_runner.clone());
+
         // Best-effort startup sweep (nice-to-have alongside the manual
         // "clean up now" button + a periodic timer isn't wired up separately):
         // only runs when a retention policy is actually configured, and never
@@ -266,6 +287,7 @@ impl App {
             progress,
             vision,
             training,
+            training_runner,
             scheduler,
             jobs,
             agents,
