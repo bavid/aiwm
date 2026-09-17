@@ -44,6 +44,9 @@ const RUNTIME_DIR: &str = "ai-toolkit";
 
 const ARCHIVE_BASE: &str = "https://github.com/ostris/ai-toolkit/archive";
 
+/// Name of the per-checkout commit stamp — see [`source_commit_file`].
+const COMMIT_FILE: &str = ".commit";
+
 /// The GitHub source archive for [`PINNED_COMMIT`]. GitHub publishes no digest
 /// for source archives, so this SHA-256 + size are the ones we computed while
 /// curating the pin; a regeneration on GitHub's side surfaces as a
@@ -89,6 +92,14 @@ pub fn venv_python(runtimes_dir: &Path) -> PathBuf {
 /// `ai-toolkit`'s headless entry point.
 pub fn run_py(runtimes_dir: &Path) -> PathBuf {
     source_dir(runtimes_dir).join("run.py")
+}
+
+/// `<src>/.commit` — which commit the checkout in `src/` actually is. Written
+/// right after extraction, so bumping [`PINNED_COMMIT`] makes the existing
+/// checkout stale: it is thrown away and fetched again rather than having the
+/// new archive unpacked on top of the old pin's files.
+pub fn source_commit_file(runtimes_dir: &Path) -> PathBuf {
+    source_dir(runtimes_dir).join(COMMIT_FILE)
 }
 
 /// Written last, once every step succeeded: `.installed-<commit>`.
@@ -184,7 +195,7 @@ where
     let src = source_dir(runtimes_dir);
     let py = venv_python(runtimes_dir);
 
-    fetch_sources(&root, &src, spec, &on_progress).await?;
+    fetch_sources(runtimes_dir, spec, &on_progress).await?;
     build_venv(
         &root,
         &uv,
@@ -213,15 +224,13 @@ where
 
 /// Fetch + unpack the verified toolchain: `uv` (via [`ensure_uv`]) and the
 /// pinned `ai-toolkit` source, flattened out of its `<repo>-<sha>/` wrapper.
-async fn fetch_sources<F>(
-    root: &Path,
-    src: &Path,
-    spec: &FetchSpec<'_>,
-    on_progress: &F,
-) -> Result<()>
+async fn fetch_sources<F>(runtimes_dir: &Path, spec: &FetchSpec<'_>, on_progress: &F) -> Result<()>
 where
     F: Fn(TrainerInstallPhase, u64, u64) + Send + Sync,
 {
+    let root = install_root(runtimes_dir);
+    let src = source_dir(runtimes_dir);
+    let stamp = source_commit_file(runtimes_dir);
     let staging = root.join(".download");
     let _ = tokio::fs::remove_dir_all(&staging).await;
     tokio::fs::create_dir_all(&staging)
@@ -230,13 +239,18 @@ where
     let total = spec.uv.size + spec.src.size;
     let mut done = 0u64;
 
-    ensure_uv(spec.uv_base, spec.uv, root, |n| {
+    ensure_uv(spec.uv_base, spec.uv, &root, |n| {
         on_progress(TrainerInstallPhase::Downloading, done + n, total);
     })
     .await?;
     done += spec.uv.size;
 
-    if !src.join("run.py").is_file() {
+    if source_is_current(&src, &stamp).await {
+        on_progress(TrainerInstallPhase::Extracting, total, total);
+    } else {
+        // Stale (an older pin) or half-extracted: start from an empty tree, so
+        // no file the previous pin shipped can survive into the new checkout.
+        let _ = tokio::fs::remove_dir_all(&src).await;
         let zip = staging.join(spec.src.name);
         download_verified(
             &format!("{}/{}", spec.src_base, spec.src.name),
@@ -246,13 +260,28 @@ where
         )
         .await?;
         on_progress(TrainerInstallPhase::Extracting, total, total);
-        extract_zip_flat(&zip, src).await?;
-    } else {
-        on_progress(TrainerInstallPhase::Extracting, total, total);
+        extract_zip_flat(&zip, &src).await?;
+        tokio::fs::write(&stamp, PINNED_COMMIT)
+            .await
+            .map_err(|e| trainer_install_err(format!("write the source commit stamp: {e}")))?;
     }
 
     let _ = tokio::fs::remove_dir_all(&staging).await;
     Ok(())
+}
+
+/// Whether `src` already holds exactly [`PINNED_COMMIT`]: the entry point is
+/// there *and* the commit stamp matches. A checkout with no stamp predates
+/// this check (or is a half-finished extraction) — either way it is fetched
+/// again rather than trusted.
+async fn source_is_current(src: &Path, stamp: &Path) -> bool {
+    if !src.join("run.py").is_file() {
+        return false;
+    }
+    match tokio::fs::read_to_string(stamp).await {
+        Ok(stamp) => stamp.trim() == PINNED_COMMIT,
+        Err(_) => false,
+    }
 }
 
 /// Build the trainer's own venv: managed Python, then the pinned CUDA torch
@@ -639,6 +668,66 @@ mod tests {
         );
         assert!(!marker_file(tmp.path()).exists());
         assert!(!is_installed(tmp.path()));
+    }
+
+    #[tokio::test]
+    async fn a_pin_bump_re_fetches_the_source() {
+        let fx = Fixtures::serve().await;
+        let tmp = tempfile::tempdir().expect("tempdir");
+        // A checkout of some *older* pin: run.py is there, but `.commit` names
+        // a different commit, and a file that pin had is still lying around.
+        let src = source_dir(tmp.path());
+        std::fs::create_dir_all(&src).expect("create the source dir");
+        std::fs::write(src.join("run.py"), b"# the previous pin").expect("write run.py");
+        std::fs::write(src.join("gone_in_the_new_pin.py"), b"stale").expect("write a stale file");
+        std::fs::write(
+            source_commit_file(tmp.path()),
+            "0000000000000000000000000000000000000000",
+        )
+        .expect("write a stale .commit");
+
+        let runner = VenvCreatingRunner::new(tmp.path());
+        run_install(&fx, tmp.path(), &runner, |_, _, _| {})
+            .await
+            .expect("a pin bump should re-install");
+
+        assert_eq!(
+            std::fs::read(run_py(tmp.path())).expect("run.py"),
+            b"# ai-toolkit",
+            "the source must be re-fetched, not kept"
+        );
+        assert!(
+            !src.join("gone_in_the_new_pin.py").exists(),
+            "the stale checkout must be removed, not merged into"
+        );
+        assert_eq!(
+            std::fs::read_to_string(source_commit_file(tmp.path())).expect(".commit"),
+            PINNED_COMMIT
+        );
+        assert!(is_installed(tmp.path()));
+    }
+
+    #[tokio::test]
+    async fn a_matching_commit_file_skips_the_source_download() {
+        let fx = Fixtures::serve().await;
+        let tmp = tempfile::tempdir().expect("tempdir");
+        // The current pin is already checked out; only the venv is missing.
+        let src = source_dir(tmp.path());
+        std::fs::create_dir_all(&src).expect("create the source dir");
+        std::fs::write(src.join("run.py"), b"# already here").expect("write run.py");
+        std::fs::write(source_commit_file(tmp.path()), PINNED_COMMIT).expect("write .commit");
+
+        let runner = VenvCreatingRunner::new(tmp.path());
+        run_install(&fx, tmp.path(), &runner, |_, _, _| {})
+            .await
+            .expect("the venv half should still be built");
+
+        assert_eq!(
+            std::fs::read(run_py(tmp.path())).expect("run.py"),
+            b"# already here",
+            "a matching .commit means the checkout is left alone"
+        );
+        assert!(is_installed(tmp.path()));
     }
 
     /// The real thing: run the whole pinned install against GitHub + PyPI.

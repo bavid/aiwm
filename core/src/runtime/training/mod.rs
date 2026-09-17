@@ -20,6 +20,7 @@ pub(crate) mod install;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
+use std::time::Duration;
 
 use async_trait::async_trait;
 use serde::Serialize;
@@ -74,6 +75,12 @@ struct ProbeJson {
     vram: u64,
 }
 
+/// How long [`TrainingAdapter::probe`] waits for the venv's `python -c` to
+/// answer. Far longer than the 3–5 s the llama.cpp / ComfyUI adapters allow
+/// their HTTP probes: this one starts a Python interpreter and imports torch,
+/// which on a cold disk is several seconds before it prints anything.
+pub const PROBE_TIMEOUT: Duration = Duration::from_secs(20);
+
 /// One line, so the exact string the probe runs is visible at a glance.
 const PROBE_SCRIPT: &str = "import torch,json;print(json.dumps({'torch':torch.__version__,'cuda':torch.cuda.is_available(),'vram':torch.cuda.get_device_properties(0).total_memory if torch.cuda.is_available() else 0}))";
 
@@ -88,6 +95,8 @@ pub struct TrainingAdapter {
     alive: Mutex<Option<AliveRun>>,
     /// The subprocess boundary — swapped in tests.
     runner: Arc<dyn CmdRunner>,
+    /// [`PROBE_TIMEOUT`] in production; tests shorten it.
+    probe_timeout: Duration,
 }
 
 impl std::fmt::Debug for TrainingAdapter {
@@ -116,7 +125,16 @@ impl TrainingAdapter {
             env_broken: AtomicBool::new(false),
             alive: Mutex::new(None),
             runner,
+            probe_timeout: PROBE_TIMEOUT,
         }
+    }
+
+    /// Shorten the probe's patience — tests only; production waits
+    /// [`PROBE_TIMEOUT`].
+    #[must_use]
+    pub fn with_probe_timeout(mut self, timeout: Duration) -> Self {
+        self.probe_timeout = timeout;
+        self
     }
 
     /// Whether the pinned trainer is completely installed.
@@ -194,11 +212,17 @@ impl TrainingAdapter {
             ));
         }
         let python = self.python_bin();
-        let raw = match self
-            .runner
-            .run_capture(&python, &["-c", PROBE_SCRIPT], &[])
-            .await
-        {
+        // A hung import (a broken CUDA driver is the usual cause) must not
+        // hang the caller: past the timeout the environment counts as broken.
+        let probe = self.runner.run_capture(&python, &["-c", PROBE_SCRIPT], &[]);
+        let Ok(captured) = tokio::time::timeout(self.probe_timeout, probe).await else {
+            self.env_broken.store(true, Ordering::Relaxed);
+            return Err(training_err(format!(
+                "trainer environment probe timed out after {} s — set it up again",
+                self.probe_timeout.as_secs()
+            )));
+        };
+        let raw = match captured {
             Ok(raw) => raw,
             Err(e) => {
                 self.env_broken.store(true, Ordering::Relaxed);
@@ -344,9 +368,43 @@ impl RuntimeAdapter for TrainingAdapter {
             .unwrap_or_default()
     }
 
+    /// The one-line status the Settings card shows — same phrasing shape as
+    /// the ComfyUI adapter's, so the two install cards read alike.
     fn detail(&self) -> Option<String> {
         Some(match self.install_state() {
-            InstallState::Running { phase, .. } => format!("setting up the trainer: {phase:?}"),
+            InstallState::Running {
+                phase: TrainerInstallPhase::Downloading,
+                done_bytes,
+                total_bytes,
+            } => {
+                let pct = done_bytes
+                    .saturating_mul(100)
+                    .checked_div(total_bytes)
+                    .unwrap_or(0);
+                format!("downloading ai-toolkit — {pct}%")
+            }
+            InstallState::Running { phase, .. } => {
+                let step = match phase {
+                    // Handled above, with its percentage; kept exhaustive
+                    // rather than `unreachable!()` — a panic in a status line
+                    // would be a poor trade for one match arm.
+                    TrainerInstallPhase::Downloading => "downloading ai-toolkit".to_string(),
+                    TrainerInstallPhase::Extracting => "unpacking ai-toolkit".to_string(),
+                    TrainerInstallPhase::InstallingPython => {
+                        format!("installing Python {}", install::PYTHON_VERSION)
+                    }
+                    TrainerInstallPhase::CreatingVenv => {
+                        "creating the Python environment".to_string()
+                    }
+                    TrainerInstallPhase::InstallingTorch => {
+                        "installing PyTorch (large download)".to_string()
+                    }
+                    TrainerInstallPhase::InstallingDeps => {
+                        "installing trainer dependencies".to_string()
+                    }
+                };
+                format!("{step}…")
+            }
             InstallState::Failed { error } => format!("setup failed: {error}"),
             InstallState::Idle if !self.is_installed() => "not installed".to_string(),
             InstallState::Idle if self.env_broken() => {
@@ -611,6 +669,131 @@ mod tests {
         assert!(
             matches!(adapter.install_state(), InstallState::Failed { .. }),
             "a refused install is a failed install, not idle"
+        );
+    }
+
+    /// A runner whose probe never answers — a hung `python -c` (an import
+    /// deadlocked on a broken CUDA driver is the real-world shape of this).
+    struct HangingRunner;
+
+    #[async_trait::async_trait]
+    impl CmdRunner for HangingRunner {
+        async fn run(&self, _p: &Path, _args: &[&str], _e: &[(&str, &str)]) -> Result<()> {
+            Ok(())
+        }
+
+        async fn run_capture(
+            &self,
+            _p: &Path,
+            _args: &[&str],
+            _e: &[(&str, &str)],
+        ) -> Result<String> {
+            tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+            Ok("{}".to_string())
+        }
+    }
+
+    #[tokio::test]
+    async fn probe_times_out_and_marks_env_broken() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        fake_install(tmp.path());
+        let adapter = TrainingAdapter::with_runner(tmp.path(), Arc::new(HangingRunner))
+            .with_probe_timeout(std::time::Duration::from_millis(30));
+
+        let err = adapter
+            .probe()
+            .await
+            .expect_err("a hung probe must not hang the caller");
+
+        assert!(
+            err.to_string().contains("timed out"),
+            "unexpected error: {err}"
+        );
+        assert!(adapter.env_broken(), "a timeout is a broken environment");
+    }
+
+    #[test]
+    fn the_default_probe_timeout_leaves_room_for_a_cold_torch_import() {
+        assert_eq!(PROBE_TIMEOUT, std::time::Duration::from_secs(20));
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let adapter = TrainingAdapter::with_runner(tmp.path(), ScriptedRunner::ok("{}"));
+        assert_eq!(adapter.probe_timeout, PROBE_TIMEOUT);
+    }
+
+    #[test]
+    fn detail_reports_friendly_install_phases() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let adapter = TrainingAdapter::with_runner(tmp.path(), ScriptedRunner::ok("{}"));
+        assert_eq!(adapter.detail().as_deref(), Some("not installed"));
+
+        adapter.set_install_state(InstallState::Running {
+            phase: TrainerInstallPhase::Downloading,
+            done_bytes: 42,
+            total_bytes: 100,
+        });
+        assert_eq!(
+            adapter.detail().as_deref(),
+            Some("downloading ai-toolkit — 42%")
+        );
+
+        // A zero total (nothing known yet) must not divide by zero.
+        adapter.set_install_state(InstallState::Running {
+            phase: TrainerInstallPhase::Downloading,
+            done_bytes: 0,
+            total_bytes: 0,
+        });
+        assert_eq!(
+            adapter.detail().as_deref(),
+            Some("downloading ai-toolkit — 0%")
+        );
+
+        for (phase, expected) in [
+            (TrainerInstallPhase::Extracting, "unpacking ai-toolkit…"),
+            (
+                TrainerInstallPhase::InstallingPython,
+                "installing Python 3.12…",
+            ),
+            (
+                TrainerInstallPhase::CreatingVenv,
+                "creating the Python environment…",
+            ),
+            (
+                TrainerInstallPhase::InstallingTorch,
+                "installing PyTorch (large download)…",
+            ),
+            (
+                TrainerInstallPhase::InstallingDeps,
+                "installing trainer dependencies…",
+            ),
+        ] {
+            adapter.set_install_state(InstallState::Running {
+                phase,
+                done_bytes: 0,
+                total_bytes: 0,
+            });
+            assert_eq!(adapter.detail().as_deref(), Some(expected), "{phase:?}");
+        }
+
+        adapter.set_install_state(InstallState::Failed {
+            error: "boom".to_string(),
+        });
+        assert_eq!(adapter.detail().as_deref(), Some("setup failed: boom"));
+
+        adapter.set_install_state(InstallState::Idle);
+        fake_install(tmp.path());
+        assert_eq!(adapter.detail().as_deref(), Some("idle"));
+
+        adapter.mark_alive("run-7", 14_000);
+        assert_eq!(
+            adapter.detail().as_deref(),
+            Some("training run run-7 is holding the GPU")
+        );
+
+        adapter.clear_alive();
+        adapter.env_broken.store(true, Ordering::Relaxed);
+        assert_eq!(
+            adapter.detail().as_deref(),
+            Some("the trainer environment is broken — set it up again")
         );
     }
 }
