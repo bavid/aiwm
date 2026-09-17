@@ -352,6 +352,14 @@ pub fn preset_values(p: &TrainingProfile, preset: Preset) -> PresetValues {
 ///
 /// `None` means "not trainable" — the UI shows that in plain text rather
 /// than failing.
+/// Whether `name` has `token` as a whole, case-insensitive component —
+/// splitting on every non-alphanumeric character, so `4b` matches
+/// `…-4b-…`/`4b_fp8`/`4B` but not the `4b` inside `14b`.
+fn has_size_token(name: &str, token: &str) -> bool {
+    name.split(|c: char| !c.is_ascii_alphanumeric())
+        .any(|part| part.eq_ignore_ascii_case(token))
+}
+
 pub fn find_for_model(
     family: Option<&str>,
     name: &str,
@@ -361,22 +369,28 @@ pub fn find_for_model(
     const WAN_5B_PARAM_THRESHOLD: i64 = 8_000_000_000;
 
     let family = family?;
-    let lower_name = name.to_lowercase();
 
     match family {
         "flux2" => {
-            let resolved = if lower_name.contains("9b") {
+            let resolved = if has_size_token(name, "9b") {
                 "flux2-klein-9b"
-            } else if lower_name.contains("4b") || param_count? < FLUX2_4B_PARAM_THRESHOLD {
+            } else if has_size_token(name, "4b") {
                 "flux2-klein-4b"
             } else {
-                "flux2-klein-9b"
+                match param_count {
+                    Some(count) if count < FLUX2_4B_PARAM_THRESHOLD => "flux2-klein-4b",
+                    Some(_) => "flux2-klein-9b",
+                    None => return None,
+                }
             };
             find_for_family(resolved)
         }
         "wan" => {
-            let is_5b = lower_name.contains("5b")
-                || param_count.is_some_and(|count| count < WAN_5B_PARAM_THRESHOLD);
+            let is_5b = has_size_token(name, "5b")
+                || match param_count {
+                    Some(count) => count < WAN_5B_PARAM_THRESHOLD,
+                    None => false,
+                };
             if is_5b {
                 find_for_family("wan")
             } else {
@@ -560,5 +574,34 @@ mod tests {
             find_for_model(Some("flux2-klein-9b"), "irrelevant name", None).map(|p| p.arch),
             Some("flux2_klein_9b")
         );
+    }
+
+    #[test]
+    fn find_for_model_size_matching_is_whole_token_not_substring() {
+        // "14b" must not be mistaken for a "4b" (or, for Wan, "5b") substring.
+        assert_eq!(
+            find_for_model(Some("flux2"), "flux2-klein-14b-experimental", None),
+            None
+        );
+        assert_eq!(find_for_model(Some("wan"), "wan2.2-t2v-14b", None), None);
+        assert_eq!(
+            find_for_model(Some("wan"), "Wan2.2-TI2V-5B-Diffusers", None).map(|p| p.arch),
+            Some("wan22_5b")
+        );
+    }
+
+    #[test]
+    fn reserve_and_fit_match_the_spec_table() {
+        let expected: &[(&str, u64, Fit)] = &[
+            ("flux2-klein-4b", 12288, Fit::Comfortable),
+            ("flux2-klein-9b", 15000, Fit::AtTheEdge),
+            ("sdxl", 10240, Fit::Comfortable),
+            ("wan", 15000, Fit::AtTheEdge),
+        ];
+        for (family, reserve_mb, fit) in expected {
+            let profile = find_for_family(family).expect("seeded profile");
+            assert_eq!(profile.vram.reserve_mb, *reserve_mb, "{family}: reserve_mb");
+            assert_eq!(profile.vram.fit, *fit, "{family}: fit");
+        }
     }
 }
