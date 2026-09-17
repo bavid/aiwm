@@ -66,7 +66,7 @@ export function FitBadge({
       <button
         type="button"
         className={`fitbadge__pill fitbadge__pill--${fit.level} fitbadge__pill--why`}
-        aria-label={`${prefix}${label}${estimate ? `, ${estimate}` : ""}`}
+        aria-label={`${prefix}${label}${estimate ? ` ${estimate}` : ""}`}
         aria-expanded={open}
         aria-controls={reasonId}
         aria-describedby={open ? undefined : reasonId}

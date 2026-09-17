@@ -114,6 +114,8 @@
 /* Its own line under the pill, inside the badge's own wrapper. */
 .fitbadge > .fitbadge__reason {
   flex-basis: 100%;
+  /* Keep an opened reason from claiming the whole row in a wide host. */
+  max-width: 44ch;
   min-width: 0;
   color: var(--muted);
   font-size: var(--text-xs);
