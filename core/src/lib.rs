@@ -46,6 +46,7 @@ pub mod logging;
 pub mod model;
 pub mod orchestrator;
 pub mod paths;
+pub mod persona;
 pub mod pipeline;
 pub mod progress;
 pub mod rag;

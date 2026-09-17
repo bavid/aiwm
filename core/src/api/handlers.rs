@@ -6,16 +6,16 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use super::dto::{
-    AboutDto, AgentPermissionDto, AgentSessionDetailDto, AssignedDto, AttachExternalDto,
-    BenchmarkOptionsDto, CharacterBodyDto, CivitaiSearchDto, ColibriModelDto, ConceptBodyDto,
-    ConceptFramesDto, ConceptSummaryDto, ConfigUpdate, DetachEngineDto, DialogueLineDto,
-    EnqueueDownloadDto, ExportDatasetDto, FeaturedModelDto, JobDetailDto, KnownModelDto,
-    LaunchExternalDto, LocalApiStatusDto, LocationBodyDto, ModelStackDto, NewAgentDto,
-    NewSessionDto, NewVoiceIdentityDto, NpcBodyDto, OpenAgentSessionDto, ProfileDto,
-    ProfilePresetsDto, RegisterColibriModelDto, RegistryDetailsDto, RegistryFileDto,
-    RegistrySearchDto, RunDetailDto, RuntimeStatusDto, SceneBodyDto, SceneDetailDto, StartRunDto,
-    StoryBodyDto, SubmitJobDto, TrainableModelDto, TrainerStatusDto, UpdateDatasetDto,
-    UpdateDatasetFrameDto,
+    AboutDto, ActivePersonaDto, AgentPermissionDto, AgentSessionDetailDto, AssignedDto,
+    AttachExternalDto, BenchmarkOptionsDto, CharacterBodyDto, CivitaiSearchDto, ColibriModelDto,
+    ConceptBodyDto, ConceptFramesDto, ConceptSummaryDto, ConfigUpdate, DetachEngineDto,
+    DialogueLineDto, EnqueueDownloadDto, ExportDatasetDto, FeaturedModelDto, JobDetailDto,
+    KnownModelDto, LaunchExternalDto, LocalApiStatusDto, LocationBodyDto, ModelStackDto,
+    NewAgentDto, NewSessionDto, NewVoiceIdentityDto, NpcBodyDto, OpenAgentSessionDto,
+    PersonaBodyDto, ProfileDto, ProfilePresetsDto, RegisterColibriModelDto, RegistryDetailsDto,
+    RegistryFileDto, RegistrySearchDto, RunDetailDto, RuntimeStatusDto, SceneBodyDto,
+    SceneDetailDto, SetSessionPersonaDto, StartRunDto, StoryBodyDto, SubmitJobDto,
+    TrainableModelDto, TrainerStatusDto, UpdateDatasetDto, UpdateDatasetFrameDto,
 };
 use crate::compat::FitVerdict;
 use crate::config::Config;
@@ -23,12 +23,13 @@ use crate::db::{
     Agent, AgentSession, Benchmark, Character, CharacterLogEntry, CharacterRelationship,
     CharacterUpdate, Download, EventLevel, Job, JobFilter, Location, LocationUpdate, Model,
     NewAgent, NewCharacter, NewDialogueLine, NewJob, NewLocation, NewNpc, NewScene, Npc, NpcUpdate,
-    Scene, SceneImage, SceneUpdate, Session, Story, StoryUpdate, VoiceIdentity,
+    Persona, Scene, SceneImage, SceneUpdate, Session, Story, StoryUpdate, VoiceIdentity,
 };
 use crate::download::EnqueueRequest;
 use crate::launcher::LaunchRequest;
 use crate::model::{ImportOutcome, ImportRequest};
 use crate::orchestrator::JobOutcome;
+use crate::persona;
 use crate::registry::{Fetched, RemoteFile, RemoteFormat, RemoteModel};
 use crate::telemetry::SystemTelemetry;
 use crate::voice_identity::{self, CreateVoiceIdentity};
@@ -1437,6 +1438,61 @@ pub async fn set_session_archived(app: &App, id: &str, archived: bool) -> Result
 
 pub async fn delete_session(app: &App, id: &str) -> Result<()> {
     app.db.sessions().delete(id).await
+}
+
+// --- personas (spec `2026-09-18-personas-design`) ---------------------------
+//
+// Every "unknown id" here comes back as an `Option`/enum rather than an error,
+// so the transports can turn it into a 404; the *limits* come back as
+// `CoreError::Config`, which is already a 400.
+
+pub async fn list_personas(app: &App) -> Result<Vec<Persona>> {
+    app.db.personas().list().await
+}
+
+pub async fn create_persona(app: &App, body: PersonaBodyDto) -> Result<Persona> {
+    persona::create(&app.db, &body.name, &body.icon, &body.system_prompt).await
+}
+
+/// `None` = no such persona (404).
+pub async fn update_persona(app: &App, id: &str, body: PersonaBodyDto) -> Result<Option<Persona>> {
+    persona::update(&app.db, id, &body.name, &body.icon, &body.system_prompt).await
+}
+
+/// Deleting also clears every reference to the persona (sessions pointing at it,
+/// the global active key). Idempotent, like sessions and documents: an unknown id
+/// is a success, and the returned flag only says whether a row was really there.
+pub async fn delete_persona(app: &App, id: &str) -> Result<bool> {
+    app.db.personas().delete(id).await
+}
+
+pub async fn active_persona(app: &App) -> Result<ActivePersonaDto> {
+    Ok(ActivePersonaDto {
+        id: persona::active(&app.db).await?.map(|p| p.id),
+    })
+}
+
+/// `false` = the id names no persona (404). `None` clears the global choice.
+pub async fn set_active_persona(app: &App, id: Option<&str>) -> Result<bool> {
+    persona::set_active(&app.db, id).await
+}
+
+pub async fn set_session_persona(
+    app: &App,
+    session_id: &str,
+    body: SetSessionPersonaDto,
+) -> Result<persona::SetSessionPersona> {
+    persona::set_session_persona(&app.db, session_id, body.mode, body.persona_id.as_deref()).await
+}
+
+/// The persona a chat would actually use plus where it came from, so the Chat
+/// tab's chip never re-implements the rule. `session_id` is optional: `None` is
+/// the "Ungrouped" case, where only the global persona applies.
+pub async fn effective_persona(
+    app: &App,
+    session_id: Option<&str>,
+) -> Result<persona::EffectivePersona> {
+    persona::resolve_effective(&app.db, session_id).await
 }
 
 // --- documents / local RAG (7.x) -------------------------------------------

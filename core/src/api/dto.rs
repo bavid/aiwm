@@ -126,6 +126,39 @@ pub struct SetArchivedDto {
     pub archived: bool,
 }
 
+// --- personas (spec `2026-09-18-personas-design`) ---------------------------
+
+/// Body for `POST /personas` and `PUT /personas/{id}` — the whole persona, since
+/// the edit dialog always has all three fields in hand. The limits live in
+/// [`crate::persona::validate`]; the prompt text itself is passed through
+/// verbatim.
+#[derive(Debug, Clone, Deserialize)]
+pub struct PersonaBodyDto {
+    pub name: String,
+    /// One emoji.
+    pub icon: String,
+    pub system_prompt: String,
+}
+
+/// `GET`/`PUT /personas/active` — the globally active persona's id, or `null`
+/// for "no global persona". The same shape in both directions so the UI has one
+/// type for it.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct ActivePersonaDto {
+    #[serde(default)]
+    pub id: Option<String>,
+}
+
+/// Body for `PUT /sessions/{id}/persona` — this chat's override. `persona_id` is
+/// required for (and only read with) `mode: "persona"`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct SetSessionPersonaDto {
+    /// `"inherit"` | `"none"` | `"persona"`.
+    pub mode: crate::db::PersonaMode,
+    #[serde(default)]
+    pub persona_id: Option<String>,
+}
+
 /// Body for `PUT /jobs/{id}/dataset-frames/{frame_id}` — a curator's edit to
 /// one frame. Every field optional so the curation UI can send just the one
 /// thing that changed (a caption edit vs. an exclude toggle) rather than the

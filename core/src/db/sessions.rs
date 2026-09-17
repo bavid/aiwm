@@ -9,6 +9,7 @@ use sqlx::{AssertSqlSafe, SqlitePool};
 use uuid::Uuid;
 
 use super::now_rfc3339;
+use super::personas::PersonaMode;
 use crate::{CoreError, Result};
 
 /// A stored session.
@@ -22,6 +23,13 @@ pub struct Session {
     /// `None` = active (shown in the switcher); `Some` = archived (hidden by
     /// default, jobs untouched).
     pub archived_at: Option<String>,
+    /// How this chat picks its persona. `Inherit` (the default for every
+    /// session, including every one that predates personas) means "whatever is
+    /// active globally".
+    pub persona_mode: PersonaMode,
+    /// Only meaningful with [`PersonaMode::Persona`]. May name a persona that
+    /// has since been deleted — [`crate::persona::resolve`] heals that.
+    pub persona_id: Option<String>,
 }
 
 #[derive(sqlx::FromRow)]
@@ -31,6 +39,8 @@ struct SessionRow {
     name: String,
     created_at: String,
     archived_at: Option<String>,
+    persona_mode: String,
+    persona_id: Option<String>,
 }
 
 impl From<SessionRow> for Session {
@@ -41,6 +51,8 @@ impl From<SessionRow> for Session {
             name: r.name,
             created_at: r.created_at,
             archived_at: r.archived_at,
+            persona_mode: PersonaMode::from_db(&r.persona_mode),
+            persona_id: r.persona_id,
         }
     }
 }
@@ -48,7 +60,7 @@ impl From<SessionRow> for Session {
 // The `SELECT` statements below interpolate only this compile-time constant
 // and `$N` bind placeholders — never caller data (always bound). `AssertSqlSafe`
 // documents that we have checked this.
-const SELECT_COLS: &str = "id, capability, name, created_at, archived_at";
+const SELECT_COLS: &str = "id, capability, name, created_at, archived_at, persona_mode, persona_id";
 
 #[derive(Debug)]
 pub struct SessionRepo<'a> {
@@ -109,6 +121,31 @@ impl<'a> SessionRepo<'a> {
         Ok(())
     }
 
+    /// Point this session's persona override at `mode` / `persona_id`. The id is
+    /// only stored for [`PersonaMode::Persona`]; the other two modes always
+    /// clear it, so a stale id can never linger behind a mode that ignores it.
+    /// Returns whether the session exists.
+    pub async fn set_persona(
+        &self,
+        id: &str,
+        mode: PersonaMode,
+        persona_id: Option<&str>,
+    ) -> Result<bool> {
+        let persona_id = match mode {
+            PersonaMode::Persona => persona_id,
+            PersonaMode::Inherit | PersonaMode::None => None,
+        };
+        let affected =
+            sqlx::query("UPDATE sessions SET persona_mode = $1, persona_id = $2 WHERE id = $3")
+                .bind(mode.as_str())
+                .bind(persona_id)
+                .bind(id)
+                .execute(self.pool)
+                .await?
+                .rows_affected();
+        Ok(affected > 0)
+    }
+
     pub async fn set_archived(&self, id: &str, archived: bool) -> Result<()> {
         let value = archived.then(now_rfc3339);
         sqlx::query("UPDATE sessions SET archived_at = $1 WHERE id = $2")
@@ -134,7 +171,7 @@ impl<'a> SessionRepo<'a> {
 
 #[cfg(test)]
 mod tests {
-    use crate::db::{Database, NewJob};
+    use crate::db::{Database, NewJob, PersonaMode};
 
     async fn db() -> Database {
         Database::connect_in_memory().await.unwrap()
@@ -151,6 +188,8 @@ mod tests {
         assert_eq!(s.capability, "chat");
         assert_eq!(s.name, "Debugging help");
         assert!(s.archived_at.is_none());
+        assert_eq!(s.persona_mode, PersonaMode::Inherit, "personas are opt-in");
+        assert_eq!(s.persona_id, None);
 
         let fetched = db.sessions().get(&s.id).await.unwrap().unwrap();
         assert_eq!(fetched.id, s.id);
@@ -183,6 +222,46 @@ mod tests {
         db.sessions().rename(&s.id, "B-roll clips").await.unwrap();
         let fetched = db.sessions().get(&s.id).await.unwrap().unwrap();
         assert_eq!(fetched.name, "B-roll clips");
+    }
+
+    #[tokio::test]
+    async fn set_persona_round_trips_and_clears_the_id_for_the_idless_modes() {
+        let db = db().await;
+        let s = db.sessions().create("chat", "Override").await.unwrap();
+        let persona = db
+            .personas()
+            .create("Blunt", "🪓", "be brief")
+            .await
+            .unwrap();
+
+        assert!(db
+            .sessions()
+            .set_persona(&s.id, PersonaMode::Persona, Some(&persona.id))
+            .await
+            .unwrap());
+        let fetched = db.sessions().get(&s.id).await.unwrap().unwrap();
+        assert_eq!(fetched.persona_mode, PersonaMode::Persona);
+        assert_eq!(fetched.persona_id.as_deref(), Some(persona.id.as_str()));
+
+        // Switching to `none` (or back to `inherit`) drops the id, so no stale
+        // pointer survives behind a mode that ignores it.
+        db.sessions()
+            .set_persona(&s.id, PersonaMode::None, Some(&persona.id))
+            .await
+            .unwrap();
+        let fetched = db.sessions().get(&s.id).await.unwrap().unwrap();
+        assert_eq!(fetched.persona_mode, PersonaMode::None);
+        assert_eq!(fetched.persona_id, None);
+    }
+
+    #[tokio::test]
+    async fn set_persona_reports_an_unknown_session() {
+        let db = db().await;
+        assert!(!db
+            .sessions()
+            .set_persona("nope", PersonaMode::Inherit, None)
+            .await
+            .unwrap());
     }
 
     #[tokio::test]

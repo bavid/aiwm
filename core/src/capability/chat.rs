@@ -12,7 +12,7 @@ use serde_json::Value;
 use tokio::sync::{mpsc, watch};
 
 use crate::db::{Database, EventLevel};
-use crate::runtime::{GenerationEvent, LlamaCppAdapter};
+use crate::runtime::{GenerationEvent, GenerationOptions, LlamaCppAdapter};
 use crate::{CoreError, Result};
 
 /// How often the growing answer is flushed to `jobs.result`.
@@ -95,13 +95,24 @@ pub async fn run(
         )
         .await?;
 
+    let system = crate::persona::prepare_for_job(db, job_id, session_id).await?;
     let prompt = ground_prompt(db, job_id, session_id, &req.prompt).await?;
 
     let (tx, mut rx) = mpsc::channel::<GenerationEvent>(64);
     let stream = tokio::spawn({
         let llama = Arc::clone(llama);
         let max_tokens = req.max_tokens;
-        async move { llama.stream_completion(&prompt, max_tokens, tx).await }
+        // No persona → `GenerationOptions::default()`, which serialises to
+        // exactly the request body this path has always sent.
+        let opts = match &system {
+            Some(system) => GenerationOptions::with_system(system),
+            None => GenerationOptions::default(),
+        };
+        async move {
+            llama
+                .stream_completion_with(&prompt, max_tokens, &opts, tx)
+                .await
+        }
     });
 
     let mut answer = String::new();

@@ -29,6 +29,25 @@ pub enum GenerationEvent {
     Done { tokens: u32 },
 }
 
+/// The `/v1/chat/completions` request body. Kept in one place so both shapes —
+/// with and without a persona's system message — can be pinned by a test, the
+/// same way the llama.cpp client does it. `system` is trimmed, and a blank one
+/// is treated as absent, so the body only ever grows when there is really
+/// something to say.
+fn chat_body(model_id: &str, prompt: &str, max_tokens: i32, system: Option<&str>) -> Value {
+    let mut messages: Vec<Value> = Vec::with_capacity(2);
+    if let Some(system) = system.map(str::trim).filter(|s| !s.is_empty()) {
+        messages.push(serde_json::json!({ "role": "system", "content": system }));
+    }
+    messages.push(serde_json::json!({ "role": "user", "content": prompt }));
+    serde_json::json!({
+        "model": model_id,
+        "messages": messages,
+        "max_tokens": max_tokens,
+        "stream": true,
+    })
+}
+
 /// A `/health` probe must return within this or the server counts as down.
 /// The chat stream is deliberately left unbounded.
 const PROBE_TIMEOUT: Duration = Duration::from_secs(3);
@@ -81,6 +100,9 @@ impl ColibriClient {
     }
 
     /// Streaming chat completion via `POST /v1/chat/completions` (SSE).
+    /// `system` is an optional message placed in front of the user message (a
+    /// resolved persona's prompt, [`crate::persona`]); `None` sends exactly the
+    /// body this path always sent.
     /// Sends a [`GenerationEvent::Token`] per chunk and a final
     /// [`GenerationEvent::Done`] to `tx`. Stops early (and returns `Ok`) if
     /// the receiver is dropped — that is how a cancel unwinds.
@@ -91,18 +113,14 @@ impl ColibriClient {
         model_id: &str,
         prompt: &str,
         max_tokens: i32,
+        system: Option<&str>,
         tx: mpsc::Sender<GenerationEvent>,
     ) -> Result<()> {
         let mut resp = self
             .http
             .post(format!("{}/v1/chat/completions", self.base(port)))
             .bearer_auth(api_key)
-            .json(&serde_json::json!({
-                "model": model_id,
-                "messages": [{ "role": "user", "content": prompt }],
-                "max_tokens": max_tokens,
-                "stream": true,
-            }))
+            .json(&chat_body(model_id, prompt, max_tokens, system))
             .send()
             .await
             .map_err(|e| colibri_err(format!("chat request failed: {e}")))?
@@ -235,6 +253,30 @@ mod tests {
         body
     }
 
+    /// Pinned: without a persona Colibri must keep receiving exactly the body it
+    /// always received, and with one the system message goes first — the same
+    /// contract as the llama.cpp client's.
+    #[test]
+    fn chat_body_is_unchanged_without_a_system_prompt() {
+        assert_eq!(
+            serde_json::to_string(&chat_body("qwen3.6-colibri", "hi", 8, None)).unwrap(),
+            r#"{"max_tokens":8,"messages":[{"content":"hi","role":"user"}],"model":"qwen3.6-colibri","stream":true}"#
+        );
+    }
+
+    #[test]
+    fn chat_body_puts_a_system_prompt_first() {
+        assert_eq!(
+            serde_json::to_string(&chat_body("m", "hi", 8, Some("Be brief."))).unwrap(),
+            r#"{"max_tokens":8,"messages":[{"content":"Be brief.","role":"system"},{"content":"hi","role":"user"}],"model":"m","stream":true}"#
+        );
+        // Blank is the same as absent.
+        assert_eq!(
+            serde_json::to_string(&chat_body("m", "hi", 8, Some("  "))).unwrap(),
+            serde_json::to_string(&chat_body("m", "hi", 8, None)).unwrap()
+        );
+    }
+
     #[test]
     fn parse_sse_event_cases() {
         assert_eq!(
@@ -284,7 +326,7 @@ mod tests {
 
         let (tx, mut rx) = mpsc::channel(16);
         ColibriClient::new()
-            .complete_stream(port, "secret-key", "qwen3.6-colibri", "hi", 8, tx)
+            .complete_stream(port, "secret-key", "qwen3.6-colibri", "hi", 8, None, tx)
             .await
             .unwrap();
 
@@ -323,7 +365,7 @@ mod tests {
         let (tx, rx) = mpsc::channel(1);
         drop(rx); // no consumer
         ColibriClient::new()
-            .complete_stream(port, "key", "m", "hi", 8, tx)
+            .complete_stream(port, "key", "m", "hi", 8, None, tx)
             .await
             .unwrap();
     }
@@ -338,7 +380,7 @@ mod tests {
 
         let (tx, _rx) = mpsc::channel(1);
         let err = ColibriClient::new()
-            .complete_stream(port, "wrong-key", "m", "hi", 8, tx)
+            .complete_stream(port, "wrong-key", "m", "hi", 8, None, tx)
             .await
             .unwrap_err();
         assert!(err.to_string().contains("rejected"));

@@ -310,6 +310,21 @@ impl ColibriAdapter {
         max_tokens: i32,
         tx: mpsc::Sender<GenerationEvent>,
     ) -> Result<()> {
+        self.stream_completion_with(prompt, max_tokens, None, tx)
+            .await
+    }
+
+    /// Like [`stream_completion`](Self::stream_completion), but with an optional
+    /// system message in front of the user message — a resolved persona's prompt
+    /// ([`crate::persona`]). Colibri speaks the same OpenAI-compatible
+    /// `messages` array llama.cpp does, so personas work here too.
+    pub async fn stream_completion_with(
+        &self,
+        prompt: &str,
+        max_tokens: i32,
+        system: Option<&str>,
+        tx: mpsc::Sender<GenerationEvent>,
+    ) -> Result<()> {
         let (port, model_id, api_key) = match &*self.slot() {
             Slot::Loaded {
                 port,
@@ -320,7 +335,7 @@ impl ColibriAdapter {
             _ => return Err(colibri_err("no model is loaded")),
         };
         self.client
-            .complete_stream(port, &api_key, &model_id, prompt, max_tokens, tx)
+            .complete_stream(port, &api_key, &model_id, prompt, max_tokens, system, tx)
             .await
     }
 }

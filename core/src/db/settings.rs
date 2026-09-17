@@ -56,6 +56,17 @@ impl<'a> SettingsRepo<'a> {
         Ok(result.rows_affected() > 0)
     }
 
+    /// Remove the key entirely. Absent already → nothing to do, not an error.
+    /// "Unset" is a missing row, never an empty value, so
+    /// [`all`](Self::all) and every reader see the same thing.
+    pub async fn clear(&self, key: &str) -> Result<()> {
+        sqlx::query("DELETE FROM settings WHERE key = $1")
+            .bind(key)
+            .execute(self.pool)
+            .await?;
+        Ok(())
+    }
+
     pub async fn all(&self) -> Result<BTreeMap<String, String>> {
         let rows: Vec<(String, String)> =
             sqlx::query_as("SELECT key, value FROM settings ORDER BY key")
@@ -115,6 +126,19 @@ mod tests {
                 .as_deref(),
             Some("1")
         );
+    }
+
+    #[tokio::test]
+    async fn clear_removes_the_row_and_is_idempotent() {
+        let db = Database::connect_in_memory().await.unwrap();
+        db.settings().set("k", "v").await.unwrap();
+
+        db.settings().clear("k").await.unwrap();
+        assert_eq!(db.settings().get("k").await.unwrap(), None);
+        assert!(db.settings().all().await.unwrap().is_empty());
+
+        // Clearing an absent key is a no-op, not an error.
+        db.settings().clear("k").await.unwrap();
     }
 
     #[tokio::test]

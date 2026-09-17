@@ -30,7 +30,22 @@ fn chat_job(prompt: &str) -> NewJob {
 struct Harness {
     db: Database,
     engine: Arc<JobEngine>,
+    llama: Arc<LlamaCppAdapter>,
     _tmp: tempfile::TempDir,
+}
+
+impl Harness {
+    /// The body of the last `/v1/chat/completions` the fixture served —
+    /// fake-llama's test-only `GET /__test/last_request`.
+    async fn last_request(&self) -> serde_json::Value {
+        let base = self.llama.base_url().expect("a loaded fake server");
+        reqwest::get(format!("{base}/__test/last_request"))
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap()
+    }
 }
 
 async fn harness(with_model: bool) -> Harness {
@@ -71,6 +86,7 @@ async fn harness_with(with_model: bool, extra_args: &[&str]) -> Harness {
             },
         ),
     );
+    let probe = llama.clone();
     registry.register(llama.clone());
     let comfyui = Arc::new(ComfyUiAdapter::with_launch(
         db.clone(),
@@ -95,8 +111,212 @@ async fn harness_with(with_model: bool, extra_args: &[&str]) -> Harness {
     Harness {
         db,
         engine,
+        llama: probe,
         _tmp: tmp,
     }
+}
+
+/// The chat messages the fixture last received, as `(role, content)` pairs.
+fn messages(body: &serde_json::Value) -> Vec<(String, String)> {
+    body["messages"]
+        .as_array()
+        .expect("a messages array")
+        .iter()
+        .map(|m| {
+            (
+                m["role"].as_str().unwrap_or_default().to_string(),
+                m["content"].as_str().unwrap_or_default().to_string(),
+            )
+        })
+        .collect()
+}
+
+async fn persona(h: &Harness, name: &str, icon: &str, prompt: &str) -> aiwm_core::db::Persona {
+    aiwm_core::persona::create(&h.db, name, icon, prompt)
+        .await
+        .unwrap()
+}
+
+/// A chat with no persona anywhere must send exactly the one user message it
+/// always sent — the guard for "nothing changes until you opt in".
+#[tokio::test]
+async fn without_a_persona_the_request_carries_only_the_user_message() {
+    let h = harness(true).await;
+    let job = h.engine.submit(chat_job("Hello there")).await.unwrap();
+    h.engine.run_next().await.unwrap().unwrap();
+
+    assert_eq!(
+        messages(&h.last_request().await),
+        [("user".to_string(), "Hello there".to_string())]
+    );
+
+    let stored = h.db.jobs().get(&job.id).await.unwrap().unwrap();
+    assert!(stored.params.get("persona").is_none(), "{}", stored.params);
+}
+
+#[tokio::test]
+async fn a_global_persona_prepends_a_system_message_and_lands_in_the_job_params() {
+    let h = harness(true).await;
+    let p = persona(&h, "Blunt", "🪓", "Answer in at most three sentences.").await;
+    aiwm_core::persona::set_active(&h.db, Some(&p.id))
+        .await
+        .unwrap();
+
+    let job = h.engine.submit(chat_job("Hello there")).await.unwrap();
+    h.engine.run_next().await.unwrap().unwrap();
+
+    let got = messages(&h.last_request().await);
+    assert_eq!(
+        got,
+        [
+            (
+                "system".to_string(),
+                "Answer in at most three sentences.".to_string()
+            ),
+            ("user".to_string(), "Hello there".to_string()),
+        ],
+        "the system message must come first"
+    );
+
+    // The job remembers which persona answered — id, name and icon, never the
+    // prompt text.
+    let stored = h.db.jobs().get(&job.id).await.unwrap().unwrap();
+    assert_eq!(stored.params["persona"]["id"], p.id);
+    assert_eq!(stored.params["persona"]["name"], "Blunt");
+    assert_eq!(stored.params["persona"]["icon"], "🪓");
+    assert!(
+        !stored.params.to_string().contains("three sentences"),
+        "{}",
+        stored.params
+    );
+
+    let events: Vec<String> =
+        h.db.jobs()
+            .events(&job.id)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|e| e.message)
+            .collect();
+    assert!(
+        events.iter().any(|m| m == "persona: 🪓 Blunt"),
+        "{events:?}"
+    );
+}
+
+/// A session that opted out sends the plain single-message request even with a
+/// global persona active.
+#[tokio::test]
+async fn a_session_override_of_none_sends_a_single_user_message() {
+    let h = harness(true).await;
+    let p = persona(&h, "Blunt", "🪓", "Answer in at most three sentences.").await;
+    aiwm_core::persona::set_active(&h.db, Some(&p.id))
+        .await
+        .unwrap();
+    let session = h.db.sessions().create("chat", "Plain").await.unwrap();
+    aiwm_core::persona::set_session_persona(
+        &h.db,
+        &session.id,
+        aiwm_core::db::PersonaMode::None,
+        None,
+    )
+    .await
+    .unwrap();
+
+    let mut job = chat_job("Hello there");
+    job.session_id = Some(session.id.clone());
+    let job = h.engine.submit(job).await.unwrap();
+    h.engine.run_next().await.unwrap().unwrap();
+
+    assert_eq!(
+        messages(&h.last_request().await),
+        [("user".to_string(), "Hello there".to_string())]
+    );
+    let stored = h.db.jobs().get(&job.id).await.unwrap().unwrap();
+    assert!(stored.params.get("persona").is_none(), "{}", stored.params);
+}
+
+/// A session may pick its own persona over the global one.
+#[tokio::test]
+async fn a_session_persona_wins_over_the_global_one() {
+    let h = harness(true).await;
+    let global = persona(&h, "Global", "🌍", "global prompt").await;
+    let own = persona(&h, "Own", "🎯", "own prompt").await;
+    aiwm_core::persona::set_active(&h.db, Some(&global.id))
+        .await
+        .unwrap();
+    let session = h.db.sessions().create("chat", "Own").await.unwrap();
+    aiwm_core::persona::set_session_persona(
+        &h.db,
+        &session.id,
+        aiwm_core::db::PersonaMode::Persona,
+        Some(&own.id),
+    )
+    .await
+    .unwrap();
+
+    let mut job = chat_job("Hi");
+    job.session_id = Some(session.id.clone());
+    h.engine.submit(job).await.unwrap();
+    h.engine.run_next().await.unwrap().unwrap();
+
+    assert_eq!(
+        messages(&h.last_request().await)[0],
+        ("system".to_string(), "own prompt".to_string())
+    );
+}
+
+/// The self-healing case that matters most: deleting the persona between two
+/// messages must leave the second chat working, with no persona, rather than
+/// failing on a stale id.
+#[tokio::test]
+async fn a_persona_deleted_between_two_chats_leaves_the_second_one_working() {
+    let h = harness(true).await;
+    let p = persona(&h, "Doomed", "💀", "be doomed").await;
+    let session = h.db.sessions().create("chat", "Chat").await.unwrap();
+    aiwm_core::persona::set_session_persona(
+        &h.db,
+        &session.id,
+        aiwm_core::db::PersonaMode::Persona,
+        Some(&p.id),
+    )
+    .await
+    .unwrap();
+    aiwm_core::persona::set_active(&h.db, Some(&p.id))
+        .await
+        .unwrap();
+
+    let mut first = chat_job("First");
+    first.session_id = Some(session.id.clone());
+    let first = h.engine.submit(first).await.unwrap();
+    h.engine.run_next().await.unwrap().unwrap();
+    assert_eq!(
+        messages(&h.last_request().await)[0],
+        ("system".to_string(), "be doomed".to_string())
+    );
+
+    h.db.personas().delete(&p.id).await.unwrap();
+
+    let mut second = chat_job("Second");
+    second.session_id = Some(session.id.clone());
+    let second = h.engine.submit(second).await.unwrap();
+    let outcome = h.engine.run_next().await.unwrap().unwrap();
+    assert!(
+        matches!(&outcome, JobOutcome::Completed { job_id } if *job_id == second.id),
+        "the chat must still complete: {outcome:?}"
+    );
+
+    assert_eq!(
+        messages(&h.last_request().await),
+        [("user".to_string(), "Second".to_string())],
+        "no persona left to apply"
+    );
+    let stored = h.db.jobs().get(&second.id).await.unwrap().unwrap();
+    assert!(stored.params.get("persona").is_none(), "{}", stored.params);
+    // The first job keeps its record of who answered, even though the persona
+    // is gone.
+    let first = h.db.jobs().get(&first.id).await.unwrap().unwrap();
+    assert_eq!(first.params["persona"]["name"], "Doomed");
 }
 
 #[tokio::test]

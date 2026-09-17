@@ -7,14 +7,15 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 use aiwm_core::api::dto::{
-    AboutDto, AgentPermissionDto, AgentSessionDetailDto, AssignedDto, AttachExternalDto,
-    BenchmarkOptionsDto, CharacterBodyDto, CivitaiSearchDto, ColibriModelDto, ConceptBodyDto,
-    ConceptFramesDto, ConceptSummaryDto, ConfigUpdate, EnqueueDownloadDto, ExportDatasetDto,
-    FeaturedModelDto, JobDetailDto, KnownModelDto, LaunchExternalDto, LocalApiStatusDto,
-    LocationBodyDto, ModelStackDto, NewAgentDto, NewSessionDto, NewVoiceIdentityDto, NpcBodyDto,
-    OpenAgentSessionDto, ProfileDto, RegisterColibriModelDto, RegistryDetailsDto,
-    RegistrySearchDto, RunDetailDto, RuntimeStatusDto, SceneBodyDto, SceneDetailDto, StartRunDto,
-    StoryBodyDto, SubmitJobDto, TrainerStatusDto, UpdateDatasetDto, UpdateDatasetFrameDto,
+    AboutDto, ActivePersonaDto, AgentPermissionDto, AgentSessionDetailDto, AssignedDto,
+    AttachExternalDto, BenchmarkOptionsDto, CharacterBodyDto, CivitaiSearchDto, ColibriModelDto,
+    ConceptBodyDto, ConceptFramesDto, ConceptSummaryDto, ConfigUpdate, EnqueueDownloadDto,
+    ExportDatasetDto, FeaturedModelDto, JobDetailDto, KnownModelDto, LaunchExternalDto,
+    LocalApiStatusDto, LocationBodyDto, ModelStackDto, NewAgentDto, NewSessionDto,
+    NewVoiceIdentityDto, NpcBodyDto, OpenAgentSessionDto, PersonaBodyDto, ProfileDto,
+    RegisterColibriModelDto, RegistryDetailsDto, RegistrySearchDto, RunDetailDto, RuntimeStatusDto,
+    SceneBodyDto, SceneDetailDto, SetSessionPersonaDto, StartRunDto, StoryBodyDto, SubmitJobDto,
+    TrainerStatusDto, UpdateDatasetDto, UpdateDatasetFrameDto,
 };
 use aiwm_core::api::handlers;
 use aiwm_core::capability::dataset::{CaptionerStatus, ExportSummary};
@@ -22,11 +23,12 @@ use aiwm_core::config::Config;
 use aiwm_core::db::Document;
 use aiwm_core::db::{
     Agent, AgentSession, Benchmark, Character, CharacterLogEntry, CharacterRelationship, Dataset,
-    DatasetConcept, DatasetFrame, Download, Job, JobFilter, Location, Model, Npc, SceneImage,
-    Session, Story, TrainingRun, VoiceIdentity,
+    DatasetConcept, DatasetFrame, Download, Job, JobFilter, Location, Model, Npc, Persona,
+    SceneImage, Session, Story, TrainingRun, VoiceIdentity,
 };
 use aiwm_core::model::{ImportOutcome, ImportRequest};
 use aiwm_core::orchestrator::JobState;
+use aiwm_core::persona::{EffectivePersona, SetSessionPersona};
 use aiwm_core::registry::{Fetched, RemoteModel};
 use aiwm_core::runtime::training::Probe;
 use aiwm_core::runtime::DetectedEngine;
@@ -735,6 +737,68 @@ async fn delete_scene_image(app: tauri::State<'_, Arc<App>>, id: String) -> Resu
     to_ipc(handlers::delete_scene_image(&app, &id).await)
 }
 
+// --- personas (spec `2026-09-18-personas-design`) ---------------------------
+//
+// `Option`/`bool` returns mirror the HTTP 404s: `None`/`false` means "no such
+// id", and the caller decides what to say about it.
+
+#[tauri::command]
+async fn list_personas(app: tauri::State<'_, Arc<App>>) -> Result<Vec<Persona>, String> {
+    to_ipc(handlers::list_personas(&app).await)
+}
+
+#[tauri::command]
+async fn create_persona(
+    app: tauri::State<'_, Arc<App>>,
+    body: PersonaBodyDto,
+) -> Result<Persona, String> {
+    to_ipc(handlers::create_persona(&app, body).await)
+}
+
+#[tauri::command]
+async fn update_persona(
+    app: tauri::State<'_, Arc<App>>,
+    id: String,
+    body: PersonaBodyDto,
+) -> Result<Option<Persona>, String> {
+    to_ipc(handlers::update_persona(&app, &id, body).await)
+}
+
+#[tauri::command]
+async fn delete_persona(app: tauri::State<'_, Arc<App>>, id: String) -> Result<bool, String> {
+    to_ipc(handlers::delete_persona(&app, &id).await)
+}
+
+#[tauri::command]
+async fn active_persona(app: tauri::State<'_, Arc<App>>) -> Result<ActivePersonaDto, String> {
+    to_ipc(handlers::active_persona(&app).await)
+}
+
+#[tauri::command]
+async fn set_active_persona(
+    app: tauri::State<'_, Arc<App>>,
+    id: Option<String>,
+) -> Result<bool, String> {
+    to_ipc(handlers::set_active_persona(&app, id.as_deref()).await)
+}
+
+#[tauri::command]
+async fn set_session_persona(
+    app: tauri::State<'_, Arc<App>>,
+    id: String,
+    body: SetSessionPersonaDto,
+) -> Result<SetSessionPersona, String> {
+    to_ipc(handlers::set_session_persona(&app, &id, body).await)
+}
+
+#[tauri::command]
+async fn effective_persona(
+    app: tauri::State<'_, Arc<App>>,
+    session_id: Option<String>,
+) -> Result<EffectivePersona, String> {
+    to_ipc(handlers::effective_persona(&app, session_id.as_deref()).await)
+}
+
 #[tauri::command]
 async fn list_voice_identities(
     app: tauri::State<'_, Arc<App>>,
@@ -1177,6 +1241,14 @@ fn try_run() -> anyhow::Result<()> {
             list_documents,
             attach_document,
             delete_document,
+            list_personas,
+            create_persona,
+            update_persona,
+            delete_persona,
+            active_persona,
+            set_active_persona,
+            set_session_persona,
+            effective_persona,
             list_voice_identities,
             create_voice_identity,
             delete_voice_identity,
