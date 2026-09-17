@@ -496,7 +496,7 @@ async fn preflight_refuses_base_weights_that_do_not_match_the_pinned_manifest() 
 
     let msg = err.to_string();
     assert!(
-        msg.contains("transformer/diffusion_pytorch_model.safetensors"),
+        msg.contains("flux-2-klein-base-4b.safetensors"),
         "the refusal must name the offending file: {msg}"
     );
     assert!(

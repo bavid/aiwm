@@ -18,7 +18,7 @@ use crate::scheduler::Scheduler;
 use crate::training::config::training_folder;
 use crate::training::process::read_pid_file;
 use crate::training::progress::{
-    parse_marker, parse_progress, scan_work_dir, split_updates, tail_log, Marker,
+    parse_marker, parse_run_progress, scan_work_dir, split_updates, tail_log, Marker,
 };
 use crate::training::TRAINING_MODEL_ID;
 use crate::{CoreError, Result};
@@ -121,7 +121,9 @@ impl Runner {
 
         let mut latest = None;
         for update in split_updates(&chunk) {
-            if let Some(progress) = parse_progress(update) {
+            // Scoped to this run's own bar: the trainer draws several other
+            // progress bars of the same shape (see `parse_run_progress`).
+            if let Some(progress) = parse_run_progress(update, &run.name) {
                 latest = Some(progress);
                 continue;
             }

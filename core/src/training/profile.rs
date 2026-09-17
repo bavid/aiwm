@@ -113,30 +113,27 @@ pub struct TrainingProfile {
     pub license_note: &'static str,
 }
 
-/// The two FLUX.2 [klein] sizes share a layout but not a shard count: the 4B
-/// has one transformer file and a two-shard text encoder, the 9B a two-shard
-/// transformer and a four-shard text encoder (confirmed against each repo's
-/// file list on the Hub, 2026-09-17). One shared list would make the 9B's
-/// "base weights ready" badge false against a complete download — and the
-/// runner refuse to start on it — so each size names its own files.
-const FLUX2_KLEIN_4B_REQUIRED_FILES: &[&str] = &[
-    "model_index.json",
-    "transformer/diffusion_pytorch_model.safetensors",
-    "text_encoder/model-00001-of-00002.safetensors",
-    "text_encoder/model-00002-of-00002.safetensors",
-    "vae/diffusion_pytorch_model.safetensors",
-];
+/// What the FLUX.2 [klein] trainer actually opens under `name_or_path` — the
+/// repo's **single-file** blob, and nothing else.
+///
+/// This is the opposite of what the diffusers layout suggests, and it cost a
+/// failed run to find out (2026-09-17). In the pinned `ai-toolkit` commit,
+/// `Flux2Model.load_model` does
+/// `load_file(os.path.join(name_or_path, self.flux2_te_filename))`, and
+/// `Flux2Klein4BModel`/`Flux2Klein9BModel` set that filename to
+/// `flux-2-klein-base-{4,9}b.safetensors`. The `transformer/`,
+/// `text_encoder/`, `vae/`, `tokenizer/` and `scheduler/` folders are never
+/// read on this path: the klein text encoder comes from a *different* Hub
+/// repo (`Qwen/Qwen3-4B` / `Qwen3-8B`) and the VAE from
+/// `ai-toolkit/flux2_vae`, both fetched by the trainer at run time. Listing
+/// the diffusers files here would refuse a download that is complete for the
+/// trainer, and accept one missing the only file it opens — which is exactly
+/// what happened: the first real run died on
+/// `FileNotFoundError: No such file or directory: E:\AI\models\training\flux2-klein-4b`
+/// with all five diffusers files present and verified.
+const FLUX2_KLEIN_4B_REQUIRED_FILES: &[&str] = &["flux-2-klein-base-4b.safetensors"];
 
-const FLUX2_KLEIN_9B_REQUIRED_FILES: &[&str] = &[
-    "model_index.json",
-    "transformer/diffusion_pytorch_model-00001-of-00002.safetensors",
-    "transformer/diffusion_pytorch_model-00002-of-00002.safetensors",
-    "text_encoder/model-00001-of-00004.safetensors",
-    "text_encoder/model-00002-of-00004.safetensors",
-    "text_encoder/model-00003-of-00004.safetensors",
-    "text_encoder/model-00004-of-00004.safetensors",
-    "vae/diffusion_pytorch_model.safetensors",
-];
+const FLUX2_KLEIN_9B_REQUIRED_FILES: &[&str] = &["flux-2-klein-base-9b.safetensors"];
 
 /// The registry. One entry per trainable model family — see the module doc.
 ///
@@ -744,53 +741,27 @@ mod tests {
     }
 
     #[test]
-    fn the_two_flux2_klein_sizes_require_their_own_shard_layouts() {
-        // The 9B is not a bigger copy of the 4B: its transformer ships as two
-        // shards and its text encoder as four, so sharing one required-files
-        // list between the sizes would leave the 9B's "base weights ready"
-        // badge permanently false against a perfectly good download -- and
-        // the runner refusing to start on weights that are all there.
-        let four = find_for_family("flux2-klein-4b").expect("4B profile");
-        assert!(four
-            .base
-            .required_files
-            .contains(&"transformer/diffusion_pytorch_model.safetensors"));
-        assert_eq!(
-            four.base
-                .required_files
-                .iter()
-                .filter(|f| f.starts_with("text_encoder/model-"))
-                .count(),
-            2,
-            "the 4B text encoder ships as two shards"
-        );
-
-        let nine = find_for_family("flux2-klein-9b").expect("9B profile");
-        assert_eq!(
-            nine.base
-                .required_files
-                .iter()
-                .filter(|f| f.starts_with("transformer/diffusion_pytorch_model-"))
-                .count(),
-            2,
-            "the 9B transformer ships as two shards"
-        );
-        assert_eq!(
-            nine.base
-                .required_files
-                .iter()
-                .filter(|f| f.starts_with("text_encoder/model-"))
-                .count(),
-            4,
-            "the 9B text encoder ships as four shards"
-        );
-        assert!(
-            !nine
-                .base
-                .required_files
-                .contains(&"transformer/diffusion_pytorch_model.safetensors"),
-            "the 9B has no unsharded transformer file"
-        );
+    fn the_flux2_klein_sizes_require_only_their_single_file_blob() {
+        // Verified against the pinned ai-toolkit commit and against a real
+        // failed run (see the module note): `Flux2Model.load_model` joins
+        // `name_or_path` with `flux2_te_filename` and calls `load_file` on
+        // the result, and the klein subclasses set that filename to the
+        // repo's single-file blob. The diffusers subfolders are never opened
+        // on this path -- requiring them would refuse a download that is
+        // complete for the trainer, and permit one that is missing the only
+        // file it actually reads.
+        let expected: &[(&str, &str)] = &[
+            ("flux2-klein-4b", "flux-2-klein-base-4b.safetensors"),
+            ("flux2-klein-9b", "flux-2-klein-base-9b.safetensors"),
+        ];
+        for (family, blob) in expected {
+            let profile = find_for_family(family).expect("klein profile");
+            assert_eq!(
+                profile.base.required_files,
+                &[*blob],
+                "{family}: the trainer reads exactly one local file"
+            );
+        }
     }
 
     #[test]

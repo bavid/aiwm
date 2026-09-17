@@ -211,6 +211,31 @@ pub fn parse_marker(line: &str) -> Option<Marker> {
     None
 }
 
+/// Parse a `tqdm` line **only if it is this run's own training bar**.
+///
+/// `ai-toolkit` draws several other bars with exactly the same shape before
+/// and during a run — quantising the transformer's blocks, caching latents,
+/// generating sample images — and [`parse_progress`] cannot tell them apart,
+/// because it deliberately does not look at the description. Feeding those to
+/// the runner makes a run report a step it is nowhere near and, worse,
+/// rewrite its own `total_steps` to the other bar's total: the first real run
+/// showed `step 34` (out of the latent cache's 50) while the log still said
+/// "Generating baseline samples before training".
+///
+/// The training bar is the one `tqdm` gets `desc=job.name` for, so it is the
+/// one that starts `"<run name>: "`. Matching on the name rather than on a
+/// list of the other bars' descriptions keeps this correct when a future
+/// `ai-toolkit` adds a fourth setup bar.
+pub fn parse_run_progress(line: &str, run_name: &str) -> Option<Progress> {
+    let rest = line.strip_prefix(run_name)?;
+    // `desc` is followed by tqdm's `": "`. Requiring the colon is what stops
+    // a run called `myrender` from claiming `myrender-v1`'s bar.
+    if !rest.starts_with(':') {
+        return None;
+    }
+    parse_progress(line)
+}
+
 /// Convenience over [`split_updates`] + [`parse_progress`]: the last
 /// parseable progress update in a chunk, i.e. the run's current step.
 pub fn latest_step_from_updates(buf: &str) -> Option<Progress> {
@@ -368,6 +393,93 @@ mod tests {
             "job:  50%|█████     | 100/200 [1:02:03<2:00:00,  1.86it/s, lr: 1.0e-04 loss: 3.123e-01]";
         let p3 = parse_progress(long_running).expect("should parse h:mm:ss eta");
         assert_eq!(p3.eta_secs, Some(2 * 3600));
+    }
+
+    #[test]
+    fn the_first_three_bars_of_the_first_real_run_parse_exactly() {
+        // Copied verbatim out of `train.log` of the first real training run on
+        // this machine (FLUX.2 [klein] 4B, 2026-09-17, run
+        // 01a0aeeb-f67a-7751-bad9-1da6e10f4df3). This is the ground truth the
+        // parser is written against: tqdm emits the bar before it has a rate
+        // or a postfix, then with a postfix but still no rate, and only then
+        // a complete one -- so `?it/s` with no ETA and a missing postfix are
+        // normal opening states, not malformed lines.
+        let first = "myrender-v1:   0%|          | 0/600 [00:00<?, ?it/s]";
+        let second =
+            "myrender-v1:   0%|          | 0/600 [00:03<?, ?it/s, lr: 1.0e-04 loss: 7.309e-01]";
+        let third = "myrender-v1:   0%|          | 1/600 [00:03<39:03,  3.91s/it, lr: 1.0e-04 loss: 7.309e-01]";
+
+        let p1 = parse_run_progress(first, "myrender-v1").expect("bar 1");
+        assert_eq!((p1.step, p1.total), (0, 600));
+        assert_eq!(p1.eta_secs, None, "tqdm has no estimate yet");
+        assert_eq!(p1.loss, None, "no postfix on the opening draw");
+        assert_eq!(p1.lr, None);
+
+        let p2 = parse_run_progress(second, "myrender-v1").expect("bar 2");
+        assert_eq!((p2.step, p2.total), (0, 600));
+        assert_eq!(p2.eta_secs, None);
+        assert_eq!(p2.loss, Some(0.7309));
+        assert_eq!(p2.lr, Some(1.0e-04));
+
+        let p3 = parse_run_progress(third, "myrender-v1").expect("bar 3");
+        assert_eq!((p3.step, p3.total), (1, 600));
+        assert_eq!(p3.eta_secs, Some(39 * 60 + 3));
+        assert_eq!(p3.loss, Some(0.7309));
+        assert_eq!(p3.lr, Some(1.0e-04));
+    }
+
+    #[test]
+    fn only_the_run_s_own_bar_counts_as_training_progress() {
+        // Verbatim from the first real run (2026-09-17, run
+        // 01a0aeeb-f67a-7751-bad9-1da6e10f4df3): ai-toolkit draws three other
+        // tqdm bars before the training bar ever appears -- weight
+        // quantisation, latent caching and the baseline sample generation.
+        // They have the same shape, so a shape-only parser reads them as
+        // training steps: the run showed "step 34" while the log still said
+        // "Generating baseline samples before training", and each one would
+        // have rewritten `total_steps` to its own total (25, 50, 2) too.
+        let name = "myrender-v1";
+        let quantising = "  0%|          | 0/25 [00:00<?, ?it/s]";
+        let caching = "Caching Latents:  68%|######    | 34/50 [00:04<00:02,  7.2it/s]";
+        let sampling = "Generating Samples: 100%|##########| 2/2 [00:35<00:00, 17.97s/it]";
+        let training = "myrender-v1:   0%|          | 0/600 [00:00<?, ?it/s]";
+
+        for other in [quantising, caching, sampling] {
+            assert!(
+                parse_progress(other).is_some(),
+                "precondition: {other:?} has a progress-bar shape"
+            );
+            assert_eq!(
+                parse_run_progress(other, name),
+                None,
+                "{other:?} is not this run's bar"
+            );
+        }
+
+        let p = parse_run_progress(training, name).expect("the run's own bar must parse");
+        assert_eq!(p.step, 0);
+        assert_eq!(p.total, 600);
+    }
+
+    #[test]
+    fn a_run_name_that_is_a_prefix_of_another_is_not_confused() {
+        // `myrender` must not swallow `myrender-v1`'s bar, and the colon is
+        // what separates the description from the bar.
+        let line = "myrender-v1:  10%|#         | 60/600 [00:30<04:30,  2.0it/s]";
+        assert_eq!(parse_run_progress(line, "myrender"), None);
+        assert_eq!(
+            parse_run_progress(line, "myrender-v1").map(|p| p.step),
+            Some(60)
+        );
+    }
+
+    #[test]
+    fn a_run_name_with_colons_and_brackets_still_matches_its_own_bar() {
+        let name = "my [lora]: run 1";
+        let line = "my [lora]: run 1:  12%|##        | 240/2000 [01:02<07:35,  3.86it/s, lr: 1.0e-04 loss: 3.123e-01]";
+        let p = parse_run_progress(line, name).expect("the run's own bar must parse");
+        assert_eq!(p.step, 240);
+        assert_eq!(p.total, 2000);
     }
 
     #[test]

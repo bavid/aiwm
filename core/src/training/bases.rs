@@ -1,8 +1,15 @@
 //! The pinned base-weight manifests (spec §5 "Echter Lauf", plan Task 11):
 //! for each trainable family, the upstream repo, where its snapshot belongs
-//! under the model store, what the download must leave out, and — where a
-//! real download has actually happened on a real machine — the exact size
+//! under the model store, which files the download should select, and — where
+//! a real download has actually happened on a real machine — the exact size
 //! and SHA-256 of every file the trainer reads.
+//!
+//! "Every file the trainer reads" is narrower than "every file in the repo",
+//! and for the FLUX.2 [klein] sizes it is dramatically narrower: one blob out
+//! of twenty-odd files. What a trainer opens is a property of the *trainer*,
+//! not of the repo layout, so each entry here is derived from the pinned
+//! `ai-toolkit` commit's loader and confirmed by a real run — see the
+//! required-files note in [`super::profile`].
 //!
 //! This is the *integrity* half of a base checkpoint. The *completeness*
 //! half lives next door in [`super::profile::find_staged_base`]: which
@@ -44,50 +51,41 @@ pub struct TrainingBase {
     pub repo: &'static str,
     /// Where the snapshot belongs under the model store, forward slashes.
     pub local_subdir: &'static str,
-    /// `hf download --exclude` patterns: sample images and single-file
-    /// duplicates of weights the diffusers layout already carries.
-    pub exclude: &'static [&'static str],
+    /// The `hf download` flags that select what to fetch, already quoted,
+    /// appended verbatim to the command — `["--include", "\"x.safetensors\""]`
+    /// or a list of `--exclude` patterns.
+    ///
+    /// Selector flags rather than a bare exclusion list because for the two
+    /// FLUX.2 [klein] sizes the trainer opens exactly *one* file out of a
+    /// 16–30 GB repo (see [`super::profile`]'s required-files note), and
+    /// "everything except these twenty things" is both longer and easier to
+    /// get wrong than "this one thing".
+    pub download_filters: &'static [&'static str],
     /// Empty until a real download on a real machine has been hashed.
     pub files: &'static [BaseFile],
 }
 
-/// The five files the FLUX.2 [klein] trainer actually reads, pinned from the
-/// download on this machine (2026-09-17). Every hash here was produced by
-/// `sha256sum` over the staged snapshot; they happen to agree with the Hub's
-/// published blob digests, which is the cross-check, not the source.
-const FLUX2_KLEIN_4B_FILES: &[BaseFile] = &[
-    BaseFile {
-        path: "transformer/diffusion_pytorch_model.safetensors",
-        size_bytes: 7_751_109_744,
-        sha256: "e109674697ffa1a3983126e32512f5428a9442bd8df59f9c95566ee90a473bb6",
-    },
-    BaseFile {
-        path: "text_encoder/model-00001-of-00002.safetensors",
-        size_bytes: 4_967_215_360,
-        sha256: "8c0506e7f4936fa7e26183a4fd8da4e2bdbc5990ba64ae441f965d51228f36ea",
-    },
-    BaseFile {
-        path: "text_encoder/model-00002-of-00002.safetensors",
-        size_bytes: 3_077_766_632,
-        sha256: "82f2bd839378541b0557bfabaf37c7d3d637071fdcb73302dedd7cf61162ce07",
-    },
-    BaseFile {
-        path: "vae/diffusion_pytorch_model.safetensors",
-        size_bytes: 168_120_878,
-        sha256: "ca70d2202afe6415bdbcb8793ba8cd99fd159cfe6192381504d6c4d3036e0f04",
-    },
-    BaseFile {
-        path: "tokenizer/tokenizer.json",
-        size_bytes: 11_422_654,
-        sha256: "aeb13307a71acd8fe81861d94ad54ab689df773318809eed3cbe794b4492dae4",
-    },
-];
+/// The one file the FLUX.2 [klein] 4B trainer opens under `name_or_path`,
+/// pinned from the download on this machine (2026-09-17) with `sha256sum`.
+/// Agreement with the Hub's published blob digest is the cross-check, not the
+/// source.
+///
+/// It is *one* file, not the five of the diffusers layout — see the
+/// required-files note in [`super::profile`], which a failed real run
+/// established the hard way. The trainer's other two inputs (the Qwen3 text
+/// encoder and the VAE) are separate Hub repos it fetches itself, so they
+/// are not part of this snapshot and cannot be pinned here.
+const FLUX2_KLEIN_4B_FILES: &[BaseFile] = &[BaseFile {
+    path: "flux-2-klein-base-4b.safetensors",
+    size_bytes: 7_751_105_712,
+    sha256: "9c5fed22b76baea749d88fc2abe3ad53245e7b21a0d353a762665eea00043b92",
+}];
 
 /// One entry per family in [`super::profile::PROFILES`], so the Training tab
 /// can show a download command for any of them.
 ///
 /// Only the 4B carries pinned `files`: it is the only base that has been
-/// downloaded and hashed here. The other three are the repo/exclude/target
+/// downloaded and hashed here. The other three are the repo/selector/target
 /// half of the manifest with `files: &[]` — hashes get pinned after the first
 /// verified download, one family at a time.
 pub const TRAINING_BASES: &[TrainingBase] = &[
@@ -95,17 +93,18 @@ pub const TRAINING_BASES: &[TrainingBase] = &[
         family: "flux2-klein-4b",
         repo: "black-forest-labs/FLUX.2-klein-base-4B",
         local_subdir: "training/flux2-klein-4b",
-        // `*.jpg` are the three README sample images; the single-file
-        // `.safetensors` is a duplicate of `transformer/` in one blob, 7.7 GB
-        // the trainer never opens.
-        exclude: &["*.jpg", "flux-2-klein-base-4b.safetensors"],
+        // One file out of a 23 GB repo. `--include` rather than a long
+        // `--exclude` list because the trainer opens exactly this blob and
+        // nothing else locally -- verified by reading the pinned commit's
+        // loader and by a real run that failed without it.
+        download_filters: &["--include", "\"flux-2-klein-base-4b.safetensors\""],
         files: FLUX2_KLEIN_4B_FILES,
     },
     TrainingBase {
         family: "flux2-klein-9b",
         repo: "black-forest-labs/FLUX.2-klein-base-9B",
         local_subdir: "training/flux2-klein-9b",
-        exclude: &["*.jpg", "flux-2-klein-base-9b.safetensors"],
+        download_filters: &["--include", "\"flux-2-klein-base-9b.safetensors\""],
         // Hashes pinned after the first verified download.
         files: &[],
     },
@@ -113,7 +112,7 @@ pub const TRAINING_BASES: &[TrainingBase] = &[
         family: "sdxl",
         repo: "stabilityai/stable-diffusion-xl-base-1.0",
         local_subdir: "training/sdxl",
-        exclude: &["*.jpg"],
+        download_filters: &["--exclude", "\"*.jpg\""],
         // Hashes pinned after the first verified download.
         files: &[],
     },
@@ -121,7 +120,7 @@ pub const TRAINING_BASES: &[TrainingBase] = &[
         family: "wan",
         repo: "Wan-AI/Wan2.2-TI2V-5B-Diffusers",
         local_subdir: "training/wan",
-        exclude: &["*.jpg"],
+        download_filters: &["--exclude", "\"*.jpg\""],
         // Hashes pinned after the first verified download.
         files: &[],
     },
@@ -133,17 +132,6 @@ pub fn find_base(family: &str) -> Option<&'static TrainingBase> {
 }
 
 impl TrainingBase {
-    /// The one file a quick verification hashes: the smallest pinned
-    /// `.safetensors`. Size checks already cover every file; this adds
-    /// content verification on real weights without reading the 7.7 GB
-    /// transformer on every Start. For the 4B that is the 168 MB VAE.
-    fn quick_hash_target(&self) -> Option<&BaseFile> {
-        self.files
-            .iter()
-            .filter(|f| f.path.ends_with(".safetensors"))
-            .min_by_key(|f| f.size_bytes)
-    }
-
     /// Where this base's snapshot belongs under `store_root`, with the
     /// platform's own separators throughout (a `training/flux2-klein-4b`
     /// literal joined onto `E:\AI\models` would otherwise produce a
@@ -166,26 +154,34 @@ pub fn hf_download_command(base: &TrainingBase, store_root: &Path) -> String {
         base.repo,
         base.local_dir(store_root).display()
     );
-    for pattern in base.exclude {
-        cmd.push_str(&format!(" --exclude \"{pattern}\""));
+    for flag in base.download_filters {
+        cmd.push(' ');
+        cmd.push_str(flag);
     }
     cmd
 }
 
 /// Check a staged snapshot against its pinned manifest.
 ///
-/// `full = false` (what preflight runs before every start) checks the size of
-/// every pinned file and the SHA-256 of one of them — see
-/// [`TrainingBase::quick_hash_target`]. `full = true` hashes all of them,
-/// which for the 4B means reading 16 GB, so it belongs behind an explicit
-/// "verify base weights" action rather than in the start path.
+/// `full = false` (what preflight runs before every start) checks that every
+/// pinned file is present at its pinned size. `full = true` also hashes each
+/// one.
+///
+/// The split is about what each caller can afford, not about thoroughness for
+/// its own sake. A klein base is a *single* 7.7–18 GB blob, so "hash one small
+/// file as a spot check" is not available: there is nothing small to hash.
+/// Hashing on every Start would stall the button for the better part of a
+/// minute on work that has not changed since the last run, so the full check
+/// runs once, deliberately, when the snapshot is registered
+/// (`core/tests/register_training_base.rs`), and the start path checks sizes —
+/// which is what actually catches the realistic failure, a truncated or
+/// interrupted download.
 ///
 /// A base with no pinned files verifies trivially: there is nothing to check
 /// beyond the completeness [`super::profile::find_staged_base`] already
 /// established. Errors are refusals — every one of them names the file and
 /// says to download the repo again.
 pub fn verify_base_dir(dir: &Path, base: &TrainingBase, full: bool) -> Result<()> {
-    let quick_target = base.quick_hash_target().map(|f| f.path);
     for file in base.files {
         let path = dir.join(file.path);
         let meta = std::fs::metadata(&path).map_err(|e| {
@@ -204,7 +200,7 @@ pub fn verify_base_dir(dir: &Path, base: &TrainingBase, full: bool) -> Result<()
                 base.repo
             )));
         }
-        if !full && Some(file.path) != quick_target {
+        if !full {
             continue;
         }
         let actual = sha256_file(&path)?;
@@ -280,7 +276,7 @@ mod tests {
         family: "fixture",
         repo: "acme/fixture-base",
         local_subdir: "training/fixture",
-        exclude: &["*.jpg"],
+        download_filters: &["--exclude", "\"*.jpg\""],
         files: FIXTURE_FILES,
     };
 
@@ -288,7 +284,7 @@ mod tests {
         family: "fixture-empty",
         repo: "acme/unhashed-base",
         local_subdir: "training/fixture-empty",
-        exclude: &["*.jpg"],
+        download_filters: &["--exclude", "\"*.jpg\""],
         files: &[],
     };
 
@@ -342,8 +338,8 @@ mod tests {
     fn a_size_mismatch_is_refused_by_name_even_in_quick_mode() {
         let tmp = fixture();
         // Same first bytes, wrong length: only the size check can see this
-        // without hashing 7.7 GB, which is exactly why quick mode checks
-        // every file's size and not just the one it hashes.
+        // without hashing 7.7 GB, which is exactly what the start path's
+        // cheap check is for.
         write(tmp.path(), LARGE, b"transformer-weights-and-then-some");
         let err = verify_base_dir(tmp.path(), &FIXTURE, false)
             .expect_err("a truncated/extended file must not verify");
@@ -356,10 +352,10 @@ mod tests {
     }
 
     #[test]
-    fn a_hash_mismatch_at_the_right_size_is_refused() {
+    fn a_hash_mismatch_at_the_right_size_is_refused_by_the_full_check() {
         let tmp = fixture();
         write(tmp.path(), SMALL, b"VAE"); // same 3 bytes, different content
-        let err = verify_base_dir(tmp.path(), &FIXTURE, false)
+        let err = verify_base_dir(tmp.path(), &FIXTURE, true)
             .expect_err("corrupt content must not verify");
         let msg = err.to_string();
         assert!(msg.contains(SMALL), "message must name the file: {msg}");
@@ -370,18 +366,21 @@ mod tests {
     }
 
     #[test]
-    fn quick_mode_hashes_only_the_smallest_weights_file() {
+    fn the_quick_check_reads_sizes_only_and_the_full_check_reads_content() {
         let tmp = fixture();
-        // Corrupt the large file without changing its length: quick mode
-        // cannot see it, full mode must.
+        // Corrupt both files without changing either length. The start path
+        // must not pay to notice -- it would be re-reading gigabytes that
+        // have not changed since the snapshot was registered and fully
+        // verified -- and the full check must notice.
         write(tmp.path(), LARGE, b"TRANSFORMER-WEIGHTS");
+        write(tmp.path(), SMALL, b"VAE");
         assert!(
             verify_base_dir(tmp.path(), &FIXTURE, false).is_ok(),
-            "quick mode must not read the large file"
+            "the quick check must not read file contents"
         );
         let err = verify_base_dir(tmp.path(), &FIXTURE, true)
-            .expect_err("full mode must hash every file");
-        assert!(err.to_string().contains(LARGE));
+            .expect_err("the full check must hash every file");
+        assert!(err.to_string().contains("checksum"));
     }
 
     #[test]
@@ -392,23 +391,54 @@ mod tests {
     }
 
     #[test]
-    fn the_download_command_names_the_repo_target_and_every_exclusion() {
+    fn the_download_command_names_the_repo_the_target_and_the_selector() {
+        // This is the command that was actually run on 2026-09-17 to stage
+        // the 4B (modulo the store root), and the file it fetched is the one
+        // pinned in `FLUX2_KLEIN_4B_FILES`.
         let base = find_base("flux2-klein-4b").expect("4B base");
         let store = Path::new(if cfg!(windows) {
             r"E:\AI\models"
         } else {
             "/srv/models"
         });
-        let expected = if cfg!(windows) {
-            "hf download black-forest-labs/FLUX.2-klein-base-4B \
-             --local-dir E:\\AI\\models\\training\\flux2-klein-4b \
-             --exclude \"*.jpg\" --exclude \"flux-2-klein-base-4b.safetensors\""
+        let target = if cfg!(windows) {
+            r"E:\AI\models\training\flux2-klein-4b"
         } else {
-            "hf download black-forest-labs/FLUX.2-klein-base-4B \
-             --local-dir /srv/models/training/flux2-klein-4b \
-             --exclude \"*.jpg\" --exclude \"flux-2-klein-base-4b.safetensors\""
+            "/srv/models/training/flux2-klein-4b"
         };
-        assert_eq!(hf_download_command(base, store), expected.replace("\n", ""));
+        assert_eq!(
+            hf_download_command(base, store),
+            format!(
+                "hf download black-forest-labs/FLUX.2-klein-base-4B --local-dir {target} \
+                 --include \"flux-2-klein-base-4b.safetensors\""
+            )
+        );
+    }
+
+    #[test]
+    fn the_klein_selectors_fetch_exactly_the_file_the_profile_requires() {
+        // The download command and the completeness check must name the same
+        // file: a selector that fetches something `find_staged_base` does not
+        // look for produces a download that can never satisfy preflight.
+        for family in ["flux2-klein-4b", "flux2-klein-9b"] {
+            let base = find_base(family).expect("klein base");
+            let required = crate::training::profile::find_for_family(family)
+                .expect("klein profile")
+                .base
+                .required_files;
+            assert_eq!(required.len(), 1, "{family}: one required file");
+            let quoted = format!("\"{}\"", required[0]);
+            assert!(
+                base.download_filters.contains(&"--include"),
+                "{family}: the selector must be an include"
+            );
+            assert!(
+                base.download_filters.contains(&quoted.as_str()),
+                "{family}: the selector must name {}, got {:?}",
+                required[0],
+                base.download_filters
+            );
+        }
     }
 
     #[test]
@@ -473,7 +503,7 @@ mod tests {
     }
 
     #[test]
-    fn the_4b_manifest_pins_every_file_the_profile_requires_that_is_a_weight() {
+    fn the_4b_manifest_pins_every_file_the_profile_requires() {
         let base = find_base("flux2-klein-4b").expect("4B base");
         let pinned: Vec<&str> = base.files.iter().map(|f| f.path).collect();
         for required in crate::training::profile::find_for_family("flux2-klein-4b")
@@ -481,29 +511,15 @@ mod tests {
             .base
             .required_files
         {
-            // `model_index.json` is a 422-byte manifest diffusers rewrites on
-            // load; the four weight files and the tokenizer are what is pinned.
-            if *required == "model_index.json" {
-                continue;
-            }
             assert!(
                 pinned.contains(required),
                 "{required} is required but not pinned"
             );
         }
-        assert_eq!(base.files.len(), 5, "the 4B snapshot pins five files");
-    }
-
-    #[test]
-    fn the_quick_hash_target_is_the_smallest_safetensors() {
-        let base = find_base("flux2-klein-4b").expect("4B base");
         assert_eq!(
-            base.quick_hash_target().map(|f| f.path),
-            Some("vae/diffusion_pytorch_model.safetensors")
-        );
-        assert_eq!(
-            find_base("sdxl").and_then(TrainingBase::quick_hash_target),
-            None
+            base.files.len(),
+            1,
+            "the trainer opens exactly one local file for the 4B"
         );
     }
 }
