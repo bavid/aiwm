@@ -1417,39 +1417,114 @@ Stärke (0.80 / 1.55) im Image-Tab, Entfernen einer LoRA per Checkbox
 bestätigt (Regler verschwindet, andere LoRA bleibt unverändert), gleiches
 Verhalten im Video-Tab mit der neuen Wan-LoRA bestätigt.
 
-## Benchmark-Tab für Chat-/Coding-Modelle (Backlog, User-Wunsch 2026-09-17)
+## Benchmark-Tab — ✅ umgesetzt (2026-09-17)
 
-**Ziel (User):** „Wie viele Tokens/s produziere ich mit Modell X?" — Modell
-wählen, einen vordefinierten Test starten, Ausgabe messen. Erst einmal nur
-Chat/Coding, bewusst einfach.
+Erfüllt den User-Wunsch „Wie viele Tokens/s produziere ich mit Modell X?":
+Modell wählen, vordefinierten Test starten, Ausgabe messen. `job_type=bench`
+(`core/src/bench/mod.rs`) lief schon seit 6.5 als Job über die JobEngine gegen
+llama.cpp und lieferte Gen-/Prefill-tok/s, Kaltstart-Ladezeit und einen Score —
+gefehlt haben die **versionierten Test-Sets**, die **feste Ausgabelänge**, die
+**Pro-Prompt-Aufschlüsselung** und ein **eigener Tab**. Alles vier ist da:
 
-**Was schon da ist:** `job_type=bench` (`core/src/bench/mod.rs`) läuft heute
-schon als Job über die JobEngine gegen llama.cpp und liefert einen
-`BenchReport` mit `tokens_per_second` (Generierung), `prompt_tokens_per_second`
-(Prompt-Verarbeitung), Kaltstart-Ladezeit und einem Score; Ergebnisse landen
-auf der Modell-Zeile (`for_role_with_benchmark`) und die Jobs-Seite listet
-`bench`-Jobs. **Was fehlt:** ein eigener Benchmark-Tab (Modell-Dropdown,
-Test-Set wählen, Start, Verlauf/Vergleich mehrerer Modelle nebeneinander) und
-ein vordefiniertes, versioniertes Test-Set für Chat und Coding (feste Prompts
-mit fester Ausgabelänge, damit tok/s vergleichbar sind; Coding-Prompts mit
-einer kleinen automatischen Korrektheitsprüfung, z. B. „schreibe eine Funktion
-… — Tests laufen lassen").
+- **Versionierte Suiten** (`core/src/bench/suites.rs`): `chat-v1` (erklären /
+  zusammenfassen / E-Mail höflich umschreiben, 256 Tokens) und `coding-v1`
+  (Funktion aus Spec schreiben / Bug finden und fixen / Code erklären +
+  Testfälle vorschlagen, 384 Tokens). Selbst geschriebene englische Prompts,
+  `-vN`-Suffix ist Teil der Id — ein geänderter Prompt wird `-v2`, damit alte
+  Zeilen in der Historie vergleichbar bleiben.
+- **Feste Ausgabelänge, deterministisch** (`GenerationOptions::fixed_length()`
+  in `core/src/runtime/llamacpp/client.rs`): `ignore_eos`, `temperature 0`,
+  `seed 0`, `cache_prompt false`. **Das war der eigentliche Fund dieses
+  Slices:** ohne diese vier Felder hat ein Pass auf dem *echten* llama-server
+  **2 Tokens** gemessen (das Modell hörte nach der Höflichkeitsfloskel auf) und
+  einen **vollständig gecachten Prefill** — also eine Prefill-Rate, die nichts
+  mehr mit Prompt-Verarbeitung zu tun hatte. Gegen `aiwm-fake-llama` war das
+  nie aufgefallen, weil das Fixture immer bis zum Cap generiert. Der
+  Kontrast ist unten gemessen: derselbe resident geladene Mistral liefert im
+  Quick-Test **79 tok/s Prefill**, in der Suite **2369–2464 tok/s**.
+- **Pro-Prompt-Detail + Pro-Prompt-Stabilität**: `BenchReport.detail`
+  (`PromptResult` je Prompt mit `tokens`/`max_tokens`/gen/prefill) und
+  `stability_score` = **Mittel der Pro-Prompt-Stabilitäten**. Über alle
+  Prompts gepoolt hätte „Code ist langsamer als Prosa" als Jitter gezählt;
+  innerhalb eines Prompts sind die Pässe wirklich vergleichbar.
+- **Frühe Suite-Validierung**: eine unbekannte Suite lässt den Job sofort
+  mit Klartext scheitern, statt erst nach dem Modell-Load.
+- **Migration `0017`** (`suite`, `detail_json` — additiv, nullable) +
+  `list_all(suite, limit)` in `core/src/db/bench.rs`.
+- **API**: `GET /bench/suites`, `POST /models/{id}/benchmark` mit optionalem
+  Body `{suite, runs}` (leerer Body = der alte Quick-Test),
+  `GET /benchmarks/history?suite=&limit=` (Limit auf `1..=200` geklemmt).
+- **UI**: `ui/src/features/benchmark/` — Container + Formular (Modell, Suite
+  mit ausklappbarer Prompt-Liste, 1–5 Pässe pro Prompt), Live-Panel
+  (`pass k / total` aus den Job-Events), Result-Karte (tok/s zuerst, dann
+  Prefill / Ladezeit / VRAM-Spitze / Stabilität / Pro-Prompt-Tabelle, Warnung
+  wenn ein Prompt vor dem Cap aufgehört hat), Vergleichstabelle (neuester Lauf
+  pro Modell für die gewählte Suite, Balken via `scaleX`) und Pro-Modell-
+  Historie. Die reinen Helfer liegen in `benchmark-utils.ts`.
 
-**Vorgesehene Inspiration (Ideen, kein Code kopieren; Lizenz je prüfen):**
-- `ggml-org/llama.cpp` → `llama-bench` (Rohdurchsatz pp/tg pro Batchgröße;
-  das ist die Referenzmetrik für tok/s).
-- `Aider-AI/aider` → „polyglot benchmark" (Coding-Aufgaben aus Exercism mit
-  automatischer Testauswertung; guter Zuschnitt für „kann das Modell coden").
-- `EleutherAI/lm-evaluation-harness` (Standard-Tasks, zu groß für die App,
-  aber die Task-Definition als Vorbild).
-- `bigcode-project/bigcode-evaluation-harness` / `openai/human-eval`
-  (HumanEval-Stil: Funktion generieren, Tests ausführen — als kleine,
-  lokale Teilmenge).
-- `princeton-nlp/SWE-bench` (Repo-Level-Aufgaben; nur als Vorbild für die
-  Aufgabenform, nicht als Laufzeitabhängigkeit).
+**Gemessen (2026-09-17, RTX 4080 SUPER 16 GB, echter `aiwm-cored` + echter
+llama-server `b10855`, Leerlauf-VRAM 705 MB):**
 
-**Nicht enthalten (bewusst):** Qualitäts-Benchmarks mit Judge-Modell,
-Bild-/Video-Benchmarks, Netz-Leaderboards. Die App bleibt offline-first.
+| Modell | Suite | tok/s | Prefill tok/s | Ladezeit | VRAM-Spitze | Stabilität | Pässe | Tokens/Prompt | Anmerkung |
+|---|---|---|---|---|---|---|---|---|---|
+| Mistral-Small-3.2-24B-Instruct-2506 ultra-uncensored-heretic, IQ3_M (10,7 GB) | `chat-v1` | **56,35** | 2464 | 6090 ms (kalt) | 12406 MB | 0,9995 | 6 (3 × 2) | 256/256, 256/256, 256/256 | Wall 37 s inkl. Kaltstart |
+| dito | `coding-v1` | **56,32** | 2369 | — (resident) | 12405 MB | 0,9997 | 6 (3 × 2) | 384/384, 384/384, 384/384 | Wall 45 s |
+| dito | — (Quick-Test, leerer Body) | **56,66** | **79** | — (resident) | 12415 MB | 0,9991 | 3 | 128 (Cap), EOS-terminiert, kein Detail | Wall 8 s; Prefill bricht ein, weil der Quick-Test `cache_prompt` anlässt |
+| Qwen2.5-7B-Instruct **F16** (15,2 GB) | `chat-v1`, `coding-v1`, Quick-Test | — | — | — | — | — | 0 | — | Vom VRAM-Planer abgelehnt (Wortlaut unten) |
+
+**Kern-Check bestanden:** auf dem echten llama-server hat **jeder** der zwölf
+Suite-Detail-Einträge `tokens == max_tokens`, und **keine** `notes` enthält
+„stopped early" — genau das, was `fixed_length()` garantieren soll. Die
+`notes` lauten `"cold load; suite chat-v1, 6 pass(es) averaged"` bzw.
+`"model already resident (load time not measured); suite coding-v1, 6 pass(es)
+averaged"`.
+
+**Qwen2.5 7B F16 wird abgelehnt** — nicht umgangen, sondern so protokolliert.
+Wortlaut aus `jobs.error_text` (erster Versuch, GPU im Leerlauf):
+
+> not enough VRAM for Qwen2.5 7B Instruct: needs ~15.0 GB (weights 14.2 GB + KV
+> cache 0.4 GB @ 8K ctx + 0.3 GB overhead) — 15329 MB needed, but this GPU only
+> has 14840 MB usable in total — this model doesn't fit this card no matter what
+> else is running. Try a smaller quant/model.. Free VRAM by closing the resident
+> model, or import a smaller quant / lower the context.
+
+Die F16-Variante passt also auf diese Karte grundsätzlich nicht — ein
+Q4/Q5-Quant desselben Modells wäre die Lösung, ist aber nicht installiert.
+`E:\AI\models\llm\downloaded-7b{,-cb7e76e9}\qwen.Q4_K_M.gguf` sind 40-kB-Stubs
+aus einem Download-Test, keine echten Modelle; deshalb steht in der Tabelle nur
+**ein** real gemessenes Modell.
+
+**Inspiration (Ideen, kein Code kopiert):** `ggml-org/llama.cpp` →
+`llama-bench` für die Grundidee „feste Länge, pp und tg getrennt messen" (genau
+das macht `fixed_length()`). `Aider-AI/aider` („polyglot benchmark") und
+`openai/human-eval` / `bigcode-project/bigcode-evaluation-harness` bleiben
+Vorbilder für eine **spätere** Korrektheits-Phase, nicht für diesen Slice —
+hier wird kein generierter Code ausgeführt oder bewertet.
+
+**Bewusst nicht enthalten:** Qualitäts-Benchmarks mit Judge-Modell,
+Bild-/Video-Benchmarks, Netz-Leaderboards. Die App bleibt offline-first
+(ADR-024: keine Qualitäts-Achse).
+
+**Offen / später:**
+- **Coding-Korrektheit mit Sandbox** — generierten Code wirklich ausführen und
+  Tests laufen lassen (HumanEval-/Aider-Zuschnitt). Braucht eine eigene Spec
+  *und* eine Sicherheitsentscheidung: ein Modell erzeugt beliebigen Code, der
+  darf nicht ungeschützt auf dem Rechner des Users laufen.
+- **Andere Runtimes als llama.cpp** — `benchmark_model` lehnt heute alles ab,
+  was nicht GGUF ist; Hermes/Colibri/ComfyUI haben keine vergleichbare
+  Token-Telemetrie.
+- **Batch-Size- und Kontext-Sweeps** (llama-bench misst pp/tg je Batchgröße;
+  die App fährt nur eine Konfiguration).
+- **Export** der Historie (CSV/JSON) für Vergleiche außerhalb der App.
+- **UI-Testrunner für die reinen Helfer** in `benchmark-utils.ts` — es gibt im
+  `ui/`-Paket noch kein Testframework, die Helfer sind nur über die Live-Smoke
+  abgedeckt.
+- **Der Quick-Test in der Model Library nutzt weiter die alte Methode**
+  (EOS-terminiert, Default-Sampling, Prompt-Cache an). Er bleibt absichtlich
+  so — er ist der schnelle „läuft das Modell überhaupt und wie schnell
+  ungefähr"-Test, und seine Historie soll vergleichbar bleiben. Die Score-Chip
+  in der Model Library kann deshalb eine Suite-Zeile **oder** eine
+  Quick-Test-Zeile zeigen; welche, hängt nur daran, was zuletzt lief.
 
 ## Offen / später zu entscheiden
 - App-Selbst-Update offline (manueller Installer + Signaturprüfung angenommen)
