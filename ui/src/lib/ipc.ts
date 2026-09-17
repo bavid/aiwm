@@ -1460,6 +1460,41 @@ export const clearFinishedDownloads = () => invoke<number>("clear_finished_downl
 
 // --- benchmarks (Phase 6.5) ----------------------------------------------
 
+/** One prompt inside a {@link BenchSuite}. `text` is what the model is sent
+ *  verbatim — long enough that the picker should only ever preview it. */
+export interface BenchSuitePrompt {
+  id: string;
+  title: string;
+  text: string;
+}
+
+/** A fixed, versioned set of prompts run at a fixed generation length. The id
+ *  carries the version (`chat-v1`): changing a prompt means a new id, so
+ *  stored rows stay comparable. */
+export interface BenchSuite {
+  id: string;
+  title: string;
+  /** What the suite measures, in the honest sense — speed, never quality. */
+  description: string;
+  /** Tokens generated per pass. */
+  max_tokens: number;
+  prompts: BenchSuitePrompt[];
+}
+
+/** What one suite prompt contributed to a run, averaged over its own passes
+ *  (`Benchmark.detail[]`). */
+export interface BenchPromptResult {
+  /** Matches a {@link BenchSuitePrompt.id}. */
+  prompt_id: string;
+  /** Mean generated tokens per pass, rounded. */
+  tokens: number;
+  /** The token cap those passes ran at. `tokens` well below it means the model
+   *  stopped early, so its tok/s covers a shorter run than the other prompts. */
+  max_tokens: number;
+  gen_tps: number | null;
+  prompt_tps: number | null;
+}
+
 /** One "Test model" run, measured on this machine (`GET /benchmarks`). */
 export interface Benchmark {
   id: string;
@@ -1482,16 +1517,69 @@ export interface Benchmark {
    *  quality score. */
   overall_score: number;
   notes: string | null;
+  /** Id of the suite this run used; null for the Model Library's quick test. */
+  suite: string | null;
+  /** Per-prompt breakdown; null without a suite. */
+  detail: BenchPromptResult[] | null;
   created_at: string;
 }
+
+/** Whether `POST /models/{id}/benchmark` will accept this model at all. The
+ *  core refuses anything but llama.cpp / GGUF ("benchmarking is llama.cpp /
+ *  GGUF models only for now"), so both the Model Library's "Test model" button
+ *  and the Benchmark tab's picker gate on exactly this, rather than each
+ *  guessing its own rule and drifting from the API. */
+export const isBenchmarkable = (model: Model): boolean => model.format === "gguf";
+
+/** Whether each job state still has work ahead of it — queued, waiting for
+ *  VRAM, or actually working. A `bench` job in one of the `true` ones is a
+ *  test in flight.
+ *
+ *  A total `Record<JobState, …>` rather than a set of the active ones: adding
+ *  a state to {@link JobState} fails to compile until someone says which side
+ *  of this line it falls on, instead of defaulting to "finished". */
+const JOB_ACTIVE: Record<JobState, boolean> = {
+  queued: true,
+  scheduled: true,
+  blocked: true,
+  preparing: true,
+  running: true,
+  post: true,
+  completed: false,
+  failed: false,
+  cancelled: false,
+};
+
+/** True while a job in this state still has work ahead of it. */
+export const isJobActive = (state: JobState): boolean => JOB_ACTIVE[state];
+
+/** Every state {@link isJobActive} calls active, derived from {@link JOB_ACTIVE}
+ *  rather than hand-listed — a poll filter that cannot silently drift from the
+ *  function it is supposed to mirror. A stable module-level constant, so it is
+ *  safe as a hook dependency / poll key. */
+export const ACTIVE_JOB_STATES = (Object.keys(JOB_ACTIVE) as JobState[]).filter(isJobActive);
 
 /** The latest benchmark for every model that has one — join by `model_id`. */
 export const listBenchmarks = () => invoke<Benchmark[]>("list_benchmarks");
 /** Every benchmark run for one model, newest first. */
 export const modelBenchmarks = (id: string) =>
   invoke<Benchmark[]>("model_benchmarks", { id });
-/** Queue a "Test model" job (GGUF models only). Returns the job. */
-export const benchmarkModel = (id: string) => invoke<Job>("benchmark_model", { id });
+/** The built-in, versioned suites a run may name — the Benchmark tab's picker. */
+export const listBenchSuites = () => invoke<BenchSuite[]>("bench_suites");
+/** Queue a "Test model" job (GGUF models only). Returns the job.
+ *  Without `opts` this is the single-prompt quick test the Model Library
+ *  button has always queued; `suite` runs a versioned suite instead and `runs`
+ *  sets the passes per prompt (the job clamps it to 1..10). */
+export const benchmarkModel = (id: string, opts?: { suite?: string; runs?: number }) =>
+  invoke<Job>("benchmark_model", { id, body: opts ?? null });
+/** Benchmarks across all models, newest first — the Benchmark tab's history.
+ *  No `suite` returns every row (quick tests included); `limit` defaults to 50
+ *  and is clamped to 1..200. */
+export const benchmarkHistory = (opts?: { suite?: string; limit?: number }) =>
+  invoke<Benchmark[]>("benchmark_history", {
+    suite: opts?.suite ?? null,
+    limit: opts?.limit ?? null,
+  });
 
 // --- upgrade check (Phase 6.7) ------------------------------------------
 

@@ -194,6 +194,8 @@ mod tests {
             stability_score: stability,
             overall_score: 60,
             notes: None,
+            suite: None,
+            detail: None,
             created_at: "2026-01-01T00:00:00Z".into(),
         }
     }
@@ -301,6 +303,8 @@ mod tests {
                 stability_score: 0.95,
                 overall_score: 80,
                 notes: None,
+                suite: None,
+                detail_json: None,
             })
             .await
             .unwrap();

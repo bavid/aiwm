@@ -32,6 +32,13 @@ pub struct Benchmark {
     /// quality score (ADR-024).
     pub overall_score: i64,
     pub notes: Option<String>,
+    /// Id of the [`crate::bench::suites`] suite this run used; `None` for the
+    /// single-prompt "quick test" from the Model Library.
+    pub suite: Option<String>,
+    /// Per-prompt breakdown, already parsed from the stored JSON so API
+    /// consumers get structure instead of a string; `None` without a suite (or
+    /// if the stored text is not valid JSON).
+    pub detail: Option<serde_json::Value>,
     pub created_at: String,
 }
 
@@ -51,6 +58,9 @@ pub struct NewBenchmark {
     pub stability_score: f64,
     pub overall_score: u8,
     pub notes: Option<String>,
+    pub suite: Option<String>,
+    /// Serialised `[{ prompt_id, tokens, max_tokens, gen_tps, prompt_tps }, ...]`.
+    pub detail_json: Option<String>,
 }
 
 #[derive(Debug)]
@@ -73,11 +83,24 @@ struct Row {
     stability_score: f64,
     overall_score: i64,
     notes: Option<String>,
+    suite: Option<String>,
+    detail_json: Option<String>,
     created_at: String,
 }
 
 impl From<Row> for Benchmark {
     fn from(r: Row) -> Self {
+        let detail = r.detail_json.as_deref().and_then(|raw| {
+            serde_json::from_str(raw)
+                .inspect_err(|err| {
+                    tracing::warn!(
+                        benchmark = %r.id,
+                        %err,
+                        "stored benchmark detail is not valid JSON — dropping it"
+                    );
+                })
+                .ok()
+        });
         Self {
             id: r.id,
             model_id: r.model_id,
@@ -92,13 +115,20 @@ impl From<Row> for Benchmark {
             stability_score: r.stability_score,
             overall_score: r.overall_score,
             notes: r.notes,
+            suite: r.suite,
+            detail,
             created_at: r.created_at,
         }
     }
 }
 
 const COLS: &str = "id, model_id, job_id, kind, runs, prompt_tps, gen_tps, load_ms, \
-     vram_peak_mb, ram_peak_mb, stability_score, overall_score, notes, created_at";
+     vram_peak_mb, ram_peak_mb, stability_score, overall_score, notes, suite, detail_json, \
+     created_at";
+
+/// Upper bound for [`BenchRepo::list_all`], so a bad caller cannot ask for the
+/// whole table.
+const MAX_LIST_LIMIT: i64 = 500;
 
 impl<'a> BenchRepo<'a> {
     pub(super) fn new(pool: &'a SqlitePool) -> Self {
@@ -113,8 +143,9 @@ impl<'a> BenchRepo<'a> {
 
         sqlx::query(
             "INSERT INTO benchmarks (id, model_id, job_id, kind, runs, prompt_tps, gen_tps,
-                 load_ms, vram_peak_mb, ram_peak_mb, stability_score, overall_score, notes, created_at)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)",
+                 load_ms, vram_peak_mb, ram_peak_mb, stability_score, overall_score, notes,
+                 suite, detail_json, created_at)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)",
         )
         .bind(&id)
         .bind(&new.model_id)
@@ -129,6 +160,8 @@ impl<'a> BenchRepo<'a> {
         .bind(new.stability_score)
         .bind(i64::from(new.overall_score))
         .bind(&new.notes)
+        .bind(&new.suite)
+        .bind(&new.detail_json)
         .bind(&now)
         .execute(self.pool)
         .await?;
@@ -149,6 +182,15 @@ impl<'a> BenchRepo<'a> {
     }
 
     /// Every benchmark for one model, newest first.
+    ///
+    /// Deliberately **not** filtered by suite: a suite run is a perfectly good
+    /// "latest result" for a model. Its `gen_tps` is measured at a fixed token
+    /// length and its `stability_score` is averaged within each prompt, so a
+    /// suite row is not penalised for mixing prose and code prompts. It is still
+    /// a different prompt set *and* a different method than the quick test —
+    /// which remains EOS-terminated with the server's default sampling and its
+    /// prompt cache on — so the Model Library chip may show either. Callers that
+    /// need one suite's numbers use [`list_all`](Self::list_all) with a filter.
     pub async fn list_for(&self, model_id: &str) -> Result<Vec<Benchmark>> {
         let rows: Vec<Row> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
             "SELECT {COLS} FROM benchmarks WHERE model_id = $1 ORDER BY created_at DESC, id DESC"
@@ -164,8 +206,30 @@ impl<'a> BenchRepo<'a> {
         Ok(self.list_for(model_id).await?.into_iter().next())
     }
 
+    /// Benchmarks across all models, newest first — the Benchmark tab's history.
+    /// `suite = None` returns every row (including the suite-less quick tests);
+    /// `limit` is clamped to `1..=500`.
+    pub async fn list_all(&self, suite: Option<&str>, limit: i64) -> Result<Vec<Benchmark>> {
+        let limit = limit.clamp(1, MAX_LIST_LIMIT);
+        let filter = if suite.is_some() {
+            "WHERE suite = $2"
+        } else {
+            ""
+        };
+        let mut query = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+            "SELECT {COLS} FROM benchmarks {filter} ORDER BY created_at DESC, id DESC LIMIT $1"
+        )))
+        .bind(limit);
+        if let Some(suite) = suite {
+            query = query.bind(suite);
+        }
+        let rows: Vec<Row> = query.fetch_all(self.pool).await?;
+        Ok(rows.into_iter().map(Benchmark::from).collect())
+    }
+
     /// The most recent benchmark for every model that has one — the Model Library
-    /// score column. Keyed by `model_id`.
+    /// score column. Keyed by `model_id`. Like [`latest_for`](Self::latest_for)
+    /// this mixes suite runs and quick tests on purpose; see that method's note.
     pub async fn latest_all(&self) -> Result<Vec<Benchmark>> {
         let rows: Vec<Row> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
             "SELECT {COLS} FROM benchmarks b
@@ -216,6 +280,8 @@ mod tests {
             stability_score: 0.94,
             overall_score: 72,
             notes: None,
+            suite: None,
+            detail_json: None,
         }
     }
 
@@ -281,6 +347,74 @@ mod tests {
         let for_a = all.iter().find(|x| x.model_id == a).unwrap();
         assert_eq!(for_a.id, newest_a.id);
         assert_eq!(for_a.overall_score, 88);
+    }
+
+    #[tokio::test]
+    async fn a_suite_run_round_trips_with_its_parsed_detail() {
+        let db = Database::connect_in_memory().await.unwrap();
+        let m = model(&db, "qwen").await;
+
+        let stored = db
+            .benchmarks()
+            .insert(NewBenchmark {
+                suite: Some("chat-v1".into()),
+                detail_json: Some(
+                    r#"[{"prompt_id":"chat-v1-explain","tokens":256,"gen_tps":61.2,"prompt_tps":null}]"#
+                        .into(),
+                ),
+                ..sample(&m)
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(stored.suite.as_deref(), Some("chat-v1"));
+        let detail = stored.detail.expect("parsed detail");
+        assert_eq!(detail[0]["prompt_id"], "chat-v1-explain");
+        assert_eq!(detail[0]["tokens"], 256);
+
+        // A legacy row keeps both columns NULL.
+        let legacy = db.benchmarks().insert(sample(&m)).await.unwrap();
+        assert!(legacy.suite.is_none());
+        assert!(legacy.detail.is_none());
+    }
+
+    #[tokio::test]
+    async fn list_all_filters_by_suite_and_honours_the_limit() {
+        let db = Database::connect_in_memory().await.unwrap();
+        let a = model(&db, "a").await;
+        let b = model(&db, "b").await;
+
+        for (model_id, suite) in [
+            (&a, Some("chat-v1")),
+            (&b, Some("chat-v1")),
+            (&a, Some("coding-v1")),
+            (&a, None),
+        ] {
+            db.benchmarks()
+                .insert(NewBenchmark {
+                    suite: suite.map(str::to_string),
+                    ..sample(model_id)
+                })
+                .await
+                .unwrap();
+        }
+
+        let all = db.benchmarks().list_all(None, 50).await.unwrap();
+        assert_eq!(all.len(), 4);
+        // Newest first: the last insert (the legacy row) leads.
+        assert!(all[0].suite.is_none());
+
+        let chat = db.benchmarks().list_all(Some("chat-v1"), 50).await.unwrap();
+        assert_eq!(chat.len(), 2);
+        assert!(chat.iter().all(|r| r.suite.as_deref() == Some("chat-v1")));
+
+        assert_eq!(db.benchmarks().list_all(None, 2).await.unwrap().len(), 2);
+        assert!(db
+            .benchmarks()
+            .list_all(Some("chat-v9"), 50)
+            .await
+            .unwrap()
+            .is_empty());
     }
 
     #[tokio::test]

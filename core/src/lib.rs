@@ -66,7 +66,7 @@ pub use agent::{
 };
 pub use api::{ApiServer, Services};
 pub use app::{App, AppOptions};
-pub use bench::{BenchOutcome, BenchReport, BenchRequest};
+pub use bench::{suites as bench_suites, BenchOutcome, BenchReport, BenchRequest, PromptResult};
 pub use capability::agent::{AgentSessions, CodingRuntime, LlamaCodingRuntime};
 pub use cleanup::StorageReport;
 pub use compat::{estimate as estimate_vram, FitVerdict, ModelDims, VramEstimate};
