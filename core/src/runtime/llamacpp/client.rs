@@ -24,9 +24,10 @@ pub enum GenerationEvent {
         tokens: u32,
         /// Generation (decode) rate the server reported.
         tokens_per_second: f64,
-        /// Prompt (prefill) rate the server reported, or `None` when it did not
-        /// report one. Deliberately not `0.0`: a missing rate must not be
-        /// averaged in as if the prefill really ran at zero tokens/sec.
+        /// Prompt (prefill) rate the server reported. `None` means it reported
+        /// no rate at all *or* reported one of zero — both are "no measurement",
+        /// and neither must be averaged in as if the prefill really ran at zero
+        /// tokens/sec.
         prompt_tokens_per_second: Option<f64>,
     },
 }
@@ -73,17 +74,22 @@ fn chat_body(prompt: &str, max_tokens: i32, opts: &GenerationOptions, stream: bo
         "max_tokens": max_tokens,
         "stream": stream,
     });
-    if opts.ignore_eos {
-        body["ignore_eos"] = Value::Bool(true);
-    }
-    if let Some(temperature) = opts.temperature {
-        body["temperature"] = serde_json::json!(temperature);
-    }
-    if let Some(seed) = opts.seed {
-        body["seed"] = serde_json::json!(seed);
-    }
-    if let Some(cache_prompt) = opts.cache_prompt {
-        body["cache_prompt"] = Value::Bool(cache_prompt);
+    // `json!` above always yields an object, so this branch always runs; asking
+    // for the map instead of index-assigning keeps that fact honest and out of
+    // an `unwrap`.
+    if let Some(map) = body.as_object_mut() {
+        if opts.ignore_eos {
+            map.insert("ignore_eos".into(), Value::Bool(true));
+        }
+        if let Some(temperature) = opts.temperature {
+            map.insert("temperature".into(), serde_json::json!(temperature));
+        }
+        if let Some(seed) = opts.seed {
+            map.insert("seed".into(), serde_json::json!(seed));
+        }
+        if let Some(cache_prompt) = opts.cache_prompt {
+            map.insert("cache_prompt".into(), Value::Bool(cache_prompt));
+        }
     }
     body
 }

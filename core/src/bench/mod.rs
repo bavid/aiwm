@@ -484,6 +484,10 @@ async fn one_pass(
 
     if cancelled {
         drop(rx); // the client sees the closed channel and stops streaming
+                  // …but only once the server sends the *next* chunk: the client is parked
+                  // in `chunk().await` until then, so a server that stalls mid-body would
+                  // hold the cancel open indefinitely. Aborting drops that future instead.
+        stream.abort();
         let _ = stream.await;
         return Ok(None);
     }

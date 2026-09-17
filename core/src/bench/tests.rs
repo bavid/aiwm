@@ -426,6 +426,42 @@ async fn paced_llama(token_ms: u64) -> u16 {
     port
 }
 
+/// A stand-in that sends one token and then nothing at all, without closing the
+/// connection — the shape that parks the client in `chunk().await` forever. Used
+/// to prove a cancel does not wait for a stalled server.
+async fn stalling_llama() -> u16 {
+    use axum::response::sse::{Event, Sse};
+    use futures_util::stream::{self, StreamExt};
+
+    let router = Router::new()
+        .route("/health", get(|| async { axum::http::StatusCode::OK }))
+        .route(
+            "/v1/chat/completions",
+            post(|| async {
+                let first = stream::once(async {
+                    Ok::<_, std::convert::Infallible>(
+                        Event::default().data(
+                            serde_json::json!({
+                                "choices": [{ "delta": { "content": "w " },
+                                              "finish_reason": null }]
+                            })
+                            .to_string(),
+                        ),
+                    )
+                });
+                Sse::new(first.chain(stream::pending()))
+            }),
+        );
+    let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+        .await
+        .unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        axum::serve(listener, router).await.unwrap();
+    });
+    port
+}
+
 /// Like [`mock_llama`], but each pass takes `delay_ms` — long enough for a test
 /// to flip a cancel between two prompts of a suite.
 async fn delayed_llama(delay_ms: u64) -> u16 {
@@ -730,6 +766,50 @@ async fn a_cancel_mid_generation_does_not_wait_for_the_pass_to_finish() {
     )
     .await
     .expect("a cancel must not wait for the generation to end")
+    .unwrap();
+
+    assert!(matches!(outcome, BenchOutcome::Cancelled), "{outcome:?}");
+    assert!(
+        db.benchmarks()
+            .latest_for(&model.id)
+            .await
+            .unwrap()
+            .is_none(),
+        "a cancelled benchmark records nothing"
+    );
+}
+
+/// The client only notices the dropped receiver when the *next* chunk arrives,
+/// so a server that goes quiet mid-body would otherwise pin the pass forever.
+#[tokio::test]
+async fn a_cancel_is_not_blocked_by_a_server_that_stalls_mid_body() {
+    let db = Database::connect_in_memory().await.unwrap();
+    let port = stalling_llama().await;
+    let (model, job_id, llama) = cancellable_fixture(&db, port).await;
+
+    let (_tel_tx, tel_rx) = watch::channel(telemetry(1_000, 10_000));
+    let (cancel_tx, cancel_rx) = watch::channel(false);
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(120)).await;
+        let _ = cancel_tx.send(true);
+    });
+
+    let outcome = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        run(
+            &db,
+            &llama,
+            tel_rx,
+            &job_id,
+            &model,
+            BenchRequest::default(),
+            None,
+            16_376,
+            cancel_rx,
+        ),
+    )
+    .await
+    .expect("a stalled stream must not hold the cancel open")
     .unwrap();
 
     assert!(matches!(outcome, BenchOutcome::Cancelled), "{outcome:?}");

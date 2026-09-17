@@ -185,10 +185,12 @@ impl<'a> BenchRepo<'a> {
     ///
     /// Deliberately **not** filtered by suite: a suite run is a perfectly good
     /// "latest result" for a model. Its `gen_tps` is measured at a fixed token
-    /// length like the quick test's, and its `stability_score` is averaged
-    /// within each prompt, so a suite row is not penalised for mixing prose and
-    /// code prompts. Callers that need one suite's numbers use
-    /// [`list_all`](Self::list_all) with a filter.
+    /// length and its `stability_score` is averaged within each prompt, so a
+    /// suite row is not penalised for mixing prose and code prompts. It is still
+    /// a different prompt set *and* a different method than the quick test —
+    /// which remains EOS-terminated with the server's default sampling and its
+    /// prompt cache on — so the Model Library chip may show either. Callers that
+    /// need one suite's numbers use [`list_all`](Self::list_all) with a filter.
     pub async fn list_for(&self, model_id: &str) -> Result<Vec<Benchmark>> {
         let rows: Vec<Row> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
             "SELECT {COLS} FROM benchmarks WHERE model_id = $1 ORDER BY created_at DESC, id DESC"
