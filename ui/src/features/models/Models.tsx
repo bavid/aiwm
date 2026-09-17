@@ -179,7 +179,7 @@ function ModelLibrary({ models, error }: { models: Model[] | null; error: string
   const activeOf = (type: string) =>
     new Set(
       (jobs ?? [])
-        .filter((j: Job) => j.job_type === type && isJobActive(j))
+        .filter((j: Job) => j.job_type === type && isJobActive(j.state))
         .map(targetOf),
     );
   const testing = activeOf("bench");

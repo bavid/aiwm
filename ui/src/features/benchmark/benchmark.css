@@ -33,6 +33,27 @@
   font-size: var(--text-sm);
 }
 
+/* Read by screen readers, never shown: the explanation a `title=` tooltip
+   would have hidden from keyboard and touch users. */
+.bench__sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+/* The gap between "the job finished" and "its row arrived from the store". */
+.bench__reading {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+
 .bench__warn {
   margin: 0;
   padding: var(--space-2) var(--space-3);
@@ -214,7 +235,7 @@
   gap: var(--space-3);
 }
 
-.bench__live-head h2 {
+.bench__live-title {
   display: flex;
   align-items: center;
   gap: var(--space-2);
@@ -245,7 +266,9 @@
   background: var(--load-crit);
 }
 
-.bench__live-count {
+/* The job's own model and suite — an adopted run (page reload, or a test
+   started from the Model Library) need not match the form above. */
+.bench__live-target {
   color: var(--muted);
   font-size: var(--text-sm);
 }
@@ -292,6 +315,11 @@
   font-size: var(--text-xs);
   line-height: 1.7;
   overflow: auto;
+}
+
+.bench__trail:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 .bench__trail li[data-level="warn"] {

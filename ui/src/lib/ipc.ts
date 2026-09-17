@@ -1532,8 +1532,10 @@ export interface Benchmark {
 export const isBenchmarkable = (model: Model): boolean => model.format === "gguf";
 
 /** Job states that mean "not finished yet" — queued, waiting for VRAM, or
- *  actually working. A `bench` job in one of these is a test in flight. */
-const ACTIVE_JOB_STATES: ReadonlySet<string> = new Set<JobState>([
+ *  actually working. A `bench` job in one of these is a test in flight.
+ *  Typed as a set *of `JobState`*, so adding a state to the union without
+ *  deciding which side of this line it falls on is a build error. */
+const ACTIVE_JOB_STATES: ReadonlySet<JobState> = new Set<JobState>([
   "queued",
   "scheduled",
   "blocked",
@@ -1542,8 +1544,8 @@ const ACTIVE_JOB_STATES: ReadonlySet<string> = new Set<JobState>([
   "post",
 ]);
 
-/** True while `job` still has work ahead of it — see {@link ACTIVE_JOB_STATES}. */
-export const isJobActive = (job: Job): boolean => ACTIVE_JOB_STATES.has(job.state);
+/** True while a job in this state still has work ahead of it. */
+export const isJobActive = (state: JobState): boolean => ACTIVE_JOB_STATES.has(state);
 
 /** The latest benchmark for every model that has one — join by `model_id`. */
 export const listBenchmarks = () => invoke<Benchmark[]>("list_benchmarks");

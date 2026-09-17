@@ -284,15 +284,18 @@ export const useDownloads = () =>
   usePolled<Download[]>("downloads", listDownloads, 1500);
 export const useBenchmarks = () =>
   usePolled<Benchmark[]>("benchmarks", listBenchmarks, 3000);
-/** The built-in suite catalogue. Static on the core side, but polled like its
- *  neighbours so the picker fills in once the core is up. */
+/** The built-in suite catalogue. It is a compile-time constant in the core, so
+ *  this only re-reads slowly -- enough to fill the picker in once the core is
+ *  up, without a 3 s poll for something that never changes. */
 export const useBenchSuites = () =>
-  usePolled<BenchSuite[]>("bench-suites", listBenchSuites, 3000);
-/** Cross-model benchmark history; `null` suite = every row, quick tests too. */
-export const useBenchmarkHistory = (suite: string | null) =>
+  usePolled<BenchSuite[]>("bench-suites", listBenchSuites, 60_000);
+/** Cross-model benchmark history; `null` suite = every row, quick tests too.
+ *  `limit` is the API's own page size (default 50, max 200): the comparison
+ *  needs a window wide enough that no model silently drops out of it. */
+export const useBenchmarkHistory = (suite: string | null, limit?: number) =>
   usePolled<Benchmark[]>(
-    `benchmark-history:${suite ?? ""}`,
-    () => benchmarkHistory(suite ? { suite } : undefined),
+    `benchmark-history:${suite ?? ""}:${limit ?? ""}`,
+    () => benchmarkHistory({ suite: suite ?? undefined, limit }),
     3000,
   );
 export const useStorage = () =>

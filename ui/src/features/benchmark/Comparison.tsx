@@ -1,5 +1,13 @@
 import type { Benchmark } from "../../lib/ipc";
-import { barScale, fastestTps, formatTps, latestPerModel, stoppedEarly } from "./benchmark-utils";
+import { ShortMark } from "./ShortMark";
+import {
+  HISTORY_LIMIT,
+  barScale,
+  fastestTps,
+  formatTps,
+  latestPerModel,
+  stoppedEarly,
+} from "./benchmark-utils";
 
 type Props = {
   /** History already filtered to one suite — rows from different suites run at
@@ -10,11 +18,20 @@ type Props = {
   suiteTitle: string;
   /** The run that just finished here, so it stands out among the others. */
   highlightBenchId: string | null;
+  /** `rows` filled the API's page: older runs exist that this view never saw,
+   *  which the caption has to admit rather than imply completeness. */
+  windowed: boolean;
 };
 
 /** One bar per model: its newest run on this suite, fastest on top. The bars
  *  are the comparison — the numbers beside them are the receipt. */
-export function Comparison({ rows, nameByModel, suiteTitle, highlightBenchId }: Props) {
+export function Comparison({
+  rows,
+  nameByModel,
+  suiteTitle,
+  highlightBenchId,
+  windowed,
+}: Props) {
   const latest = latestPerModel(rows);
   const fastest = fastestTps(latest);
 
@@ -34,7 +51,10 @@ export function Comparison({ rows, nameByModel, suiteTitle, highlightBenchId }: 
       <h2>Comparison</h2>
       <div className="bench__tablewrap">
         <table className="bench__table bench__table--bars">
-          <caption>Newest run per model with {suiteTitle}, fastest first</caption>
+          <caption>
+            Newest run per model with {suiteTitle}, fastest first
+            {windowed && ` — showing the most recent ${HISTORY_LIMIT} runs`}
+          </caption>
           <thead>
             <tr>
               <th scope="col">Model</th>
@@ -47,11 +67,7 @@ export function Comparison({ rows, nameByModel, suiteTitle, highlightBenchId }: 
               <tr key={row.id} data-current={row.id === highlightBenchId || undefined}>
                 <th scope="row">
                   {nameByModel[row.model_id] ?? <em className="muted">removed model</em>}
-                  {stoppedEarly(row) && (
-                    <span className="bench__short" title="Stopped early — not comparable">
-                      short
-                    </span>
-                  )}
+                  {stoppedEarly(row) && <ShortMark />}
                 </th>
                 <td>
                   <span className="bench__bar">

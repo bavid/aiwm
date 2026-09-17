@@ -1,4 +1,5 @@
 import type { Benchmark } from "../../lib/ipc";
+import { ShortMark } from "./ShortMark";
 import {
   formatRoundTps,
   formatStability,
@@ -46,11 +47,7 @@ export function History({ rows, modelName, suiteTitle }: Props) {
                 <tr key={row.id}>
                   <th scope="row" className="numeric">
                     {formatWhen(row.created_at)}
-                    {stoppedEarly(row) && (
-                      <span className="bench__short" title="Stopped early — not comparable">
-                        short
-                      </span>
-                    )}
+                    {stoppedEarly(row) && <ShortMark />}
                   </th>
                   <td className="numeric">{formatTps(row.gen_tps)}</td>
                   <td className="numeric">{formatRoundTps(row.prompt_tps)}</td>

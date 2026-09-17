@@ -51,10 +51,24 @@ export function parsePassEvent(message: string): PassEvent | null {
   const tps = Number(m[3]);
   if (!Number.isFinite(pass) || !Number.isFinite(runs) || !Number.isFinite(tps)) return null;
 
+  // The *first* separator ends the suite id; a prompt title that contains one
+  // itself keeps it (`lastIndexOf` would eat everything up to that one).
   const head = message.slice(0, m.index).replace(LABEL_TAIL, "");
-  const dot = head.lastIndexOf(LABEL_SEPARATOR);
+  const dot = head.indexOf(LABEL_SEPARATOR);
   const title = (dot >= 0 ? head.slice(dot + LABEL_SEPARATOR.length) : head).trim();
   return { promptTitle: title === "" ? null : title, pass, runs, tps };
+}
+
+/** Where a parsed pass sits in the suite — `{ index, of }`, 1-based, or `null`
+ *  when the line named no prompt this suite knows (an older suite version, or
+ *  a suite-less quick test). Lets the live panel say "prompt 2/3". */
+export function promptPosition(
+  suite: BenchSuite | null,
+  title: string | null,
+): { index: number; of: number } | null {
+  if (!suite || title == null) return null;
+  const at = suite.prompts.findIndex((p) => p.title === title);
+  return at < 0 ? null : { index: at + 1, of: suite.prompts.length };
 }
 
 /** The passes-per-prompt the form offers. The core clamps to `1..=10`; five is
@@ -64,20 +78,49 @@ export const MAX_RUNS = 5;
 /** Matches `core::bench`'s own default for a suite run. */
 export const DEFAULT_RUNS = 2;
 
+/** The API's maximum page size for `GET /benchmarks/history`. The comparison
+ *  asks for all of it: at the 50-row default a machine with a few models and a
+ *  busy afternoon silently loses whole models off the chart. */
+export const HISTORY_LIMIT = 200;
+
+/** The passes field keeps raw text so clearing it does not snap to 1; this is
+ *  what that text means. Blank or unparseable reads as the default, never as
+ *  zero. */
+export function parseRuns(text: string): number {
+  const trimmed = text.trim();
+  if (trimmed === "") return DEFAULT_RUNS;
+  const n = Number(trimmed);
+  if (!Number.isFinite(n)) return DEFAULT_RUNS;
+  return Math.min(MAX_RUNS, Math.max(MIN_RUNS, Math.round(n)));
+}
+
 /** How many generation passes a suite run of `runs` passes per prompt means in
  *  total — the denominator the live panel counts towards. */
 export function totalPasses(suite: BenchSuite | null, runs: number): number {
   return suite ? suite.prompts.length * Math.max(0, runs) : 0;
 }
 
-/** The same count for a job already in flight, read back from its own params
+/** The suite id a bench job was queued with — the run's own, which may differ
+ *  from whatever the form shows now (a reload, or a job started elsewhere). */
+export function jobSuiteId(params: unknown): string | null {
+  if (params == null || typeof params !== "object") return null;
+  const { suite } = params as { suite?: unknown };
+  return typeof suite === "string" ? suite : null;
+}
+
+/** The suite a bench job is running, as far as this build still knows it. */
+export function jobSuite(params: unknown, suites: readonly BenchSuite[]): BenchSuite | null {
+  const id = jobSuiteId(params);
+  return id == null ? null : (suites.find((s) => s.id === id) ?? null);
+}
+
+/** Total passes for a job already in flight, read back from its own params
  *  rather than from the form — the form may have moved on since it started. */
 export function jobPasses(params: unknown, suites: readonly BenchSuite[]): number {
   if (params == null || typeof params !== "object") return 0;
-  const { suite: suiteId, runs } = params as { suite?: unknown; runs?: unknown };
-  const suite = suites.find((s) => s.id === suiteId) ?? null;
+  const { runs } = params as { runs?: unknown };
   const asked = Number(runs);
-  return totalPasses(suite, Number.isFinite(asked) ? asked : DEFAULT_RUNS);
+  return totalPasses(jobSuite(params, suites), Number.isFinite(asked) ? asked : DEFAULT_RUNS);
 }
 
 /** A model stopped generating before the token cap, so its tok/s covers a
@@ -103,7 +146,10 @@ export function latestPerModel(rows: readonly Benchmark[]): Benchmark[] {
   const newest = new Map<string, Benchmark>();
   for (const row of rows) {
     const held = newest.get(row.model_id);
-    if (!held || row.created_at.localeCompare(held.created_at) > 0) newest.set(row.model_id, row);
+    // Plain `>`: these are ISO-8601 timestamps, where byte order *is*
+    // chronological order. A locale collation would reorder them by rules that
+    // have nothing to do with time.
+    if (!held || row.created_at > held.created_at) newest.set(row.model_id, row);
   }
   return [...newest.values()].sort((a, b) => (b.gen_tps ?? -1) - (a.gen_tps ?? -1));
 }

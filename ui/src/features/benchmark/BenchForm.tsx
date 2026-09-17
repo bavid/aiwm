@@ -3,19 +3,28 @@ import type { BenchSuite, Model } from "../../lib/ipc";
 import { MAX_RUNS, MIN_RUNS, totalPasses } from "./benchmark-utils";
 
 type Props = {
-  /** Already filtered to what the core will accept (GGUF / llama.cpp). */
+  /** Benchmarkable *and* marked as chat models — what a run can use. */
   models: Model[];
+  /** How many GGUF models the library holds at all, chat-marked or not. It is
+   *  what tells "import something" apart from "fix a role". */
+  ggufCount: number;
   suites: BenchSuite[];
   modelId: string;
   suiteId: string;
+  /** Raw field text, so clearing it leaves an empty box rather than a 1. */
+  runsText: string;
+  /** What that text means once parsed and clamped — what a run would use. */
   runs: number;
-  /** A bench job started here is still queued or running. */
+  /** A bench job started (or adopted) by this tab is still in flight, or one
+   *  is being queued right now. */
   busy: boolean;
-  /** What went wrong queueing or cancelling, if anything. */
+  /** What went wrong queueing, cancelling or watching, if anything. */
   error: string | null;
   onModelChange: (id: string) => void;
   onSuiteChange: (id: string) => void;
-  onRunsChange: (runs: number) => void;
+  onRunsTextChange: (text: string) => void;
+  /** Blur/submit: normalize the field to the value a run would actually use. */
+  onRunsCommit: () => void;
   onStart: () => void;
   onStop: () => void;
   /** Opens the Models tab so an empty library can be filled. `null` when the
@@ -28,15 +37,18 @@ type Props = {
  *  container. */
 export function BenchForm({
   models,
+  ggufCount,
   suites,
   modelId,
   suiteId,
+  runsText,
   runs,
   busy,
   error,
   onModelChange,
   onSuiteChange,
-  onRunsChange,
+  onRunsTextChange,
+  onRunsCommit,
   onStart,
   onStop,
   onGoToModels,
@@ -50,28 +62,14 @@ export function BenchForm({
   const passes = totalPasses(suite, runs);
   const ready = modelId !== "" && suite !== null;
 
-  if (models.length === 0) {
-    return (
-      <div className="card bench__empty">
-        <h2>No GGUF chat model yet — get one in Discover</h2>
-        <p>
-          Benchmarking runs on llama.cpp, so it needs a <code>.gguf</code> chat model in the
-          library. Import one, or pick a recommendation on the Models tab.
-        </p>
-        {onGoToModels && (
-          <button type="button" className="bench__go" onClick={onGoToModels}>
-            Open Models → Discover
-          </button>
-        )}
-      </div>
-    );
-  }
+  if (models.length === 0) return <EmptyLibrary ggufCount={ggufCount} onGoToModels={onGoToModels} />;
 
   return (
     <form
       className="card bench__form"
       onSubmit={(e) => {
         e.preventDefault();
+        onRunsCommit();
         if (ready && !busy) onStart();
       }}
     >
@@ -108,8 +106,9 @@ export function BenchForm({
             min={MIN_RUNS}
             max={MAX_RUNS}
             step={1}
-            value={runs}
-            onChange={(e) => onRunsChange(Number(e.target.value))}
+            value={runsText}
+            onChange={(e) => onRunsTextChange(e.target.value)}
+            onBlur={onRunsCommit}
           />
         </label>
       </div>
@@ -151,5 +150,36 @@ export function BenchForm({
 
       {error && <p className="bench__err">{error}</p>}
     </form>
+  );
+}
+
+/** Nothing to benchmark — but for two quite different reasons, and the fix
+ *  differs with them: download a model, or fix a role on one already here. */
+function EmptyLibrary({
+  ggufCount,
+  onGoToModels,
+}: {
+  ggufCount: number;
+  onGoToModels: (() => void) | null;
+}) {
+  const hasGguf = ggufCount > 0;
+  return (
+    <div className="card bench__empty">
+      <h2>
+        {hasGguf
+          ? "You have GGUF models, but none is marked as a chat model"
+          : "No GGUF chat model yet — get one in Discover"}
+      </h2>
+      <p>
+        {hasGguf
+          ? "Benchmarking measures chat/coding throughput, so it only offers models carrying the chat role. Set that role in the Model Library and the model appears here."
+          : "Benchmarking runs on llama.cpp, so it needs a .gguf chat model in the library. Import one, or pick a recommendation on the Models tab."}
+      </p>
+      {onGoToModels && (
+        <button type="button" className="bench__go" onClick={onGoToModels}>
+          {hasGguf ? "Open the Model Library" : "Open Models → Discover"}
+        </button>
+      )}
+    </div>
   );
 }

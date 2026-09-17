@@ -57,8 +57,11 @@ export function ResultCard({ bench, suite, modelName }: Props) {
         </div>
       </dl>
 
+      {/* No `role="status"`: this text is part of the card from the moment it
+          renders, not something that appears later, and a status region would
+          have it announced over whatever the reader was on. */}
       {early && (
-        <p className="bench__warn" role="status">
+        <p className="bench__warn">
           At least one prompt stopped before the token cap, so this run generated fewer tokens
           than a full one — the rate is not comparable with the other runs.
         </p>
