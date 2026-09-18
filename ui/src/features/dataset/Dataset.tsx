@@ -445,8 +445,10 @@ export function DatasetStudio({ onTrainLora }: Props) {
           </div>
         ) : (
           <div className="card dataset__empty">
-            Point the pipeline at a folder tree — each immediate subfolder becomes a tag applied
-            to every frame extracted from the video/images inside it.
+            Point the pipeline at a folder of videos/images (.mp4, .png, .jpg, .jpeg, .webp).
+            Files directly in the folder are tagged with the folder's name; for several styles,
+            use subfolders — each immediate subfolder becomes a tag applied to every frame
+            extracted from the videos/images inside it.
           </div>
         )}
 
