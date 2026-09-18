@@ -1579,6 +1579,42 @@ Bild-/Video-Benchmarks, Netz-Leaderboards. Die App bleibt offline-first
   (das HTTP-Zwilling hat Tests) — ein Smoke-Schritt, der prüft, dass ein aus
   dem Tab gestarteter Lauf ein nicht-NULL `suite` speichert, ist noch offen.
 
+## Dataset-Kuratierung & Trainings-Werkzeuge (Backlog, User-Wunsch 2026-09-18)
+
+Aus dem ersten praktischen Blick auf den Trainings-Workflow ("100 Videos rein,
+Frames sortieren, Training starten"). Heute gibt es pro Frame nur eine
+Exclude-Checkbox im Kuratier-Grid (`ui/src/features/dataset/Dataset.tsx`) —
+für hunderte bis tausende Frames aus Videos ist das zu langsam.
+
+- **Schnelles Sortieren im Kuratier-Grid: zwei Spalten + Drag & Drop** — links
+  "Behalten", rechts "Aussortiert" (unscharf / wird nicht genutzt).
+  Mehrfachauswahl wie im Windows-Explorer: Rahmen mit der Maus aufziehen
+  (Rubber-Band-Auswahl), Strg/Shift-Klick, **"Alle auswählen"**; die Auswahl
+  per Drag & Drop in die jeweils andere Spalte ziehen. Frames, die der
+  Qualitätsfilter (`filter.rs`: Unschärfe/Duplikat) schon aussortiert hat,
+  starten rechts, damit man sie mit einem Zug zurückholen kann. Tastatur-
+  Äquivalent nötig (Auswahl + Taste zum Verschieben), nicht nur Maus.
+- **Frames wirklich löschen** — neben "aussortieren" (bleibt auf Platte, fließt
+  nur nicht in den Export) eine Löschen-Option für ausgewählte Frames, mit
+  Bestätigung. Klären: Löschen nur die extrahierten Frame-Dateien im
+  Dataset-Ordner, **nie** die Quellvideos des Nutzers.
+- **Datasets löschen** — ein ganzes Dataset (DB-Zeilen, extrahierte Frames,
+  Export) aus dem Dataset-Tab entfernen, mit Bestätigung; Quellordner bleibt
+  unangetastet. Laufende/abhängige Trainings-Runs vorher prüfen (ein Run, der
+  den Export nutzt, darf nicht still kaputtgehen).
+- **Trainings-Werkzeuge im Discover-/Models-Tab statt manuellem Import** —
+  heute sagt der Dataset-Tab: "No captioner installed — import Florence-2 or
+  the WD tagger on the Models tab. Without one, everything recurring in your
+  frames flows into the trigger word." Der Nutzer will nicht manuell
+  importieren. Stattdessen: eine eigene Kategorie "Training & Beschriftung"
+  (Captioner Florence-2 / WD EVA02 Tagger v3 / Qwen2.5-VL, später weitere
+  Hilfsmodelle/Addons fürs Training und für Bildbeschreibung) mit Ein-Klick-
+  Download über den bestehenden Download-Weg (Hash-Prüfung, keine geratenen
+  SHA-256). Der Hinweis im Dataset-Tab bekommt einen direkten
+  "Empfohlenen Captioner installieren"-Button. Knüpft an den offenen Punkt
+  "kein `KNOWN_MODELS`-Katalogeintrag für Florence-2/Qwen2.5-VL" in
+  Teilsystem 1 an.
+
 ## Offen / später zu entscheiden
 - App-Selbst-Update offline (manueller Installer + Signaturprüfung angenommen)
 - Parallele Jobs: Policy verfeinern (klein-LLM + Upscale gleichzeitig)
