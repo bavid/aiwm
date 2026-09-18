@@ -276,18 +276,20 @@ impl<'a> DatasetFrameRepo<'a> {
         Ok(deleted)
     }
 
-    /// Every discarded frame of a dataset — excluded by the curator or
-    /// rejected by the filter — in insertion order.
-    pub async fn list_discarded(&self, dataset_id: &str) -> Result<Vec<DatasetFrame>> {
-        let rows = sqlx::query_as::<_, DatasetFrameRow>(sqlx::AssertSqlSafe(format!(
-            "SELECT {SELECT_COLS} FROM dataset_frames \
-             WHERE dataset_id = $1 AND (excluded != 0 OR rejection_reason != '') \
-             ORDER BY created_at, id"
-        )))
+    /// `(frame_path, source_path)` of every frame that is *not* in
+    /// `dataset_id` — other datasets' frames and frames without a dataset.
+    /// Housekeeping never deletes any of these files.
+    pub async fn list_paths_outside_dataset(
+        &self,
+        dataset_id: &str,
+    ) -> Result<Vec<(String, String)>> {
+        Ok(sqlx::query_as(
+            "SELECT frame_path, source_path FROM dataset_frames \
+             WHERE dataset_id IS NULL OR dataset_id != $1",
+        )
         .bind(dataset_id)
         .fetch_all(self.pool)
-        .await?;
-        Ok(rows.into_iter().map(DatasetFrame::from).collect())
+        .await?)
     }
 
     pub async fn set_clip_range(
@@ -617,11 +619,28 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn list_discarded_returns_excluded_and_rejected_frames_only() {
-        let (db, ds_id, ids, _) = bulk_fixture().await;
-        let discarded = db.dataset_frames().list_discarded(&ds_id).await.unwrap();
-        let got: Vec<&str> = discarded.iter().map(|f| f.id.as_str()).collect();
-        assert_eq!(got, vec![ids[1].as_str(), ids[2].as_str()]);
+    async fn list_paths_outside_dataset_covers_other_datasets_and_orphan_frames() {
+        let (db, ds_id, _, foreign_id) = bulk_fixture().await;
+        let job_id = db
+            .dataset_frames()
+            .get(&foreign_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .job_id
+            .unwrap();
+        let mut orphan = new_frame(&job_id, "C");
+        orphan.frame_path = "C:\\orphan\\f.png".into();
+        orphan.source_path = "C:\\orphan\\src.png".into();
+        db.dataset_frames().insert(orphan).await.unwrap();
+
+        let paths = db
+            .dataset_frames()
+            .list_paths_outside_dataset(&ds_id)
+            .await
+            .unwrap();
+        assert_eq!(paths.len(), 2, "{paths:?}");
+        assert!(paths.contains(&("C:\\orphan\\f.png".into(), "C:\\orphan\\src.png".into())));
     }
 
     #[tokio::test]

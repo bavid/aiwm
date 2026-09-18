@@ -9,7 +9,10 @@ use std::net::{Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use aiwm_core::db::{DatasetMode, NewDataset, NewDatasetFrame, NewJob, NewTrainingRun, Preset};
+use aiwm_core::db::{
+    DatasetMode, JobPatch, NewDataset, NewDatasetFrame, NewJob, NewTrainingRun, Preset,
+};
+use aiwm_core::orchestrator::JobState;
 use aiwm_core::{ApiServer, App, AppPaths};
 use serde_json::{json, Value};
 
@@ -37,6 +40,12 @@ async fn fixture() -> Fx {
         .db
         .jobs()
         .insert(NewJob::new("dataset_prep"))
+        .await
+        .unwrap();
+    // A finished prep job: while it runs, deleting is refused (tested below).
+    app.db
+        .jobs()
+        .set_state(&job.id, JobState::Cancelled, JobPatch::default())
         .await
         .unwrap();
     let dataset = app
@@ -323,8 +332,63 @@ async fn delete_dataset_removes_its_files_and_then_404s() {
     assert_eq!(body["freed_bytes"], 600);
     assert_eq!(body["skipped_files"], json!([]));
     assert_eq!(body["export_dir_kept"], Value::Null);
+    assert_eq!(body["dataset_deleted"], true);
     assert!(!fx.work_root.exists());
 
     assert_eq!(http.get(&url).send().await.unwrap().status(), 404);
     assert_eq!(http.delete(&url).send().await.unwrap().status(), 404);
+}
+
+#[tokio::test]
+async fn more_than_ten_thousand_frame_ids_are_a_400() {
+    let fx = fixture().await;
+    let ids: Vec<String> = (0..10_001).map(|i| i.to_string()).collect();
+    for route in ["frames/delete", "frames/bulk"] {
+        let (status, body) = post(
+            &fx,
+            &format!("/datasets/{}/{route}", fx.dataset_id),
+            json!({ "frame_ids": ids, "excluded": true }),
+        )
+        .await;
+        assert_eq!(status, 400, "{route}: {body}");
+    }
+    assert!(fx.frame_files.iter().all(|f| f.exists()));
+}
+
+#[tokio::test]
+async fn a_running_prep_job_is_a_400() {
+    let fx = fixture().await;
+    let job = fx
+        .app
+        .db
+        .jobs()
+        .insert(NewJob::new("dataset_prep"))
+        .await
+        .unwrap();
+    let busy = fx
+        .app
+        .db
+        .datasets()
+        .create(NewDataset {
+            name: "Busy".into(),
+            mode: DatasetMode::Frames,
+            source_root: "E:\\Data\\Busy".into(),
+            prep_job_id: Some(job.id),
+        })
+        .await
+        .unwrap();
+    let r = reqwest::Client::new()
+        .delete(fx.url(&format!("/datasets/{}", busy.id)))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 400);
+    let err: Value = r.json().await.unwrap();
+    assert!(
+        err["error"]
+            .as_str()
+            .unwrap()
+            .contains("still being prepared"),
+        "{err}"
+    );
 }

@@ -346,23 +346,26 @@ impl<'a> TrainingRunRepo<'a> {
             .collect::<Result<Vec<_>>>()
     }
 
-    /// Runs of one dataset that are not finished yet (every non-terminal
-    /// state: `preparing`, `running`, `paused`, `interrupted`, `resuming`,
-    /// `finishing`). Deleting the dataset's files under such a run would pull
-    /// the data out from under the trainer, so housekeeping refuses.
+    /// Runs of one dataset that are not finished yet — every state that is
+    /// not [`RunState::is_terminal`], so a new state can never be missed.
+    /// Deleting the dataset's files under such a run would pull the data out
+    /// from under the trainer, so housekeeping refuses.
     pub async fn list_active_for_dataset(&self, dataset_id: &str) -> Result<Vec<TrainingRun>> {
         let rows = sqlx::query_as::<_, TrainingRunRow>(sqlx::AssertSqlSafe(format!(
-            "SELECT {SELECT_COLS} FROM training_runs
-             WHERE dataset_id = $1
-               AND state IN ('preparing', 'running', 'paused', 'interrupted', 'resuming', 'finishing')
+            "SELECT {SELECT_COLS} FROM training_runs WHERE dataset_id = $1
              ORDER BY created_at DESC, id DESC"
         )))
         .bind(dataset_id)
         .fetch_all(self.pool)
         .await?;
-        rows.into_iter()
+        let runs = rows
+            .into_iter()
             .map(TrainingRun::try_from)
-            .collect::<Result<Vec<_>>>()
+            .collect::<Result<Vec<_>>>()?;
+        Ok(runs
+            .into_iter()
+            .filter(|r| !r.state.is_terminal())
+            .collect())
     }
 
     /// Move a run to `next`, validating the transition first. Sets

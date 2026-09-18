@@ -426,6 +426,7 @@ pub async fn bulk_update_dataset_frames(
     id: &str,
     body: BulkFramesDto,
 ) -> Result<Option<BulkUpdatedDto>> {
+    crate::capability::dataset::housekeeping::check_frame_ids(&body.frame_ids)?;
     if app.db.datasets().get(id).await?.is_none() {
         return Ok(None);
     }

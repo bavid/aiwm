@@ -3,28 +3,29 @@
 //! near-duplicates across the whole dataset (design spec
 //! `2026-09-18-dataset-curation-design.md`).
 //!
-//! **Path guard.** Every file this module deletes first goes through one
-//! [`Guard`]: the path is canonicalised and must lie strictly inside one of
-//! the dataset's app-owned roots — its work folder
-//! `<outputs>/datasets/<prep_job_id>/`, or its export folder when that lies
-//! inside the outputs folder — and must not be the source file of any of the
-//! dataset's frames. A `frame_path` pointing anywhere else (a crafted row,
-//! an image referenced in place) is reported as skipped, never deleted.
-//! Canonicalising first means `..` segments and symlinks cannot walk out of a
-//! root.
+//! **Path guard.** Every file this module deletes first goes through
+//! [`guard::Guard`]: canonicalised, strictly inside one of this dataset's own
+//! roots, never a source file or inside any dataset's source folder, and
+//! never a file, work folder or export folder of **another** dataset. The
+//! module docs of [`guard`] list every rule. Files the guard refuses are
+//! reported as skipped with a reason, never deleted.
 //!
-//! **Training runs.** Deleting a dataset, some of its frames or its
-//! discarded frames is refused while a training run of that dataset is not
-//! finished (see [`TrainingRunRepo::list_active_for_dataset`]).
+//! **When deleting is refused.** Deleting a dataset, some of its frames or
+//! its discarded frames is refused while a training run of the dataset has
+//! not finished, and while the dataset's prep job has not finished (it may
+//! still be writing frames). Other datasets need no such check: their files
+//! are never touched. An export is not a job, so a concurrently running
+//! export cannot be observed here. The checks run before the file work
+//! starts; a run or prep job started in the moment between the check and the
+//! deletion is not seen — an accepted race, as both are started by the same
+//! single user from the same UI.
 //!
 //! **Blocking work.** All file-system walking, deleting and image decoding
 //! runs on `spawn_blocking` so a large dataset never stalls the async
 //! runtime that also serves the API.
-//!
-//! [`TrainingRunRepo::list_active_for_dataset`]: crate::db::TrainingRunRepo::list_active_for_dataset
 
 use std::collections::HashSet;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
@@ -34,7 +35,9 @@ use crate::{CoreError, Result};
 use super::{dataset_err, filter};
 
 mod dedup_plan;
+mod guard;
 use dedup_plan::plan_dedup;
+use guard::{skipped, Guard, Snapshot, Verdict};
 
 /// Default Hamming distance for the dataset-wide dedup — the same one the
 /// per-source duplicate filter uses.
@@ -42,6 +45,8 @@ pub const DEFAULT_DEDUP_THRESHOLD: u32 = filter::DEFAULT_PHASH_MAX_DISTANCE;
 /// Upper bound for a caller-chosen dedup threshold. Beyond this, frames that
 /// merely share a composition start to count as "the same picture".
 pub const MAX_DEDUP_THRESHOLD: u32 = 16;
+/// Most frame ids one bulk request may name.
+pub const MAX_FRAME_IDS: usize = 10_000;
 
 /// Skip reasons reported in [`SkippedFile::reason`].
 pub const SKIP_OUTSIDE: &str = "outside_app_folders";
@@ -49,8 +54,10 @@ pub const SKIP_SOURCE: &str = "source_file";
 pub const SKIP_IN_USE: &str = "in_use";
 pub const SKIP_NOT_A_FILE: &str = "not_a_file";
 pub const SKIP_ERROR: &str = "error";
+pub const SKIP_OTHER_DATASET: &str = "used_by_other_dataset";
 
-/// A file a deletion left alone, and why (one of the `SKIP_*` constants).
+/// A file a deletion left alone, and why (one of the `SKIP_*` constants;
+/// `"error: …"` when deleting it failed).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct SkippedFile {
     pub path: String,
@@ -78,13 +85,16 @@ pub struct DatasetUsage {
 /// `DELETE /datasets/{id}`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct DatasetDeleteSummary {
-    /// Frame rows that went with the dataset.
+    /// Frame rows of the dataset (deleted with it when `dataset_deleted`).
     pub frames: u64,
     pub deleted_files: u64,
     pub freed_bytes: u64,
     pub skipped_files: Vec<SkippedFile>,
-    /// A user-chosen export folder outside the outputs folder, left as is.
+    /// A user-chosen or shared export folder, left as is.
     pub export_dir_kept: Option<String>,
+    /// `false` when a file could not be deleted (see `skipped_files`, reason
+    /// `"error: …"`): the dataset row stays so the delete can be retried.
+    pub dataset_deleted: bool,
 }
 
 /// `POST /datasets/{id}/frames/delete`.
@@ -130,6 +140,17 @@ pub fn dedup_threshold(requested: Option<u32>) -> u32 {
         .min(MAX_DEDUP_THRESHOLD)
 }
 
+/// Refuse a request naming more than [`MAX_FRAME_IDS`] frames.
+pub fn check_frame_ids(ids: &[String]) -> Result<()> {
+    if ids.len() > MAX_FRAME_IDS {
+        return Err(CoreError::Config(format!(
+            "at most {MAX_FRAME_IDS} frames per request, got {}",
+            ids.len()
+        )));
+    }
+    Ok(())
+}
+
 // --- public operations ------------------------------------------------------
 
 /// How much disk `dataset_id` uses. `None` for an unknown dataset.
@@ -138,26 +159,24 @@ pub async fn usage(
     outputs_dir: &Path,
     dataset_id: &str,
 ) -> Result<Option<DatasetUsage>> {
-    let Some(dataset) = db.datasets().get(dataset_id).await? else {
+    let Some(snap) = snapshot(db, dataset_id).await? else {
         return Ok(None);
     };
-    let frames = db.dataset_frames().list_for_dataset(dataset_id).await?;
     let outputs_dir = outputs_dir.to_path_buf();
     blocking(move || {
-        let guard = Guard::build(&outputs_dir, &dataset, &frames);
+        let (discarded, staying): (Vec<&DatasetFrame>, Vec<&DatasetFrame>) =
+            snap.frames.iter().partition(|f| is_discarded(f));
+        let staying: Vec<&str> = staying.iter().map(|f| f.frame_path.as_str()).collect();
+        let guard = Guard::build(&outputs_dir, &snap, &staying);
         let (work_files, work_bytes) = guard.work_dir.as_deref().map(dir_totals).unwrap_or((0, 0));
         let export_bytes = guard
             .export_dir
             .as_deref()
             .map(|d| export_files(d).iter().map(|(_, len)| len).sum())
             .unwrap_or(0);
-        let (discarded, remaining): (Vec<&DatasetFrame>, Vec<&DatasetFrame>) =
-            frames.iter().partition(|f| is_discarded(f));
-        let in_use: HashSet<&str> = remaining.iter().map(|f| f.frame_path.as_str()).collect();
         let mut seen = HashSet::new();
         let discarded_bytes = discarded
             .iter()
-            .filter(|f| !in_use.contains(f.frame_path.as_str()))
             .filter_map(|f| match guard.check(Path::new(&f.frame_path)) {
                 Verdict::Delete { path, bytes } => seen.insert(path).then_some(bytes),
                 Verdict::Missing | Verdict::Skip(_) => None,
@@ -167,7 +186,7 @@ pub async fn usage(
             work_dir: guard.work_dir.as_deref().map(display),
             work_bytes,
             work_files,
-            export_dir: dataset.export_dir.clone(),
+            export_dir: snap.dataset.export_dir.clone(),
             export_bytes,
             export_app_owned: guard.export_dir.is_some(),
             discarded_frames: discarded.len() as u64,
@@ -178,69 +197,71 @@ pub async fn usage(
     .map(Some)
 }
 
-/// Delete the dataset: its work folder, its app-owned export's numbered
-/// files, then its rows (frames and concepts cascade). Source files and
-/// anything outside the app-owned roots stay. `None` for an unknown dataset.
+/// Delete the dataset: its own files (see [`guard`]), then its rows (frames
+/// and concepts cascade). When any file fails to delete, the rows stay and
+/// `dataset_deleted` is `false`, so the delete can be retried. `None` for an
+/// unknown dataset.
 pub async fn delete_dataset_with_files(
     db: &Database,
     outputs_dir: &Path,
     dataset_id: &str,
 ) -> Result<Option<DatasetDeleteSummary>> {
-    let Some(dataset) = db.datasets().get(dataset_id).await? else {
+    let Some(snap) = snapshot(db, dataset_id).await? else {
         return Ok(None);
     };
-    refuse_if_training(db, &dataset).await?;
-    let frames = db.dataset_frames().list_for_dataset(dataset_id).await?;
-    let frame_count = frames.len() as u64;
+    refuse_if_busy(db, &snap.dataset).await?;
+    let dataset = snap.dataset.clone();
+    let frame_count = snap.frames.len() as u64;
     let outputs = outputs_dir.to_path_buf();
-    let ds = dataset.clone();
     let (tally, export_kept) = blocking(move || {
-        let guard = Guard::build(&outputs, &ds, &frames);
+        let guard = Guard::build(&outputs, &snap, &[]);
         let mut tally = Tally::default();
-        let none = HashSet::new();
-        if let Some(work) = guard.work_dir.as_deref() {
+        if let Some(work) = guard.work_dir.as_deref().filter(|_| guard.walkable) {
             for file in walk_files(work) {
-                tally.remove(&guard, &file, &none);
+                tally.remove(&guard, &file);
             }
         }
         if let Some(export) = guard.export_dir.as_deref() {
             for (file, _) in export_files(export) {
-                tally.remove(&guard, &file, &none);
-            }
-            // Only removed when nothing else was in it.
-            let _ = std::fs::remove_dir(export);
-        }
-        // Frames outside the work folder: deleted if app-owned, else reported.
-        for f in &frames {
-            if !f.frame_path.is_empty() {
-                tally.remove(&guard, Path::new(&f.frame_path), &none);
+                tally.remove(&guard, &file);
             }
         }
-        if let Some(work) = guard.work_dir.as_deref() {
-            prune_empty_dirs(work, true);
+        for f in &snap.frames {
+            tally.remove(&guard, Path::new(&f.frame_path));
         }
-        let export_kept = match (&ds.export_dir, &guard.export_dir) {
+        match guard.work_dir.as_deref().filter(|_| guard.walkable) {
+            Some(work) => prune_empty_dirs(work),
+            None => guard.prune_after(&tally.deleted),
+        }
+        guard.remove_export_dir_if_empty();
+        let export_kept = match (&snap.dataset.export_dir, &guard.export_dir) {
             (Some(dir), None) => Some(dir.clone()),
             _ => None,
         };
         (tally, export_kept)
     })
     .await?;
-    db.datasets().delete(&dataset.id).await?;
+    let dataset_deleted = tally.failed == 0;
+    if dataset_deleted {
+        db.datasets().delete(&dataset.id).await?;
+    }
     tracing::info!(
         dataset = %dataset.id,
         frames = frame_count,
-        files = tally.deleted_files,
+        files = tally.deleted.len(),
         bytes = tally.freed_bytes,
         skipped = tally.skipped.len(),
+        failed = tally.failed,
+        dataset_deleted,
         "deleted dataset with its files"
     );
     Ok(Some(DatasetDeleteSummary {
         frames: frame_count,
-        deleted_files: tally.deleted_files,
+        deleted_files: tally.deleted.len() as u64,
         freed_bytes: tally.freed_bytes,
         skipped_files: tally.skipped,
         export_dir_kept: export_kept,
+        dataset_deleted,
     }))
 }
 
@@ -254,20 +275,21 @@ pub async fn delete_frames(
     dataset_id: &str,
     frame_ids: &[String],
 ) -> Result<Option<FramesDeleteSummary>> {
-    let Some(dataset) = db.datasets().get(dataset_id).await? else {
+    check_frame_ids(frame_ids)?;
+    let Some(snap) = snapshot(db, dataset_id).await? else {
         return Ok(None);
     };
-    refuse_if_training(db, &dataset).await?;
+    refuse_if_busy(db, &snap.dataset).await?;
     let wanted: HashSet<&str> = frame_ids.iter().map(String::as_str).collect();
-    let frames = db.dataset_frames().list_for_dataset(dataset_id).await?;
-    let target_ids: Vec<String> = frames
+    let targets: HashSet<String> = snap
+        .frames
         .iter()
         .filter(|f| wanted.contains(f.id.as_str()))
         .map(|f| f.id.clone())
         .collect();
-    let s = remove_frames(db, outputs_dir, &dataset, frames, target_ids).await?;
+    let s = remove_frames(db, outputs_dir, snap, targets).await?;
     tracing::info!(
-        dataset = %dataset.id,
+        dataset = %dataset_id,
         frames = s.deleted,
         files = s.deleted_files,
         bytes = s.freed_bytes,
@@ -285,9 +307,6 @@ pub async fn cleanup(
     dataset_id: &str,
     dry_run: bool,
 ) -> Result<Option<CleanupSummary>> {
-    let Some(dataset) = db.datasets().get(dataset_id).await? else {
-        return Ok(None);
-    };
     if dry_run {
         let usage = usage(db, outputs_dir, dataset_id).await?;
         return Ok(usage.map(|u| CleanupSummary {
@@ -298,16 +317,19 @@ pub async fn cleanup(
             skipped_files: Vec::new(),
         }));
     }
-    refuse_if_training(db, &dataset).await?;
-    let frames = db.dataset_frames().list_for_dataset(dataset_id).await?;
-    let target_ids: Vec<String> = frames
+    let Some(snap) = snapshot(db, dataset_id).await? else {
+        return Ok(None);
+    };
+    refuse_if_busy(db, &snap.dataset).await?;
+    let targets: HashSet<String> = snap
+        .frames
         .iter()
         .filter(|f| is_discarded(f))
         .map(|f| f.id.clone())
         .collect();
-    let s = remove_frames(db, outputs_dir, &dataset, frames, target_ids).await?;
+    let s = remove_frames(db, outputs_dir, snap, targets).await?;
     tracing::info!(
-        dataset = %dataset.id,
+        dataset = %dataset_id,
         frames = s.deleted,
         files = s.deleted_files,
         bytes = s.freed_bytes,
@@ -323,17 +345,15 @@ pub async fn cleanup(
     }))
 }
 
+/// One dedup at a time: its decoding already uses up to eight threads, and
+/// two concurrent requests would double that.
+static DEDUP_SLOT: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
+
 /// Find near-duplicates across every kept frame of the dataset — all
 /// sources, not just neighbours — and mark all but the sharpest of each
 /// group `duplicate_global`. Only marks: the files stay until a cleanup, and
-/// moving a frame back to "Keep" clears the mark.
-///
-/// Greedy and deterministic: frames are visited sharpest first (ties: the
-/// earlier frame), each joins the first already-kept frame within
-/// `threshold` or becomes a keeper itself. Unlike single-linkage clustering
-/// this cannot chain two different pictures together through a series of
-/// small steps, and the keeper of every group is by construction its
-/// sharpest member.
+/// moving a frame back to "Keep" clears the mark. See
+/// [`dedup_plan::plan_dedup`] for the grouping.
 pub async fn dedup(
     db: &Database,
     dataset_id: &str,
@@ -357,6 +377,10 @@ pub async fn dedup(
         .map(|f| (f.id, PathBuf::from(f.frame_path)))
         .collect();
     let scanned = items.len() as u64;
+    let _slot = DEDUP_SLOT
+        .acquire()
+        .await
+        .map_err(|e| dataset_err(format!("duplicate search unavailable: {e}")))?;
     let started = std::time::Instant::now();
     let plan = blocking(move || plan_dedup(&items, threshold)).await?;
     let marked = db
@@ -397,214 +421,100 @@ async fn blocking<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> 
         .map_err(|e| dataset_err(format!("housekeeping task failed: {e}")))
 }
 
-async fn refuse_if_training(db: &Database, dataset: &Dataset) -> Result<()> {
+/// This dataset, its frames, and what every other dataset references.
+async fn snapshot(db: &Database, dataset_id: &str) -> Result<Option<Snapshot>> {
+    let Some(dataset) = db.datasets().get(dataset_id).await? else {
+        return Ok(None);
+    };
+    let frames = db.dataset_frames().list_for_dataset(dataset_id).await?;
+    let others = db
+        .datasets()
+        .list()
+        .await?
+        .into_iter()
+        .filter(|d| d.id != dataset.id)
+        .collect();
+    let foreign_frames = db
+        .dataset_frames()
+        .list_paths_outside_dataset(dataset_id)
+        .await?;
+    Ok(Some(Snapshot {
+        dataset,
+        frames,
+        others,
+        foreign_frames,
+    }))
+}
+
+/// Refuse while a training run of the dataset or its prep job is not
+/// finished. See the module docs for the accepted race.
+async fn refuse_if_busy(db: &Database, dataset: &Dataset) -> Result<()> {
     let runs = db
         .training_runs()
         .list_active_for_dataset(&dataset.id)
         .await?;
-    match runs.first() {
-        Some(run) => Err(CoreError::Config(format!(
+    if let Some(run) = runs.first() {
+        return Err(CoreError::Config(format!(
             "dataset \"{}\" is in use by training run \"{}\" ({}) \u{2014} wait for it to \
              finish or cancel it first",
             dataset.name,
             run.name,
             run.state.as_str()
-        ))),
-        None => Ok(()),
+        )));
     }
+    if let Some(job_id) = dataset.prep_job_id.as_deref() {
+        if let Some(job) = db.jobs().get(job_id).await? {
+            if !job.state.is_terminal() {
+                return Err(CoreError::Config(format!(
+                    "dataset \"{}\" is still being prepared (job {job_id} is {}) \u{2014} wait \
+                     for it to finish or cancel it first",
+                    dataset.name,
+                    job.state.as_str()
+                )));
+            }
+        }
+    }
+    Ok(())
 }
 
-/// Files of `frames` whose id is in `target_ids`, then their rows.
+/// Files of the frames in `targets`, then their rows.
 async fn remove_frames(
     db: &Database,
     outputs_dir: &Path,
-    dataset: &Dataset,
-    frames: Vec<DatasetFrame>,
-    target_ids: Vec<String>,
+    snap: Snapshot,
+    targets: HashSet<String>,
 ) -> Result<FramesDeleteSummary> {
+    let dataset_id = snap.dataset.id.clone();
     let outputs = outputs_dir.to_path_buf();
-    let ds = dataset.clone();
     let (tally, row_ids) = blocking(move || {
-        let guard = Guard::build(&outputs, &ds, &frames);
-        let targets: HashSet<&str> = target_ids.iter().map(String::as_str).collect();
-        // A file another remaining frame still shows is not deleted.
-        let in_use: HashSet<PathBuf> = frames
+        let staying: Vec<&str> = snap
+            .frames
             .iter()
-            .filter(|f| !targets.contains(f.id.as_str()) && !f.frame_path.is_empty())
-            .map(|f| PathBuf::from(&f.frame_path))
+            .filter(|f| !targets.contains(&f.id))
+            .map(|f| f.frame_path.as_str())
             .collect();
+        let guard = Guard::build(&outputs, &snap, &staying);
         let mut tally = Tally::default();
-        let mut row_ids = Vec::with_capacity(target_ids.len());
-        for f in frames.iter().filter(|f| targets.contains(f.id.as_str())) {
-            let removable =
-                f.frame_path.is_empty() || tally.remove(&guard, Path::new(&f.frame_path), &in_use);
-            if removable {
+        let mut row_ids = Vec::with_capacity(targets.len());
+        for f in snap.frames.iter().filter(|f| targets.contains(&f.id)) {
+            if tally.remove(&guard, Path::new(&f.frame_path)) {
                 row_ids.push(f.id.clone());
             }
         }
-        if let Some(work) = guard.work_dir.as_deref() {
-            prune_empty_dirs(work, false);
-        }
+        guard.prune_after(&tally.deleted);
         (tally, row_ids)
     })
     .await?;
     let deleted = db
         .dataset_frames()
-        .delete_many(&dataset.id, &row_ids)
+        .delete_many(&dataset_id, &row_ids)
         .await?;
     Ok(FramesDeleteSummary {
         deleted,
-        deleted_files: tally.deleted_files,
+        deleted_files: tally.deleted.len() as u64,
         freed_bytes: tally.freed_bytes,
         skipped_files: tally.skipped,
     })
-}
-
-/// The one place that decides whether a file may be deleted.
-#[derive(Debug, Clone)]
-struct Guard {
-    /// Canonical `<outputs>/datasets/<prep_job_id>`, if it exists.
-    work_dir: Option<PathBuf>,
-    /// Canonical export folder, only when it lies inside the outputs folder.
-    export_dir: Option<PathBuf>,
-    /// Canonical source files of the dataset's frames — never deleted.
-    sources: HashSet<PathBuf>,
-}
-
-enum Verdict {
-    Delete { path: PathBuf, bytes: u64 },
-    Missing,
-    Skip(SkippedFile),
-}
-
-impl Guard {
-    fn build(outputs_dir: &Path, dataset: &Dataset, frames: &[DatasetFrame]) -> Self {
-        let outputs = std::fs::canonicalize(outputs_dir).ok();
-        let datasets_root = outputs
-            .as_ref()
-            .and_then(|o| std::fs::canonicalize(o.join("datasets")).ok());
-        let work_dir = datasets_root
-            .as_deref()
-            .and_then(|root| work_dir_of(root, dataset, frames));
-        let export_dir = match (&outputs, &dataset.export_dir) {
-            (Some(outputs), Some(export)) => {
-                app_owned_export(outputs, datasets_root.as_deref(), Path::new(export))
-            }
-            _ => None,
-        };
-        let source_strings: HashSet<&str> = frames.iter().map(|f| f.source_path.as_str()).collect();
-        let sources = source_strings
-            .into_iter()
-            .filter(|s| !s.is_empty())
-            .filter_map(|s| std::fs::canonicalize(s).ok())
-            .collect();
-        Self {
-            work_dir,
-            export_dir,
-            sources,
-        }
-    }
-
-    fn check(&self, raw: &Path) -> Verdict {
-        if raw.as_os_str().is_empty() {
-            return Verdict::Missing;
-        }
-        // A relative path would be resolved against the process's working
-        // directory, which says nothing about where the frame really is.
-        if !raw.is_absolute() {
-            return Verdict::Skip(skipped(raw, SKIP_OUTSIDE));
-        }
-        let canonical = match std::fs::canonicalize(raw) {
-            Ok(p) => p,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Verdict::Missing,
-            Err(e) => return Verdict::Skip(skipped(raw, &format!("{SKIP_ERROR}: {e}"))),
-        };
-        if self.sources.contains(&canonical) {
-            return Verdict::Skip(skipped(raw, SKIP_SOURCE));
-        }
-        let inside = [&self.work_dir, &self.export_dir]
-            .into_iter()
-            .flatten()
-            .any(|root| canonical.starts_with(root) && canonical != *root);
-        if !inside {
-            return Verdict::Skip(skipped(raw, SKIP_OUTSIDE));
-        }
-        match std::fs::metadata(&canonical) {
-            Ok(m) if m.is_file() => Verdict::Delete {
-                path: canonical,
-                bytes: m.len(),
-            },
-            Ok(_) => Verdict::Skip(skipped(raw, SKIP_NOT_A_FILE)),
-            Err(e) => Verdict::Skip(skipped(raw, &format!("{SKIP_ERROR}: {e}"))),
-        }
-    }
-}
-
-fn skipped(path: &Path, reason: &str) -> SkippedFile {
-    SkippedFile {
-        path: path.to_string_lossy().into_owned(),
-        reason: reason.to_string(),
-    }
-}
-
-/// The dataset's work folder under the canonical `datasets_root`: named after
-/// the prep job, or — once that job is deleted and `prep_job_id` is `NULL` —
-/// the one folder under `datasets_root` all its app-extracted frames share.
-fn work_dir_of(
-    datasets_root: &Path,
-    dataset: &Dataset,
-    frames: &[DatasetFrame],
-) -> Option<PathBuf> {
-    let name = match dataset.prep_job_id.as_deref() {
-        Some(id) => single_component(id)?.to_owned(),
-        None => inferred_work_name(datasets_root, frames)?,
-    };
-    let dir = std::fs::canonicalize(datasets_root.join(name)).ok()?;
-    (dir.is_dir() && dir.starts_with(datasets_root) && dir != datasets_root).then_some(dir)
-}
-
-/// `name` when it is exactly one ordinary path component (no separator, no
-/// `..`, no drive) — a job id always is.
-fn single_component(name: &str) -> Option<&str> {
-    let mut parts = Path::new(name).components();
-    match (parts.next(), parts.next()) {
-        (Some(Component::Normal(_)), None) => Some(name),
-        _ => None,
-    }
-}
-
-fn inferred_work_name(datasets_root: &Path, frames: &[DatasetFrame]) -> Option<String> {
-    let names: HashSet<String> = frames
-        .iter()
-        .filter(|f| Path::new(&f.frame_path).is_absolute())
-        .filter_map(|f| std::fs::canonicalize(&f.frame_path).ok())
-        .filter_map(|p| {
-            let rest = p.strip_prefix(datasets_root).ok()?;
-            match rest.components().next()? {
-                Component::Normal(n) => Some(n.to_string_lossy().into_owned()),
-                _ => None,
-            }
-        })
-        .collect();
-    (names.len() == 1)
-        .then(|| names.into_iter().next())
-        .flatten()
-}
-
-/// The export folder when the app may delete its numbered files: strictly
-/// inside the outputs folder and not the `datasets` root (or above it).
-fn app_owned_export(
-    outputs: &Path,
-    datasets_root: Option<&Path>,
-    export: &Path,
-) -> Option<PathBuf> {
-    if !export.is_absolute() {
-        return None;
-    }
-    let export = std::fs::canonicalize(export).ok()?;
-    let inside = export.starts_with(outputs) && export != outputs;
-    let covers_work = datasets_root.is_some_and(|root| root.starts_with(&export));
-    (inside && !covers_work && export.is_dir()).then_some(export)
 }
 
 /// The files an export wrote: `NNNN.<ext>` directly in the folder, with their
@@ -633,7 +543,7 @@ fn is_export_name(name: &str) -> bool {
         && ext.bytes().all(|b| b.is_ascii_alphanumeric())
 }
 
-/// Every file (and file symlink) below `dir`, without following links.
+/// Every file (and link) below `dir`, without following links.
 fn walk_files(dir: &Path) -> Vec<PathBuf> {
     walkdir::WalkDir::new(dir)
         .follow_links(false)
@@ -656,10 +566,11 @@ fn dir_totals(dir: &Path) -> (u64, u64) {
         })
 }
 
-/// Remove directories below `root` that are empty (deepest first);
-/// `include_root` also removes `root` itself when it ends up empty.
-/// `remove_dir` refuses a non-empty directory, so nothing with content goes.
-fn prune_empty_dirs(root: &Path, include_root: bool) {
+/// Remove every empty directory below and including a walkable work folder
+/// (deepest first). `remove_dir` refuses a non-empty directory, and links are
+/// not directories to walkdir, so nothing with content and nothing behind a
+/// link goes. Only called for a work folder the guard found walkable.
+fn prune_empty_dirs(root: &Path) {
     let dirs: Vec<walkdir::DirEntry> = walkdir::WalkDir::new(root)
         .follow_links(false)
         .contents_first(true)
@@ -668,9 +579,6 @@ fn prune_empty_dirs(root: &Path, include_root: bool) {
         .filter(|e| e.file_type().is_dir())
         .collect();
     for d in dirs {
-        if d.depth() == 0 && !include_root {
-            continue;
-        }
         let _ = std::fs::remove_dir(d.path());
     }
 }
@@ -678,45 +586,51 @@ fn prune_empty_dirs(root: &Path, include_root: bool) {
 /// Running totals of one deletion pass.
 #[derive(Debug, Default)]
 struct Tally {
-    deleted_files: u64,
+    /// Canonical paths actually deleted, in order.
+    deleted: Vec<PathBuf>,
+    /// The same paths, for the "already handled" check.
+    seen: HashSet<PathBuf>,
     freed_bytes: u64,
     skipped: Vec<SkippedFile>,
-    /// Canonical paths already handled, so a file two rows share (or the
-    /// walk and a row both reach) is counted once.
-    seen: HashSet<PathBuf>,
+    /// Deletions that failed with an I/O error.
+    failed: u64,
 }
 
 impl Tally {
-    /// Delete `raw` if the guard allows it and no remaining frame (`in_use`,
-    /// raw paths) still shows it. `false` only when deleting failed with an
-    /// I/O error — everything else (deleted, missing, skipped) is `true`.
-    fn remove(&mut self, guard: &Guard, raw: &Path, in_use: &HashSet<PathBuf>) -> bool {
-        if in_use.contains(raw) {
-            self.skipped.push(skipped(raw, SKIP_IN_USE));
-            return true;
+    fn skip(&mut self, s: SkippedFile) {
+        if !self.skipped.contains(&s) {
+            self.skipped.push(s);
         }
+    }
+
+    /// Delete `raw` if the guard allows it. `false` only when deleting failed
+    /// with an I/O error — deleted, missing and skipped are all `true`.
+    fn remove(&mut self, guard: &Guard, raw: &Path) -> bool {
         match guard.check(raw) {
             Verdict::Missing => true,
             Verdict::Skip(s) => {
-                if !self.skipped.contains(&s) {
-                    self.skipped.push(s);
-                }
+                self.skip(s);
                 true
             }
             Verdict::Delete { path, bytes } => {
-                if !self.seen.insert(path.clone()) {
+                if self.seen.contains(&path) {
                     return true;
                 }
                 match std::fs::remove_file(&path) {
                     Ok(()) => {
-                        self.deleted_files += 1;
+                        self.seen.insert(path.clone());
+                        self.deleted.push(path);
                         self.freed_bytes += bytes;
                         true
                     }
                     Err(e) => {
-                        tracing::warn!(path = %path.display(), error = %e, "could not delete dataset file");
-                        self.skipped
-                            .push(skipped(raw, &format!("{SKIP_ERROR}: {e}")));
+                        tracing::warn!(
+                            path = %path.display(),
+                            error = %e,
+                            "could not delete dataset file"
+                        );
+                        self.failed += 1;
+                        self.skip(skipped(raw, &format!("{SKIP_ERROR}: {e}")));
                         false
                     }
                 }
@@ -734,5 +648,9 @@ fn display(p: &Path) -> String {
     }
 }
 
+#[cfg(test)]
+mod dedup_tests;
+#[cfg(test)]
+mod safety_tests;
 #[cfg(test)]
 mod tests;
