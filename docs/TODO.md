@@ -1629,7 +1629,29 @@ für hunderte bis tausende Frames aus Videos ist das zu langsam.
 - **Datasets löschen** — ein ganzes Dataset (DB-Zeilen, extrahierte Frames,
   Export) aus dem Dataset-Tab entfernen, mit Bestätigung; Quellordner bleibt
   unangetastet. Laufende/abhängige Trainings-Runs vorher prüfen (ein Run, der
-  den Export nutzt, darf nicht still kaputtgehen).
+  den Export nutzt, darf nicht still kaputtgehen). (Vom Nutzer am 2026-09-18
+  ein zweites Mal ausdrücklich gewünscht — hohe Priorität innerhalb dieses
+  Blocks.) Anzeige vor dem Löschen: wie viel Platz frei wird.
+- **Aufräum-Job nach der Frame-Extraktion — "tonnenweise Duplikate"**
+  (User-Beobachtung 2026-09-18). Heute (geprüft im Code): aussortierte Frames
+  (Unschärfe, Duplikat, tote Frames, Szenenwechsel) bekommen nur einen
+  `rejection_reason` und werden beim Export übersprungen
+  (`capability/dataset/export.rs:52`), **bleiben aber auf der Platte**; in
+  `core/src/capability/dataset/` gibt es kein Löschen von Dateien. Und die
+  Duplikat-Erkennung (`filter.rs`, pHash + Hamming-Distanz) vergleicht nur mit
+  dem zuletzt behaltenen Frame *derselben Quelle* — wiederkehrende Szenen
+  später im Video oder dieselbe Szene in mehreren Videos bleiben als Dubletten
+  stehen. Vorgesehen:
+  - ein **globaler Dubletten-Durchlauf** über das ganze Dataset (alle
+    Quellen, nicht nur aufeinanderfolgende Frames), Schwelle einstellbar,
+    Ergebnis als Gruppen ("diese 40 Frames sind praktisch gleich — 1
+    behalten"), den schärfsten/besten pro Gruppe vorschlagen;
+    `select_diverse` (`filter.rs:230`) ist ein vorhandener Baustein;
+  - ein **Aufräum-Job**, der aussortierte/abgelehnte Frames nach Bestätigung
+    wirklich von der Platte löscht, mit Vorschau "N Frames, X GB werden frei";
+    optional automatisch direkt nach der Extraktion (Einstellung, Standard aus);
+  - nie die Quellvideos anfassen; bereits exportierte/trainierte Frames nicht
+    löschen, solange ein Trainingslauf sie braucht.
 - **Trainings-Werkzeuge im Discover-/Models-Tab statt manuellem Import** —
   heute sagt der Dataset-Tab: "No captioner installed — import Florence-2 or
   the WD tagger on the Models tab. Without one, everything recurring in your
@@ -1664,6 +1686,18 @@ für hunderte bis tausende Frames aus Videos ist das zu langsam.
   Platte abgesteckt) — klare Meldung statt stillem Fehler; kein Verschieben
   bestehender Daten in diesem Schritt (höchstens ein späterer
   "Dataset verschieben"-Befehl).
+- **Zentrale Standard-Pfade in den Settings für *alles*, was die App erzeugt**
+  (User-Wunsch 2026-09-18, ergänzt den Punkt oben). Settings → "Data
+  locations" kennt heute nur `outputs_path`, `runtimes_path` und `cache_path`
+  (`ui/src/features/settings/Settings.tsx:253`, `[paths]` in `config.toml`).
+  Gewünscht: dort einen Standardort für jede Art erzeugter Daten festlegen —
+  generierte Bilder/Videos/Audio, Datasets (extrahierte Frames, Exporte),
+  Trainingsläufe (Checkpoints, Samples, fertige LoRAs), Downloads/Modelle —
+  wahlweise ein gemeinsamer Wurzelordner mit Unterordnern oder pro Art
+  einzeln. Dazu je ein **"Ordner öffnen"-Knopf**, um direkt im Explorer in die
+  Daten zu schauen, plus Belegungsanzeige pro Ort. Beim Ändern eines Pfads:
+  klar sagen, dass bestehende Daten nicht mitwandern (Verschieben wäre ein
+  eigener, späterer Schritt), und prüfen, ob der Zielordner beschreibbar ist.
 
 ## LoRA-Übersicht & Weitertrainieren (Backlog, User-Wunsch 2026-09-18)
 
