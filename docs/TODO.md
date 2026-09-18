@@ -1665,6 +1665,43 @@ für hunderte bis tausende Frames aus Videos ist das zu langsam.
   bestehender Daten in diesem Schritt (höchstens ein späterer
   "Dataset verschieben"-Befehl).
 
+## In-App-Dokumentation & Tooltips (Backlog, User-Wunsch 2026-09-18)
+
+- **Vollständige Dokumentation in der App selbst** — eine eigene Seite
+  (z. B. "Help" / "Docs" im Seitenmenü), auf der **alle** Features
+  beschrieben sind, nicht nur in `docs/` im Repo. Pro Tab/Feature: wofür es
+  da ist, typischer Ablauf Schritt für Schritt, was jede Einstellung bewirkt,
+  was dabei auf der Platte / auf der GPU passiert, Grenzen und bekannte
+  Stolperfallen. Durchsuchbar, offline (Inhalte liegen in der App, kein
+  Nachladen aus dem Netz). Von jeder Stelle mit Tooltip oder "?" direkt zum
+  passenden Abschnitt springen können.
+- **Tooltips überall, wo eine Einstellung nicht selbsterklärend ist** — jeder
+  Tooltip beantwortet kurz: **Was macht das? Warum brauche ich es? Was
+  passiert, wenn ich es ändere / starte? Welchen Nutzen habe ich davon?**
+  Tastatur- und Screenreader-tauglich (nicht nur `title=`; gleiches Muster
+  wie die Offenlegung beim Hardware-Fit-Badge), mit Link "Mehr in der Hilfe".
+- **Schwerpunkt Datasets & Training** (dort ist der Bedarf am größten, der
+  Ablauf hat die meisten Fachbegriffe und die teuersten Fehler):
+  - Dataset-Pipeline: Ordnerstruktur (Unterordner = Tag; siehe PRIO-1-Bug zu
+    Dateien im Root), fps der Frame-Extraktion und was sie für die Frame-Zahl
+    bedeutet, Unschärfe- und Duplikat-Filter, Captioner-Wahl (Florence-2 vs.
+    WD-Tagger vs. Qwen-Eskalation — Prosa vs. Tags, VRAM, Geschwindigkeit),
+    Trigger-Wort und warum ohne Captioner "alles Wiederkehrende ins
+    Trigger-Wort fließt", Konzepte, Clip-Modus, Kuratieren, Export.
+  - Training: Profile (klein 4B/9B, SDXL, Wan 2.2 5B) und welches wofür,
+    Presets und was Steps / Learning-Rate / Rank praktisch bedeuten, erwartete
+    Dauer und VRAM (aus den echten Messungen), was die Samples während des
+    Laufs zeigen, Pause/Resume/Abbruch, wo die fertige LoRA landet und wie man
+    sie im Image-Tab testet, einmaliger Download von Hilfsmodellen beim ersten
+    Lauf einer Familie.
+  - Gleiches Prinzip danach für die übrigen Tabs (Image inkl. Hi-Res-Fix und
+    LoRA-Stack, Video, Upscale, Voice, Chat inkl. Personas, Agents,
+    Story Studio, Models/Discover inkl. Fit-Badge, Benchmark).
+- Umsetzungshinweise: Texte als Inhalt pflegen (eine Quelle für Hilfeseite
+  und Tooltips, damit sie nicht auseinanderlaufen); englische UI-Texte wie
+  der Rest der App; Zahlen (Dauer, VRAM) aus den dokumentierten Messungen in
+  dieser Datei übernehmen, nicht schätzen.
+
 ## Offen / später zu entscheiden
 - App-Selbst-Update offline (manueller Installer + Signaturprüfung angenommen)
 - Parallele Jobs: Policy verfeinern (klein-LLM + Upscale gleichzeitig)
