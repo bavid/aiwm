@@ -198,6 +198,13 @@ impl<'a> PersonaRepo<'a> {
             .execute(&mut *tx)
             .await?
             .rows_affected();
+        if removed == 0 {
+            // Nothing was deleted, so nothing can be pointing at it that the
+            // cleanup below would fix. Drop the transaction (nothing was
+            // written, so the rollback is a no-op) instead of running two
+            // pointless statements against live rows.
+            return Ok(false);
+        }
         sqlx::query(
             "UPDATE sessions SET persona_mode = 'inherit', persona_id = NULL WHERE persona_id = $1",
         )

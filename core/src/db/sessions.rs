@@ -146,6 +146,28 @@ impl<'a> SessionRepo<'a> {
         Ok(affected > 0)
     }
 
+    /// Compare-and-heal: reset this session to `inherit` only while it is still
+    /// in `persona` mode *and* still points at `stale`. `stale = None` targets
+    /// the corrupt `mode = 'persona'` with a NULL id (`persona_id IS NULL`
+    /// rather than `=`, which never matches NULL).
+    ///
+    /// A reader that finds a dangling override must use this rather than
+    /// [`set_persona`](Self::set_persona) — between the read and the write the
+    /// user may have picked a valid persona for this chat, and an unconditional
+    /// reset would silently undo that. Returns whether a row was healed.
+    pub async fn heal_persona(&self, id: &str, stale: Option<&str>) -> Result<bool> {
+        let affected = sqlx::query(
+            "UPDATE sessions SET persona_mode = 'inherit', persona_id = NULL \
+             WHERE id = $1 AND persona_mode = 'persona' AND persona_id IS $2",
+        )
+        .bind(id)
+        .bind(stale)
+        .execute(self.pool)
+        .await?
+        .rows_affected();
+        Ok(affected > 0)
+    }
+
     pub async fn set_archived(&self, id: &str, archived: bool) -> Result<()> {
         let value = archived.then(now_rfc3339);
         sqlx::query("UPDATE sessions SET archived_at = $1 WHERE id = $2")
@@ -252,6 +274,82 @@ mod tests {
         let fetched = db.sessions().get(&s.id).await.unwrap().unwrap();
         assert_eq!(fetched.persona_mode, PersonaMode::None);
         assert_eq!(fetched.persona_id, None);
+    }
+
+    /// The compare-and-heal a self-healing reader needs: reset the override only
+    /// while it still points at the stale id it saw. A session re-pointed at a
+    /// valid persona in between must survive untouched.
+    #[tokio::test]
+    async fn heal_persona_only_resets_a_session_still_pointing_at_the_stale_id() {
+        let db = db().await;
+        let stale = db.personas().create("Stale", "💀", "p").await.unwrap();
+        let fresh = db.personas().create("Fresh", "🙂", "p").await.unwrap();
+        let s = db.sessions().create("chat", "Chat").await.unwrap();
+        db.sessions()
+            .set_persona(&s.id, PersonaMode::Persona, Some(&fresh.id))
+            .await
+            .unwrap();
+
+        // A heal aimed at the *old* id must not touch the new pointer.
+        assert!(!db
+            .sessions()
+            .heal_persona(&s.id, Some(&stale.id))
+            .await
+            .unwrap());
+        let kept = db.sessions().get(&s.id).await.unwrap().unwrap();
+        assert_eq!(kept.persona_mode, PersonaMode::Persona);
+        assert_eq!(kept.persona_id.as_deref(), Some(fresh.id.as_str()));
+
+        // Aimed at the id it really holds, it resets.
+        assert!(db
+            .sessions()
+            .heal_persona(&s.id, Some(&fresh.id))
+            .await
+            .unwrap());
+        let healed = db.sessions().get(&s.id).await.unwrap().unwrap();
+        assert_eq!(healed.persona_mode, PersonaMode::Inherit);
+        assert_eq!(healed.persona_id, None);
+    }
+
+    /// `stale = None` targets the corrupt `mode = 'persona'` + `persona_id NULL`
+    /// row, which only a direct SQL write can produce.
+    #[tokio::test]
+    async fn heal_persona_resets_mode_persona_with_a_null_id() {
+        let db = db().await;
+        let s = db.sessions().create("chat", "Chat").await.unwrap();
+        sqlx::query(
+            "UPDATE sessions SET persona_mode = 'persona', persona_id = NULL WHERE id = $1",
+        )
+        .bind(&s.id)
+        .execute(db.pool())
+        .await
+        .unwrap();
+
+        assert!(db.sessions().heal_persona(&s.id, None).await.unwrap());
+        let healed = db.sessions().get(&s.id).await.unwrap().unwrap();
+        assert_eq!(healed.persona_mode, PersonaMode::Inherit);
+    }
+
+    /// A session that is not in `persona` mode at all is never rewritten.
+    #[tokio::test]
+    async fn heal_persona_leaves_the_other_modes_alone() {
+        let db = db().await;
+        let s = db.sessions().create("chat", "Chat").await.unwrap();
+        db.sessions()
+            .set_persona(&s.id, PersonaMode::None, None)
+            .await
+            .unwrap();
+
+        assert!(!db.sessions().heal_persona(&s.id, None).await.unwrap());
+        assert_eq!(
+            db.sessions()
+                .get(&s.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .persona_mode,
+            PersonaMode::None
+        );
     }
 
     #[tokio::test]

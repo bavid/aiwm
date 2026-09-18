@@ -39,9 +39,13 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/sessions/{id}", put(rename_session).delete(delete_session))
         .route("/sessions/{id}/archived", put(set_session_archived))
         .route("/sessions/{id}/persona", put(set_session_persona))
-        // The two literal segments are registered before `/personas/{id}` so
-        // they win over the parameter (axum matches static segments first, but
-        // keeping them adjacent makes the intent obvious).
+        // `active` and `effective` are literal segments, so axum matches them
+        // ahead of the `{id}` parameter regardless of registration order; they
+        // are kept adjacent here to make that visible. The consequence is
+        // deliberate: `DELETE /personas/active` has no handler and answers
+        // `405 Method Not Allowed` rather than deleting a persona that happens
+        // to be called "active" — persona ids are uuid v7, so no real id can
+        // ever be shadowed by either word.
         .route("/personas", get(list_personas).post(create_persona))
         .route(
             "/personas/active",

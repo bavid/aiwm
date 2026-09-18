@@ -19,11 +19,12 @@ use crate::{CoreError, Result};
 
 /// Name length limits, in characters (not bytes) after trimming.
 const NAME_MAX_CHARS: usize = 60;
-/// An icon is one emoji. A single emoji can be a multi-codepoint ZWJ sequence
-/// (🧑‍🏫 is 11 bytes, 👩‍❤️‍👨 is 20+), so the limit is generous and in bytes —
-/// enough for any ordinary emoji, small enough that the column never becomes a
-/// second prompt field.
-const ICON_MAX_BYTES: usize = 16;
+/// An icon is one emoji, and a single emoji can be a long multi-codepoint ZWJ
+/// sequence: 🧑‍🏫 is 11 bytes, 👩‍❤️‍👨 is 20+, 👨‍👩‍👧‍👦 is 25, and flag or
+/// skin-tone variants stack further. The cap is therefore deliberately roomy and
+/// measured in bytes — it exists only to stop the column being used as a second
+/// prompt field, not to police which emoji are "simple enough".
+const ICON_MAX_BYTES: usize = 64;
 /// System-prompt length limit, in characters after trimming.
 const PROMPT_MAX_CHARS: usize = 8_000;
 
@@ -90,12 +91,26 @@ pub fn validate(name: &str, icon: &str, system_prompt: &str) -> Result<ValidPers
             "persona name must be at most {NAME_MAX_CHARS} characters ({name_chars} given)"
         )));
     }
+    // Both fields are shown inline — in the chip, and in the job event line
+    // `persona: <icon> <name>`. A newline there would forge extra log lines, and
+    // no control character belongs in either. The system prompt is exempt: it is
+    // multi-line prose by nature and never rendered as a single line.
+    if name.chars().any(char::is_control) {
+        return Err(CoreError::Config(
+            "persona name must not contain control characters".into(),
+        ));
+    }
     if icon.is_empty() {
         return Err(CoreError::Config("persona icon must not be empty".into()));
     }
+    if icon.chars().any(char::is_control) {
+        return Err(CoreError::Config(
+            "persona icon must not contain control characters".into(),
+        ));
+    }
     if icon.len() > ICON_MAX_BYTES {
         return Err(CoreError::Config(format!(
-            "persona icon must be a single emoji (at most {ICON_MAX_BYTES} bytes, {} given)",
+            "persona icon too long: at most {ICON_MAX_BYTES} bytes, {} given",
             icon.len()
         )));
     }
@@ -145,22 +160,36 @@ pub async fn update(
 /// that no longer exists.
 pub async fn active(db: &Database) -> Result<Option<Persona>> {
     let stored = db.settings().get(ACTIVE_PERSONA_KEY).await?;
+    // A legacy empty value reads as "unset" and is left alone: there is nothing
+    // to heal, and rewriting it would be a write on every read.
     let Some(id) = stored.filter(|id| !id.is_empty()) else {
         return Ok(None);
     };
     match db.personas().get(&id).await? {
         Some(persona) => Ok(Some(persona)),
         None => {
-            db.settings().clear(ACTIVE_PERSONA_KEY).await?;
+            heal_stale_active(db, &id).await?;
             Ok(None)
         }
     }
 }
 
+/// Clear the global key, but only while it still names `stale`. Between reading
+/// the id and deciding it is dangling, another caller may have set a perfectly
+/// good persona; an unconditional clear would throw that away.
+async fn heal_stale_active(db: &Database, stale: &str) -> Result<()> {
+    db.settings().clear_if(ACTIVE_PERSONA_KEY, stale).await?;
+    Ok(())
+}
+
 /// Set (`Some`) or clear (`None`) the globally active persona. `false` = the id
 /// names no persona (404); nothing is written in that case.
+///
+/// Clearing has exactly one spelling — `None` (`{"id": null}` over the wire). An
+/// empty string is *not* a clear: it names no persona, so it is refused like any
+/// other unknown id rather than silently wiping the user's choice.
 pub async fn set_active(db: &Database, id: Option<&str>) -> Result<bool> {
-    let Some(id) = id.filter(|id| !id.is_empty()) else {
+    let Some(id) = id else {
         db.settings().clear(ACTIVE_PERSONA_KEY).await?;
         return Ok(true);
     };
@@ -210,6 +239,11 @@ pub async fn set_session_persona(
 /// request stays exactly what it was before personas existed. Shared by the
 /// llama.cpp chat body ([`crate::capability::chat`]) and the Colibri one
 /// ([`crate::capability::colibri`]).
+///
+/// Once the persona has resolved, the bookkeeping is best-effort: a failure to
+/// write the event or the params is logged and stepped over rather than
+/// propagated. Losing the note of *who* answered is a small loss; failing the
+/// user's chat over it is not.
 pub async fn prepare_for_job(
     db: &Database,
     job_id: &str,
@@ -219,6 +253,21 @@ pub async fn prepare_for_job(
         return Ok(None);
     };
 
+    if let Err(error) = note_on_job(db, job_id, &persona).await {
+        tracing::warn!(
+            job_id,
+            persona_id = persona.id,
+            %error,
+            "could not record the persona on the job; answering with it anyway"
+        );
+    }
+
+    Ok(Some(persona.system_prompt))
+}
+
+/// The two bookkeeping writes [`prepare_for_job`] makes, together so one
+/// `Result` covers both.
+async fn note_on_job(db: &Database, job_id: &str, persona: &Persona) -> Result<()> {
     db.jobs()
         .append_event(
             job_id,
@@ -232,8 +281,7 @@ pub async fn prepare_for_job(
         persona.apply_to(&mut params);
         db.jobs().set_params(job_id, &params).await?;
     }
-
-    Ok(Some(persona.system_prompt))
+    Ok(())
 }
 
 /// The persona a chat in `session_id` gets, or `None` for "no system prompt".
@@ -274,12 +322,19 @@ pub async fn resolve_effective(
             }
             // The override pointed at nothing (deleted, or never set). Heal the
             // session back to `inherit` and fall back to the global choice.
-            db.sessions()
-                .set_persona(session_id, PersonaMode::Inherit, None)
-                .await?;
+            heal_stale_session(db, session_id, session.persona_id.as_deref()).await?;
             global(db).await
         }
     }
+}
+
+/// Reset a session's override, but only while it is still in `persona` mode and
+/// still points at `stale` — the same compare-and-write care as
+/// [`heal_stale_active`]. The user may have picked a valid persona for this chat
+/// in between, and that choice must not be undone.
+async fn heal_stale_session(db: &Database, session_id: &str, stale: Option<&str>) -> Result<()> {
+    db.sessions().heal_persona(session_id, stale).await?;
+    Ok(())
 }
 
 async fn session_persona(db: &Database, persona_id: &Option<String>) -> Result<Option<Persona>> {

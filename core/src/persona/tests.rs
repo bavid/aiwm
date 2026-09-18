@@ -59,21 +59,57 @@ fn validate_accepts_a_60_char_name_and_rejects_61() {
     assert!(validate(&format!("{}   ", "a".repeat(60)), "🙂", "p").is_ok());
 }
 
-/// A single emoji can be a multi-codepoint ZWJ sequence; those must pass, while
-/// a whole sentence in the icon field must not.
+/// A single emoji can be a long multi-codepoint ZWJ sequence — the family and
+/// couple emoji run well past 20 bytes. All of these are *one* emoji a user may
+/// reasonably pick, so all of them must pass; the limit only stops the field
+/// being used as a second prompt.
 #[test]
-fn validate_accepts_multi_byte_emoji_icons_and_rejects_an_oversized_one() {
-    for icon in ["🙂", "🪓", "🧑‍🏫", "👩‍🚀", "🏳️‍🌈"] {
+fn validate_accepts_long_zwj_emoji_icons_and_rejects_an_oversized_one() {
+    for icon in ["🙂", "🪓", "🧑‍🏫", "👩‍🚀", "🏳️‍🌈", "👩‍❤️‍👨", "👨‍👩‍👧‍👦"]
+    {
         assert!(
             validate("N", icon, "p").is_ok(),
-            "{icon} ({} bytes) should be a valid icon",
+            "{icon} ({} bytes) is one emoji and should be a valid icon",
             icon.len()
         );
     }
-    // 17 bytes of ASCII, and a four-emoji string — both past the byte limit.
-    let err = validate("N", &"a".repeat(17), "p").unwrap_err();
-    assert!(err.to_string().contains("single emoji"), "{err}");
-    assert!(validate("N", "🙂🙂🙂🙂🙂", "p").is_err());
+    // 65 bytes of ASCII is past the limit, and the message says so plainly
+    // rather than claiming the input was not "a single emoji".
+    let err = validate("N", &"a".repeat(65), "p").unwrap_err();
+    assert!(err.to_string().contains("icon too long"), "{err}");
+    assert!(validate("N", &"🙂".repeat(17), "p").is_err());
+}
+
+/// A name or icon carrying a newline would forge extra lines in the job event
+/// log (`persona: <icon> <name>`), and control characters have no place in
+/// either field. The system prompt is deliberately *not* restricted this way.
+#[test]
+fn validate_rejects_control_characters_in_name_and_icon() {
+    for (name, icon) in [
+        ("Bad\nName", "🙂"),
+        ("Bad\rName", "🙂"),
+        ("Bad\tName", "🙂"),
+        ("Bad\u{0}Name", "🙂"),
+        ("N", "🙂\n🙂"),
+        ("N", "\u{0}"),
+        ("N", "🙂\u{7}"),
+    ] {
+        let err = validate(name, icon, "p").unwrap_err();
+        assert!(
+            matches!(err, CoreError::Config(_)) && err.to_string().contains("control"),
+            "{name:?}/{icon:?} → {err}"
+        );
+    }
+
+    // The boundary: only *interior* control characters are a problem. Leading
+    // and trailing whitespace — newlines and tabs included — is trimmed off
+    // first, exactly as a trailing space always was, so a field that is merely
+    // padded is accepted and stored clean.
+    let v = validate("\n  Fine Name \t ", " \n🙂\t ", "line one\nline two").unwrap();
+    assert_eq!(v.name, "Fine Name");
+    assert_eq!(v.icon, "🙂");
+    // And the prompt keeps its newlines — it is exempt from this check.
+    assert_eq!(v.system_prompt, "line one\nline two");
 }
 
 #[test]
@@ -141,6 +177,47 @@ async fn set_active_stores_clears_and_refuses_an_unknown_id() {
     assert_eq!(db.settings().get(ACTIVE_PERSONA_KEY).await.unwrap(), None);
 }
 
+/// An empty id is not a way to clear the global persona — that is what `null`
+/// is for. It names no persona, so it is refused like any unknown id.
+#[tokio::test]
+async fn set_active_treats_an_empty_id_as_unknown_rather_than_a_clear() {
+    let db = db().await;
+    let p = create(&db, "Blunt", "🪓", "be brief").await.unwrap();
+    set_active(&db, Some(&p.id)).await.unwrap();
+
+    assert!(!set_active(&db, Some("")).await.unwrap());
+    assert_eq!(
+        active(&db).await.unwrap().unwrap().id,
+        p.id,
+        "the active persona must be untouched"
+    );
+}
+
+/// The heal must not clobber a persona set concurrently: by the time the reader
+/// notices id A is stale, the key may already hold a valid id B.
+#[tokio::test]
+async fn active_heals_only_a_key_that_still_holds_the_stale_id() {
+    let db = db().await;
+    let fresh = create(&db, "Fresh", "🙂", "fresh prompt").await.unwrap();
+    db.settings()
+        .set(ACTIVE_PERSONA_KEY, "long-gone")
+        .await
+        .unwrap();
+
+    // Someone sets a valid persona between the stale read and the heal.
+    db.settings()
+        .set(ACTIVE_PERSONA_KEY, &fresh.id)
+        .await
+        .unwrap();
+    heal_stale_active(&db, "long-gone").await.unwrap();
+
+    assert_eq!(
+        active(&db).await.unwrap().unwrap().id,
+        fresh.id,
+        "the concurrently set persona must survive the heal"
+    );
+}
+
 /// A key left over from a persona that has since been deleted by some other
 /// path must read as "no persona" *and* be cleaned up.
 #[tokio::test]
@@ -190,7 +267,9 @@ async fn set_session_persona_stores_each_mode() {
 #[tokio::test]
 async fn set_session_persona_reports_unknown_ids_and_refuses_a_missing_persona_id() {
     let db = db().await;
-    let p = create(&db, "Blunt", "🪓", "be brief").await.unwrap();
+    // A real persona exists, so "unknown persona" below is about *that* id
+    // being wrong, not about the table being empty.
+    let existing = create(&db, "Blunt", "🪓", "be brief").await.unwrap();
     let s = db.sessions().create("chat", "Chat").await.unwrap();
 
     assert_eq!(
@@ -211,10 +290,17 @@ async fn set_session_persona_reports_unknown_ids_and_refuses_a_missing_persona_i
         .unwrap_err();
     assert!(matches!(err, CoreError::Config(_)), "{err}");
 
-    // None of the refusals changed the session.
+    // None of the refusals changed the session…
     let stored = db.sessions().get(&s.id).await.unwrap().unwrap();
     assert_eq!(stored.persona_mode, PersonaMode::Inherit);
-    let _ = p;
+    assert_eq!(stored.persona_id, None);
+    // …and the valid id still works, so nothing above left the repo wedged.
+    assert_eq!(
+        set_session_persona(&db, &s.id, PersonaMode::Persona, Some(&existing.id))
+            .await
+            .unwrap(),
+        SetSessionPersona::Stored
+    );
 }
 
 // --- what a chat job does with the resolved persona ---------------------------
@@ -302,6 +388,24 @@ async fn prepare_for_job_honours_a_session_override_of_none() {
         .await
         .unwrap()
         .is_none());
+}
+
+/// Bookkeeping is not worth failing a chat over: once the persona has resolved,
+/// a failure to write the event or the params must be logged and stepped over,
+/// not propagated. `job_events.job_id` is a real FK, so an id with no job behind
+/// it makes the event append fail for real — no mocking needed.
+#[tokio::test]
+async fn prepare_for_job_still_returns_the_prompt_when_the_bookkeeping_fails() {
+    let db = db().await;
+    let p = create(&db, "Blunt", "🪓", "be brief").await.unwrap();
+    set_active(&db, Some(&p.id)).await.unwrap();
+
+    let system = prepare_for_job(&db, "no-such-job", None).await.unwrap();
+    assert_eq!(
+        system.as_deref(),
+        Some("be brief"),
+        "the chat must still get its system prompt"
+    );
 }
 
 // --- resolve ----------------------------------------------------------------
@@ -408,6 +512,31 @@ async fn resolve_heals_a_session_pointing_at_a_deleted_persona() {
     let healed = db.sessions().get(&s.id).await.unwrap().unwrap();
     assert_eq!(healed.persona_mode, PersonaMode::Inherit);
     assert_eq!(healed.persona_id, None);
+}
+
+/// The session heal must be just as conditional as the global one: if the
+/// session was re-pointed at a valid persona between the stale read and the
+/// heal, that choice must survive.
+#[tokio::test]
+async fn resolve_does_not_heal_a_session_that_was_re_pointed_in_the_meantime() {
+    let db = db().await;
+    let fresh = create(&db, "Fresh", "🙂", "fresh prompt").await.unwrap();
+    let s = db.sessions().create("chat", "Chat").await.unwrap();
+    set_session_persona(&db, &s.id, PersonaMode::Persona, Some(&fresh.id))
+        .await
+        .unwrap();
+
+    // A heal aimed at an id the session no longer holds must be a no-op.
+    heal_stale_session(&db, &s.id, Some("long-gone"))
+        .await
+        .unwrap();
+
+    let kept = db.sessions().get(&s.id).await.unwrap().unwrap();
+    assert_eq!(kept.persona_mode, PersonaMode::Persona);
+    assert_eq!(kept.persona_id.as_deref(), Some(fresh.id.as_str()));
+    let eff = resolve_effective(&db, Some(&s.id)).await.unwrap();
+    assert_eq!(eff.origin, PersonaOrigin::Session);
+    assert_eq!(eff.persona.unwrap().id, fresh.id);
 }
 
 /// Healing a dangling session override still honours a *valid* global persona.

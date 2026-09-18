@@ -122,7 +122,12 @@ async fn invalid_fields_are_refused_with_400() {
         body("", "🙂", "p"),
         body("   ", "🙂", "p"),
         body("N", "", "p"),
-        body("N", "this is far too long for an icon", "p"),
+        // Past the 64-byte icon cap (real ZWJ emoji reach ~25 bytes, so the cap
+        // only stops the field being used as a second prompt).
+        body("N", &"a".repeat(65), "p"),
+        // A control character in a field that is rendered on one line.
+        body("Bad\nName", "🙂", "p"),
+        body("N", "🙂\n🙂", "p"),
         body("N", "🙂", ""),
         body(&"a".repeat(61), "🙂", "p"),
         body("N", "🙂", &"x".repeat(8_001)),
@@ -254,6 +259,68 @@ async fn the_active_persona_can_be_set_read_and_cleared_with_null() {
         .await
         .unwrap();
     assert!(active["id"].is_null());
+}
+
+/// Clearing the global persona has exactly one spelling: `{"id": null}`. An
+/// absent key is a malformed body, and an empty string names no persona — both
+/// must be refused rather than silently clearing the user's choice.
+#[tokio::test]
+async fn only_an_explicit_null_clears_the_active_persona() {
+    let (server, _tmp, _app) = fixture().await;
+    let base = format!("http://{}", server.addr);
+    let client = reqwest::Client::new();
+    let created = create(&base, "Blunt", "🪓", "be brief").await;
+    let id = created["id"].as_str().unwrap().to_string();
+    client
+        .put(format!("{base}/personas/active"))
+        .json(&serde_json::json!({ "id": id }))
+        .send()
+        .await
+        .unwrap();
+
+    // No `id` key at all: the DTO cannot be built.
+    let resp = client
+        .put(format!("{base}/personas/active"))
+        .json(&serde_json::json!({}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 422);
+
+    // An empty string is an unknown id, not a clear.
+    let resp = client
+        .put(format!("{base}/personas/active"))
+        .json(&serde_json::json!({ "id": "" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 404);
+
+    // Neither of them changed anything.
+    let active: serde_json::Value = reqwest::get(format!("{base}/personas/active"))
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(active["id"], id);
+}
+
+/// `/personas/active` and `/personas/effective` are literal segments, so they
+/// never fall through to `/personas/{id}`: `DELETE /personas/active` has no
+/// handler at all rather than deleting a persona whose id happens to be
+/// "active".
+#[tokio::test]
+async fn the_literal_persona_routes_do_not_collide_with_the_id_route() {
+    let (server, _tmp, _app) = fixture().await;
+    let base = format!("http://{}", server.addr);
+
+    let resp = reqwest::Client::new()
+        .delete(format!("{base}/personas/active"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 405, "method not allowed, not a delete");
 }
 
 /// Deleting the globally active persona must clear the key, not leave a

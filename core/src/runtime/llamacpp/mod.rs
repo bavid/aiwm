@@ -335,20 +335,12 @@ impl LlamaCppAdapter {
     /// Stream a completion from the resident model: a [`GenerationEvent`] per
     /// token chunk, then a final `Done`. Returns early if `tx`'s receiver is
     /// dropped (that is how the chat job cancels).
-    pub async fn stream_completion(
-        &self,
-        prompt: &str,
-        max_tokens: i32,
-        tx: tokio::sync::mpsc::Sender<GenerationEvent>,
-    ) -> Result<()> {
-        self.stream_completion_with(prompt, max_tokens, &GenerationOptions::default(), tx)
-            .await
-    }
-
-    /// Like [`stream_completion`](Self::stream_completion), but with explicit
-    /// sampling / cache options — the benchmark suites use
-    /// [`GenerationOptions::fixed_length`] so every pass generates the same
-    /// number of tokens from an uncached prefill.
+    ///
+    /// `opts` carries the sampling / cache knobs and the optional persona system
+    /// message; [`GenerationOptions::default`] is "whatever the server does by
+    /// default" and serialises to exactly the body this path has always sent,
+    /// while the benchmark suites pass [`GenerationOptions::fixed_length`] so
+    /// every pass generates the same number of tokens from an uncached prefill.
     pub async fn stream_completion_with(
         &self,
         prompt: &str,

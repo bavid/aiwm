@@ -266,6 +266,82 @@ async fn a_session_persona_wins_over_the_global_one() {
     );
 }
 
+/// The two features stack without interfering: RAG grounding stays inside the
+/// user message exactly as before, and the persona rides in front of it as its
+/// own system message.
+#[tokio::test]
+async fn an_attached_document_grounds_the_user_message_while_the_persona_stays_a_system_message() {
+    use aiwm_core::db::NewDocument;
+
+    let h = harness(true).await;
+    let p = persona(&h, "Blunt", "🪓", "Answer in at most three sentences.").await;
+    aiwm_core::persona::set_active(&h.db, Some(&p.id))
+        .await
+        .unwrap();
+    let session = h.db.sessions().create("chat", "Docs").await.unwrap();
+    h.db.documents()
+        .insert(
+            NewDocument {
+                session_id: session.id.clone(),
+                name: "policy.md".into(),
+                source_path: "policy.md".into(),
+                format: "md".into(),
+            },
+            &[
+                "The refund window is thirty days from purchase.".to_string(),
+                "Shipping normally takes three to five business days.".to_string(),
+            ],
+        )
+        .await
+        .unwrap();
+
+    let mut job = chat_job("what is the refund window");
+    job.session_id = Some(session.id.clone());
+    let job = h.engine.submit(job).await.unwrap();
+    h.engine.run_next().await.unwrap().unwrap();
+
+    let got = messages(&h.last_request().await);
+    assert_eq!(got.len(), 2, "exactly a system and a user message: {got:?}");
+    assert_eq!(
+        got[0],
+        (
+            "system".to_string(),
+            "Answer in at most three sentences.".to_string()
+        )
+    );
+    assert_eq!(got[1].0, "user");
+    // The grounding is in the user message, where it has always been — and the
+    // persona's prompt is not duplicated into it.
+    assert!(got[1].1.contains("thirty days"), "{:?}", got[1].1);
+    assert!(
+        got[1].1.contains("what is the refund window"),
+        "{:?}",
+        got[1].1
+    );
+    assert!(
+        !got[1].1.contains("three sentences"),
+        "the persona prompt must not leak into the user message: {:?}",
+        got[1].1
+    );
+
+    let events: Vec<String> =
+        h.db.jobs()
+            .events(&job.id)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|e| e.message)
+            .collect();
+    assert!(
+        events.iter().any(|m| m == "persona: 🪓 Blunt"),
+        "{events:?}"
+    );
+    assert!(
+        events.iter().any(|m| m.contains("grounded in")),
+        "{events:?}"
+    );
+}
+
 /// The self-healing case that matters most: deleting the persona between two
 /// messages must leave the second chat working, with no persona, rather than
 /// failing on a stale id.
