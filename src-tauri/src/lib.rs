@@ -774,12 +774,20 @@ async fn active_persona(app: tauri::State<'_, Arc<App>>) -> Result<ActivePersona
     to_ipc(handlers::active_persona(&app).await)
 }
 
+/// `{ id: null }` clears the global choice, exactly as over HTTP: the same
+/// [`ActivePersonaDto`] reaches the core either way.
+///
+/// The argument stays a plain `Option<String>` because an `invoke` payload *is*
+/// the argument map — `invoke("set_active_persona", { id })` names the argument
+/// `id`, it does not send a body — and Tauri cannot tell a missing key from an
+/// explicit `null` there anyway, so the DTO's "the key is required" guard is an
+/// HTTP-only affair (see [`ActivePersonaDto`]).
 #[tauri::command]
 async fn set_active_persona(
     app: tauri::State<'_, Arc<App>>,
     id: Option<String>,
 ) -> Result<bool, String> {
-    to_ipc(handlers::set_active_persona(&app, id.as_deref()).await)
+    to_ipc(handlers::set_active_persona(&app, ActivePersonaDto { id }).await)
 }
 
 #[tauri::command]

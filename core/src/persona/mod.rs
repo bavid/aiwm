@@ -14,7 +14,7 @@
 
 use serde::Serialize;
 
-use crate::db::{Database, EventLevel, Persona, PersonaMode, ACTIVE_PERSONA_KEY};
+use crate::db::{Database, EventLevel, Persona, PersonaMode, Session, ACTIVE_PERSONA_KEY};
 use crate::{CoreError, Result};
 
 /// Name length limits, in characters (not bytes) after trimming.
@@ -310,21 +310,55 @@ pub async fn resolve_effective(
         return global(db).await;
     };
 
+    match resolve_from(db, &session).await? {
+        Some(effective) => Ok(effective),
+        // The override pointed at nothing (deleted, or never set).
+        None => heal_and_resolve_again(db, session_id, session.persona_id.as_deref()).await,
+    }
+}
+
+/// Resolve from a session row that has already been read. `None` means its
+/// `persona` override dangles and wants healing — what the caller does about
+/// that is [`heal_and_resolve_again`]'s business.
+async fn resolve_from(db: &Database, session: &Session) -> Result<Option<EffectivePersona>> {
     match session.persona_mode {
-        PersonaMode::None => Ok(EffectivePersona::none()),
-        PersonaMode::Inherit => global(db).await,
-        PersonaMode::Persona => {
-            if let Some(persona) = session_persona(db, &session.persona_id).await? {
-                return Ok(EffectivePersona {
-                    persona: Some(persona),
-                    origin: PersonaOrigin::Session,
-                });
-            }
-            // The override pointed at nothing (deleted, or never set). Heal the
-            // session back to `inherit` and fall back to the global choice.
-            heal_stale_session(db, session_id, session.persona_id.as_deref()).await?;
-            global(db).await
-        }
+        PersonaMode::None => Ok(Some(EffectivePersona::none())),
+        PersonaMode::Inherit => Ok(Some(global(db).await?)),
+        PersonaMode::Persona => match session_persona(db, &session.persona_id).await? {
+            Some(persona) => Ok(Some(EffectivePersona {
+                persona: Some(persona),
+                origin: PersonaOrigin::Session,
+            })),
+            None => Ok(None),
+        },
+    }
+}
+
+/// Heal a session whose `persona` override dangled a moment ago, then say which
+/// persona the chat gets.
+///
+/// The heal is conditional, so it can come back having changed nothing: that
+/// means the session was re-pointed between the read and the heal, and the row
+/// the decision was based on is stale. Falling back to the global persona there
+/// would answer with the wrong voice and quietly ignore a choice the user just
+/// made, so the session is read once more and resolved from the fresh state
+/// instead. Exactly once — a second dangling read means one conditional heal has
+/// already failed to bite, and looping on a moving target would be worse than
+/// the global fallback.
+async fn heal_and_resolve_again(
+    db: &Database,
+    session_id: &str,
+    stale: Option<&str>,
+) -> Result<EffectivePersona> {
+    if heal_stale_session(db, session_id, stale).await? {
+        return global(db).await;
+    }
+    let Some(session) = db.sessions().get(session_id).await? else {
+        return global(db).await;
+    };
+    match resolve_from(db, &session).await? {
+        Some(effective) => Ok(effective),
+        None => global(db).await,
     }
 }
 
@@ -332,9 +366,11 @@ pub async fn resolve_effective(
 /// still points at `stale` — the same compare-and-write care as
 /// [`heal_stale_active`]. The user may have picked a valid persona for this chat
 /// in between, and that choice must not be undone.
-async fn heal_stale_session(db: &Database, session_id: &str, stale: Option<&str>) -> Result<()> {
-    db.sessions().heal_persona(session_id, stale).await?;
-    Ok(())
+///
+/// `false` = nothing was healed, i.e. the row no longer looks the way the caller
+/// last saw it. [`heal_and_resolve_again`] treats that as the signal to re-read.
+async fn heal_stale_session(db: &Database, session_id: &str, stale: Option<&str>) -> Result<bool> {
+    db.sessions().heal_persona(session_id, stale).await
 }
 
 async fn session_persona(db: &Database, persona_id: &Option<String>) -> Result<Option<Persona>> {

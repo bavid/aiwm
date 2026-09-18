@@ -539,6 +539,31 @@ async fn resolve_does_not_heal_a_session_that_was_re_pointed_in_the_meantime() {
     assert_eq!(eff.persona.unwrap().id, fresh.id);
 }
 
+/// The other half of that race: when the conditional heal changes no row, the
+/// session state the decision was based on is stale — the chat must answer with
+/// the persona the session holds *now*, not with the global one.
+#[tokio::test]
+async fn resolve_re_reads_the_session_when_the_heal_finds_nothing_to_heal() {
+    let db = db().await;
+    let fresh = create(&db, "Fresh", "🙂", "fresh prompt").await.unwrap();
+    let global_persona = create(&db, "Global", "🌍", "global prompt").await.unwrap();
+    let s = db.sessions().create("chat", "Chat").await.unwrap();
+    set_active(&db, Some(&global_persona.id)).await.unwrap();
+    set_session_persona(&db, &s.id, PersonaMode::Persona, Some(&fresh.id))
+        .await
+        .unwrap();
+
+    // Enter the heal path with the id the session held a moment ago: the row now
+    // names `fresh`, so the conditional heal changes nothing — exactly what a
+    // concurrent re-point between the read and the heal looks like.
+    let eff = heal_and_resolve_again(&db, &s.id, Some("long-gone"))
+        .await
+        .unwrap();
+
+    assert_eq!(eff.origin, PersonaOrigin::Session);
+    assert_eq!(eff.persona.unwrap().id, fresh.id);
+}
+
 /// Healing a dangling session override still honours a *valid* global persona.
 #[tokio::test]
 async fn resolve_heals_then_falls_back_to_a_valid_global_persona() {

@@ -1472,9 +1472,13 @@ pub async fn active_persona(app: &App) -> Result<ActivePersonaDto> {
     })
 }
 
-/// `false` = the id names no persona (404). `None` clears the global choice.
-pub async fn set_active_persona(app: &App, id: Option<&str>) -> Result<bool> {
-    persona::set_active(&app.db, id).await
+/// `false` = the id names no persona (404). `{ id: null }` clears the global
+/// choice.
+///
+/// Takes the same [`ActivePersonaDto`] [`active_persona`] hands back, so HTTP and
+/// Tauri cross into the core through one shape rather than two.
+pub async fn set_active_persona(app: &App, body: ActivePersonaDto) -> Result<bool> {
+    persona::set_active(&app.db, body.id.as_deref()).await
 }
 
 pub async fn set_session_persona(

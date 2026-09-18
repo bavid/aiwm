@@ -434,7 +434,7 @@ fn pass_line(step: &Step, i: u32, runs: u32, pass: &Pass) -> String {
     }
 }
 
-/// One `stream_completion` pass; returns its prompt + generation rates, or
+/// One `stream_completion_with` pass; returns its prompt + generation rates, or
 /// `None` when `cancel` flipped while the model was still generating (the
 /// receiver is dropped, which unwinds the stream on the client side).
 async fn one_pass(

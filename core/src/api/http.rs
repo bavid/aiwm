@@ -433,7 +433,7 @@ async fn set_active_persona(
     State(app): AppState,
     Json(body): Json<super::dto::ActivePersonaDto>,
 ) -> Result<Response, ApiError> {
-    if handlers::set_active_persona(&app, body.id.as_deref()).await? {
+    if handlers::set_active_persona(&app, body).await? {
         Ok(StatusCode::NO_CONTENT.into_response())
     } else {
         Ok(no_such_persona())
