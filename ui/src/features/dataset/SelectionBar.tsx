@@ -8,6 +8,8 @@ type Props = {
   /** Selected frames in the Keep column — what "Discard" would move. */
   toDiscard: number;
   isCompact: boolean;
+  /** False while the prep run is still writing frames. */
+  canDelete: boolean;
   onKeep: () => void;
   onDiscard: () => void;
   onDelete: () => void;
@@ -24,6 +26,7 @@ export function SelectionBar({
   toKeep,
   toDiscard,
   isCompact,
+  canDelete,
   onKeep,
   onDiscard,
   onDelete,
@@ -61,7 +64,8 @@ export function SelectionBar({
         <button
           type="button"
           className="chip curation__action curation__action--danger"
-          disabled={selectedTotal === 0}
+          disabled={selectedTotal === 0 || !canDelete}
+          title={canDelete ? undefined : "Wait for the prep run to finish before deleting"}
           onClick={onDelete}
           aria-keyshortcuts="Delete"
         >

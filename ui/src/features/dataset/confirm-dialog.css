@@ -45,8 +45,17 @@
 }
 
 .confirm__warn {
-  color: var(--load-warn);
+  padding: var(--space-2) var(--space-3);
+  border-left: 3px solid var(--load-warn);
+  border-radius: var(--radius-sm);
+  background: color-mix(in oklab, var(--load-warn) 10%, var(--surface));
+  color: var(--text);
   font-weight: 600;
+}
+
+.confirm__warn::before {
+  content: "\26A0\FE0E\00A0";
+  color: var(--load-warn);
 }
 
 .confirm__error {

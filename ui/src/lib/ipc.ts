@@ -1133,6 +1133,10 @@ export const cleanupDataset = (datasetId: string, dryRun: boolean) =>
 export const DEFAULT_DEDUP_THRESHOLD = 6;
 export const MAX_DEDUP_THRESHOLD = 16;
 
+/** The core refuses more frame ids than this in one bulk move or frame
+ *  delete (`check_frame_ids`); callers split larger selections. */
+export const MAX_FRAME_IDS = 10_000;
+
 export interface DedupSummary {
   /** The threshold actually used, after defaulting and clamping. */
   threshold: number;

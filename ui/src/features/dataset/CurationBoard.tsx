@@ -11,6 +11,7 @@ import {
   assignConcept,
   bulkUpdateDatasetFrames,
   deleteDatasetFrames,
+  MAX_FRAME_IDS,
   unassignConcept,
   updateDatasetFrame,
   type DatasetConcept,
@@ -20,6 +21,7 @@ import {
 import { CurationColumn, type CardHandlers, type ColumnHandlers } from "./CurationColumn";
 import {
   ALL_DISCARDED,
+  chunk,
   COLUMN_LABEL,
   columnOf,
   errorText,
@@ -49,6 +51,9 @@ type Props = {
   datasetId: string;
   frames: readonly DatasetFrame[];
   isClipMode: boolean;
+  /** The prep run is still writing frames: deleting waits for it (the core
+   *  refuses too), like the housekeeping panel. */
+  isPrepRunning: boolean;
   imageUrlFor: (frame: DatasetFrame) => string;
   tokensByFrameId: Record<string, string[]>;
   concepts: DatasetConcept[];
@@ -84,6 +89,7 @@ export function CurationBoard({
   datasetId,
   frames: polledFrames,
   isClipMode,
+  isPrepRunning,
   imageUrlFor,
   tokensByFrameId,
   concepts,
@@ -196,31 +202,49 @@ export function CurationBoard({
   });
 
   // --- writes -------------------------------------------------------------
+  /** One optimistic batch per request-sized chunk, sent one after another; a
+   *  failure rolls back its own chunk and every unsent one, and says how many
+   *  frames were already moved. */
   const move = useCallback(
     async (ids: string[], target: ColumnId) => {
       if (ids.length === 0) return;
       const excluded = target === "discard";
+      const label = COLUMN_LABEL[target];
       planRefocus(ids, otherColumn(target));
-      const batch = beginMove(ids, excluded);
+      const parts = chunk(ids, MAX_FRAME_IDS).map((part) => ({
+        part,
+        batch: beginMove(part, excluded),
+      }));
       remove(ids);
       setError(null);
       setNotice(null);
-      announce(`${framesLabel(ids.length)} moved to ${COLUMN_LABEL[target]}`);
+      announce(`${framesLabel(ids.length)} moved to ${label}`);
+      let requested = 0;
+      let updated = 0;
       try {
-        const summary = await bulkUpdateDatasetFrames(datasetId, ids, excluded);
-        settleMove(batch);
-        if (summary.updated < summary.requested) {
+        for (const [index, { part, batch }] of parts.entries()) {
+          try {
+            const summary = await bulkUpdateDatasetFrames(datasetId, part, excluded);
+            settleMove(batch);
+            requested += summary.requested;
+            updated += summary.updated;
+          } catch (e) {
+            for (const rest of parts.slice(index)) rollbackMove(rest.batch);
+            const before = updated > 0 ? ` ${framesLabel(updated)} were moved before it.` : "";
+            // The alert below announces it; no second announcement.
+            setError(
+              `Could not move ${framesLabel(ids.length - requested)} to ${label}: ` +
+                `${errorText(e)}.${before}`,
+            );
+            return;
+          }
+        }
+        if (updated < requested) {
           setNotice({
-            text: `${summary.updated} of ${summary.requested} frames moved — the rest no longer exist.`,
+            text: `${updated} of ${requested} frames moved — the rest no longer exist.`,
             skipped: [],
           });
         }
-      } catch (e) {
-        rollbackMove(batch);
-        // The alert below announces it; no second announcement.
-        setError(
-          `Could not move ${framesLabel(ids.length)} to ${COLUMN_LABEL[target]}: ${errorText(e)}`,
-        );
       } finally {
         onFramesChanged();
       }
@@ -242,7 +266,22 @@ export function CurationBoard({
     void move(ids, target);
   };
 
+  /** Counts for the delete confirm: per column, and how many of `ids` are
+   *  not rendered right now (paged out or filtered away). */
+  const describeDelete = (ids: string[]) => {
+    const onScreen = new Set(
+      (["keep", "discard"] as const).flatMap((c) => orderedIds[c].slice(0, visible[c])),
+    );
+    return {
+      ids,
+      fromKeep: ids.filter((id) => columnById.get(id) === "keep").length,
+      fromDiscard: ids.filter((id) => columnById.get(id) === "discard").length,
+      offscreen: ids.filter((id) => !onScreen.has(id)).length,
+    };
+  };
+
   const requestDelete = () => {
+    if (isPrepRunning) return;
     const focused = focusedFrameId();
     const ids =
       selectedTotal > 0
@@ -251,53 +290,72 @@ export function CurationBoard({
           ? [focused]
           : [];
     if (ids.length === 0) return;
-    const onScreen = new Set(
-      (["keep", "discard"] as const).flatMap((c) =>
-        orderedIds[c].slice(0, visible[c]),
-      ),
-    );
-    setDeleteRequest({
-      ids,
-      fromKeep: ids.filter((id) => columnById.get(id) === "keep").length,
-      fromDiscard: ids.filter((id) => columnById.get(id) === "discard").length,
-      offscreen: ids.filter((id) => !onScreen.has(id)).length,
-      isBusy: false,
-      error: null,
-    });
+    setDeleteRequest({ ...describeDelete(ids), isBusy: false, error: null });
   };
 
+  /** Deletes in request-sized chunks, one after another. A failure midway
+   *  keeps the dialog open with what was already deleted; only the ids that
+   *  really went leave the selection and the request. */
   const confirmDelete = async () => {
     if (!deleteRequest) return;
     const { ids } = deleteRequest;
     setDeleteRequest({ ...deleteRequest, isBusy: true, error: null });
+    const focused = focusedFrameId();
+    const column = (focused && columnById.get(focused)) || lastColumn.current;
+    const gone: string[] = [];
+    const skipped: SkippedFile[] = [];
+    let deleted = 0;
+    let files = 0;
+    let bytes = 0;
+    const summaryText = () =>
+      `Deleted ${framesLabel(deleted)} and ${files.toLocaleString()} file(s) — ` +
+      `${formatBytes(bytes)} freed.`;
     try {
-      const summary = await deleteDatasetFrames(datasetId, ids);
-      const focused = focusedFrameId();
-      const column = (focused && columnById.get(focused)) || lastColumn.current;
+      for (const part of chunk(ids, MAX_FRAME_IDS)) {
+        const summary = await deleteDatasetFrames(datasetId, part);
+        gone.push(...part);
+        deleted += summary.deleted;
+        files += summary.deleted_files;
+        bytes += summary.freed_bytes;
+        skipped.push(...summary.skipped_files);
+      }
       planRefocus(ids, column);
       remove(ids);
       setDeleteRequest(null);
-      const text =
-        `Deleted ${framesLabel(summary.deleted)} and ${summary.deleted_files.toLocaleString()} ` +
-        `file(s) — ${formatBytes(summary.freed_bytes)} freed.`;
-      setNotice({ text, skipped: summary.skipped_files });
-      announce(text);
+      setNotice({ text: summaryText(), skipped });
+      announce(summaryText());
     } catch (e) {
-      setDeleteRequest({ ...deleteRequest, isBusy: false, error: errorText(e) });
+      remove(gone);
+      const done = new Set(gone);
+      const rest = ids.filter((id) => !done.has(id));
+      if (gone.length > 0) setNotice({ text: summaryText(), skipped });
+      const before =
+        gone.length > 0
+          ? ` — before it: ${summaryText()} The ${framesLabel(rest.length)} below were not deleted.`
+          : "";
+      setDeleteRequest({
+        ...describeDelete(rest),
+        isBusy: false,
+        error: `${errorText(e)}${before}`,
+      });
     } finally {
       onFramesChanged();
     }
   };
 
+  /** Concept writes go in request-sized chunks too, one after another. */
   const runAssign = async (attach: boolean) => {
     if (!assignConceptId || selectedTotal === 0) return;
     const ids = [...selected];
     try {
       if (attach) {
-        const summary = await assignConcept(assignConceptId, ids);
-        setAssignState({ kind: "done", text: `${summary.attached} of ${summary.requested} assigned` });
+        let attached = 0;
+        for (const part of chunk(ids, MAX_FRAME_IDS)) {
+          attached += (await assignConcept(assignConceptId, part)).attached;
+        }
+        setAssignState({ kind: "done", text: `${attached} of ${ids.length} assigned` });
       } else {
-        await unassignConcept(assignConceptId, ids);
+        for (const part of chunk(ids, MAX_FRAME_IDS)) await unassignConcept(assignConceptId, part);
         setAssignState({ kind: "done", text: `${ids.length} removed` });
       }
       onConceptsChanged();
@@ -469,6 +527,7 @@ export function CurationBoard({
         isCompact={isCompact}
         onKeep={() => void move(selectedIn.discard, "keep")}
         onDiscard={() => void move(selectedIn.keep, "discard")}
+        canDelete={!isPrepRunning}
         onDelete={requestDelete}
         onClear={clear}
         onCompactChange={setIsCompact}

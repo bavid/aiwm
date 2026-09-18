@@ -429,6 +429,17 @@ function requireDataset(id: unknown): AnyRecord {
   return dataset;
 }
 
+/** Same cap and message as the core's `check_frame_ids`. */
+const MOCK_MAX_FRAME_IDS = 10_000;
+
+function checkFrameIds(ids: readonly string[]): void {
+  if (ids.length > MOCK_MAX_FRAME_IDS) {
+    throw new Error(
+      `configuration error: at most ${MOCK_MAX_FRAME_IDS} frames per request, got ${ids.length}`,
+    );
+  }
+}
+
 /** Same refusal as the core's `refuse_if_training`. */
 function refuseIfTraining(dataset: AnyRecord): void {
   const run = TRAINING_RUNS.find(
@@ -481,7 +492,14 @@ function progressDatasetJobs(): void {
     const jobId = String(j.id);
     const dataset = datasetForJob(j);
     const clips = dataset.mode === "clips";
-    const target = clips ? DATASET_MOCK_CLIPS.length : DATASET_MOCK_TOTAL_FRAMES;
+    // Dev-only: `mock_frame_count` lands a large frame set in one tick, to try
+    // the curation board and the per-request frame cap at scale.
+    const bulk = Number(((j.params ?? {}) as AnyRecord).mock_frame_count ?? 0);
+    const target = clips
+      ? DATASET_MOCK_CLIPS.length
+      : bulk > 0
+        ? bulk
+        : DATASET_MOCK_TOTAL_FRAMES;
     const existing = DATASET_FRAMES.filter((f) => f.job_id === jobId);
     if (existing.length >= target) {
       j.state = "completed";
@@ -512,25 +530,32 @@ function progressDatasetJobs(): void {
       continue;
     }
 
-    const escalated = idx % 6 === 0;
-    // A slice of every run is auto-rejected, so the "verworfen" filter and the
-    // "doch behalten" button have something to act on in the dev preview.
-    const rejection = idx % 7 === 0 ? "blur" : idx % 11 === 0 ? "cap" : "";
-    DATASET_FRAMES.push(
-      mkDatasetFrame(`${jobId}-f${idx}`, jobId, tag, {
-        dataset_id: dataset.id,
-        source_path: `E:\\Data\\Demo\\${tag}\\clip.mp4`,
-        frame_path: `E:\\Data\\Demo\\${tag}\\clip_${String(idx).padStart(4, "0")}.png`,
-        timestamp_secs: idx * 0.7,
-        caption: escalated
-          ? `${tag} scene, dev-mock: the figure turns and walks toward the doorway`
-          : `${tag} scene, dev-mock caption ${idx}`,
-        caption_engine: escalated ? "qwen2.5-vl" : "florence2",
-        rejection_reason: rejection,
-        duration_secs: null,
-      }),
-    );
+    const count = bulk > 0 ? target - existing.length : 1;
+    for (let n = 0; n < count; n += 1) pushMockFrame(jobId, dataset, idx + n);
   }
+}
+
+/** One still of a running mock prep job. */
+function pushMockFrame(jobId: string, dataset: AnyRecord, idx: number): void {
+  const tag = DATASET_TAGS[(idx - 1) % DATASET_TAGS.length];
+  const escalated = idx % 6 === 0;
+  // A slice of every run is auto-rejected, so the "verworfen" filter and the
+  // "doch behalten" button have something to act on in the dev preview.
+  const rejection = idx % 7 === 0 ? "blur" : idx % 11 === 0 ? "cap" : "";
+  DATASET_FRAMES.push(
+    mkDatasetFrame(`${jobId}-f${idx}`, jobId, tag, {
+      dataset_id: dataset.id,
+      source_path: `E:\\Data\\Demo\\${tag}\\clip.mp4`,
+      frame_path: `E:\\Data\\Demo\\${tag}\\clip_${String(idx).padStart(4, "0")}.png`,
+      timestamp_secs: idx * 0.7,
+      caption: escalated
+        ? `${tag} scene, dev-mock: the figure turns and walks toward the doorway`
+        : `${tag} scene, dev-mock caption ${idx}`,
+      caption_engine: escalated ? "qwen2.5-vl" : "florence2",
+      rejection_reason: rejection,
+      duration_secs: null,
+    }),
+  );
 }
 
 // --- training orchestrator ----------------------------------------------
@@ -1848,10 +1873,12 @@ export function installDevMock(): void {
         requireDataset(a.datasetId);
         const body = (a.body ?? {}) as AnyRecord;
         const ids = (body.frame_ids as string[]) ?? [];
+        checkFrameIds(ids);
+        const wanted = new Set(ids);
         const excluded = body.excluded === true;
         let updated = 0;
         for (const frame of DATASET_FRAMES) {
-          if (frame.dataset_id !== a.datasetId || !ids.includes(String(frame.id))) continue;
+          if (frame.dataset_id !== a.datasetId || !wanted.has(String(frame.id))) continue;
           frame.excluded = excluded;
           // Keeping also clears a filter rejection, like the core.
           if (!excluded) frame.rejection_reason = "";
@@ -1863,7 +1890,9 @@ export function installDevMock(): void {
         const dataset = requireDataset(a.datasetId);
         refuseIfTraining(dataset);
         const body = (a.body ?? {}) as AnyRecord;
-        const ids = new Set((body.frame_ids as string[]) ?? []);
+        const idList = (body.frame_ids as string[]) ?? [];
+        checkFrameIds(idList);
+        const ids = new Set(idList);
         const gone = dropFrames(dataset, (f) => ids.has(String(f.id)));
         return {
           deleted: gone.length,

@@ -458,6 +458,7 @@ export function DatasetStudio({ onTrainLora }: Props) {
               datasetId={activeDatasetId}
               frames={frameList}
               isClipMode={isClipMode}
+              isPrepRunning={isRunning}
               imageUrlFor={imageUrlFor}
               tokensByFrameId={tokensByFrameId}
               concepts={conceptList}

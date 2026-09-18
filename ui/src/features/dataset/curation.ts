@@ -47,11 +47,18 @@ const SKIP_REASON_LABEL: Record<string, string> = {
   outside_app_folders: "outside the app's folders — not the app's to delete",
   source_file: "a source file — never deleted",
   in_use: "still used by another frame",
-  used_by_other_dataset: "Used by another dataset",
+  used_by_other_dataset: "used by another dataset",
   not_a_file: "not a file",
 };
 
 /** Human text for one `SkippedFile.reason`; `"error: …"` is shown verbatim. */
 export function skipReasonLabel(file: SkippedFile): string {
   return SKIP_REASON_LABEL[file.reason] ?? file.reason;
+}
+
+/** `items` in consecutive slices of at most `size` (the last may be shorter). */
+export function chunk<T>(items: readonly T[], size: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
+  return out;
 }
