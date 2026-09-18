@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react";
-import { useActivePersona, useEffectivePersona, usePersonas, useSessions } from "../../../lib/hooks";
+import { useActivePersona, useEffectivePersona, usePersonas } from "../../../lib/hooks";
 import {
   createPersona,
   deletePersona,
@@ -14,17 +14,34 @@ import { PersonaMenu } from "./PersonaMenu";
 import { PersonaManager } from "./PersonaManager";
 import "./personas.css";
 
+/** How often the persona list and the global default are re-read while the
+ *  menu or the dialog is open — they can only change from in here, so the
+ *  poll is really just a backstop for a second window. */
+const OPEN_POLL_MS = 5000;
+/** Closed, nothing of this is on screen: the interval change re-fetches on
+ *  open, which is the only moment the data is needed. */
+const IDLE_POLL_MS = 60 * 60 * 1000;
+
 /** The chat header's persona control as a whole: the chip, the menu it opens
  *  and the manage dialog behind it. It owns every persona round-trip so the
- *  three pieces below it stay presentational, and re-reads all four queries
- *  after each one — a delete can move the global default, a session override
- *  and the chip's label at the same time. */
-export function PersonaControls({ sessionId }: { sessionId: string | null }) {
-  const { data: personas, refetch: refetchPersonas } = usePersonas();
-  const { data: active, refetch: refetchActive } = useActivePersona();
-  const { data: effective, refetch: refetchEffective } = useEffectivePersona(sessionId);
-  const { data: sessions, refetch: refetchSessions } = useSessions("chat");
-
+ *  three pieces below it stay presentational, and re-reads what it shows after
+ *  each one — a delete can move the global default, a session override and the
+ *  chip's label at the same time. */
+export function PersonaControls({
+  sessionId,
+  sessionMode,
+  sessionPersonaId,
+  onSessionsChanged,
+}: {
+  sessionId: string | null;
+  /** This chat's stored override, or `null` while the session list has not
+   *  arrived yet — the menu then shows no session choice as taken. */
+  sessionMode: PersonaMode | null;
+  sessionPersonaId: string | null;
+  /** Ask the owner of the session list to re-read it: a persona write can
+   *  change this chat's row, and a delete can change any chat's. */
+  onSessionsChanged: () => void;
+}) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [managerOpen, setManagerOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -32,19 +49,21 @@ export function PersonaControls({ sessionId }: { sessionId: string | null }) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const menuId = useId();
 
-  const session = sessions?.find((s) => s.id === sessionId) ?? null;
-  const sessionMode: PersonaMode = session?.persona_mode ?? "inherit";
+  const pollMs = menuOpen || managerOpen ? OPEN_POLL_MS : IDLE_POLL_MS;
+  const { data: personas, refetch: refetchPersonas } = usePersonas(pollMs);
+  const { data: active, refetch: refetchActive } = useActivePersona(pollMs);
+  const { data: effective, refetch: refetchEffective } = useEffectivePersona(sessionId);
 
   const closeMenu = useCallback((returnFocus: boolean) => {
     setMenuOpen(false);
     if (returnFocus) chipRef.current?.focus();
   }, []);
 
-  // Switching chats while the menu is open would leave it showing the old
-  // chat's override.
-  useEffect(() => {
-    setMenuOpen(false);
-  }, [sessionId]);
+  const openMenu = () => {
+    // Last attempt's complaint is about a choice that is now two clicks old.
+    setError(null);
+    setMenuOpen(true);
+  };
 
   // Clicking anywhere else dismisses the menu -- without stealing focus back
   // to the chip, since the click is already moving it somewhere on purpose.
@@ -61,8 +80,8 @@ export function PersonaControls({ sessionId }: { sessionId: string | null }) {
     refetchPersonas();
     refetchActive();
     refetchEffective();
-    refetchSessions();
-  }, [refetchPersonas, refetchActive, refetchEffective, refetchSessions]);
+    onSessionsChanged();
+  }, [refetchPersonas, refetchActive, refetchEffective, onSessionsChanged]);
 
   const pickGlobal = async (personaId: string | null) => {
     setError(null);
@@ -97,26 +116,29 @@ export function PersonaControls({ sessionId }: { sessionId: string | null }) {
     setManagerOpen(true);
   };
 
-  const closeManager = () => {
+  const closeManager = useCallback(() => {
     setManagerOpen(false);
     chipRef.current?.focus();
-  };
+  }, []);
 
-  // The three below deliberately let a rejection through: the dialog shows the
-  // core's message verbatim next to the field that caused it.
+  // The three below deliberately let a rejection through -- including the
+  // "it is gone" cases the core reports as `null` / `false` rather than as an
+  // error: the dialog shows all of them in the same place, verbatim.
   const handleCreate = async (body: PersonaBody) => {
     await createPersona(body);
     refreshAll();
   };
 
   const handleUpdate = async (id: string, body: PersonaBody) => {
-    await updatePersona(id, body);
+    const updated = await updatePersona(id, body);
     refreshAll();
+    if (!updated) throw new Error(GONE);
   };
 
   const handleDelete = async (id: string) => {
-    await deletePersona(id);
+    const deleted = await deletePersona(id);
     refreshAll();
+    if (!deleted) throw new Error(GONE);
   };
 
   return (
@@ -127,7 +149,7 @@ export function PersonaControls({ sessionId }: { sessionId: string | null }) {
         optedOut={sessionMode === "none"}
         open={menuOpen}
         menuId={menuId}
-        onToggle={() => setMenuOpen((o) => !o)}
+        onToggle={() => (menuOpen ? closeMenu(false) : openMenu())}
       />
       {menuOpen && (
         <PersonaMenu
@@ -136,7 +158,7 @@ export function PersonaControls({ sessionId }: { sessionId: string | null }) {
           activeId={active?.id ?? null}
           sessionId={sessionId}
           sessionMode={sessionMode}
-          sessionPersonaId={session?.persona_id ?? null}
+          sessionPersonaId={sessionPersonaId}
           onPickGlobal={pickGlobal}
           onPickSession={pickSession}
           onManage={openManager}
@@ -160,6 +182,8 @@ export function PersonaControls({ sessionId }: { sessionId: string | null }) {
     </div>
   );
 }
+
+const GONE = "That persona no longer exists.";
 
 function messageOf(err: unknown): string {
   return err instanceof Error ? err.message : String(err);

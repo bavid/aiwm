@@ -155,9 +155,13 @@ const PERSONAS: AnyRecord[] = [
 /** The globally active persona (`chat.active_persona_id` in the real store). */
 let activePersonaId: string | null = null;
 
-/** Mirror of `core::persona::validate` -- the same limits and the same
- *  messages, so the manage dialog's "server said" line reads here exactly as
- *  it does against the real core. Returns the trimmed fields to store. */
+/** Unicode's control category -- what Rust's `char::is_control` matches. */
+const CONTROL_CHARS = /\p{Cc}/u;
+
+/** Mirror of `core::persona::validate` -- the same limits, in the same order,
+ *  with the same messages, so the manage dialog's "server said" line reads
+ *  here exactly as it does against the real core. Returns the trimmed fields
+ *  to store. */
 function validatePersona(body: AnyRecord): AnyRecord {
   const name = String(body.name ?? "").trim();
   const icon = String(body.icon ?? "").trim();
@@ -168,10 +172,16 @@ function validatePersona(body: AnyRecord): AnyRecord {
   if (nameChars > 60) {
     throw new Error(`persona name must be at most 60 characters (${nameChars} given)`);
   }
+  if (CONTROL_CHARS.test(name)) {
+    throw new Error("persona name must not contain control characters");
+  }
   if (!icon) throw new Error("persona icon must not be empty");
+  if (CONTROL_CHARS.test(icon)) {
+    throw new Error("persona icon must not contain control characters");
+  }
   const iconBytes = new TextEncoder().encode(icon).length;
-  if (iconBytes > 16) {
-    throw new Error(`persona icon must be a single emoji (at most 16 bytes, ${iconBytes} given)`);
+  if (iconBytes > 64) {
+    throw new Error(`persona icon too long: at most 64 bytes, ${iconBytes} given`);
   }
   if (!systemPrompt) throw new Error("persona system prompt must not be empty");
   const promptChars = [...systemPrompt].length;
@@ -183,9 +193,20 @@ function validatePersona(body: AnyRecord): AnyRecord {
   return { name, icon, system_prompt: systemPrompt };
 }
 
-/** Mirror of `core::persona::resolve_effective`: the session's own override
- *  wins, otherwise the globally active persona, and a dangling id heals itself
- *  on the spot rather than failing the chat. */
+/** Mirror of `core::persona::active`: the globally active persona, healing the
+ *  key when it names one that no longer exists. */
+function activeMockPersona(): AnyRecord | null {
+  if (!activePersonaId) return null;
+  const persona = PERSONAS.find((p) => p.id === activePersonaId);
+  if (persona) return persona;
+  activePersonaId = null;
+  return null;
+}
+
+/** Mirror of `core::persona::resolve_effective`: a session's own override
+ *  wins, `inherit` (and an unknown session id, and the ungrouped case) falls
+ *  through to the globally active persona, and a dangling id anywhere heals
+ *  itself on the spot rather than failing the chat. */
 function resolvePersona(sessionId: string | null): AnyRecord {
   const session = sessionId ? SESSIONS.find((s) => s.id === sessionId) : undefined;
   if (session) {
@@ -198,12 +219,8 @@ function resolvePersona(sessionId: string | null): AnyRecord {
       session.persona_id = null;
     }
   }
-  if (activePersonaId) {
-    const global = PERSONAS.find((p) => p.id === activePersonaId);
-    if (global) return { persona: { ...global }, origin: "global" };
-    activePersonaId = null;
-  }
-  return { persona: null, origin: "none" };
+  const global = activeMockPersona();
+  return global ? { persona: { ...global }, origin: "global" } : { persona: null, origin: "none" };
 }
 
 /** `{ id, name, icon }` for a chat job's params, or nothing when this chat
@@ -1568,9 +1585,11 @@ export function installDevMock(): void {
         return { ...persona };
       }
       case "update_persona": {
+        // Validation first, like the core: a malformed body is a 400 whether
+        // or not the id happens to exist.
+        const fields = validatePersona((a.body ?? {}) as AnyRecord);
         const persona = PERSONAS.find((p) => p.id === a.id);
         if (!persona) return null;
-        const fields = validatePersona((a.body ?? {}) as AnyRecord);
         Object.assign(persona, fields, { updated_at: now() });
         return { ...persona };
       }
@@ -1591,21 +1610,35 @@ export function installDevMock(): void {
         return true;
       }
       case "active_persona":
-        return { id: activePersonaId };
+        // Reading heals a dangling id, exactly as `persona::active` does.
+        return { id: activeMockPersona()?.id ?? null };
       case "set_active_persona": {
-        const id = (a.id as string | null) ?? null;
+        // `null` is the one spelling of "clear"; an empty string names no
+        // persona and is refused like any other unknown id.
+        const id = (a.id as string | null | undefined) ?? null;
         if (id !== null && !PERSONAS.some((p) => p.id === id)) return false;
         activePersonaId = id;
         return true;
       }
       case "set_session_persona": {
+        const body = (a.body ?? {}) as AnyRecord;
+        const mode = String(body.mode ?? "");
+        if (!["inherit", "none", "persona"].includes(mode)) {
+          // The real core rejects this while deserializing the body; the
+          // wording differs, the 400 does not.
+          throw new Error(`unknown persona mode "${mode}"`);
+        }
+        if (mode === "persona" && body.persona_id == null) {
+          throw new Error('persona mode "persona" needs a persona_id');
+        }
+        // The persona is checked before the session, same as the core.
+        const personaId = mode === "persona" ? String(body.persona_id) : null;
+        if (personaId !== null && !PERSONAS.some((p) => p.id === personaId)) {
+          return "unknown_persona";
+        }
         const session = SESSIONS.find((s) => s.id === a.id);
         if (!session) return "unknown_session";
-        const body = (a.body ?? {}) as AnyRecord;
-        const mode = String(body.mode ?? "inherit");
-        if (mode === "persona") {
-          const personaId = String(body.persona_id ?? "");
-          if (!PERSONAS.some((p) => p.id === personaId)) return "unknown_persona";
+        if (personaId !== null) {
           session.persona_mode = "persona";
           session.persona_id = personaId;
         } else {

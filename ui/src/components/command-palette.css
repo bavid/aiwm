@@ -1,13 +1,5 @@
-.cmdk__backdrop {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.45);
-  display: flex;
-  align-items: flex-start;
-  justify-content: center;
-  padding-top: 14vh;
-  z-index: 100;
-}
+/* `.cmdk__backdrop` lives in `index.css`: four unrelated modals share it, so
+   it must not depend on this file being imported. */
 
 .cmdk {
   width: min(560px, 92vw);

@@ -49,6 +49,28 @@ button {
   font-variant-numeric: tabular-nums;
 }
 
+/* Two utilities every tab reaches for. They live here, in the one stylesheet
+   the app always loads, rather than in whichever feature happened to need
+   them first -- a feature stylesheet defining them makes every other user of
+   them depend on that feature's import order. */
+.muted {
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+
+/* The dimmed full-window layer behind a modal (command palette, shortcuts,
+   compare, personas). */
+.cmdk__backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 14vh;
+  z-index: 100;
+}
+
 /* --- app shell: a persistent, collapsible sidebar + independently
    scrolling main content (not the page body -- the sidebar must stay put
    on tabs taller than the viewport). --- */

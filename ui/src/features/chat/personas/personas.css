@@ -83,8 +83,22 @@
   white-space: nowrap;
 }
 
+/* Out of the header's flow: a complaint about the last pick must not shove
+   the model picker sideways, and it reads as belonging to the chip. */
 .persona-controls__err {
+  position: absolute;
+  top: calc(100% + var(--space-1));
+  inset-inline-start: 0;
+  z-index: 30;
   margin: 0;
+  /* The containing block is only as wide as the chip; without this the
+     sentence would wrap into a two-word column. */
+  width: max-content;
+  max-width: min(22rem, 60vw);
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid color-mix(in oklab, var(--load-crit) 45%, var(--border));
+  border-radius: var(--radius-sm);
+  background: var(--surface);
   color: var(--load-crit);
   font-size: var(--text-xs);
 }
@@ -105,10 +119,18 @@
   border-radius: var(--radius);
   background: var(--surface);
   box-shadow: 0 18px 40px -20px rgba(0, 0, 0, 0.55);
-  animation: persona-menu-in 160ms var(--ease);
+  /* Opacity only: `transform` belongs to the off-screen nudge in
+     `PersonaMenu`, and an animation on the same channel would fight it. */
+  animation: persona-fade-in 160ms var(--ease);
 }
 
-@keyframes persona-menu-in {
+@keyframes persona-fade-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes persona-pop-in {
   from {
     opacity: 0;
     transform: translateY(-4px);
@@ -208,7 +230,7 @@
   border-radius: var(--radius);
   background: var(--surface);
   box-shadow: 0 30px 60px -28px rgba(0, 0, 0, 0.7);
-  animation: persona-menu-in 160ms var(--ease);
+  animation: persona-pop-in 160ms var(--ease);
 }
 
 .persona-manager__head {
@@ -259,7 +281,7 @@
 
 .persona-manager__close,
 .persona-row__actions button,
-.persona-form__actions button {
+.persona-form__actions button:not(.persona-form__save) {
   padding: var(--space-1) var(--space-3);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
@@ -271,7 +293,7 @@
 
 .persona-manager__close:hover,
 .persona-row__actions button:hover,
-.persona-form__actions button:hover {
+.persona-form__actions button:not(.persona-form__save):hover {
   color: var(--text);
   border-color: var(--accent);
 }
@@ -342,9 +364,11 @@
   font-size: var(--text-xs);
 }
 
-.persona-row__danger:hover {
-  color: var(--load-crit) !important;
-  border-color: color-mix(in oklab, var(--load-crit) 45%, var(--border)) !important;
+/* One class more specific than the shared button rule above, so the
+   destructive hover wins without `!important`. */
+.persona-row__actions button.persona-row__danger:hover {
+  color: var(--load-crit);
+  border-color: color-mix(in oklab, var(--load-crit) 45%, var(--border));
 }
 
 /* --- the form ----------------------------------------------------------- */
@@ -441,6 +465,10 @@
   font-size: var(--text-xs);
 }
 
+.persona-field__label label {
+  cursor: pointer;
+}
+
 .persona-field__count {
   color: var(--faint);
 }
@@ -492,10 +520,14 @@
 }
 
 .persona-form__save {
-  border-color: transparent !important;
-  background: var(--accent) !important;
-  color: var(--accent-fg) !important;
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: var(--accent);
+  color: var(--accent-fg);
+  font-size: var(--text-sm);
   font-weight: 600;
+  cursor: pointer;
 }
 
 .persona-form__save:disabled {

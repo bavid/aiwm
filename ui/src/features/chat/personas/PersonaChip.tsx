@@ -26,7 +26,10 @@ export function PersonaChip({
 }) {
   const persona = effective?.persona ?? null;
   const origin = originLabel(effective, optedOut);
-  const name = persona ? persona.name : "No persona";
+  // Not yet resolved is not the same as "none": saying "No persona" here would
+  // be a wrong answer for the moment after a session switch, when the chip is
+  // remounted and the first resolve is still in flight.
+  const name = effective ? (persona ? persona.name : "No persona") : "Checking…";
 
   return (
     <button
@@ -37,7 +40,7 @@ export function PersonaChip({
       aria-haspopup="menu"
       aria-expanded={open}
       aria-controls={open ? menuId : undefined}
-      aria-label={`${name}${origin ? `, ${origin}` : ""} — choose a persona`}
+      aria-label={`Persona: ${name}${origin ? `, ${origin}` : ""} — choose a persona`}
       onClick={onToggle}
     >
       <span className="persona-chip__icon" aria-hidden="true">

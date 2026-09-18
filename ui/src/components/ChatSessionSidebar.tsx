@@ -1,6 +1,11 @@
 import { useRef, useState } from "react";
-import { useSessions } from "../lib/hooks";
-import { createSession, deleteSession, renameSession, setSessionArchived } from "../lib/ipc";
+import {
+  createSession,
+  deleteSession,
+  renameSession,
+  setSessionArchived,
+  type Session,
+} from "../lib/ipc";
 import "./chat-session-sidebar.css";
 
 interface SessionRow {
@@ -17,11 +22,17 @@ interface SessionRow {
 export function ChatSessionSidebar({
   activeId,
   onChange,
+  sessions,
+  onRefetch,
 }: {
   activeId: string | null;
   onChange: (id: string | null) => void;
+  /** The chat sessions, polled by the Chat tab: the persona chip needs the
+   *  active session's own row too, and one poll serves both. `null` = not read
+   *  yet. */
+  sessions: Session[] | null;
+  onRefetch: () => void;
 }) {
-  const { data: sessions, refetch } = useSessions("chat");
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [draftName, setDraftName] = useState("");
   const [showArchived, setShowArchived] = useState(false);
@@ -33,7 +44,7 @@ export function ChatSessionSidebar({
 
   const newChat = async () => {
     const session = await createSession({ capability: "chat", name: "New chat" });
-    refetch();
+    onRefetch();
     onChange(session.id);
   };
 
@@ -51,7 +62,7 @@ export function ChatSessionSidebar({
     setRenamingId(null);
     if (!id || !name) return;
     await renameSession(id, name);
-    refetch();
+    onRefetch();
   };
 
   const cancelRename = () => {
@@ -66,13 +77,13 @@ export function ChatSessionSidebar({
       return;
     }
     await deleteSession(id);
-    refetch();
+    onRefetch();
     if (activeId === id) onChange(null);
   };
 
   const setArchived = async (id: string, archived: boolean) => {
     await setSessionArchived(id, archived);
-    refetch();
+    onRefetch();
     if (archived && activeId === id) onChange(null);
   };
 

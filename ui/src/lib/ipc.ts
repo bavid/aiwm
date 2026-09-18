@@ -387,9 +387,11 @@ export interface Persona {
   updated_at: string;
 }
 
-/** The three editable fields, for create and update alike. The core trims
- *  them and rejects (400) a name outside 1–60 characters, an empty icon or one
- *  over 16 bytes, and a prompt outside 1–8000 characters. */
+/** The three editable fields, for create and update alike. The core trims them
+ *  and rejects (400) a name outside 1–60 characters, an icon that is empty or
+ *  over 64 bytes, a control character in either, and a prompt outside 1–8000
+ *  characters. The prompt itself is passed to the model verbatim — the only
+ *  limits are technical. */
 export interface PersonaBody {
   name: string;
   icon: string;

@@ -2,7 +2,14 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { ChatSessionSidebar } from "../../components/ChatSessionSidebar";
 import { CompareModels } from "../../components/CompareModels";
-import { useAbout, useDocuments, useJobs, useModels, useRuntimes } from "../../lib/hooks";
+import {
+  useAbout,
+  useDocuments,
+  useJobs,
+  useModels,
+  useRuntimes,
+  useSessions,
+} from "../../lib/hooks";
 import {
   assistantKindOf,
   attachDocument,
@@ -113,6 +120,11 @@ export function Chat() {
   const { data: runtimes } = useRuntimes();
   const { data: jobs } = useJobs();
   const about = useAbout();
+  // Polled once here and handed to both the sidebar and the persona chip --
+  // the chip needs this chat's own row (its persona override), and two
+  // components polling the same endpoint is one poll too many.
+  const { data: sessions, refetch: refetchSessions } = useSessions("chat");
+  const session = sessions?.find((s) => s.id === sessionId) ?? null;
   const chatModels = useMemo(
     () => (models ?? []).filter((m) => m.roles.includes("chat")),
     [models],
@@ -342,10 +354,23 @@ export function Chat() {
 
   return (
     <div className="chat-page">
-      <ChatSessionSidebar activeId={sessionId} onChange={setSessionId} />
+      <ChatSessionSidebar
+        activeId={sessionId}
+        onChange={setSessionId}
+        sessions={sessions}
+        onRefetch={refetchSessions}
+      />
       <div className="chat">
         <div className="chat__head">
-          <PersonaControls sessionId={sessionId} />
+          {/* Keyed by the chat: switching chats must not leave the previous
+              one's persona sitting in the chip while the new one resolves. */}
+          <PersonaControls
+            key={sessionId ?? "ungrouped"}
+            sessionId={sessionId}
+            sessionMode={session ? session.persona_mode : null}
+            sessionPersonaId={session?.persona_id ?? null}
+            onSessionsChanged={refetchSessions}
+          />
           <select
             className="chat__model"
             value={modelId}

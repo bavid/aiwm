@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef } from "react";
+import { useEffect, useId, useLayoutEffect, useRef } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 import type { Persona, PersonaMode } from "../../../lib/ipc";
 
@@ -28,7 +28,9 @@ export function PersonaMenu({
   activeId: string | null;
   /** `null` = "Ungrouped", where only the global half applies. */
   sessionId: string | null;
-  sessionMode: PersonaMode;
+  /** `null` while this chat's row has not been read yet — the session half
+   *  then shows no choice as taken rather than claiming "inherit". */
+  sessionMode: PersonaMode | null;
   sessionPersonaId: string | null;
   onPickGlobal: (personaId: string | null) => void;
   onPickSession: (mode: PersonaMode, personaId?: string) => void;
@@ -38,31 +40,38 @@ export function PersonaMenu({
   const menuRef = useRef<HTMLDivElement>(null);
   const noteId = useId();
 
-  // Opening a menu moves focus into it -- otherwise the arrow keys below have
-  // nothing to move from, and a keyboard user would have to tab past the whole
-  // header to reach the first choice.
-  useEffect(() => {
+  // Before the browser paints, so the popup never flashes half off-screen: it
+  // hangs off the chip's leading edge, which is fine until the window gets
+  // narrow enough that the chip itself sits near the right edge.
+  useLayoutEffect(() => {
     const el = menuRef.current;
     if (!el) return;
-    itemsOf(el)[0]?.focus();
-    // The menu hangs off the chip's leading edge, which is fine until the
-    // window gets narrow enough that the chip itself is near the right edge --
-    // then the popup would run off-screen, where it cannot be clicked. Nudge
-    // it back in by exactly as much as it overhangs.
-    const overhang = el.getBoundingClientRect().right - (window.innerWidth - EDGE_GAP_PX);
-    if (overhang > 0) el.style.transform = `translateX(${-Math.round(overhang)}px)`;
+    const place = () => {
+      el.style.transform = "";
+      const overhang = el.getBoundingClientRect().right - (window.innerWidth - EDGE_GAP_PX);
+      if (overhang > 0) el.style.transform = `translateX(${-Math.round(overhang)}px)`;
+    };
+    place();
+    window.addEventListener("resize", place);
+    return () => window.removeEventListener("resize", place);
+  }, []);
+
+  // Opening a menu moves focus into it -- otherwise the arrow keys below have
+  // nothing to move from, and a keyboard user would have to tab past the whole
+  // header to reach the first choice. The current choice is the useful landing
+  // point; the first row is the fallback while nothing is resolved yet.
+  useEffect(() => {
+    const items = itemsOf(menuRef.current);
+    const checked = items.find((el) => el.getAttribute("aria-checked") === "true");
+    (checked ?? items[0])?.focus();
   }, []);
 
   const onKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {
-    if (e.key === "Escape") {
+    if (e.key === "Escape" || e.key === "Tab") {
+      // Tab out of an open menu closes it and hands focus back to the chip --
+      // letting the browser move focus instead would drop the caller at the
+      // top of the document, since every row here is `tabindex="-1"`.
       e.preventDefault();
-      onClose();
-      return;
-    }
-    // Tab leaves the menu on purpose; close it, but let the browser move
-    // focus as it normally would rather than trapping it (this is a menu,
-    // not a modal).
-    if (e.key === "Tab") {
       onClose();
       return;
     }
@@ -153,6 +162,7 @@ export function PersonaMenu({
         type="button"
         role="menuitem"
         data-menuitem=""
+        tabIndex={-1}
         className="persona-menu__item persona-menu__manage"
         onClick={onManage}
       >
@@ -178,6 +188,9 @@ function MenuChoice({
       type="button"
       role="menuitemradio"
       data-menuitem=""
+      // Roving focus: the menu moves focus itself (see `onKeyDown`), so no row
+      // is in the document's own tab order.
+      tabIndex={-1}
       aria-checked={checked}
       className="persona-menu__item"
       onClick={onSelect}
