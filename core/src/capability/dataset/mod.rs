@@ -8,7 +8,8 @@
 //! out of scope here.
 //!
 //! Four stages, each in its own submodule:
-//! 1. [`ingest`] — walk the root folder; each immediate subfolder is a tag.
+//! 1. [`ingest`] — walk the root folder; each immediate subfolder is a tag,
+//!    files directly in the root are tagged with the root folder's name.
 //! 2. [`extract`] — sample video into stills via `ffmpeg`; a plain image
 //!    file is already a frame.
 //! 3. [`filter`] — judge every frame (dead frame, transition, blur,

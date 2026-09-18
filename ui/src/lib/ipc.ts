@@ -930,7 +930,8 @@ export interface AssignedSummary {
  *  captioning). Only `root` is required; the rest fall back to the Rust
  *  side's own defaults. */
 export interface DatasetPrepParams {
-  /** Folder tree root — each immediate subfolder becomes a tag. */
+  /** Folder tree root — files directly in it are tagged with its name, each
+   *  immediate subfolder becomes a tag of its own. */
   root: string;
   /** Still frames (default) or whole clips as the dataset's items. */
   mode?: DatasetMode;

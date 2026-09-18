@@ -128,8 +128,8 @@ pub async fn run(
     let items = ingest::walk_dataset_root(&req.root)?;
     if items.is_empty() {
         return Err(dataset_err(format!(
-            "no videos or images found under {} (expected tag subfolders containing .mp4/.png/\
-             .jpg/.jpeg/.webp files)",
+            "no videos or images found under {} \u{2014} put .mp4/.png/.jpg/.jpeg/.webp files \
+             in the folder itself or in tag subfolders",
             req.root.display()
         )));
     }
@@ -574,6 +574,61 @@ mod tests {
             "no captioner -> no captions"
         );
     }
+    #[tokio::test]
+    async fn run_accepts_images_placed_directly_in_the_root_under_the_root_name_tag() {
+        let db = Database::connect_in_memory().await.unwrap();
+        let vision = VisionAdapter::new();
+        let job = new_job(&db).await;
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("Test");
+        std::fs::create_dir_all(&root).unwrap();
+        sharp_checkerboard(32, 0).save(root.join("a.png")).unwrap();
+
+        let req =
+            DatasetPrepRequest::from_params(&serde_json::json!({ "root": root.to_string_lossy() }))
+                .unwrap();
+        let work = tempfile::tempdir().unwrap();
+        let (_tx, rx) = watch::channel(false);
+        let outcome = run(&db, &vision, work.path(), &job, req, rx).await.unwrap();
+        let DatasetPrepOutcome::Done(done) = outcome else {
+            panic!("expected Done")
+        };
+        assert_eq!(done.frame_count, 1);
+
+        let datasets = db.datasets().list().await.unwrap();
+        let frames = db
+            .dataset_frames()
+            .list_for_dataset(&datasets[0].id)
+            .await
+            .unwrap();
+        assert_eq!(frames.len(), 1);
+        assert_eq!(frames[0].tag, "Test");
+    }
+
+    #[tokio::test]
+    async fn run_on_an_empty_root_explains_where_media_may_live() {
+        let db = Database::connect_in_memory().await.unwrap();
+        let vision = VisionAdapter::new();
+        let job = new_job(&db).await;
+        let root = tempfile::tempdir().unwrap();
+        let req = DatasetPrepRequest::from_params(
+            &serde_json::json!({ "root": root.path().to_string_lossy() }),
+        )
+        .unwrap();
+        let work = tempfile::tempdir().unwrap();
+        let (_tx, rx) = watch::channel(false);
+        let err = run(&db, &vision, work.path(), &job, req, rx)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("no videos or images found under"), "{err}");
+        assert!(
+            err.contains("in the folder itself or in tag subfolders"),
+            "{err}"
+        );
+        assert!(db.datasets().list().await.unwrap().is_empty());
+    }
+
     /// Mirrors `filter.rs`'s own fixtures so the verdicts below rest on the
     /// same pictures its unit tests pin.
     fn sharp_checkerboard(size: u32, phase: u32) -> image::DynamicImage {

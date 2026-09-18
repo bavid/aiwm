@@ -1579,7 +1579,25 @@ Bild-/Video-Benchmarks, Netz-Leaderboards. Die App bleibt offline-first
   (das HTTP-Zwilling hat Tests) — ein Smoke-Schritt, der prüft, dass ein aus
   dem Tab gestarteter Lauf ein nicht-NULL `suite` speichert, ist noch offen.
 
-## PRIO 1 — offene Bugs (Stand 2026-09-18)
+## PRIO 1 — Bugs (Stand 2026-09-18) — ✅ beide behoben (2026-09-18 nachts)
+
+**Erledigt:** `8c09eb0` — Dateien direkt im gewählten Ordner werden jetzt
+aufgenommen, Tag = Name dieses Ordners (`"untagged"`, wenn er keinen lesbaren
+Namen hat, z. B. ein Laufwerks-Root); Unterordner-als-Tag unverändert, ein
+gemischter Ordner liefert beides (Root-Dateien zuerst, alles nach Pfad
+sortiert). Endungen waren bereits groß/klein-unabhängig (jetzt per Test
+belegt: `.MP4`, `.JPG`). Neue Fehlermeldung: `no videos or images found under
+<root> — put .mp4/.png/.jpg/.jpeg/.webp files in the folder itself or in tag
+subfolders`; der Hinweis im Dataset-Formular erklärt beides. Ende-zu-Ende-Test
+durch die Pipeline mit einer Datei im Root. `c0b809c` — der
+`daemon_shutdown`-Test holt sich einen freien Port und gibt ihn nur dem
+gestarteten `aiwm-cored` mit; ein zweiter Test belegt, dass er auch bei
+belegtem Port 48160 durchläuft (App offen). Randfall, bewusst offen gelassen:
+heißt ein Unterordner genau wie der gewählte Ordner und liegt in beiden ein
+Video mit gleichem Dateinamen, landen beide Extraktionen im selben
+Zwischenordner.
+
+Ursprünglicher Befund:
 
 - **[PRIO 1] Dataset-Pipeline findet Videos direkt im Root-Ordner nicht.**
   Fehler beim Start mit einem Ordner, der nur `.mp4`-Dateien enthält:
