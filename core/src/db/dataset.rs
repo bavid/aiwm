@@ -203,6 +203,93 @@ impl<'a> DatasetFrameRepo<'a> {
         Ok(())
     }
 
+    /// Bulk keep/discard for the curation grid — one request, one
+    /// transaction, however many frames were selected. Keeping
+    /// (`excluded = false`) also clears a filter rejection, because a frame
+    /// the curator moved to "Keep" must actually be exported. Ids of another
+    /// dataset are skipped; returns how many rows changed.
+    pub async fn set_excluded_many(
+        &self,
+        dataset_id: &str,
+        ids: &[String],
+        excluded: bool,
+    ) -> Result<u64> {
+        let mut changed = 0u64;
+        let mut tx = self.pool.begin().await?;
+        for id in ids {
+            let res = sqlx::query(
+                "UPDATE dataset_frames SET excluded = $1, \
+                 rejection_reason = CASE WHEN $1 THEN rejection_reason ELSE '' END \
+                 WHERE id = $2 AND dataset_id = $3",
+            )
+            .bind(excluded)
+            .bind(id)
+            .bind(dataset_id)
+            .execute(&mut *tx)
+            .await?;
+            changed += res.rows_affected();
+        }
+        tx.commit().await?;
+        Ok(changed)
+    }
+
+    /// Mark frames of one dataset with the same rejection reason (global
+    /// dedup's `"duplicate_global"`). Ids of another dataset are skipped.
+    pub async fn set_rejection_reason_many(
+        &self,
+        dataset_id: &str,
+        ids: &[String],
+        reason: &str,
+    ) -> Result<u64> {
+        let mut changed = 0u64;
+        let mut tx = self.pool.begin().await?;
+        for id in ids {
+            let res = sqlx::query(
+                "UPDATE dataset_frames SET rejection_reason = $1 WHERE id = $2 AND dataset_id = $3",
+            )
+            .bind(reason)
+            .bind(id)
+            .bind(dataset_id)
+            .execute(&mut *tx)
+            .await?;
+            changed += res.rows_affected();
+        }
+        tx.commit().await?;
+        Ok(changed)
+    }
+
+    /// Delete frame rows of one dataset (their concept links cascade). Only
+    /// the rows — the files are the caller's business (see
+    /// `capability::dataset::housekeeping`). Returns how many rows went.
+    pub async fn delete_many(&self, dataset_id: &str, ids: &[String]) -> Result<u64> {
+        let mut deleted = 0u64;
+        let mut tx = self.pool.begin().await?;
+        for id in ids {
+            let res = sqlx::query("DELETE FROM dataset_frames WHERE id = $1 AND dataset_id = $2")
+                .bind(id)
+                .bind(dataset_id)
+                .execute(&mut *tx)
+                .await?;
+            deleted += res.rows_affected();
+        }
+        tx.commit().await?;
+        Ok(deleted)
+    }
+
+    /// Every discarded frame of a dataset — excluded by the curator or
+    /// rejected by the filter — in insertion order.
+    pub async fn list_discarded(&self, dataset_id: &str) -> Result<Vec<DatasetFrame>> {
+        let rows = sqlx::query_as::<_, DatasetFrameRow>(sqlx::AssertSqlSafe(format!(
+            "SELECT {SELECT_COLS} FROM dataset_frames \
+             WHERE dataset_id = $1 AND (excluded != 0 OR rejection_reason != '') \
+             ORDER BY created_at, id"
+        )))
+        .bind(dataset_id)
+        .fetch_all(self.pool)
+        .await?;
+        Ok(rows.into_iter().map(DatasetFrame::from).collect())
+    }
+
     pub async fn set_clip_range(
         &self,
         id: &str,
@@ -469,6 +556,109 @@ mod tests {
         let frame = db.dataset_frames().insert(f).await.unwrap();
         db.datasets().delete(&ds_id).await.unwrap();
         assert!(db.dataset_frames().get(&frame.id).await.unwrap().is_none());
+    }
+
+    /// Three frames in one dataset (kept, excluded, rejected as blur) plus one
+    /// frame in a second dataset — the fixture for the bulk operations.
+    async fn bulk_fixture() -> (Database, String, Vec<String>, String) {
+        let (db, job_id, ds_id) = db_with_dataset().await;
+        let other_ds = db
+            .datasets()
+            .create(crate::db::NewDataset {
+                name: "Other".into(),
+                mode: crate::db::DatasetMode::Frames,
+                source_root: "y".into(),
+                prep_job_id: None,
+            })
+            .await
+            .unwrap();
+        let mut ids = Vec::new();
+        for reason in ["", "", "blur"] {
+            let mut f = new_frame(&job_id, "A");
+            f.dataset_id = Some(ds_id.clone());
+            f.rejection_reason = reason.into();
+            ids.push(db.dataset_frames().insert(f).await.unwrap().id);
+        }
+        db.dataset_frames()
+            .set_excluded(&ids[1], true)
+            .await
+            .unwrap();
+        let mut foreign = new_frame(&job_id, "B");
+        foreign.dataset_id = Some(other_ds.id.clone());
+        let foreign_id = db.dataset_frames().insert(foreign).await.unwrap().id;
+        (db, ds_id, ids, foreign_id)
+    }
+
+    #[tokio::test]
+    async fn set_excluded_many_discards_and_keeping_clears_the_rejection() {
+        let (db, ds_id, ids, foreign_id) = bulk_fixture().await;
+        let repo = db.dataset_frames();
+
+        let all = vec![ids[0].clone(), ids[2].clone(), foreign_id.clone()];
+        let n = repo.set_excluded_many(&ds_id, &all, true).await.unwrap();
+        assert_eq!(n, 2, "the frame of another dataset is not touched");
+        assert!(repo.get(&ids[0]).await.unwrap().unwrap().excluded);
+        assert!(!repo.get(&foreign_id).await.unwrap().unwrap().excluded);
+        assert_eq!(
+            repo.get(&ids[2]).await.unwrap().unwrap().rejection_reason,
+            "blur",
+            "discarding keeps the filter's reason"
+        );
+
+        let n = repo
+            .set_excluded_many(&ds_id, &[ids[1].clone(), ids[2].clone()], false)
+            .await
+            .unwrap();
+        assert_eq!(n, 2);
+        let kept = repo.get(&ids[2]).await.unwrap().unwrap();
+        assert!(!kept.excluded);
+        assert_eq!(kept.rejection_reason, "", "keeping clears the rejection");
+        assert!(!repo.get(&ids[1]).await.unwrap().unwrap().excluded);
+    }
+
+    #[tokio::test]
+    async fn list_discarded_returns_excluded_and_rejected_frames_only() {
+        let (db, ds_id, ids, _) = bulk_fixture().await;
+        let discarded = db.dataset_frames().list_discarded(&ds_id).await.unwrap();
+        let got: Vec<&str> = discarded.iter().map(|f| f.id.as_str()).collect();
+        assert_eq!(got, vec![ids[1].as_str(), ids[2].as_str()]);
+    }
+
+    #[tokio::test]
+    async fn delete_many_removes_rows_of_this_dataset_only() {
+        let (db, ds_id, ids, foreign_id) = bulk_fixture().await;
+        let repo = db.dataset_frames();
+        let n = repo
+            .delete_many(&ds_id, &[ids[0].clone(), foreign_id.clone()])
+            .await
+            .unwrap();
+        assert_eq!(n, 1);
+        assert!(repo.get(&ids[0]).await.unwrap().is_none());
+        assert!(repo.get(&foreign_id).await.unwrap().is_some());
+        assert_eq!(repo.list_for_dataset(&ds_id).await.unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn set_rejection_reason_many_marks_frames_of_this_dataset_only() {
+        let (db, ds_id, ids, foreign_id) = bulk_fixture().await;
+        let repo = db.dataset_frames();
+        let n = repo
+            .set_rejection_reason_many(&ds_id, &[ids[0].clone(), foreign_id.clone()], "cap")
+            .await
+            .unwrap();
+        assert_eq!(n, 1);
+        assert_eq!(
+            repo.get(&ids[0]).await.unwrap().unwrap().rejection_reason,
+            "cap"
+        );
+        assert_eq!(
+            repo.get(&foreign_id)
+                .await
+                .unwrap()
+                .unwrap()
+                .rejection_reason,
+            ""
+        );
     }
 
     /// Regression guard for the silent NULL -> "" decode a reviewer found

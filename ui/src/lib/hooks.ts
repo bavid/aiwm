@@ -23,6 +23,7 @@ import {
   listDatasetFrames,
   listDatasetFramesForDataset,
   listDatasets,
+  datasetUsage,
   frameConceptMap,
   listDocuments,
   listFeaturedModels,
@@ -63,6 +64,7 @@ import {
   type Dataset,
   type DatasetConcept,
   type DatasetFrame,
+  type DatasetUsage,
   type Document,
   type Download,
   type EffectivePersona,
@@ -254,6 +256,16 @@ export const useDatasetFramesForDataset = (datasetId: string | null) =>
     `dataset-frames-by-dataset:${datasetId ?? ""}`,
     () => (datasetId ? listDatasetFramesForDataset(datasetId) : Promise.resolve([])),
     3000,
+  );
+
+/** A dataset's disk use (work folder, export, discarded frames) for the
+ *  delete and cleanup confirmations. Polled slowly — the core walks the
+ *  folders for it; `null` disables polling. */
+export const useDatasetUsage = (datasetId: string | null) =>
+  usePolled<DatasetUsage | null>(
+    `dataset-usage:${datasetId ?? ""}`,
+    () => (datasetId ? datasetUsage(datasetId) : Promise.resolve(null)),
+    10000,
   );
 
 /** A dataset's concepts with their frame counts; `null` disables polling. */

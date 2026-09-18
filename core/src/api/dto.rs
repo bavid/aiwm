@@ -280,6 +280,50 @@ pub struct ConceptSummaryDto {
     pub token_warning: Option<String>,
 }
 
+/// Body for `POST /datasets/{id}/frames/bulk` — move many frames to "Keep"
+/// (`excluded: false`, which also clears a filter rejection) or "Discard"
+/// (`excluded: true`) in one request.
+#[derive(Debug, Clone, Deserialize)]
+pub struct BulkFramesDto {
+    pub frame_ids: Vec<String>,
+    pub excluded: bool,
+}
+
+/// Response of `POST /datasets/{id}/frames/bulk`: unknown ids and ids of
+/// another dataset are skipped, so `updated` can be lower than `requested`.
+#[derive(Debug, Clone, Serialize)]
+pub struct BulkUpdatedDto {
+    pub requested: usize,
+    pub updated: u64,
+}
+
+/// Body for `POST /datasets/{id}/frames/delete` — frames to delete together
+/// with their files.
+#[derive(Debug, Clone, Deserialize)]
+pub struct DeleteFramesDto {
+    pub frame_ids: Vec<String>,
+}
+
+/// Body for `POST /datasets/{id}/cleanup`. `dry_run` defaults to `true`: a
+/// body that forgets the flag previews instead of deleting.
+#[derive(Debug, Clone, Deserialize)]
+pub struct CleanupDatasetDto {
+    #[serde(default = "default_true")]
+    pub dry_run: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+/// Body for `POST /datasets/{id}/dedup`. `threshold` is a Hamming distance;
+/// the core defaults it to the duplicate filter's and clamps it to `0..=16`.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct DedupDatasetDto {
+    #[serde(default)]
+    pub threshold: Option<u32>,
+}
+
 /// Body for `POST /sessions/{id}/documents` — attach a document to a chat
 /// session for local RAG (7.x). `path` is resolved by the caller (a native
 /// file picker in the UI); the core reads, chunks, and stores it.
@@ -950,6 +994,17 @@ mod tests {
         let set: UpdateDatasetFrameDto =
             serde_json::from_str(r#"{"clip_start_secs": 1.5}"#).unwrap();
         assert_eq!(set.clip_start_secs, Some(Some(1.5)));
+    }
+
+    /// A cleanup body that forgets `dry_run` previews; it never deletes.
+    #[test]
+    fn cleanup_body_defaults_to_a_dry_run() {
+        let body: CleanupDatasetDto = serde_json::from_str("{}").unwrap();
+        assert!(body.dry_run);
+        let real: CleanupDatasetDto = serde_json::from_str(r#"{"dry_run": false}"#).unwrap();
+        assert!(!real.dry_run);
+        let dedup: DedupDatasetDto = serde_json::from_str("{}").unwrap();
+        assert_eq!(dedup.threshold, None);
     }
 
     /// The job-keyed export route predates `caption_order`; a body without it

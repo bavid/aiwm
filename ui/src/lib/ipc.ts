@@ -972,8 +972,9 @@ export interface DatasetFrame {
    *  captioned yet, or hand-edited). */
   caption_engine: string;
   excluded: boolean;
-  /** `""` = kept; otherwise why the pipeline dropped it (`"blur"`, …). A
-   *  rejected item stays visible so the curator can put it back. */
+  /** `""` = kept; otherwise why the pipeline dropped it (`"blur"`, …, or
+   *  `"duplicate_global"` from the dataset-wide dedup). A rejected item stays
+   *  visible so the curator can put it back. */
   rejection_reason: string;
   /** Clips mode: the clip's own length; `null` for a still frame. */
   duration_secs: number | null;
@@ -1031,7 +1032,123 @@ export const getDataset = (id: string) => invoke<Dataset | null>("get_dataset", 
 export const updateDataset = (id: string, body: { trigger_word?: string }) =>
   invoke<Dataset>("update_dataset", { id, body });
 
-export const deleteDataset = (id: string) => invoke<void>("delete_dataset", { id });
+/** A file a deletion left alone. `reason` is `"outside_app_folders"` (not the
+ *  app's to delete), `"source_file"` (a source video/image — never deleted),
+ *  `"in_use"` (another remaining frame still shows it), `"not_a_file"`, or
+ *  `"error: …"` (deleting failed; the frame row is kept for a retry). */
+export interface SkippedFile {
+  path: string;
+  reason: string;
+}
+
+/** `GET /datasets/{id}/usage` — measured by walking the folders. */
+export interface DatasetUsage {
+  /** The app-owned work folder; `null` when it no longer exists. */
+  work_dir: string | null;
+  work_bytes: number;
+  work_files: number;
+  /** The last export destination, app-owned or not. */
+  export_dir: string | null;
+  /** Bytes of the export's numbered files, measured only when app-owned. */
+  export_bytes: number;
+  /** `true` when the export lies inside the outputs folder, so deleting the
+   *  dataset removes its numbered files too. */
+  export_app_owned: boolean;
+  /** Excluded + rejected frames, and the bytes a cleanup would free. */
+  discarded_frames: number;
+  discarded_bytes: number;
+}
+
+/** What deleting a dataset did — its files went too. */
+export interface DatasetDeleteSummary {
+  frames: number;
+  deleted_files: number;
+  freed_bytes: number;
+  skipped_files: SkippedFile[];
+  /** A user-chosen export folder outside the outputs folder, left as is. */
+  export_dir_kept: string | null;
+}
+
+/** Deletes the dataset's rows *and* files (work folder, app-owned export).
+ *  Rejects while a training run of the dataset is still active. */
+export const deleteDataset = (id: string) =>
+  invoke<DatasetDeleteSummary>("delete_dataset", { id });
+
+export const datasetUsage = (datasetId: string) =>
+  invoke<DatasetUsage>("dataset_usage", { datasetId });
+
+export interface BulkUpdatedSummary {
+  requested: number;
+  /** Unknown ids and ids of another dataset are skipped. */
+  updated: number;
+}
+
+/** Move a whole selection to Keep (`excluded: false`, which also clears a
+ *  filter rejection) or Discard (`excluded: true`) in one request. */
+export const bulkUpdateDatasetFrames = (
+  datasetId: string,
+  frameIds: string[],
+  excluded: boolean,
+) =>
+  invoke<BulkUpdatedSummary>("bulk_update_dataset_frames", {
+    datasetId,
+    body: { frame_ids: frameIds, excluded },
+  });
+
+export interface FramesDeleteSummary {
+  /** Frame rows deleted. */
+  deleted: number;
+  deleted_files: number;
+  freed_bytes: number;
+  skipped_files: SkippedFile[];
+}
+
+/** Irreversible: deletes the frames' files and rows. */
+export const deleteDatasetFrames = (datasetId: string, frameIds: string[]) =>
+  invoke<FramesDeleteSummary>("delete_dataset_frames", {
+    datasetId,
+    body: { frame_ids: frameIds },
+  });
+
+/** In a dry run `frames`/`bytes` are what a real run would delete and free;
+ *  after a real run, what it did. */
+export interface CleanupSummary {
+  dry_run: boolean;
+  frames: number;
+  bytes: number;
+  deleted_files: number;
+  skipped_files: SkippedFile[];
+}
+
+/** Delete every discarded (excluded or rejected) frame with its file, or
+ *  with `dryRun` only measure what that would free. */
+export const cleanupDataset = (datasetId: string, dryRun: boolean) =>
+  invoke<CleanupSummary>("cleanup_dataset", { datasetId, body: { dry_run: dryRun } });
+
+/** Default and upper bound of the dedup threshold (Hamming distance). */
+export const DEFAULT_DEDUP_THRESHOLD = 6;
+export const MAX_DEDUP_THRESHOLD = 16;
+
+export interface DedupSummary {
+  /** The threshold actually used, after defaulting and clamping. */
+  threshold: number;
+  /** Kept frames looked at. */
+  scanned: number;
+  /** Groups of near-duplicates; each keeps its sharpest frame. */
+  groups: number;
+  /** Frames newly marked `duplicate_global`. */
+  marked: number;
+  /** Frames whose image could not be read; left untouched. */
+  unreadable: number;
+}
+
+/** Mark near-duplicates across the whole dataset `duplicate_global`
+ *  (reversible: moving a frame to Keep clears the mark). */
+export const dedupDataset = (datasetId: string, threshold?: number) =>
+  invoke<DedupSummary>("dedup_dataset", {
+    datasetId,
+    body: threshold === undefined ? {} : { threshold },
+  });
 
 export const listDatasetFramesForDataset = (datasetId: string) =>
   invoke<DatasetFrame[]>("list_dataset_frames_for_dataset", { datasetId });

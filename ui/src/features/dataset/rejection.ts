@@ -9,6 +9,7 @@ export const REJECTION_REASONS: readonly { value: string; label: string }[] = [
   { value: "transition", label: "Transition" },
   { value: "blur", label: "Blur" },
   { value: "duplicate", label: "Duplicate" },
+  { value: "duplicate_global", label: "Duplicate (dataset)" },
   { value: "cap", label: "Cap" },
   { value: "unusable", label: "Unusable" },
 ];

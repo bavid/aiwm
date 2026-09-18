@@ -33,6 +33,10 @@
 //! the dataset trigger, the frame's concepts and its own caption (see
 //! [`compose`]).
 //!
+//! [`housekeeping`] measures a dataset's disk use and deletes datasets,
+//! frames and discarded frames *with their files* (behind one path guard),
+//! and finds near-duplicates across the whole dataset.
+//!
 //! A cancelled or failed run keeps whatever frames and captions were written
 //! before it stopped — a partial dataset is safe to curate and export. Only a
 //! dataset that never received a single frame is discarded again (see
@@ -45,6 +49,7 @@ mod compose;
 mod export;
 mod extract;
 mod filter;
+pub mod housekeeping;
 mod ingest;
 mod pipeline;
 mod request;
@@ -64,6 +69,10 @@ pub use export::{export_dataset, export_dataset_for_job, ExportRequest, ExportSu
 pub use extract::{DEFAULT_SAMPLE_FPS, MAX_SAMPLE_FPS, MIN_SAMPLE_FPS};
 pub use filter::RejectionReason;
 pub use filter::{DEFAULT_BLUR_THRESHOLD, DEFAULT_PHASH_MAX_DISTANCE, MAX_PHASH_DISTANCE};
+pub use housekeeping::{
+    CleanupSummary, DatasetDeleteSummary, DatasetUsage, DedupSummary, FramesDeleteSummary,
+    SkippedFile, DEFAULT_DEDUP_THRESHOLD, MAX_DEDUP_THRESHOLD,
+};
 pub use pipeline::{run, DatasetPrepDone, DatasetPrepOutcome};
 pub use request::{DatasetPrepRequest, DEFAULT_MIN_CLIP_SECS};
 

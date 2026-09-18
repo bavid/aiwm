@@ -7,8 +7,9 @@ use std::path::PathBuf;
 
 use super::dto::{
     AboutDto, ActivePersonaDto, AgentPermissionDto, AgentSessionDetailDto, AssignedDto,
-    AttachExternalDto, BenchmarkOptionsDto, CharacterBodyDto, CivitaiSearchDto, ColibriModelDto,
-    ConceptBodyDto, ConceptFramesDto, ConceptSummaryDto, ConfigUpdate, DetachEngineDto,
+    AttachExternalDto, BenchmarkOptionsDto, BulkFramesDto, BulkUpdatedDto, CharacterBodyDto,
+    CivitaiSearchDto, CleanupDatasetDto, ColibriModelDto, ConceptBodyDto, ConceptFramesDto,
+    ConceptSummaryDto, ConfigUpdate, DedupDatasetDto, DeleteFramesDto, DetachEngineDto,
     DialogueLineDto, EnqueueDownloadDto, ExportDatasetDto, FeaturedModelDto, JobDetailDto,
     KnownModelDto, LaunchExternalDto, LocalApiStatusDto, LocationBodyDto, ModelStackDto,
     NewAgentDto, NewSessionDto, NewVoiceIdentityDto, NpcBodyDto, OpenAgentSessionDto,
@@ -393,9 +394,91 @@ pub async fn update_dataset(
 }
 
 /// `DELETE /datasets/{id}` — drops the dataset, its frames and its concepts
-/// (SQLite cascade); the files on disk are untouched.
-pub async fn delete_dataset(app: &App, id: &str) -> Result<()> {
-    app.db.datasets().delete(id).await
+/// (SQLite cascade) *and* its files: the app-owned work folder and an export
+/// that lies inside the outputs folder. Source files and a user-chosen
+/// export folder stay. Refused while a training run of the dataset is not
+/// finished. `None` for an unknown dataset (the route answers 404).
+pub async fn delete_dataset(
+    app: &App,
+    id: &str,
+) -> Result<Option<crate::capability::dataset::DatasetDeleteSummary>> {
+    crate::capability::dataset::housekeeping::delete_dataset_with_files(
+        &app.db,
+        &app.paths.outputs_dir(),
+        id,
+    )
+    .await
+}
+
+/// `GET /datasets/{id}/usage` — the dataset's disk use, measured by walking
+/// its folders; what the delete and cleanup confirmations show.
+pub async fn dataset_usage(
+    app: &App,
+    id: &str,
+) -> Result<Option<crate::capability::dataset::DatasetUsage>> {
+    crate::capability::dataset::housekeeping::usage(&app.db, &app.paths.outputs_dir(), id).await
+}
+
+/// `POST /datasets/{id}/frames/bulk` — move a whole selection to Keep or
+/// Discard in one request; keeping also clears a filter rejection.
+pub async fn bulk_update_dataset_frames(
+    app: &App,
+    id: &str,
+    body: BulkFramesDto,
+) -> Result<Option<BulkUpdatedDto>> {
+    if app.db.datasets().get(id).await?.is_none() {
+        return Ok(None);
+    }
+    let updated = app
+        .db
+        .dataset_frames()
+        .set_excluded_many(id, &body.frame_ids, body.excluded)
+        .await?;
+    Ok(Some(BulkUpdatedDto {
+        requested: body.frame_ids.len(),
+        updated,
+    }))
+}
+
+/// `POST /datasets/{id}/frames/delete` — delete frames with their files.
+pub async fn delete_dataset_frames(
+    app: &App,
+    id: &str,
+    body: DeleteFramesDto,
+) -> Result<Option<crate::capability::dataset::FramesDeleteSummary>> {
+    crate::capability::dataset::housekeeping::delete_frames(
+        &app.db,
+        &app.paths.outputs_dir(),
+        id,
+        &body.frame_ids,
+    )
+    .await
+}
+
+/// `POST /datasets/{id}/cleanup` — preview (`dry_run`) or delete every
+/// discarded frame with its file.
+pub async fn cleanup_dataset(
+    app: &App,
+    id: &str,
+    body: CleanupDatasetDto,
+) -> Result<Option<crate::capability::dataset::CleanupSummary>> {
+    crate::capability::dataset::housekeeping::cleanup(
+        &app.db,
+        &app.paths.outputs_dir(),
+        id,
+        body.dry_run,
+    )
+    .await
+}
+
+/// `POST /datasets/{id}/dedup` — mark near-duplicates across the whole
+/// dataset `duplicate_global`, keeping the sharpest of each group.
+pub async fn dedup_dataset(
+    app: &App,
+    id: &str,
+    body: DedupDatasetDto,
+) -> Result<Option<crate::capability::dataset::DedupSummary>> {
+    crate::capability::dataset::housekeeping::dedup(&app.db, id, body.threshold).await
 }
 
 /// `GET /datasets/{id}/frames` — the dataset-keyed curation set. Unlike the
