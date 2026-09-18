@@ -1745,6 +1745,43 @@ jederzeit sehen, womit eine LoRA bisher trainiert wurde.
   nötig hält. Knüpft an "Speicherort frei wählbar" und die
   Kuratier-Werkzeuge oben an.
 
+## Aufräumen: Settings-Seite "Cleanup" + einmalige Generalbereinigung (Backlog, User-Wunsch 2026-09-18)
+
+Anlass: die App und die Entwicklungs-/Testläufe erzeugen sehr viele Dateien;
+auf dem System liegen wieder hunderte GB, teils Nutzdaten, teils Testartefakte.
+
+- **Settings-Seite "Cleanup" (Speicher aufräumen)** — eine eigene Seite, die
+  anhand der konfigurierten Pfade (Settings → "Data locations" / `[paths]`)
+  und der eigenen Datenbank ermittelt, was die App selbst erzeugt hat und
+  entfernt werden könnte, gruppiert nach Art, mit Größe und Anzahl pro Gruppe:
+  generierte Bilder/Videos/Audio, Dataset-Inhalte (extrahierte Frames,
+  aussortierte Frames, Exporte), Trainingsläufe (Zwischen-Checkpoints,
+  Samples, Logs abgeschlossener/abgebrochener Läufe), Caches, alte
+  Job-Artefakte, verwaiste Dateien ohne DB-Eintrag (und DB-Einträge ohne
+  Datei). Pro Gruppe/Eintrag auswählbar, Vorschau "X GB werden frei", dann
+  Löschen **mit deutlicher Warnung und Bestätigung**; was gelöscht wurde,
+  wird protokolliert.
+  **Ausdrücklich nicht:** Modelle (Library, Downloads von Modellgewichten,
+  installierte Laufzeiten) — Modelle werden hier nie angeboten. Ebenso nie:
+  Quelldateien/Quellvideos des Nutzers außerhalb der App-Ordner, fertige
+  LoRAs, die in der Library stehen, und alles, was ein laufender oder
+  pausierter Job/Trainingslauf noch braucht.
+  Verbindet sich mit: Dataset-Aufräum-Job und Datasets löschen (oben),
+  zentrale Standard-Pfade in den Settings (oben), LoRA-Übersicht (Versionen
+  nicht versehentlich wegräumen).
+- **Einmalige Generalbereinigung als letzter Schritt (Entwicklung)** — nach
+  den übrigen Punkten dieses Backlogs: Bestandsaufnahme mit echten Größen,
+  dann Aufräumen nach Freigabe durch den Nutzer. Kandidaten aus den bisherigen
+  Sessions: Rust-Build-Verzeichnisse (`E:\AI\target` und `target` der
+  Worktrees — beim letzten Mal zusammen ~356 GB, per `cargo clean`
+  wiederherstellbar), nicht mehr benutzte Worktrees/Branches, Testartefakte
+  aus den echten Läufen (`E:\AI\.smoke-hires\`, Scratchpad-Dateien wie das
+  ai-toolkit-Archiv, Trainingsmaterial-Kopien, DB-Sicherungen vor den
+  Migrationen 0017/0018), die 40-kB-Stub-Downloads unter
+  `E:\AI\models\llm\downloaded-7b*`, Beweis-Einträge in der echten DB
+  (Chat-Session "Persona proof" samt vier Jobs, Benchmark-Testzeilen).
+  Nichts davon ohne ausdrückliche Bestätigung löschen; Modelle bleiben.
+
 ## In-App-Dokumentation & Tooltips (Backlog, User-Wunsch 2026-09-18)
 
 - **Vollständige Dokumentation in der App selbst** — eine eigene Seite
