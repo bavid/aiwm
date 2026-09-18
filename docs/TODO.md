@@ -1642,6 +1642,28 @@ für hunderte bis tausende Frames aus Videos ist das zu langsam.
   "Empfohlenen Captioner installieren"-Button. Knüpft an den offenen Punkt
   "kein `KNOWN_MODELS`-Katalogeintrag für Florence-2/Qwen2.5-VL" in
   Teilsystem 1 an.
+- **Speicherort für Dataset- und Trainingsdaten frei wählbar (optional)** —
+  User-Wunsch 2026-09-18: die App läuft auf einer 1-TB-SSD, ein
+  Trainingsvorhaben erzeugt aber leicht ~100 GB (extrahierte Frames, Export,
+  Checkpoints, Samples). Diese Daten sollen auf ein anderes Laufwerk gelegt
+  werden können, statt die System-/App-SSD zu füllen. **Optional:** ohne
+  Angabe bleibt alles am heutigen Standardort.
+  Vorgesehen: (a) ein globaler Standard in Settings → "Data locations" (neuer
+  Schlüssel neben `outputs_path` / `runtimes_path` / `cache_path` in der
+  `[paths]`-Tabelle von `config.toml`, gleiche Mechanik wie diese), und (b) ein
+  optionales Feld "Speicherort" direkt im Dataset-Formular beim Start der
+  Pipeline bzw. beim Start eines Trainingslaufs, das den Standard für genau
+  dieses Dataset / diesen Run überschreibt. Der gewählte Pfad wird am
+  Dataset / Run gespeichert, damit Kuratier-Grid, Export, Resume und Import der
+  fertigen LoRA ihn wiederfinden.
+  Zu klären beim Bau: vorher genau erfassen, **wo** heute Frames, Exporte und
+  der Trainings-Arbeitsordner landen (alles unter dem Datenverzeichnis?);
+  Plattenplatz-Vorabprüfung auf dem *gewählten* Laufwerk statt dem
+  Standardlaufwerk (knüpft an die offene "Disk-Preflight-Zeile" aus
+  Teilsystem 2 an); Verhalten, wenn das Ziellaufwerk später fehlt (externe
+  Platte abgesteckt) — klare Meldung statt stillem Fehler; kein Verschieben
+  bestehender Daten in diesem Schritt (höchstens ein späterer
+  "Dataset verschieben"-Befehl).
 
 ## Offen / später zu entscheiden
 - App-Selbst-Update offline (manueller Installer + Signaturprüfung angenommen)
