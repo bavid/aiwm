@@ -1167,7 +1167,16 @@ impl JobEngine {
                 .ok_or_else(|| CoreError::Config("colibri is not configured on this app".into()))?;
             let model = self.require_model(&model_id).await?;
             let req = capability::colibri::ColibriChatRequest::from_params(&job.params)?;
-            match capability::colibri::run(&self.db, &colibri, &job.id, &model, req, cancel).await?
+            match capability::colibri::run(
+                &self.db,
+                &colibri,
+                &job.id,
+                job.session_id.as_deref(),
+                &model,
+                req,
+                cancel,
+            )
+            .await?
             {
                 ColibriOutcome::Done(done) => {
                     let _ = self.db.models().mark_used(&model_id).await;

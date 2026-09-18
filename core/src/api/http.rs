@@ -16,9 +16,9 @@ use super::dto::{
     BenchmarkHistoryDto, BenchmarkOptionsDto, CharacterBodyDto, ConceptBodyDto, ConceptFramesDto,
     DetachEngineDto, ExportDatasetDto, LaunchExternalDto, LocationBodyDto, NewAgentDto,
     NewRelationshipDto, NewSessionDto, NewVoiceIdentityDto, NpcBodyDto, OpenAgentSessionDto,
-    RenameModelDto, RenameSessionDto, SceneBodyDto, SceneDetailDto, SetArchivedDto,
-    SetInventoryDto, SetReferenceJobDto, SetRolesDto, SetTagsDto, SetTokenDto, StartRunDto,
-    StoryBodyDto, SubmitJobDto, UpdateDatasetDto, UpdateDatasetFrameDto,
+    PersonaBodyDto, RenameModelDto, RenameSessionDto, SceneBodyDto, SceneDetailDto, SetArchivedDto,
+    SetInventoryDto, SetReferenceJobDto, SetRolesDto, SetSessionPersonaDto, SetTagsDto,
+    SetTokenDto, StartRunDto, StoryBodyDto, SubmitJobDto, UpdateDatasetDto, UpdateDatasetFrameDto,
 };
 use super::handlers;
 use crate::db::JobFilter;
@@ -38,6 +38,24 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/sessions", get(list_sessions).post(create_session))
         .route("/sessions/{id}", put(rename_session).delete(delete_session))
         .route("/sessions/{id}/archived", put(set_session_archived))
+        .route("/sessions/{id}/persona", put(set_session_persona))
+        // `active` and `effective` are literal segments, so axum matches them
+        // ahead of the `{id}` parameter regardless of registration order; they
+        // are kept adjacent here to make that visible. The consequence is
+        // deliberate: `DELETE /personas/active` has no handler and answers
+        // `405 Method Not Allowed` rather than deleting a persona that happens
+        // to be called "active" — persona ids are uuid v7, so no real id can
+        // ever be shadowed by either word.
+        .route("/personas", get(list_personas).post(create_persona))
+        .route(
+            "/personas/active",
+            get(active_persona).put(set_active_persona),
+        )
+        .route("/personas/effective", get(effective_persona))
+        .route(
+            "/personas/{id}",
+            put(update_persona).delete(delete_persona),
+        )
         .route(
             "/sessions/{id}/documents",
             get(list_documents).post(attach_document),
@@ -368,6 +386,91 @@ async fn delete_session(
 ) -> Result<StatusCode, ApiError> {
     handlers::delete_session(&app, &id).await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+// --- personas (spec `2026-09-18-personas-design`) ---------------------------
+
+async fn list_personas(State(app): AppState) -> Result<Json<Vec<crate::db::Persona>>, ApiError> {
+    Ok(Json(handlers::list_personas(&app).await?))
+}
+
+async fn create_persona(
+    State(app): AppState,
+    Json(body): Json<PersonaBodyDto>,
+) -> Result<(StatusCode, Json<crate::db::Persona>), ApiError> {
+    let persona = handlers::create_persona(&app, body).await?;
+    Ok((StatusCode::CREATED, Json(persona)))
+}
+
+async fn update_persona(
+    State(app): AppState,
+    Path(id): Path<String>,
+    Json(body): Json<PersonaBodyDto>,
+) -> Result<Response, ApiError> {
+    match handlers::update_persona(&app, &id, body).await? {
+        Some(persona) => Ok(Json(persona).into_response()),
+        None => Ok(no_such_persona()),
+    }
+}
+
+/// Idempotent: an unknown id is a `204` too, the same as deleting a session or a
+/// document. The persona's references (sessions, the global key) go with it.
+async fn delete_persona(
+    State(app): AppState,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    handlers::delete_persona(&app, &id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn active_persona(
+    State(app): AppState,
+) -> Result<Json<super::dto::ActivePersonaDto>, ApiError> {
+    Ok(Json(handlers::active_persona(&app).await?))
+}
+
+async fn set_active_persona(
+    State(app): AppState,
+    Json(body): Json<super::dto::ActivePersonaDto>,
+) -> Result<Response, ApiError> {
+    if handlers::set_active_persona(&app, body).await? {
+        Ok(StatusCode::NO_CONTENT.into_response())
+    } else {
+        Ok(no_such_persona())
+    }
+}
+
+#[derive(Deserialize)]
+struct EffectivePersonaQuery {
+    /// Absent = the "Ungrouped" case, where only the global persona applies.
+    session_id: Option<String>,
+}
+
+async fn effective_persona(
+    State(app): AppState,
+    Query(q): Query<EffectivePersonaQuery>,
+) -> Result<Json<crate::persona::EffectivePersona>, ApiError> {
+    Ok(Json(
+        handlers::effective_persona(&app, q.session_id.as_deref()).await?,
+    ))
+}
+
+async fn set_session_persona(
+    State(app): AppState,
+    Path(id): Path<String>,
+    Json(body): Json<SetSessionPersonaDto>,
+) -> Result<Response, ApiError> {
+    match handlers::set_session_persona(&app, &id, body).await? {
+        crate::persona::SetSessionPersona::Stored => Ok(StatusCode::NO_CONTENT.into_response()),
+        crate::persona::SetSessionPersona::UnknownSession => {
+            Ok(error_response(StatusCode::NOT_FOUND, "no such session"))
+        }
+        crate::persona::SetSessionPersona::UnknownPersona => Ok(no_such_persona()),
+    }
+}
+
+fn no_such_persona() -> Response {
+    error_response(StatusCode::NOT_FOUND, "no such persona")
 }
 
 async fn list_documents(

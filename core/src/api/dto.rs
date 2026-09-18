@@ -126,6 +126,58 @@ pub struct SetArchivedDto {
     pub archived: bool,
 }
 
+// --- personas (spec `2026-09-18-personas-design`) ---------------------------
+
+/// Body for `POST /personas` and `PUT /personas/{id}` — the whole persona, since
+/// the edit dialog always has all three fields in hand. The limits live in
+/// [`crate::persona::validate`]; the prompt text itself is passed through
+/// verbatim.
+#[derive(Debug, Clone, Deserialize)]
+pub struct PersonaBodyDto {
+    pub name: String,
+    /// One emoji.
+    pub icon: String,
+    pub system_prompt: String,
+}
+
+/// `GET`/`PUT /personas/active` — the globally active persona's id, or `null`
+/// for "no global persona". The same shape in both directions so the UI has one
+/// type for it.
+///
+/// Clearing the global persona has to be spelled `{"id": null}`: a body that
+/// simply forgot the key is a malformed request (422) rather than a silent wipe
+/// of the user's choice. See [`required_option_string`] for why that needs more
+/// than dropping `#[serde(default)]`.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct ActivePersonaDto {
+    #[serde(deserialize_with = "required_option_string")]
+    pub id: Option<String>,
+}
+
+/// Deserialize an `Option<String>` that is still **required** to be present.
+///
+/// Serde treats a missing `Option<T>` field as `None` all by itself — dropping
+/// `#[serde(default)]` is not enough. Routing the field through an explicit
+/// `deserialize_with` removes that special case (serde then reports a missing
+/// field), while `null` still deserializes to `None` as usual. That is the whole
+/// difference between "clear the active persona" and "I forgot to send the key".
+fn required_option_string<'de, D>(deserializer: D) -> std::result::Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<String>::deserialize(deserializer)
+}
+
+/// Body for `PUT /sessions/{id}/persona` — this chat's override. `persona_id` is
+/// required for (and only read with) `mode: "persona"`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct SetSessionPersonaDto {
+    /// `"inherit"` | `"none"` | `"persona"`.
+    pub mode: crate::db::PersonaMode,
+    #[serde(default)]
+    pub persona_id: Option<String>,
+}
+
 /// Body for `PUT /jobs/{id}/dataset-frames/{frame_id}` — a curator's edit to
 /// one frame. Every field optional so the curation UI can send just the one
 /// thing that changed (a caption edit vs. an exclude toggle) rather than the

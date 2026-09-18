@@ -116,7 +116,119 @@ function resolveJobParams(jobType: string, params: AnyRecord): AnyRecord {
 }
 
 function mkSession(id: string, capability: string, name: string): AnyRecord {
-  return { id, capability, name, created_at: now(), archived_at: null };
+  return {
+    id,
+    capability,
+    name,
+    created_at: now(),
+    archived_at: null,
+    persona_mode: "inherit",
+    persona_id: null,
+  };
+}
+
+/** Two seeded presets so the chip, the menu and the manage dialog all have
+ *  something to show on a fresh preview. The real app seeds none (the spec
+ *  keeps templates a UI affordance, not database rows) -- these stand in for
+ *  "you have used this feature before". */
+const PERSONAS: AnyRecord[] = [
+  {
+    id: "persona-concise",
+    name: "Concise & direct",
+    icon: "🎯",
+    system_prompt:
+      "Answer in as few words as the question honestly allows. No preamble, no summary of the question, no offers of further help.",
+    created_at: now(),
+    updated_at: now(),
+  },
+  {
+    id: "persona-tutor",
+    name: "Patient tutor",
+    icon: "🧑‍🏫",
+    system_prompt:
+      "Explain things step by step, starting from what the reader already knows. Use one concrete example per idea and check understanding before moving on.",
+    created_at: now(),
+    updated_at: now(),
+  },
+];
+
+/** The globally active persona (`chat.active_persona_id` in the real store). */
+let activePersonaId: string | null = null;
+
+/** Unicode's control category -- what Rust's `char::is_control` matches. */
+const CONTROL_CHARS = /\p{Cc}/u;
+
+/** Mirror of `core::persona::validate` -- the same limits, in the same order,
+ *  with the same messages, so the manage dialog's "server said" line reads
+ *  here exactly as it does against the real core. Returns the trimmed fields
+ *  to store. */
+function validatePersona(body: AnyRecord): AnyRecord {
+  const name = String(body.name ?? "").trim();
+  const icon = String(body.icon ?? "").trim();
+  const systemPrompt = String(body.system_prompt ?? "").trim();
+
+  if (!name) throw new Error("persona name must not be empty");
+  const nameChars = [...name].length;
+  if (nameChars > 60) {
+    throw new Error(`persona name must be at most 60 characters (${nameChars} given)`);
+  }
+  if (CONTROL_CHARS.test(name)) {
+    throw new Error("persona name must not contain control characters");
+  }
+  if (!icon) throw new Error("persona icon must not be empty");
+  if (CONTROL_CHARS.test(icon)) {
+    throw new Error("persona icon must not contain control characters");
+  }
+  const iconBytes = new TextEncoder().encode(icon).length;
+  if (iconBytes > 64) {
+    throw new Error(`persona icon too long: at most 64 bytes, ${iconBytes} given`);
+  }
+  if (!systemPrompt) throw new Error("persona system prompt must not be empty");
+  const promptChars = [...systemPrompt].length;
+  if (promptChars > 8000) {
+    throw new Error(
+      `persona system prompt must be at most 8000 characters (${promptChars} given)`,
+    );
+  }
+  return { name, icon, system_prompt: systemPrompt };
+}
+
+/** Mirror of `core::persona::active`: the globally active persona, healing the
+ *  key when it names one that no longer exists. */
+function activeMockPersona(): AnyRecord | null {
+  if (!activePersonaId) return null;
+  const persona = PERSONAS.find((p) => p.id === activePersonaId);
+  if (persona) return persona;
+  activePersonaId = null;
+  return null;
+}
+
+/** Mirror of `core::persona::resolve_effective`: a session's own override
+ *  wins, `inherit` (and an unknown session id, and the ungrouped case) falls
+ *  through to the globally active persona, and a dangling id anywhere heals
+ *  itself on the spot rather than failing the chat. */
+function resolvePersona(sessionId: string | null): AnyRecord {
+  const session = sessionId ? SESSIONS.find((s) => s.id === sessionId) : undefined;
+  if (session) {
+    const mode = String(session.persona_mode ?? "inherit");
+    if (mode === "none") return { persona: null, origin: "none" };
+    if (mode === "persona") {
+      const picked = PERSONAS.find((p) => p.id === session.persona_id);
+      if (picked) return { persona: { ...picked }, origin: "session" };
+      session.persona_mode = "inherit";
+      session.persona_id = null;
+    }
+  }
+  const global = activeMockPersona();
+  return global ? { persona: { ...global }, origin: "global" } : { persona: null, origin: "none" };
+}
+
+/** `{ id, name, icon }` for a chat job's params, or nothing when this chat
+ *  runs without a persona -- the write-back `Persona::apply_to` does. */
+function personaParams(sessionId: string | null): AnyRecord {
+  const { persona } = resolvePersona(sessionId) as { persona: AnyRecord | null };
+  if (!persona) return {};
+  return { persona: { id: persona.id, name: persona.name, icon: persona.icon } };
 }
 
 const SESSIONS: AnyRecord[] = [
@@ -844,11 +956,19 @@ function progressChatJobs(): void {
     }
     j.state = "completed";
     j.finished_at = now();
+    // A real run prepends the persona's system prompt and the answer changes
+    // shape; nothing here talks to a model, so the persona's *name* is put in
+    // front of the canned reply instead -- enough to see in the preview that
+    // the resolution actually reached the job.
+    // Assistant jobs need no exception here: `submit_job` never stamps a
+    // persona onto them in the first place, just like the core.
+    const persona = (j.params as AnyRecord)?.persona as AnyRecord | undefined;
+    const as = persona ? `[as ${String(persona.name)}] ` : "";
     j.result = isEditAssistant
       ? "Got it — that's a clear edit.\n\nPROMPT: give the subject blonde hair, keep everything else the same"
       : isAssistant
         ? "Got it — that's enough to work with.\n\nPROMPT: a moody portrait of an old lighthouse keeper, dramatic side lighting, weathered skin, oil painting texture\nNEGATIVE: blurry, cartoon, low detail"
-        : "This is a mocked reply — dev-mock has no real model attached.";
+        : `${as}This is a mocked reply — dev-mock has no real model attached.`;
   }
 }
 
@@ -1377,12 +1497,27 @@ export function installDevMock(): void {
           // reads sensibly wherever a raw model_id falls back to display.
           upscale: "rtx-video-super-resolution",
         };
+        const sessionId = (body.session_id as string) ?? null;
+        // The core resolves the persona when the job starts and writes
+        // `persona: {id,name,icon}` back over its params; the mock has no
+        // separate start, so it happens here. Prompt Assistant completions
+        // (`assistant_for`) are skipped, exactly as `capability::chat` skips
+        // them -- their reply is parsed for PROMPT:/NEGATIVE: markers, so no
+        // persona may reach them.
+        const isAssistantJob = !!(body.params as AnyRecord | undefined)?.assistant_for;
+        const persona =
+          (jobType === "chat" || jobType === "colibri") && !isAssistantJob
+            ? personaParams(sessionId)
+            : {};
         const job = mkJob(`j-dev-${seq++}`, jobType, "running", {
-          params: resolveJobParams(jobType, (body.params ?? {}) as AnyRecord),
+          params: {
+            ...resolveJobParams(jobType, (body.params ?? {}) as AnyRecord),
+            ...persona,
+          },
           model_id: (body.model_id as string) ?? autoModel[jobType] ?? "m-wan",
           runtime_id: (body.runtime_id as string) ?? "comfyui",
           output_path: null,
-          session_id: (body.session_id as string) ?? null,
+          session_id: sessionId,
         });
         JOBS.unshift(job);
         return job;
@@ -1448,6 +1583,80 @@ export function installDevMock(): void {
         if (i >= 0) SESSIONS.splice(i, 1);
         return null;
       }
+      case "list_personas":
+        // Fresh objects -- `usePolled` needs a changed reference to re-render.
+        return PERSONAS.map((p) => ({ ...p }));
+      case "create_persona": {
+        const fields = validatePersona((a.body ?? {}) as AnyRecord);
+        const persona = { id: `persona-dev-${seq++}`, ...fields, created_at: now(), updated_at: now() };
+        PERSONAS.push(persona);
+        return { ...persona };
+      }
+      case "update_persona": {
+        // Validation first, like the core: a malformed body is a 400 whether
+        // or not the id happens to exist.
+        const fields = validatePersona((a.body ?? {}) as AnyRecord);
+        const persona = PERSONAS.find((p) => p.id === a.id);
+        if (!persona) return null;
+        Object.assign(persona, fields, { updated_at: now() });
+        return { ...persona };
+      }
+      case "delete_persona": {
+        const i = PERSONAS.findIndex((p) => p.id === a.id);
+        if (i < 0) return false;
+        PERSONAS.splice(i, 1);
+        // Same self-healing as the core's delete transaction: chats that used
+        // it go back to inheriting, and the global default is cleared if it
+        // was this one.
+        for (const s of SESSIONS) {
+          if (s.persona_id === a.id) {
+            s.persona_mode = "inherit";
+            s.persona_id = null;
+          }
+        }
+        if (activePersonaId === a.id) activePersonaId = null;
+        return true;
+      }
+      case "active_persona":
+        // Reading heals a dangling id, exactly as `persona::active` does.
+        return { id: activeMockPersona()?.id ?? null };
+      case "set_active_persona": {
+        // `null` is the one spelling of "clear"; an empty string names no
+        // persona and is refused like any other unknown id.
+        const id = (a.id as string | null | undefined) ?? null;
+        if (id !== null && !PERSONAS.some((p) => p.id === id)) return false;
+        activePersonaId = id;
+        return true;
+      }
+      case "set_session_persona": {
+        const body = (a.body ?? {}) as AnyRecord;
+        const mode = String(body.mode ?? "");
+        if (!["inherit", "none", "persona"].includes(mode)) {
+          // The real core rejects this while deserializing the body; the
+          // wording differs, the 400 does not.
+          throw new Error(`unknown persona mode "${mode}"`);
+        }
+        if (mode === "persona" && body.persona_id == null) {
+          throw new Error('persona mode "persona" needs a persona_id');
+        }
+        // The persona is checked before the session, same as the core.
+        const personaId = mode === "persona" ? String(body.persona_id) : null;
+        if (personaId !== null && !PERSONAS.some((p) => p.id === personaId)) {
+          return "unknown_persona";
+        }
+        const session = SESSIONS.find((s) => s.id === a.id);
+        if (!session) return "unknown_session";
+        if (personaId !== null) {
+          session.persona_mode = "persona";
+          session.persona_id = personaId;
+        } else {
+          session.persona_mode = mode;
+          session.persona_id = null;
+        }
+        return "stored";
+      }
+      case "effective_persona":
+        return resolvePersona((a.sessionId as string | null) ?? null);
       case "list_documents":
         return DOCUMENTS.filter((d) => d.session_id === a.sessionId).map((d) => ({ ...d }));
       case "attach_document": {

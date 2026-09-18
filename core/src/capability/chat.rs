@@ -12,7 +12,7 @@ use serde_json::Value;
 use tokio::sync::{mpsc, watch};
 
 use crate::db::{Database, EventLevel};
-use crate::runtime::{GenerationEvent, LlamaCppAdapter};
+use crate::runtime::{GenerationEvent, GenerationOptions, LlamaCppAdapter};
 use crate::{CoreError, Result};
 
 /// How often the growing answer is flushed to `jobs.result`.
@@ -31,6 +31,9 @@ fn chat_err(msg: impl std::fmt::Display) -> CoreError {
 pub struct ChatRequest {
     pub prompt: String,
     pub max_tokens: i32,
+    /// This is a Prompt Assistant completion (`params.assistant_for`), not a
+    /// chat turn the user typed — see the persona note in [`run`].
+    pub is_assistant: bool,
 }
 
 impl ChatRequest {
@@ -48,7 +51,15 @@ impl ChatRequest {
             .filter(|n| *n > 0)
             .and_then(|n| i32::try_from(n).ok())
             .unwrap_or(DEFAULT_MAX_TOKENS);
-        Ok(Self { prompt, max_tokens })
+        // The marker the UI's Prompt Assistant stamps on its completions
+        // (`assistant_for: "image" | "video" | "edit" | "narrate"`). Only its
+        // presence matters here; which surface asked is the UI's business.
+        let is_assistant = params.get("assistant_for").is_some();
+        Ok(Self {
+            prompt,
+            max_tokens,
+            is_assistant,
+        })
     }
 }
 
@@ -95,13 +106,35 @@ pub async fn run(
         )
         .await?;
 
+    // The Prompt Assistant (Image/Video/Voice's "talk through what you want")
+    // submits plain `chat` jobs too, but its answer is machine-read for
+    // `PROMPT:` / `NEGATIVE:` marker lines, and it is submitted from tabs the
+    // persona was never chosen from. A persona's system prompt ("answer only in
+    // rhyme") could easily break that parse in a surface the user never picked a
+    // voice for, so these completions stay persona-free: no system message, no
+    // `persona` job params, no `persona:` event.
+    let system = if req.is_assistant {
+        None
+    } else {
+        crate::persona::prepare_for_job(db, job_id, session_id).await?
+    };
     let prompt = ground_prompt(db, job_id, session_id, &req.prompt).await?;
 
     let (tx, mut rx) = mpsc::channel::<GenerationEvent>(64);
     let stream = tokio::spawn({
         let llama = Arc::clone(llama);
         let max_tokens = req.max_tokens;
-        async move { llama.stream_completion(&prompt, max_tokens, tx).await }
+        // No persona → `GenerationOptions::default()`, which serialises to
+        // exactly the request body this path has always sent.
+        let opts = match &system {
+            Some(system) => GenerationOptions::with_system(system),
+            None => GenerationOptions::default(),
+        };
+        async move {
+            llama
+                .stream_completion_with(&prompt, max_tokens, &opts, tx)
+                .await
+        }
     });
 
     let mut answer = String::new();
@@ -212,6 +245,21 @@ mod tests {
 
         let d = ChatRequest::from_params(&serde_json::json!({ "prompt": "hi" })).unwrap();
         assert_eq!(d.max_tokens, DEFAULT_MAX_TOKENS);
+    }
+
+    #[test]
+    fn chat_request_reads_the_prompt_assistant_marker() {
+        let plain = ChatRequest::from_params(&serde_json::json!({ "prompt": "hi" })).unwrap();
+        assert!(!plain.is_assistant);
+
+        for kind in ["image", "video", "edit", "narrate"] {
+            let assistant = ChatRequest::from_params(&serde_json::json!({
+                "prompt": "hi",
+                "assistant_for": kind
+            }))
+            .unwrap();
+            assert!(assistant.is_assistant, "assistant_for: {kind}");
+        }
     }
 
     #[test]

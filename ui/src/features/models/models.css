@@ -858,6 +858,8 @@
   font-size: var(--text-xs);
 }
 
+/* Element + class outranks the shared `.muted`, whose `--text-sm` would otherwise win by source order. */
+p.filelist__hidden,
 .filelist__hidden {
   margin: 0;
   font-size: var(--text-xs);

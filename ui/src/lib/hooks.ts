@@ -2,10 +2,12 @@ import { useCallback, useEffect, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import {
   about,
+  activePersona,
   benchmarkHistory,
   characterLog,
   civitaiSearch,
   civitaiStatus,
+  effectivePersona,
   getRecentLogs,
   getRuntimes,
   getTelemetry,
@@ -29,6 +31,7 @@ import {
   listLocations,
   listModelStacks,
   listNpcs,
+  listPersonas,
   listScenes,
   listStories,
   externalEngines,
@@ -47,6 +50,7 @@ import {
   storageReport,
   trainerStatus,
   type AboutInfo,
+  type ActivePersona,
   type Agent,
   type AgentRuntime,
   type Benchmark,
@@ -61,6 +65,7 @@ import {
   type DatasetFrame,
   type Document,
   type Download,
+  type EffectivePersona,
   type ExternalEngine,
   type Job,
   type JobProgress,
@@ -68,6 +73,7 @@ import {
   type LaunchInfo,
   type LocalApiStatus,
   type Npc,
+  type Persona,
   type RegistryStatus,
   type SceneDetail,
   type StorageReport,
@@ -354,6 +360,35 @@ export function usePinnedModels() {
 /** Sessions for one capability (Chat/Image/Video "projects"), active first. */
 export const useSessions = (capability: SessionCapability) =>
   usePolled<Session[]>(`sessions:${capability}`, () => listSessions(capability), 3000);
+
+// --- personas ------------------------------------------------------------
+//
+// All three are polled rather than fetched once: a persona can be created,
+// renamed or deleted from the manage dialog while the chip and the menu are
+// on screen, and `set_active_persona` / `set_session_persona` change what the
+// chip says. Every mutation calls `refetch` itself, so the poll is only the
+// backstop — hence the slow intervals, and the caller-chosen one below.
+
+/** Every saved persona, for the menu and the manage dialog. The caller passes
+ *  a long interval while neither is open (changing it re-fetches, so the data
+ *  is fresh the moment they are). */
+export const usePersonas = (intervalMs = 5000) =>
+  usePolled<Persona[]>("personas", listPersonas, intervalMs);
+
+/** The globally active persona's id (`{ id: null }` = none). Same
+ *  caller-chosen cadence as {@link usePersonas}. */
+export const useActivePersona = (intervalMs = 5000) =>
+  usePolled<ActivePersona>("active-persona", activePersona, intervalMs);
+
+/** The persona that would answer in this session right now, resolved by the
+ *  core (session override first, then the global default). `null` session =
+ *  "Ungrouped", where only the global default applies. */
+export const useEffectivePersona = (sessionId: string | null) =>
+  usePolled<EffectivePersona>(
+    `effective-persona:${sessionId ?? ""}`,
+    () => effectivePersona(sessionId),
+    4000,
+  );
 
 /** Saved Dia voice-cloning identities (Voice tab) — set up once, reused by
  *  name across many narration calls. */

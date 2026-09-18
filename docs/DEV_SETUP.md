@@ -91,6 +91,17 @@ dort als Unterordner); `tauri.conf.json`s `beforeDevCommand` (`pnpm dev`,
 Die Loopback-API läuft bei allen Varianten auf `http://127.0.0.1:48160`
 (`GET /about /telemetry /jobs /runtimes /logs`, `GET /ws` Telemetrie-Stream).
 
+Chat-Personas (2026-09-18) hängen an denselben Port; jede Route hat ihr
+Gegenstück als Tauri-Command (`ui/src/lib/ipc.ts`):
+
+| Route | Zweck |
+|---|---|
+| `GET /personas` · `POST /personas` | Liste · anlegen (`{name, icon, system_prompt}`) |
+| `PUT /personas/{id}` · `DELETE /personas/{id}` | überschreiben · löschen (räumt Verweise mit auf) |
+| `GET /personas/active` · `PUT /personas/active` | global aktive Persona (`{"id": …}`; `{"id": null}` = keine, fehlender Schlüssel = 422) |
+| `GET /personas/effective?session_id=…` | die *wirksame* Persona + Herkunft (`session` / `global` / `none`); ohne `session_id` = „Ungrouped" |
+| `PUT /sessions/{id}/persona` | Override dieses Chats (`{"mode": "inherit"\|"none"\|"persona", "persona_id"?}`) |
+
 **Datenablage ist portabel (ADR-026):** `config.toml`, `aiwm.db`, `logs/`,
 generierte Bilder/Videos, verwaltete Laufzeit-Installationen (llama.cpp,
 ComfyUI) und der Registry-Cache landen standardmäßig unter `<repo>\data\` —

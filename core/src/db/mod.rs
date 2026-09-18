@@ -13,6 +13,7 @@ mod documents;
 mod downloads;
 mod jobs;
 mod models;
+mod personas;
 mod runtimes;
 mod sessions;
 mod settings;
@@ -29,6 +30,7 @@ pub use documents::{Document, DocumentChunk, DocumentRepo, NewDocument};
 pub use downloads::{Download, DownloadRepo, DownloadState, NewDownload};
 pub use jobs::{EventLevel, Job, JobEvent, JobFilter, JobPatch, JobRepo, NewJob};
 pub use models::{Model, ModelLink, ModelRepo, NewModel};
+pub use personas::{Persona, PersonaMode, PersonaRepo, ACTIVE_PERSONA_KEY};
 pub use runtimes::{state as runtime_state, RuntimeRecord, RuntimeRepo};
 pub use sessions::{Session, SessionRepo};
 pub use settings::SettingsRepo;
@@ -119,6 +121,10 @@ impl Database {
         SessionRepo::new(&self.pool)
     }
 
+    pub fn personas(&self) -> PersonaRepo<'_> {
+        PersonaRepo::new(&self.pool)
+    }
+
     pub fn documents(&self) -> DocumentRepo<'_> {
         DocumentRepo::new(&self.pool)
     }
@@ -173,6 +179,13 @@ impl Database {
 
     pub fn training_runs(&self) -> TrainingRunRepo<'_> {
         TrainingRunRepo::new(&self.pool)
+    }
+
+    /// The raw pool, for crate-internal tests that need to set up state no repo
+    /// method can produce on purpose (e.g. a deliberately stale reference).
+    #[cfg(test)]
+    pub(crate) fn pool(&self) -> &SqlitePool {
+        &self.pool
     }
 
     /// Names of the application tables (excludes SQLite internals). Test helper.

@@ -31,7 +31,37 @@ fn colibri_job(prompt: &str, model_id: &str) -> NewJob {
 struct Harness {
     db: Database,
     engine: Arc<JobEngine>,
+    colibri: Arc<ColibriAdapter>,
     _tmp: tempfile::TempDir,
+}
+
+impl Harness {
+    /// The body of the last `/v1/chat/completions` the fixture served —
+    /// fake-colibri's test-only `GET /__test/last_request`.
+    async fn last_request(&self) -> serde_json::Value {
+        let base = self.colibri.base_url().expect("a loaded fake server");
+        reqwest::get(format!("{base}/__test/last_request"))
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap()
+    }
+}
+
+/// The chat messages the fixture last received, as `(role, content)` pairs.
+fn messages(body: &serde_json::Value) -> Vec<(String, String)> {
+    body["messages"]
+        .as_array()
+        .expect("a messages array")
+        .iter()
+        .map(|m| {
+            (
+                m["role"].as_str().unwrap_or_default().to_string(),
+                m["content"].as_str().unwrap_or_default().to_string(),
+            )
+        })
+        .collect()
 }
 
 async fn harness() -> Harness {
@@ -74,6 +104,7 @@ async fn harness() -> Harness {
         db.clone(),
         Some(fake_colibri_bin()),
     ));
+    let probe = colibri.clone();
     registry.register(colibri.clone());
 
     let scheduler = Arc::new(HybridScheduler::new(registry.clone(), 16_384));
@@ -92,8 +123,48 @@ async fn harness() -> Harness {
     Harness {
         db,
         engine,
+        colibri: probe,
         _tmp: tmp,
     }
+}
+
+/// Personas are not a llama.cpp-only feature: a Colibri chat gets the same
+/// system message in front of the user message, and the same `persona` record
+/// in its job params.
+#[tokio::test]
+async fn a_global_persona_reaches_a_colibri_chat() {
+    let h = harness().await;
+    let model_id = h.db.models().list().await.unwrap()[0].id.clone();
+    let p = aiwm_core::persona::create(&h.db, "Blunt", "🪓", "Answer in at most three sentences.")
+        .await
+        .unwrap();
+    aiwm_core::persona::set_active(&h.db, Some(&p.id))
+        .await
+        .unwrap();
+
+    let job = h
+        .engine
+        .submit(colibri_job("Hello there", &model_id))
+        .await
+        .unwrap();
+    h.engine.run_next().await.unwrap().unwrap();
+
+    assert_eq!(
+        messages(&h.last_request().await),
+        [
+            (
+                "system".to_string(),
+                "Answer in at most three sentences.".to_string()
+            ),
+            ("user".to_string(), "Hello there".to_string()),
+        ],
+        "the system message must come first"
+    );
+
+    let stored = h.db.jobs().get(&job.id).await.unwrap().unwrap();
+    assert_eq!(stored.params["persona"]["id"], p.id);
+    assert_eq!(stored.params["persona"]["name"], "Blunt");
+    assert_eq!(stored.params["persona"]["icon"], "🪓");
 }
 
 #[tokio::test]

@@ -88,6 +88,7 @@ pub async fn run(
     db: &Database,
     colibri: &Arc<ColibriAdapter>,
     job_id: &str,
+    session_id: Option<&str>,
     model: &Model,
     req: ColibriChatRequest,
     mut cancel: watch::Receiver<bool>,
@@ -119,12 +120,25 @@ pub async fn run(
         )
         .await?;
 
+    // Colibri speaks the same OpenAI-compatible `messages` array llama.cpp
+    // does, so a persona works here exactly as it does in `capability::chat`.
+    //
+    // No `is_assistant` guard is needed on this path (unlike `capability::chat`,
+    // which must keep Prompt Assistant completions persona-free): the Prompt
+    // Assistant only ever submits `job_type: "chat"`, on `llamacpp` or on Auto,
+    // so an `assistant_for` job can never reach this body.
+    let system = crate::persona::prepare_for_job(db, job_id, session_id).await?;
+
     let (tx, mut rx) = mpsc::channel::<GenerationEvent>(64);
     let stream = tokio::spawn({
         let colibri = Arc::clone(colibri);
         let prompt = req.prompt.clone();
         let max_tokens = req.max_tokens;
-        async move { colibri.stream_completion(&prompt, max_tokens, tx).await }
+        async move {
+            colibri
+                .stream_completion_with(&prompt, max_tokens, system.as_deref(), tx)
+                .await
+        }
     });
 
     let mut answer = String::new();

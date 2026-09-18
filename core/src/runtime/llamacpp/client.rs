@@ -51,6 +51,15 @@ pub struct GenerationOptions {
     /// `Some(false)` turns off the server's prompt-cache reuse, so the prefill
     /// is really measured; `None` leaves the server's default.
     pub cache_prompt: Option<bool>,
+    /// A system message to put in front of the user message — a resolved
+    /// persona's prompt ([`crate::persona`]). `None` (and a blank string) send
+    /// the user message alone, exactly as before personas existed.
+    ///
+    /// It lives here rather than as a `chat_body` parameter on purpose: every
+    /// existing call site keeps working unchanged, and the one caller that wants
+    /// a system message says so in the same place it already says everything
+    /// else about the generation.
+    pub system: Option<String>,
 }
 
 impl GenerationOptions {
@@ -62,6 +71,16 @@ impl GenerationOptions {
             temperature: Some(0.0),
             seed: Some(0),
             cache_prompt: Some(false),
+            system: None,
+        }
+    }
+
+    /// Just a system message on top of the server's defaults — what the chat
+    /// capability builds for a resolved persona.
+    pub fn with_system(system: impl Into<String>) -> Self {
+        Self {
+            system: Some(system.into()),
+            ..Self::default()
         }
     }
 }
@@ -69,8 +88,21 @@ impl GenerationOptions {
 /// The `/v1/chat/completions` request body. Kept in one place so the default
 /// shape can be pinned by a test.
 fn chat_body(prompt: &str, max_tokens: i32, opts: &GenerationOptions, stream: bool) -> Value {
+    // A system message (a resolved persona's prompt) goes first; with none, the
+    // array holds exactly the single user message it always held.
+    let mut messages: Vec<Value> = Vec::with_capacity(2);
+    if let Some(system) = opts
+        .system
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        messages.push(serde_json::json!({ "role": "system", "content": system }));
+    }
+    messages.push(serde_json::json!({ "role": "user", "content": prompt }));
+
     let mut body = serde_json::json!({
-        "messages": [{ "role": "user", "content": prompt }],
+        "messages": messages,
         "max_tokens": max_tokens,
         "stream": stream,
     });
@@ -420,6 +452,38 @@ mod tests {
             body,
             r#"{"max_tokens":128,"messages":[{"content":"hi","role":"user"}],"stream":true}"#
         );
+    }
+
+    /// A persona's system prompt rides in front of the user message and changes
+    /// nothing else about the body — pinned next to the default above so the two
+    /// shapes can be compared at a glance.
+    #[test]
+    fn a_system_prompt_becomes_the_first_message() {
+        let opts = GenerationOptions {
+            system: Some("Answer in at most three sentences.".into()),
+            ..GenerationOptions::default()
+        };
+        let body = serde_json::to_string(&chat_body("hi", 128, &opts, true)).unwrap();
+        assert_eq!(
+            body,
+            r#"{"max_tokens":128,"messages":[{"content":"Answer in at most three sentences.","role":"system"},{"content":"hi","role":"user"}],"stream":true}"#
+        );
+    }
+
+    /// A present-but-blank system prompt must not add an empty system message —
+    /// that would change the request for no reason.
+    #[test]
+    fn a_blank_system_prompt_keeps_the_default_body() {
+        for system in ["", "   \n "] {
+            let opts = GenerationOptions {
+                system: Some(system.into()),
+                ..GenerationOptions::default()
+            };
+            assert_eq!(
+                serde_json::to_string(&chat_body("hi", 128, &opts, true)).unwrap(),
+                r#"{"max_tokens":128,"messages":[{"content":"hi","role":"user"}],"stream":true}"#
+            );
+        }
     }
 
     #[test]

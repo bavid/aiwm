@@ -56,6 +56,32 @@ impl<'a> SettingsRepo<'a> {
         Ok(result.rows_affected() > 0)
     }
 
+    /// Remove the key entirely. Absent already → nothing to do, not an error.
+    /// "Unset" is a missing row, never an empty value, so
+    /// [`all`](Self::all) and every reader see the same thing.
+    pub async fn clear(&self, key: &str) -> Result<()> {
+        sqlx::query("DELETE FROM settings WHERE key = $1")
+            .bind(key)
+            .execute(self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// Compare-and-clear: remove the key only while it still holds `expected`.
+    /// A reader that finds a stale value and cleans it up must use this rather
+    /// than [`clear`](Self::clear) — between the read and the write someone may
+    /// have stored a perfectly good value, and an unconditional delete would
+    /// throw it away. Returns whether a row was removed.
+    pub async fn clear_if(&self, key: &str, expected: &str) -> Result<bool> {
+        let affected = sqlx::query("DELETE FROM settings WHERE key = $1 AND value = $2")
+            .bind(key)
+            .bind(expected)
+            .execute(self.pool)
+            .await?
+            .rows_affected();
+        Ok(affected > 0)
+    }
+
     pub async fn all(&self) -> Result<BTreeMap<String, String>> {
         let rows: Vec<(String, String)> =
             sqlx::query_as("SELECT key, value FROM settings ORDER BY key")
@@ -115,6 +141,41 @@ mod tests {
                 .as_deref(),
             Some("1")
         );
+    }
+
+    #[tokio::test]
+    async fn clear_removes_the_row_and_is_idempotent() {
+        let db = Database::connect_in_memory().await.unwrap();
+        db.settings().set("k", "v").await.unwrap();
+
+        db.settings().clear("k").await.unwrap();
+        assert_eq!(db.settings().get("k").await.unwrap(), None);
+        assert!(db.settings().all().await.unwrap().is_empty());
+
+        // Clearing an absent key is a no-op, not an error.
+        db.settings().clear("k").await.unwrap();
+    }
+
+    /// The compare-and-clear a self-healing reader needs: only remove the key
+    /// if it still holds the stale value the caller saw, so a value written
+    /// concurrently is never clobbered.
+    #[tokio::test]
+    async fn clear_if_only_removes_a_matching_value() {
+        let db = Database::connect_in_memory().await.unwrap();
+        db.settings().set("k", "A").await.unwrap();
+
+        db.settings().clear_if("k", "B").await.unwrap();
+        assert_eq!(
+            db.settings().get("k").await.unwrap().as_deref(),
+            Some("A"),
+            "a non-matching value must survive"
+        );
+
+        db.settings().clear_if("k", "A").await.unwrap();
+        assert_eq!(db.settings().get("k").await.unwrap(), None);
+
+        // Absent key → no-op, not an error.
+        db.settings().clear_if("k", "A").await.unwrap();
     }
 
     #[tokio::test]

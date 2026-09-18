@@ -7,9 +7,14 @@
 //! the real launcher does. Not part of the shipped product; it exists so the
 //! spawn (via `cmd.exe /C coli.cmd ...`) / health / stream / stop cycle can be
 //! exercised without the real ~4.3 MB download plus a multi-GB model.
+//!
+//! One test-only extra the real server does not have, mirroring fake-llama's:
+//! `GET /__test/last_request` returns the last `/v1/chat/completions` body, so a
+//! test can assert *what* was asked for (e.g. a persona's system message).
 
 use std::convert::Infallible;
 use std::net::Ipv4Addr;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use axum::extract::State;
@@ -24,6 +29,8 @@ use serde_json::{json, Value};
 #[derive(Clone)]
 struct Fixture {
     api_key: String,
+    /// Last `/v1/chat/completions` body, for `GET /__test/last_request`.
+    last_request: Arc<Mutex<Option<Value>>>,
 }
 
 #[tokio::main]
@@ -40,11 +47,13 @@ async fn main() -> anyhow::Result<()> {
 
     let state = Fixture {
         api_key: std::env::var("COLI_API_KEY").unwrap_or_default(),
+        last_request: Arc::new(Mutex::new(None)),
     };
 
     let app = Router::new()
         .route("/health", get(health))
         .route("/v1/chat/completions", post(chat_completions))
+        .route("/__test/last_request", get(last_request))
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, port)).await?;
@@ -72,6 +81,10 @@ async fn chat_completions(
         .unwrap_or("");
     if auth != format!("Bearer {}", fx.api_key) {
         return StatusCode::UNAUTHORIZED.into_response();
+    }
+
+    if let Ok(mut slot) = fx.last_request.lock() {
+        *slot = Some(body.0.clone());
     }
 
     let prompt = body
@@ -105,4 +118,16 @@ async fn chat_completions(
     let done = stream::once(async { Ok(Event::default().data("[DONE]")) });
 
     Sse::new(tokens.chain(finish).chain(done)).into_response()
+}
+
+/// The last chat-completion body the fixture served, or `null` before the first
+/// one — test-only, no equivalent on the real server.
+async fn last_request(State(fx): State<Fixture>) -> Json<Value> {
+    let body = fx
+        .last_request
+        .lock()
+        .ok()
+        .and_then(|slot| slot.clone())
+        .unwrap_or(Value::Null);
+    Json(body)
 }
