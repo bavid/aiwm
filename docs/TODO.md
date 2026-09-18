@@ -1327,9 +1327,44 @@ ist Backlog für spätere Slices, absteigend nach Aufwand geordnet:
   getrennter, persistenter Fakten-Speicher (typisiert, Keyword-Retrieval),
   den jede neue Session mit einbezieht. Eigener Slice, braucht eigenes
   Datenmodell + Retrieval-Strategie-Entscheidung.
-- **Personas** — einfache Presets (Name/Icon/System-Prompt), global aktiv +
-  Override pro Chat. Klein genug für einen direkten Port, wenn Chat mal
-  wieder dran ist.
+- **Personas** — ✅ umgesetzt (2026-09-18). Presets aus Name, Icon (ein Emoji)
+  und System-Prompt: neue Tabelle `personas` plus `sessions.persona_mode`
+  (`inherit` · `none` · `persona`) und `sessions.persona_id` (Migration `0018`,
+  rein additiv), global aktive Persona als Settings-Schlüssel
+  `chat.active_persona_id`. **Aufgelöst wird serverseitig beim Job-Start**, nicht
+  im Client: Session-Override schlägt die globale Wahl, `none` heißt ausdrücklich
+  „keine", sonst gilt die globale. Eine verwaiste Id heilt sich unterwegs selbst
+  (bedingtes Clear, damit eine gleichzeitig getroffene Wahl nicht überschrieben
+  wird; heilt der Heal keine Zeile, wurde die Session gerade umgehängt und die
+  frisch gelesene Zeile gewinnt) — ein Chat scheitert nie an einer gelöschten
+  Persona. Der System-Prompt geht **unverändert** als System-Nachricht vor die
+  User-Nachricht (das Tool filtert nichts; Grenzen nur technisch: Name 1–60
+  Zeichen, Icon ≤ 64 Bytes, Prompt 1–8000 Zeichen); **ohne** Persona ist der
+  Request byte-identisch zu vorher (angenagelter Test bleibt grün). Der Job
+  schreibt `persona: {id, name, icon}` in seine Params zurück und setzt ein
+  Info-Event `persona: <icon> <name>`, damit der Verlauf auch nach Umbenennen
+  oder Löschen zeigt, wer geantwortet hat. UI: Persona-Chip mit Herkunft
+  („global" / „dieser Chat"), Menü und Verwalten-Dialog (Vorlagen, Bearbeiten,
+  Löschen mit Bestätigung) im Chat-Tab, Persona-Marke an jeder Antwort. Gilt für
+  llama.cpp- **und** Colibri-Chats (beide Clients tragen die System-Nachricht);
+  Agents, Story Studio, Benchmarks bleiben unberührt. Routen siehe
+  [DEV_SETUP.md](DEV_SETUP.md).
+  **Echter Lauf (2026-09-18, RTX 4080 SUPER, Mistral-Small-3.2-24B IQ3_M,
+  dreimal dieselbe Frage „In one sentence, what is a compiler?"):** mit globaler
+  Persona „🏴‍☠️ Pirate" (`origin: global`) → „*Arrr, a compiler be the scurvy
+  dog that turns me code into machine language, savvy? Arr!*"; mit
+  Session-Override `none` (`origin: none`) → „*A compiler is a program that
+  translates code written in a high-level programming language into machine code
+  for execution.*"; ohne Persona überhaupt (globaler Schlüssel geleert, Session
+  zurück auf `inherit`) → **wortgleich** dieselbe Antwort wie mit `none`, und
+  ohne `persona` in den Job-Params und ohne Persona-Event. Die Persona
+  anschließend gelöscht, während der Chat per `mode: persona` auf sie zeigte →
+  `GET /sessions` zeigt ihn sofort wieder auf `inherit`, der globale Schlüssel
+  ist leer, und der vierte Chat lief normal durch.
+  **Offen:** mehrstufiger Gesprächsverlauf (der Chat schickt weiterhin nur die
+  aktuelle Nachricht — siehe „Kompaktions-Records für lange Chats" oben),
+  Personas für Agents/Story Studio, Import/Export, Variablen/Platzhalter im
+  Prompt, `eslint-plugin-jsx-a11y` für die neuen Dialoge.
 - **Chatbot-Import (ChatGPT/Claude/Gemini-Export) → RAG statt Chat-Verlauf**
   — importierter Fremd-Verlauf wird als durchsuchbarer Kontext behandelt,
   nicht als eigene Chat-Session. Braucht AIWMs Dokument-RAG-Pipeline als
