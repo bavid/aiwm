@@ -8,10 +8,13 @@
 #![allow(unsafe_code, clippy::unwrap_used, clippy::expect_used)]
 
 use std::io::{BufRead, BufReader};
+use std::net::TcpListener;
 use std::os::windows::process::CommandExt;
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
+
+use aiwm_core::config::DEFAULT_API_PORT;
 
 const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
 const CTRL_BREAK_EVENT: u32 = 1;
@@ -22,11 +25,37 @@ extern "system" {
 
 #[test]
 fn boots_and_shuts_down_cleanly_on_ctrl_break() {
+    boot_then_ctrl_break();
+}
+
+/// The desktop app holds the default API port while it runs; the test
+/// daemon must not depend on it being free. If something else already has
+/// 48160 the bind fails, which proves the same thing.
+#[test]
+fn boots_and_shuts_down_cleanly_while_the_default_port_is_taken() {
+    let _held = TcpListener::bind(("127.0.0.1", DEFAULT_API_PORT)).ok();
+    boot_then_ctrl_break();
+}
+
+/// A loopback port nothing is listening on right now: bind port 0, read what
+/// the OS handed out, and release it again for the daemon to take.
+fn free_loopback_port() -> u16 {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind an ephemeral port");
+    listener
+        .local_addr()
+        .expect("ephemeral port address")
+        .port()
+}
+
+fn boot_then_ctrl_break() {
     let data_dir = tempfile::tempdir().unwrap();
 
+    // The port goes to the child only — never set process-wide, because the
+    // config-default tests expect `AIWM_CORE_API_PORT` to be unset.
     let mut child = Command::new(env!("CARGO_BIN_EXE_aiwm-cored"))
         .env("AIWM_DATA_DIR", data_dir.path())
         .env("AIWM_LOG", "info")
+        .env("AIWM_CORE_API_PORT", free_loopback_port().to_string())
         .creation_flags(CREATE_NEW_PROCESS_GROUP)
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
