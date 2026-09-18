@@ -271,6 +271,12 @@ export interface Session {
   created_at: string;
   /** `null` = active (shown in the switcher); set = archived. */
   archived_at: string | null;
+  /** How this chat picks its persona — `"inherit"` for every session that
+   *  predates personas. */
+  persona_mode: PersonaMode;
+  /** Only meaningful with `persona_mode: "persona"`. May name a persona that
+   *  has since been deleted; the core heals that on the next resolve. */
+  persona_id: string | null;
 }
 
 export interface NewSessionBody {
@@ -364,6 +370,95 @@ export const listDocuments = (sessionId: string) =>
 export const attachDocument = (sessionId: string, path: string) =>
   invoke<Document>("attach_document", { sessionId, path });
 export const deleteDocument = (id: string) => invoke<void>("delete_document", { id });
+
+// --- personas -----------------------------------------------------------
+
+/** A named preset the chat job prepends as a system prompt (spec
+ *  `2026-09-18-personas-design`). One can be active globally; a chat session
+ *  can override it with another one or with "none". */
+export interface Persona {
+  id: string;
+  name: string;
+  /** One emoji. */
+  icon: string;
+  /** Passed to the model verbatim — the tool applies no content filter. */
+  system_prompt: string;
+  created_at: string;
+  updated_at: string;
+}
+
+/** The three editable fields, for create and update alike. The core trims
+ *  them and rejects (400) a name outside 1–60 characters, an empty icon or one
+ *  over 16 bytes, and a prompt outside 1–8000 characters. */
+export interface PersonaBody {
+  name: string;
+  icon: string;
+  system_prompt: string;
+}
+
+/** How a chat session picks its persona: follow the global default, opt out
+ *  entirely, or use `persona_id`. */
+export type PersonaMode = "inherit" | "none" | "persona";
+
+/** Where the resolved persona came from. `"none"` covers both "nothing is set"
+ *  and "this chat opted out" — tell them apart via `Session.persona_mode`. */
+export type PersonaOrigin = "session" | "global" | "none";
+
+/** The persona a chat will actually use, resolved by the core so the UI never
+ *  re-implements the rule. */
+export interface EffectivePersona {
+  persona: Persona | null;
+  origin: PersonaOrigin;
+}
+
+/** The globally active persona's id, or `null` for "no global persona". */
+export interface ActivePersona {
+  id: string | null;
+}
+
+/** `"stored"`, or which of the two ids was unknown (the HTTP twin's 404s). */
+export type SessionPersonaOutcome = "stored" | "unknown_session" | "unknown_persona";
+
+/** What a chat job records about the persona that answered it — stamped into
+ *  the job's params by the core at run time, so the history still shows it
+ *  after the persona has been renamed or deleted. */
+export interface PersonaMark {
+  id: string;
+  name: string;
+  icon: string;
+}
+
+/** The persona stamped into a finished (or running) chat job's params, or
+ *  `null` when that job ran without one. */
+export function personaOf(job: Job): PersonaMark | null {
+  const p = job.params;
+  if (!p || typeof p !== "object") return null;
+  const mark = (p as { persona?: unknown }).persona;
+  if (!mark || typeof mark !== "object") return null;
+  const { id, name, icon } = mark as { id?: unknown; name?: unknown; icon?: unknown };
+  if (typeof id !== "string" || typeof name !== "string" || typeof icon !== "string") return null;
+  return { id, name, icon };
+}
+
+export const listPersonas = () => invoke<Persona[]>("list_personas");
+/** Rejects with the core's own message when a limit is violated. */
+export const createPersona = (body: PersonaBody) => invoke<Persona>("create_persona", { body });
+/** `null` = no such persona. */
+export const updatePersona = (id: string, body: PersonaBody) =>
+  invoke<Persona | null>("update_persona", { id, body });
+/** `false` = no such persona. Sessions pointing at a deleted persona fall back
+ *  to `inherit`, and the global default is cleared if it matched. */
+export const deletePersona = (id: string) => invoke<boolean>("delete_persona", { id });
+export const activePersona = () => invoke<ActivePersona>("active_persona");
+/** `null` clears the global default. `false` = unknown id, nothing changed. */
+export const setActivePersona = (id: string | null) =>
+  invoke<boolean>("set_active_persona", { id });
+export const setSessionPersona = (id: string, body: { mode: PersonaMode; persona_id?: string }) =>
+  invoke<SessionPersonaOutcome>("set_session_persona", { id, body });
+/** The persona that would answer right now. `null` session = "Ungrouped",
+ *  where only the global default applies. */
+export const effectivePersona = (sessionId: string | null) =>
+  invoke<EffectivePersona>("effective_persona", { sessionId });
 
 /** A saved Dia voice-cloning identity — a reference clip + its own transcript,
  *  set up once under a name (e.g. "Old Man Gareth") and reused across many

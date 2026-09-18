@@ -11,12 +11,15 @@ import {
   deleteJob,
   jobDetail,
   jobOutputUrl,
+  personaOf,
   renameSession,
   submitJob,
   type Job,
   type JobEvent,
   type JobState,
+  type PersonaMark,
 } from "../../lib/ipc";
+import { PersonaControls } from "./personas/PersonaControls";
 import "./chat.css";
 
 type TurnKind = "text" | "image" | "video";
@@ -30,6 +33,10 @@ type Turn = {
   model: string | null;
   stats: string | null;
   error: string | null;
+  /** Which persona answered, from the job's own params -- the core stamps it
+   *  in when the job starts, so it survives renaming or deleting the persona
+   *  and is still there when this history is re-read weeks later. */
+  persona: PersonaMark | null;
 };
 
 const DONE: JobState[] = ["completed", "failed", "cancelled"];
@@ -157,6 +164,7 @@ export function Chat() {
           model: j.model_id ? (modelNames.get(j.model_id) ?? j.model_id) : null,
           stats: null,
           error: j.error_text,
+          persona: personaOf(j),
         }),
       );
     setTurns(history);
@@ -187,6 +195,9 @@ export function Chat() {
                   t.model,
                 stats: statsFromEvents(events) ?? t.stats,
                 error: job.error_text,
+                // Resolved server-side once the job starts, so it lands a
+                // poll tick or two after the turn itself.
+                persona: personaOf(job) ?? t.persona,
               }
             : t,
         ),
@@ -279,6 +290,7 @@ export function Chat() {
             model: turnModel,
             stats: null,
             error: null,
+            persona: null,
           },
         ]);
       } else {
@@ -305,6 +317,8 @@ export function Chat() {
             model: picked?.name ?? null,
             stats: null,
             error: null,
+            // Filled in by the poll above once the core has resolved it.
+            persona: null,
           },
         ]);
       }
@@ -331,6 +345,7 @@ export function Chat() {
       <ChatSessionSidebar activeId={sessionId} onChange={setSessionId} />
       <div className="chat">
         <div className="chat__head">
+          <PersonaControls sessionId={sessionId} />
           <select
             className="chat__model"
             value={modelId}
@@ -533,6 +548,11 @@ function ChatTurn({
       <div className="turn__meta">
         {turn.model && <span>{turn.model}</span>}
         {turn.stats && <span>· {turn.stats}</span>}
+        {turn.persona && (
+          <span className="turn__persona">
+            <span aria-hidden="true">{turn.persona.icon}</span> as {turn.persona.name}
+          </span>
+        )}
         {turn.state === "cancelled" && turn.answer && <span>· cancelled</span>}
         {running && (
           <button type="button" className="turn__cancel" onClick={onCancel}>
