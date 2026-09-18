@@ -122,6 +122,11 @@ pub async fn run(
 
     // Colibri speaks the same OpenAI-compatible `messages` array llama.cpp
     // does, so a persona works here exactly as it does in `capability::chat`.
+    //
+    // No `is_assistant` guard is needed on this path (unlike `capability::chat`,
+    // which must keep Prompt Assistant completions persona-free): the Prompt
+    // Assistant only ever submits `job_type: "chat"`, on `llamacpp` or on Auto,
+    // so an `assistant_for` job can never reach this body.
     let system = crate::persona::prepare_for_job(db, job_id, session_id).await?;
 
     let (tx, mut rx) = mpsc::channel::<GenerationEvent>(64);

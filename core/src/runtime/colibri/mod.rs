@@ -301,6 +301,16 @@ impl ColibriAdapter {
         }
     }
 
+    /// The loopback origin of the resident model's server
+    /// (`http://127.0.0.1:<port>`), or `None` when nothing is loaded — the same
+    /// accessor [`crate::runtime::LlamaCppAdapter::base_url`] offers.
+    pub fn base_url(&self) -> Option<String> {
+        match &*self.slot() {
+            Slot::Loaded { port, .. } => Some(format!("http://127.0.0.1:{port}")),
+            _ => None,
+        }
+    }
+
     /// Stream a completion from the resident model: a [`GenerationEvent`] per
     /// token chunk, then a final `Done`. Returns early if `tx`'s receiver is
     /// dropped (that is how the chat job cancels).

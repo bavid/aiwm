@@ -506,6 +506,8 @@
   font-size: var(--text-sm);
 }
 
+/* Element + class outranks the shared `.muted`, whose `--text-sm` would otherwise win by source order. */
+p.persona-form__hint,
 .persona-form__hint {
   margin: 0;
   font-size: var(--text-xs);

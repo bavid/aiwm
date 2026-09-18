@@ -960,8 +960,10 @@ function progressChatJobs(): void {
     // shape; nothing here talks to a model, so the persona's *name* is put in
     // front of the canned reply instead -- enough to see in the preview that
     // the resolution actually reached the job.
+    // Assistant jobs need no exception here: `submit_job` never stamps a
+    // persona onto them in the first place, just like the core.
     const persona = (j.params as AnyRecord)?.persona as AnyRecord | undefined;
-    const as = persona && !isAssistant ? `[as ${String(persona.name)}] ` : "";
+    const as = persona ? `[as ${String(persona.name)}] ` : "";
     j.result = isEditAssistant
       ? "Got it — that's a clear edit.\n\nPROMPT: give the subject blonde hair, keep everything else the same"
       : isAssistant
@@ -1498,9 +1500,15 @@ export function installDevMock(): void {
         const sessionId = (body.session_id as string) ?? null;
         // The core resolves the persona when the job starts and writes
         // `persona: {id,name,icon}` back over its params; the mock has no
-        // separate start, so it happens here.
+        // separate start, so it happens here. Prompt Assistant completions
+        // (`assistant_for`) are skipped, exactly as `capability::chat` skips
+        // them -- their reply is parsed for PROMPT:/NEGATIVE: markers, so no
+        // persona may reach them.
+        const isAssistantJob = !!(body.params as AnyRecord | undefined)?.assistant_for;
         const persona =
-          jobType === "chat" || jobType === "colibri" ? personaParams(sessionId) : {};
+          (jobType === "chat" || jobType === "colibri") && !isAssistantJob
+            ? personaParams(sessionId)
+            : {};
         const job = mkJob(`j-dev-${seq++}`, jobType, "running", {
           params: {
             ...resolveJobParams(jobType, (body.params ?? {}) as AnyRecord),

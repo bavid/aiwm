@@ -204,6 +204,53 @@ async fn a_global_persona_prepends_a_system_message_and_lands_in_the_job_params(
     );
 }
 
+/// A Prompt Assistant completion (Image/Video/Voice's "talk through what you
+/// want") is a `chat` job too, but its answer is parsed for `PROMPT:` /
+/// `NEGATIVE:` markers and it is submitted from tabs the persona was never
+/// chosen from. It must stay persona-free even with a global persona active.
+#[tokio::test]
+async fn a_prompt_assistant_job_stays_persona_free() {
+    let h = harness(true).await;
+    let p = persona(&h, "Blunt", "🪓", "Answer in at most three sentences.").await;
+    aiwm_core::persona::set_active(&h.db, Some(&p.id))
+        .await
+        .unwrap();
+
+    let mut job = chat_job("a moody lighthouse portrait");
+    job.params = serde_json::json!({
+        "prompt": "a moody lighthouse portrait",
+        "max_tokens": 64,
+        "assistant_for": "image"
+    });
+    let job = h.engine.submit(job).await.unwrap();
+    h.engine.run_next().await.unwrap().unwrap();
+
+    assert_eq!(
+        messages(&h.last_request().await),
+        [(
+            "user".to_string(),
+            "a moody lighthouse portrait".to_string()
+        )],
+        "no system message may reach a Prompt Assistant completion"
+    );
+
+    let stored = h.db.jobs().get(&job.id).await.unwrap().unwrap();
+    assert!(stored.params.get("persona").is_none(), "{}", stored.params);
+
+    let events: Vec<String> =
+        h.db.jobs()
+            .events(&job.id)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|e| e.message)
+            .collect();
+    assert!(
+        !events.iter().any(|m| m.starts_with("persona:")),
+        "{events:?}"
+    );
+}
+
 /// A session that opted out sends the plain single-message request even with a
 /// global persona active.
 #[tokio::test]

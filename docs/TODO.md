@@ -1347,7 +1347,12 @@ ist Backlog für spätere Slices, absteigend nach Aufwand geordnet:
   („global" / „dieser Chat"), Menü und Verwalten-Dialog (Vorlagen, Bearbeiten,
   Löschen mit Bestätigung) im Chat-Tab, Persona-Marke an jeder Antwort. Gilt für
   llama.cpp- **und** Colibri-Chats (beide Clients tragen die System-Nachricht);
-  Agents, Story Studio, Benchmarks bleiben unberührt. Routen siehe
+  Agents, Story Studio, Benchmarks bleiben unberührt. Der Prompt-Assistent
+  (Image/Video/Voice, „talk through what you want") bleibt **bewusst
+  persona-frei**: seine Antwort wird auf `PROMPT:`/`NEGATIVE:`-Zeilen geparst und
+  er wird aus Tabs abgeschickt, für die niemand eine Stimme gewählt hat — Jobs
+  mit `assistant_for` überspringen die Auflösung ganz (keine System-Nachricht,
+  keine `persona`-Params, kein Event). Routen siehe
   [DEV_SETUP.md](DEV_SETUP.md).
   **Echter Lauf (2026-09-18, RTX 4080 SUPER, Mistral-Small-3.2-24B IQ3_M,
   dreimal dieselbe Frage „In one sentence, what is a compiler?"):** mit globaler

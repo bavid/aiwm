@@ -28,7 +28,7 @@ Default-Body ist per Test byte-genau festgenagelt. Sessions: `sessions`-Tabelle
 | Nachvollziehbarkeit | Der Job schreibt `persona: { id, name, icon }` in seine aufgelösten Params zurück (wie `ImageRequest::apply_to`), damit der Verlauf zeigt, welche Persona geantwortet hat — auch nachdem sie umbenannt oder gelöscht wurde. Der Prompt-Text selbst wird nicht in den Job kopiert. |
 | Request | `chat_body` bekommt eine optionale System-Nachricht vor der User-Nachricht. Ohne Persona bleibt der Body **byte-identisch** (bestehender Test bleibt grün). RAG-Kontext bleibt in der User-Nachricht wie heute. |
 | Reichweite | Chat-Jobs über llama.cpp; Colibri-Chats ebenfalls, wenn dessen Client eine System-Nachricht tragen kann — sonst sagt die UI dort ehrlich „Persona wird von dieser Laufzeit nicht unterstützt". Agents, Story Studio, Benchmarks, Upgrade-Check: unberührt. |
-| Inhalt | Der System-Prompt wird unverändert durchgereicht (das Tool filtert nichts). Grenzen nur technisch: Name 1–60 Zeichen, Icon ≤ 8 Bytes-Grapheme (ein Emoji), Prompt 1–8000 Zeichen. |
+| Inhalt | Der System-Prompt wird unverändert durchgereicht (das Tool filtert nichts). Grenzen nur technisch: Name 1–60 Zeichen, Icon nicht leer, ≤ 64 Bytes (ein Emoji, ZWJ-Sequenzen inklusive), Prompt 1–8000 Zeichen. |
 | Vorlagen | Keine geseedeten Zeilen. Der „Neue Persona"-Dialog bietet drei Startvorlagen (knapp & direkt / Coding-Partner / geduldiger Tutor) als reine UI-Konstanten an. |
 
 ## Abschnitt 1 — Core
