@@ -1579,6 +1579,34 @@ Bild-/Video-Benchmarks, Netz-Leaderboards. Die App bleibt offline-first
   (das HTTP-Zwilling hat Tests) — ein Smoke-Schritt, der prüft, dass ein aus
   dem Tab gestarteter Lauf ein nicht-NULL `suite` speichert, ist noch offen.
 
+## PRIO 1 — offene Bugs (Stand 2026-09-18)
+
+- **[PRIO 1] Dataset-Pipeline findet Videos direkt im Root-Ordner nicht.**
+  Fehler beim Start mit einem Ordner, der nur `.mp4`-Dateien enthält:
+  `runtime error [dataset]: no videos or images found under D:\Data\Test
+  (expected tag subfolders containing .mp4/.png/.jpg/.jpeg/.webp files)`.
+  **Ursache (geprüft, 2026-09-18):** `walk_dataset_root`
+  (`core/src/capability/dataset/ingest.rs:62`) sammelt nur die *unmittelbaren
+  Unterordner* (`min_depth(1).max_depth(1)`, nur `is_dir()`) und liest Dateien
+  ausschließlich darin; Dateien direkt im Root werden nie betrachtet.
+  `D:\Data\Test` enthält genau eine Datei `20250111-_1.mp4` (~154 MB) ohne
+  Unterordner → leere Liste → dieser Fehler. Erwartung des Nutzers: "Ordner mit
+  Videos auswählen" muss einfach funktionieren.
+  **Fix-Richtung:** Dateien im Root zusätzlich aufnehmen, Tag = Name des
+  Root-Ordners (oder ein neutraler Tag, im Formular überschreibbar);
+  Unterordner-als-Tag bleibt für strukturierte Datasets. Groß-/Kleinschreibung
+  der Endung prüfen (`.MP4`). Die Fehlermeldung und der Hinweistext im
+  Dataset-Formular müssen das neue Verhalten erklären. Tests: Root nur mit
+  Dateien, Root gemischt mit Unterordnern, leerer Root.
+- **Test `daemon_shutdown::boots_and_shuts_down_cleanly_on_ctrl_break` scheitert,
+  solange die Desktop-App läuft** (niedrige Prio, blockiert aber den Push, weil
+  der Pre-Push-Hook alle Tests fährt): der Test startet `aiwm-cored` auf dem
+  festen Port 48160; hält `aiwm-tauri` diesen Port, beendet sich der
+  Test-Daemon vor seinem Ready-Banner (`core/tests/daemon_shutdown.rs:58`).
+  Beobachtet 2026-09-18 beim Push eines reinen Doku-Commits. Fix-Richtung: der
+  Test gibt per `AIWM_CORE_API_PORT` einen freien Port mit, ohne die
+  Config-Default-Tests zu stören, die genau diese Variable ungesetzt erwarten.
+
 ## Dataset-Kuratierung & Trainings-Werkzeuge (Backlog, User-Wunsch 2026-09-18)
 
 Aus dem ersten praktischen Blick auf den Trainings-Workflow ("100 Videos rein,
