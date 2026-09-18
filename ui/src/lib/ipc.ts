@@ -1034,7 +1034,8 @@ export const updateDataset = (id: string, body: { trigger_word?: string }) =>
 
 /** A file a deletion left alone. `reason` is `"outside_app_folders"` (not the
  *  app's to delete), `"source_file"` (a source video/image — never deleted),
- *  `"in_use"` (another remaining frame still shows it), `"not_a_file"`, or
+ *  `"in_use"` (another remaining frame still shows it), `"used_by_other_dataset"`
+ *  (another dataset's frame or export uses it), `"not_a_file"`, or
  *  `"error: …"` (deleting failed; the frame row is kept for a retry). */
 export interface SkippedFile {
   path: string;
@@ -1065,8 +1066,11 @@ export interface DatasetDeleteSummary {
   deleted_files: number;
   freed_bytes: number;
   skipped_files: SkippedFile[];
-  /** A user-chosen export folder outside the outputs folder, left as is. */
+  /** A user-chosen (or shared) export folder, left as is. */
   export_dir_kept: string | null;
+  /** `false` when a file could not be deleted (see `skipped_files`, reason
+   *  `"error: …"`): the dataset stays so the delete can be retried. */
+  dataset_deleted: boolean;
 }
 
 /** Deletes the dataset's rows *and* files (work folder, app-owned export).

@@ -44,6 +44,11 @@
   overflow-wrap: anywhere;
 }
 
+.confirm__warn {
+  color: var(--load-warn);
+  font-weight: 600;
+}
+
 .confirm__error {
   margin: var(--space-3) 0 0;
   padding: var(--space-2) var(--space-3);

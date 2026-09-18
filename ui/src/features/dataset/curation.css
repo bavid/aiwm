@@ -7,18 +7,6 @@
   container-type: inline-size;
 }
 
-.visually-hidden {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  margin: -1px;
-  padding: 0;
-  overflow: hidden;
-  clip-path: inset(50%);
-  white-space: nowrap;
-  border: 0;
-}
-
 /* --- selection bar --- */
 
 .curation__bar {
@@ -229,9 +217,10 @@
   z-index: 2;
   margin: 0;
   padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--column-tint);
   border-radius: var(--radius-sm);
-  background: color-mix(in oklab, var(--column-tint) 88%, black 12%);
-  color: #fff;
+  background: color-mix(in oklab, var(--column-tint) 16%, var(--surface));
+  color: var(--text);
   font-size: var(--text-sm);
   font-weight: 600;
   text-align: center;

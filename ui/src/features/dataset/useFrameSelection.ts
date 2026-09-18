@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 
 /** How a click on a card combines with the current selection — the Windows
  *  Explorer rules: plain click picks one, Ctrl/Cmd toggles, Shift picks the
@@ -23,28 +23,39 @@ function rangeBetween(ordered: readonly string[], from: string, to: string): str
 }
 
 /** The curation board's selection: one `Set` of frame ids shared by both
- *  columns (and by the concept toolbar), so `has` is O(1) per card and a
- *  selection change re-renders only the cards whose flag flipped. */
+ *  columns (and by the concept toolbar), so `has` is O(1) per card. Every
+ *  action is a stable callback, so handlers built on them keep their
+ *  identity across selection changes and memoised cards stay put. */
 export function useFrameSelection() {
   const [selected, setSelected] = useState<ReadonlySet<string>>(EMPTY);
-  /** Where a Shift-click range starts: the last plain or Ctrl click. */
+  /** Where a Shift range starts: the last plain or Ctrl click. */
   const anchor = useRef<string | null>(null);
 
-  /** A click on `id`; `ordered` is the id order of the clicked card's column. */
-  const click = useCallback((id: string, ordered: readonly string[], mods: ClickModifiers) => {
-    const from = anchor.current;
-    if (!mods.range || from === null) anchor.current = id;
-    setSelected((cur) => {
-      const range = mods.range && from !== null ? rangeBetween(ordered, from, id) : null;
-      if (range) return union(mods.toggle ? cur : EMPTY, range);
-      if (mods.toggle) {
-        const next = new Set(cur);
-        if (!next.delete(id)) next.add(id);
-        return next;
+  /** A click on `id`; `ordered` is the id order of the clicked card's
+   *  column. A Shift click whose anchor is not in that column starts from
+   *  `fallbackAnchor` (the focused card, for Shift+arrow keys) or, failing
+   *  that, acts as a plain click and re-anchors there. */
+  const click = useCallback(
+    (id: string, ordered: readonly string[], mods: ClickModifiers, fallbackAnchor?: string) => {
+      let from = anchor.current;
+      if (mods.range && (from === null || !ordered.includes(from)) && fallbackAnchor) {
+        from = fallbackAnchor;
+        anchor.current = fallbackAnchor;
       }
-      return new Set([id]);
-    });
-  }, []);
+      const range = mods.range && from !== null ? rangeBetween(ordered, from, id) : null;
+      if (!range) anchor.current = id;
+      setSelected((cur) => {
+        if (range) return union(mods.toggle ? cur : EMPTY, range);
+        if (mods.toggle && !mods.range) {
+          const next = new Set(cur);
+          if (!next.delete(id)) next.add(id);
+          return next;
+        }
+        return new Set([id]);
+      });
+    },
+    [],
+  );
 
   /** Flip one id (the card's checkbox, Space on a focused card). */
   const toggle = useCallback((id: string) => {
@@ -56,16 +67,20 @@ export function useFrameSelection() {
     });
   }, []);
 
-  /** Replace the selection (Select all, a rubber band without modifiers). */
-  const replace = useCallback((ids: Iterable<string>) => setSelected(new Set(ids)), []);
+  /** Replace the selection (Select all, a rubber band without modifiers);
+   *  the Shift anchor starts over. */
+  const replace = useCallback((ids: Iterable<string>) => {
+    anchor.current = null;
+    setSelected(new Set(ids));
+  }, []);
 
   /** Union `ids` onto `base` — a rubber band drawn with Ctrl/Shift held. */
-  const extend = useCallback(
-    (base: ReadonlySet<string>, ids: Iterable<string>) => setSelected(union(base, ids)),
-    [],
-  );
+  const extend = useCallback((base: ReadonlySet<string>, ids: Iterable<string>) => {
+    anchor.current = null;
+    setSelected(union(base, ids));
+  }, []);
 
-  /** Drop `ids` from the selection (a column's Select none). */
+  /** Drop `ids` from the selection (a column's Select none, a move). */
   const remove = useCallback((ids: Iterable<string>) => {
     setSelected((cur) => {
       const next = new Set(cur);
@@ -79,10 +94,5 @@ export function useFrameSelection() {
     setSelected(EMPTY);
   }, []);
 
-  return useMemo(
-    () => ({ selected, click, toggle, replace, extend, remove, clear }),
-    [selected, click, toggle, replace, extend, remove, clear],
-  );
+  return { selected, click, toggle, replace, extend, remove, clear };
 }
-
-export type FrameSelection = ReturnType<typeof useFrameSelection>;

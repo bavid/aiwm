@@ -1,4 +1,4 @@
-import { useId, useState } from "react";
+import { useId, useLayoutEffect, useRef, useState } from "react";
 import {
   cleanupDataset,
   DEFAULT_DEDUP_THRESHOLD,
@@ -58,9 +58,19 @@ export function HousekeepingPanel({ dataset, usage, isRunning, onChanged, onDele
   const [dialog, setDialog] = useState<Dialog | null>(null);
   const [isDialogBusy, setIsDialogBusy] = useState(false);
   const [dialogError, setDialogError] = useState<string | null>(null);
+  const resultRef = useRef<HTMLDivElement>(null);
+  /** Set when a dialog closes with a result: focus goes to it, not to a
+   *  button that may just have become disabled. */
+  const focusResult = useRef(false);
   const thresholdId = useId();
   const thresholdHelpId = useId();
   const isClips = dataset.mode === "clips";
+
+  useLayoutEffect(() => {
+    if (!focusResult.current || dialog) return;
+    focusResult.current = false;
+    resultRef.current?.focus();
+  });
 
   const openDialog = (next: Dialog) => {
     setDialogError(null);
@@ -101,6 +111,7 @@ export function HousekeepingPanel({ dataset, usage, isRunning, onChanged, onDele
     try {
       if (dialog.kind === "cleanup") {
         const s = await cleanupDataset(dataset.id, false);
+        focusResult.current = true;
         setDialog(null);
         setResult({
           kind: "ok",
@@ -111,7 +122,21 @@ export function HousekeepingPanel({ dataset, usage, isRunning, onChanged, onDele
       } else {
         const summary = await deleteDataset(dataset.id);
         setDialog(null);
-        onDeleted(summary);
+        if (summary.dataset_deleted) {
+          onDeleted(summary);
+        } else {
+          // A file could not be deleted: the core kept the dataset so the
+          // delete can be retried once the file is free.
+          focusResult.current = true;
+          setResult({
+            kind: "error",
+            text:
+              `Some files could not be deleted; the dataset was kept so you can retry. ` +
+              `${formatBytes(summary.freed_bytes)} freed so far.`,
+            skipped: summary.skipped_files,
+          });
+          onChanged();
+        }
       }
     } catch (e) {
       setDialogError(errorText(e));
@@ -222,12 +247,23 @@ export function HousekeepingPanel({ dataset, usage, isRunning, onChanged, onDele
       {isRunning && (
         <p className="housekeeping__help">Wait for the prep run to finish before deleting.</p>
       )}
-      {result && (
-        <div className="housekeeping__result" role={result.kind === "error" ? "alert" : "status"}>
-          <p className={result.kind === "error" ? "dataset__err" : "dataset__done"}>{result.text}</p>
-          {result.skipped && <SkippedFiles files={result.skipped} />}
-        </div>
-      )}
+      {/* Always mounted, so screen readers pick up the text when it arrives. */}
+      <div
+        ref={resultRef}
+        className="housekeeping__result"
+        role="status"
+        aria-live="polite"
+        tabIndex={-1}
+      >
+        {result && (
+          <>
+            <p className={result.kind === "error" ? "dataset__err" : "dataset__done"}>
+              {result.text}
+            </p>
+            {result.skipped && <SkippedFiles files={result.skipped} />}
+          </>
+        )}
+      </div>
 
       <ConfirmDialog
         isOpen={dialog?.kind === "cleanup"}
@@ -267,7 +303,7 @@ export function HousekeepingPanel({ dataset, usage, isRunning, onChanged, onDele
             the work folder
             {usage
               ? ` — ${formatBytes(usage.work_bytes)} in ${usage.work_files.toLocaleString()} files`
-              : ""}
+              : " — size calculating…"}
             {usage?.work_dir && <span className="confirm__path">{usage.work_dir}</span>}
           </li>
           {usage?.export_dir && usage.export_app_owned && (

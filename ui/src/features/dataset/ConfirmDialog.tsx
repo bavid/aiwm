@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, type ReactNode } from "react";
+import { useId, useLayoutEffect, useRef, type ReactNode } from "react";
 import "./confirm-dialog.css";
 
 type Props = {
@@ -33,8 +33,11 @@ export function ConfirmDialog({
   const ref = useRef<HTMLDialogElement>(null);
   const cancelRef = useRef<HTMLButtonElement>(null);
   const titleId = useId();
+  const bodyId = useId();
 
-  useEffect(() => {
+  // A layout effect, so the dialog has closed (and handed focus back) before
+  // a parent's own layout effect moves focus somewhere better.
+  useLayoutEffect(() => {
     const dialog = ref.current;
     if (!dialog) return;
     if (isOpen && !dialog.open) {
@@ -50,6 +53,11 @@ export function ConfirmDialog({
       ref={ref}
       className="confirm"
       aria-labelledby={titleId}
+      aria-describedby={bodyId}
+      onClose={() => {
+        // Closed by the browser itself (not through `isOpen`): tell the parent.
+        if (isOpen) onCancel();
+      }}
       onCancel={(e) => {
         // The browser's own Esc: let the parent decide (it owns `isOpen`).
         e.preventDefault();
@@ -67,7 +75,7 @@ export function ConfirmDialog({
       <h3 id={titleId} className="confirm__title">
         {title}
       </h3>
-      <div className="confirm__body">{children}</div>
+      <div id={bodyId} className="confirm__body">{children}</div>
       {error && (
         <p className="confirm__error" role="alert">
           {error}

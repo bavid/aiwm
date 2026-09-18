@@ -8,6 +8,8 @@ import "./framecard.css";
 
 type Props = {
   frame: DatasetFrame;
+  /** 1-based position in the column, for `aria-rowindex`. */
+  rowIndex: number;
   imageUrl: string;
   /** The board column the card sits in; its move button goes to the other. */
   column: ColumnId;
@@ -46,6 +48,7 @@ const modifiersOf = (e: MouseEvent): ClickModifiers => ({
  *  selection, tab stop or tokens change. */
 export const FrameCard = memo(function FrameCard({
   frame,
+  rowIndex,
   imageUrl,
   column,
   isSelected,
@@ -126,7 +129,7 @@ export const FrameCard = memo(function FrameCard({
   const target = COLUMN_LABEL[otherColumn(column)];
 
   return (
-    <div role="row" className="framecard__row">
+    <div role="row" className="framecard__row" aria-rowindex={rowIndex}>
       <div
         role="gridcell"
         className="framecard"
@@ -145,7 +148,11 @@ export const FrameCard = memo(function FrameCard({
           data-empty={!hasThumb}
           data-drag-handle
           draggable
-          title="Click to select · Ctrl-click to add · Shift-click for a range · drag to move"
+          title={
+            isCompact
+              ? frame.caption || frame.tag
+              : "Click to select · Ctrl-click to add · Shift-click for a range · drag to move"
+          }
           onClick={(e) => onSelectClick(frame, modifiersOf(e))}
           onDragStart={(e) => onDragStart(frame, e)}
           onDragEnd={onDragEnd}
@@ -163,6 +170,8 @@ export const FrameCard = memo(function FrameCard({
             <input
               type="checkbox"
               checked={isSelected}
+              // Not a tab stop: Space on the focused card does the same.
+              tabIndex={-1}
               onChange={() => onToggleSelected(frame)}
               aria-label={`Select ${frame.caption || frame.tag}`}
             />

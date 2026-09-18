@@ -26,10 +26,40 @@ function applyOverride(frame: DatasetFrame, o: Override): DatasetFrame {
     : { ...frame, excluded: false, rejection_reason: "" };
 }
 
+function sameFrame(a: DatasetFrame, b: DatasetFrame): boolean {
+  const keys = Object.keys(a) as (keyof DatasetFrame)[];
+  return keys.length === Object.keys(b).length && keys.every((k) => a[k] === b[k]);
+}
+
+/** `next` with every row that did not change replaced by its object from
+ *  `prev`, so a poll only re-renders the cards whose row really changed. */
+function reuseUnchanged(
+  prev: readonly DatasetFrame[],
+  next: readonly DatasetFrame[],
+): readonly DatasetFrame[] {
+  const byId = new Map(prev.map((f) => [f.id, f]));
+  let isSame = prev.length === next.length;
+  const out = next.map((f, i) => {
+    const old = byId.get(f.id);
+    const kept = old && sameFrame(old, f) ? old : f;
+    if (kept !== prev[i]) isSame = false;
+    return kept;
+  });
+  return isSame ? prev : out;
+}
+
 /** The polled frame list with the curator's in-flight moves laid over it, so
- *  a move shows instantly and rolls back cleanly on failure. Untouched rows
- *  keep their identity, which keeps `FrameCard`'s memoisation intact. */
-export function useOptimisticFrames(frames: readonly DatasetFrame[]) {
+ *  a move shows instantly and rolls back cleanly on failure. Rows keep their
+ *  identity across polls unless they changed, which keeps `FrameCard`'s
+ *  memoisation intact. */
+export function useOptimisticFrames(polled: readonly DatasetFrame[]) {
+  // Derived from the previous render's result (React's "adjust state while
+  // rendering" pattern): a new poll swaps in only the rows that changed.
+  const [stable, setStable] = useState({ source: polled, frames: polled });
+  if (stable.source !== polled) {
+    setStable({ source: polled, frames: reuseUnchanged(stable.frames, polled) });
+  }
+  const frames = stable.frames;
   const [overrides, setOverrides] = useState<ReadonlyMap<string, Override>>(() => new Map());
   const batchSeq = useRef(0);
 

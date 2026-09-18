@@ -449,18 +449,22 @@ export function DatasetStudio({ onTrainLora }: Props) {
           </div>
         )}
 
-        {activeDatasetId && frameList.length > 0 && view === "grid" && (
-          <CurationBoard
-            key={`board-${activeDatasetId}`}
-            datasetId={activeDatasetId}
-            frames={frameList}
-            isClipMode={isClipMode}
-            imageUrlFor={imageUrlFor}
-            tokensByFrameId={tokensByFrameId}
-            concepts={conceptList}
-            onFramesChanged={refetchFrameData}
-            onConceptsChanged={refetchConceptData}
-          />
+        {/* Hidden, not unmounted, in the Learn view: the selection, card size,
+            Discard filter and paging survive a Sort<->Learn round-trip. */}
+        {activeDatasetId && frameList.length > 0 && (
+          <div hidden={view !== "grid"}>
+            <CurationBoard
+              key={`board-${activeDatasetId}`}
+              datasetId={activeDatasetId}
+              frames={frameList}
+              isClipMode={isClipMode}
+              imageUrlFor={imageUrlFor}
+              tokensByFrameId={tokensByFrameId}
+              concepts={conceptList}
+              onFramesChanged={refetchFrameData}
+              onConceptsChanged={refetchConceptData}
+            />
+          </div>
         )}
 
         {frameList.length > 0 && (

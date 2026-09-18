@@ -83,7 +83,7 @@
   display: flex;
   padding: 3px;
   border-radius: var(--radius-sm);
-  background: color-mix(in oklab, black 55%, transparent);
+  background: var(--scrim);
   cursor: pointer;
   opacity: 0;
   transition: opacity var(--dur) var(--ease);
@@ -116,8 +116,8 @@
   padding: 1px var(--space-2);
   overflow: hidden;
   border-radius: var(--radius-sm);
-  background: color-mix(in oklab, black 55%, transparent);
-  color: #fff;
+  background: var(--scrim);
+  color: var(--on-scrim);
   font-size: var(--text-xs);
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -145,12 +145,12 @@
 
 .framecard__badge--reject {
   background: var(--load-crit);
-  color: #fff;
+  color: var(--surface);
 }
 
 .framecard__badge--excluded {
   background: color-mix(in oklab, black 62%, transparent);
-  color: #fff;
+  color: var(--on-scrim);
 }
 
 .framecard[data-compact="true"] .framecard__tag {

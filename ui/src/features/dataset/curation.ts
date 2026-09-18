@@ -8,6 +8,9 @@ export const COLUMN_LABEL: Record<ColumnId, string> = {
   discard: "Discard",
 };
 
+export const isColumnId = (value: string): value is ColumnId =>
+  value === "keep" || value === "discard";
+
 export const otherColumn = (column: ColumnId): ColumnId =>
   column === "keep" ? "discard" : "keep";
 
@@ -44,6 +47,7 @@ const SKIP_REASON_LABEL: Record<string, string> = {
   outside_app_folders: "outside the app's folders — not the app's to delete",
   source_file: "a source file — never deleted",
   in_use: "still used by another frame",
+  used_by_other_dataset: "Used by another dataset",
   not_a_file: "not a file",
 };
 

@@ -14,7 +14,9 @@ import { useRubberBand } from "./useRubberBand";
 
 /** Stable per-card callbacks, shared by every card of both columns. */
 export type CardHandlers = {
-  onSelectClick: (frame: DatasetFrame, mods: ClickModifiers) => void;
+  /** `fallbackAnchor`: where a Shift range starts when the anchor is not in
+   *  this column (the focused card, for Shift+arrow keys). */
+  onSelectClick: (frame: DatasetFrame, mods: ClickModifiers, fallbackAnchor?: string) => void;
   onToggleSelected: (frame: DatasetFrame) => void;
   onFocusCard: (frame: DatasetFrame) => void;
   onDragStart: (frame: DatasetFrame, e: DragEvent<HTMLElement>) => void;
@@ -31,6 +33,7 @@ export type ColumnHandlers = {
   onShowMore: (column: ColumnId) => void;
   onBandStart: (column: ColumnId, additive: boolean) => void;
   onBandChange: (column: ColumnId, ids: string[]) => void;
+  onBandEnd: (column: ColumnId, ids: string[]) => void;
   onEmptyClick: (column: ColumnId) => void;
   onDragOver: (column: ColumnId, e: DragEvent<HTMLElement>) => void;
   onDragLeave: (column: ColumnId, e: DragEvent<HTMLElement>) => void;
@@ -45,6 +48,8 @@ type Props = {
   column: ColumnId;
   /** The column's frames in display order (after the Discard filter). */
   frames: readonly DatasetFrame[];
+  /** The column before the Discard filter, for "12 of 500". */
+  totalCount: number;
   selected: ReadonlySet<string>;
   selectedHere: number;
   activeId: string | null;
@@ -84,6 +89,7 @@ function cardsPerRow(cells: HTMLElement[]): number {
 export const CurationColumn = memo(function CurationColumn({
   column,
   frames,
+  totalCount,
   selected,
   selectedHere,
   activeId,
@@ -109,6 +115,7 @@ export const CurationColumn = memo(function CurationColumn({
   const band = useRubberBand({
     onStart: (additive) => columnHandlers.onBandStart(column, additive),
     onChange: (ids) => columnHandlers.onBandChange(column, ids),
+    onEnd: (ids) => columnHandlers.onBandEnd(column, ids),
     onEmptyClick: () => columnHandlers.onEmptyClick(column),
     focusTarget: () => gridRef.current,
   });
@@ -139,10 +146,14 @@ export const CurationColumn = memo(function CurationColumn({
     e.preventDefault();
     const next = Math.max(0, Math.min(cells.length - 1, index + step[e.key]));
     cells[next].focus();
-    if (e.shiftKey) cardHandlers.onSelectClick(shown[next], { toggle: false, range: true });
+    if (e.shiftKey) cardHandlers.onSelectClick(shown[next], { toggle: false, range: true }, id);
   };
 
   const label = COLUMN_LABEL[column];
+  const isFiltered = totalCount !== frames.length;
+  const count = isFiltered
+    ? `${frames.length.toLocaleString()} of ${totalCount.toLocaleString()}`
+    : frames.length.toLocaleString();
   return (
     <section
       className="curation__column"
@@ -159,7 +170,7 @@ export const CurationColumn = memo(function CurationColumn({
     >
       <header className="curation__head">
         <h3 id={headingId} className="curation__title">
-          {label} <span className="curation__count">{frames.length.toLocaleString()}</span>
+          {label} <span className="curation__count">{count}</span>
         </h3>
         <div className="curation__head-actions">
           {selectedHere > 0 && (
@@ -206,10 +217,11 @@ export const CurationColumn = memo(function CurationColumn({
           data-compact={isCompact}
           onKeyDown={onGridKeyDown}
         >
-          {shown.map((frame) => (
+          {shown.map((frame, index) => (
             <FrameCard
               key={frame.id}
               frame={frame}
+              rowIndex={index + 1}
               imageUrl={imageUrlFor(frame)}
               column={column}
               isSelected={selected.has(frame.id)}

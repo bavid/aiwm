@@ -17,7 +17,6 @@ import {
   type DatasetFrame,
   type SkippedFile,
 } from "../../lib/ipc";
-import { ConfirmDialog } from "./ConfirmDialog";
 import { CurationColumn, type CardHandlers, type ColumnHandlers } from "./CurationColumn";
 import {
   ALL_DISCARDED,
@@ -25,12 +24,15 @@ import {
   columnOf,
   errorText,
   framesLabel,
+  isColumnId,
   matchesDiscardFilter,
   otherColumn,
   type ColumnId,
 } from "./curation";
+import { DeleteFramesDialog, type DeleteRequest } from "./DeleteFramesDialog";
 import { formatBytes } from "./format";
 import { RejectionChips } from "./RejectionChips";
+import { SelectionBar } from "./SelectionBar";
 import { SelectionToolbar, type AssignState } from "./SelectionToolbar";
 import { SkippedFiles } from "./SkippedFiles";
 import { useFrameSelection } from "./useFrameSelection";
@@ -56,16 +58,23 @@ type Props = {
 };
 
 type Notice = { text: string; skipped: SkippedFile[] };
-type DeleteState = { ids: string[]; isBusy: boolean; error: string | null };
 type DragInfo = { source: ColumnId; ids: string[] };
+/** Where focus goes once a move or delete takes cards away: this card, or
+ *  (`null`) the column's grid. */
+type Refocus = { column: ColumnId; id: string | null };
 
 /** Typing in a field must not trigger the board's single-key shortcuts. */
 function isTypingTarget(el: EventTarget): boolean {
   if (!(el instanceof HTMLElement)) return false;
-  if (el.isContentEditable || el.tagName === "TEXTAREA" || el.tagName === "SELECT") return true;
-  if (el.tagName !== "INPUT") return false;
-  const type = (el as HTMLInputElement).type;
-  return type !== "checkbox" && type !== "radio" && type !== "button";
+  if (el.isContentEditable || el instanceof HTMLTextAreaElement) return true;
+  if (el instanceof HTMLSelectElement) return true;
+  if (!(el instanceof HTMLInputElement)) return false;
+  return el.type !== "checkbox" && el.type !== "radio" && el.type !== "button";
+}
+
+function focusedFrameId(): string | undefined {
+  const el = document.activeElement;
+  return el instanceof HTMLElement ? el.dataset.frameId : undefined;
 }
 
 /** The curation board: Keep on the left, Discard on the right. Select with
@@ -81,10 +90,8 @@ export function CurationBoard({
   onFramesChanged,
   onConceptsChanged,
 }: Props) {
-  const optimistic = useOptimisticFrames(polledFrames);
-  const frames = optimistic.frames;
-  const selection = useFrameSelection();
-  const { selected } = selection;
+  const { frames, beginMove, settleMove, rollbackMove } = useOptimisticFrames(polledFrames);
+  const { selected, click, toggle, replace, extend, remove, clear } = useFrameSelection();
 
   const [discardFilter, setDiscardFilter] = useState(ALL_DISCARDED);
   const [visible, setVisible] = useState<Record<ColumnId, number>>({
@@ -101,7 +108,7 @@ export function CurationBoard({
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<Notice | null>(null);
   const [announcement, setAnnouncement] = useState({ text: "", seq: 0 });
-  const [deleteState, setDeleteState] = useState<DeleteState | null>(null);
+  const [deleteRequest, setDeleteRequest] = useState<DeleteRequest | null>(null);
   const [assignConceptId, setAssignConceptId] = useState("");
   const [assignState, setAssignState] = useState<AssignState>({ kind: "idle" });
 
@@ -110,8 +117,7 @@ export function CurationBoard({
   const dragInfo = useRef<DragInfo | null>(null);
   const bandBase = useRef<ReadonlySet<string>>(new Set());
   const lastColumn = useRef<ColumnId>("keep");
-  /** Where focus goes when a keyboard move takes the focused card away. */
-  const refocus = useRef<{ column: ColumnId; index: number } | null>(null);
+  const refocus = useRef<Refocus | null>(null);
 
   // --- columns ------------------------------------------------------------
   const { keep, discardAll } = useMemo(() => {
@@ -127,10 +133,7 @@ export function CurationBoard({
     return filtered.length > 0 ? filtered : discardAll;
   }, [discardAll, discardFilter]);
 
-  const columns = useMemo(
-    () => ({ keep, discard: discardShown }) satisfies Record<ColumnId, DatasetFrame[]>,
-    [keep, discardShown],
-  );
+  const columns: Record<ColumnId, DatasetFrame[]> = { keep, discard: discardShown };
   const orderedIds = useMemo(
     () => ({ keep: keep.map((f) => f.id), discard: discardShown.map((f) => f.id) }),
     [keep, discardShown],
@@ -157,19 +160,55 @@ export function CurationBoard({
     [],
   );
 
+  // The latest render, for the stable handlers below.
+  const latest = useRef({ orderedIds, selectedIn, selected });
+  useLayoutEffect(() => {
+    latest.current = { orderedIds, selectedIn, selected };
+  });
+
+  /** Focus should land on the card after the first one taken away from
+   *  `column` (else the one before it, else the column's grid). */
+  const planRefocus = useCallback((ids: readonly string[], column: ColumnId) => {
+    const ordered = latest.current.orderedIds[column];
+    const gone = new Set(ids);
+    const first = ordered.findIndex((id) => gone.has(id));
+    const remaining = (list: string[]) => list.find((id) => !gone.has(id));
+    const id =
+      first < 0
+        ? null
+        : (remaining(ordered.slice(first)) ?? remaining(ordered.slice(0, first).reverse()) ?? null);
+    refocus.current = { column, id };
+  }, []);
+
+  // Apply a planned refocus once no dialog holds focus (the dialog closes in
+  // its own layout effect, which runs before this one).
+  useLayoutEffect(() => {
+    const want = refocus.current;
+    const board = boardRef.current;
+    if (!want || !board || deleteRequest) return;
+    refocus.current = null;
+    const column = board.querySelector(`[data-column="${want.column}"]`);
+    const card = want.id
+      ? column?.querySelector<HTMLElement>(`[data-frame-id="${CSS.escape(want.id)}"]`)
+      : null;
+    const target = card ?? column?.querySelector<HTMLElement>('[role="grid"]') ?? board;
+    target.focus({ preventScroll: true });
+  });
+
   // --- writes -------------------------------------------------------------
   const move = useCallback(
     async (ids: string[], target: ColumnId) => {
       if (ids.length === 0) return;
       const excluded = target === "discard";
-      const batch = optimistic.beginMove(ids, excluded);
-      selection.remove(ids);
+      planRefocus(ids, otherColumn(target));
+      const batch = beginMove(ids, excluded);
+      remove(ids);
       setError(null);
       setNotice(null);
       announce(`${framesLabel(ids.length)} moved to ${COLUMN_LABEL[target]}`);
       try {
         const summary = await bulkUpdateDatasetFrames(datasetId, ids, excluded);
-        optimistic.settleMove(batch);
+        settleMove(batch);
         if (summary.updated < summary.requested) {
           setNotice({
             text: `${summary.updated} of ${summary.requested} frames moved — the rest no longer exist.`,
@@ -177,79 +216,77 @@ export function CurationBoard({
           });
         }
       } catch (e) {
-        optimistic.rollbackMove(batch);
-        const message = `Could not move ${framesLabel(ids.length)} to ${COLUMN_LABEL[target]}: ${errorText(e)}`;
-        setError(message);
-        announce(message);
+        rollbackMove(batch);
+        // The alert below announces it; no second announcement.
+        setError(
+          `Could not move ${framesLabel(ids.length)} to ${COLUMN_LABEL[target]}: ${errorText(e)}`,
+        );
       } finally {
         onFramesChanged();
       }
     },
-    [datasetId, optimistic, selection, announce, onFramesChanged],
+    [datasetId, planRefocus, beginMove, settleMove, rollbackMove, remove, announce, onFramesChanged],
   );
 
-  /** The ids a toolbar/keyboard move to `target` acts on: the selection in
-   *  the other column, or else the focused card. */
-  const idsToMove = (target: ColumnId): string[] => {
+  /** A toolbar/keyboard move to `target` acts on the selection in the other
+   *  column, or else on the focused card. */
+  const moveSelection = (target: ColumnId) => {
     const source = otherColumn(target);
-    if (selectedTotal > 0) return selectedIn[source];
-    const focused = document.activeElement;
-    const id = focused instanceof HTMLElement ? focused.dataset.frameId : undefined;
-    return id && columnById.get(id) === source ? [id] : [];
-  };
-
-  const moveFromKeyboard = (target: ColumnId) => {
-    const ids = idsToMove(target);
-    const focused = document.activeElement;
-    const focusedId = focused instanceof HTMLElement ? focused.dataset.frameId : undefined;
-    if (focusedId && ids.includes(focusedId)) {
-      const column = otherColumn(target);
-      refocus.current = { column, index: orderedIds[column].indexOf(focusedId) };
-    }
+    const focused = focusedFrameId();
+    const ids =
+      selectedTotal > 0
+        ? selectedIn[source]
+        : focused && columnById.get(focused) === source
+          ? [focused]
+          : [];
     void move(ids, target);
   };
 
-  // Put focus back on the column a keyboard move just emptied a slot in.
-  useLayoutEffect(() => {
-    const want = refocus.current;
-    const board = boardRef.current;
-    if (!want || !board) return;
-    refocus.current = null;
-    const cells = board.querySelectorAll<HTMLElement>(
-      `[data-column="${want.column}"] [data-frame-id]`,
+  const requestDelete = () => {
+    const focused = focusedFrameId();
+    const ids =
+      selectedTotal > 0
+        ? [...selectedIn.keep, ...selectedIn.discard]
+        : focused && columnById.has(focused)
+          ? [focused]
+          : [];
+    if (ids.length === 0) return;
+    const onScreen = new Set(
+      (["keep", "discard"] as const).flatMap((c) =>
+        orderedIds[c].slice(0, visible[c]),
+      ),
     );
-    // The next card in the same column, else (the column is now empty) the
-    // first card of the other one, else the board itself.
-    const target =
-      cells[Math.min(want.index, cells.length - 1)] ??
-      board.querySelector<HTMLElement>(`[data-column="${otherColumn(want.column)}"] [data-frame-id]`) ??
-      board;
-    target.focus({ preventScroll: true });
-  }, [frames]);
+    setDeleteRequest({
+      ids,
+      fromKeep: ids.filter((id) => columnById.get(id) === "keep").length,
+      fromDiscard: ids.filter((id) => columnById.get(id) === "discard").length,
+      offscreen: ids.filter((id) => !onScreen.has(id)).length,
+      isBusy: false,
+      error: null,
+    });
+  };
 
   const confirmDelete = async () => {
-    if (!deleteState) return;
-    const { ids } = deleteState;
-    setDeleteState({ ...deleteState, isBusy: true, error: null });
+    if (!deleteRequest) return;
+    const { ids } = deleteRequest;
+    setDeleteRequest({ ...deleteRequest, isBusy: true, error: null });
     try {
       const summary = await deleteDatasetFrames(datasetId, ids);
-      selection.remove(ids);
-      setDeleteState(null);
+      const focused = focusedFrameId();
+      const column = (focused && columnById.get(focused)) || lastColumn.current;
+      planRefocus(ids, column);
+      remove(ids);
+      setDeleteRequest(null);
       const text =
         `Deleted ${framesLabel(summary.deleted)} and ${summary.deleted_files.toLocaleString()} ` +
         `file(s) — ${formatBytes(summary.freed_bytes)} freed.`;
       setNotice({ text, skipped: summary.skipped_files });
       announce(text);
     } catch (e) {
-      setDeleteState({ ids, isBusy: false, error: errorText(e) });
+      setDeleteRequest({ ...deleteRequest, isBusy: false, error: errorText(e) });
     } finally {
       onFramesChanged();
     }
-  };
-
-  const requestDelete = () => {
-    const ids = selectedTotal > 0 ? [...selectedIn.keep, ...selectedIn.discard] : [];
-    if (ids.length > 0) setDeleteState({ ids, isBusy: false, error: null });
   };
 
   const runAssign = async (attach: boolean) => {
@@ -269,10 +306,10 @@ export function CurationBoard({
     }
   };
 
-  // --- stable handlers (read the latest render through a ref) -------------
-  const latest = useRef({ orderedIds, selectedIn, selected, move, columnById });
+  // --- stable handlers: none depends on the selection itself --------------
+  const latestMove = useRef(move);
   useLayoutEffect(() => {
-    latest.current = { orderedIds, selectedIn, selected, move, columnById };
+    latestMove.current = move;
   });
 
   const endDrag = useCallback(() => {
@@ -283,12 +320,12 @@ export function CurationBoard({
 
   const cardHandlers = useMemo<CardHandlers>(
     () => ({
-      onSelectClick: (frame, mods) => {
+      onSelectClick: (frame, mods, fallbackAnchor) => {
         const column = columnOf(frame);
         lastColumn.current = column;
-        selection.click(frame.id, latest.current.orderedIds[column], mods);
+        click(frame.id, latest.current.orderedIds[column], mods, fallbackAnchor);
       },
-      onToggleSelected: (frame) => selection.toggle(frame.id),
+      onToggleSelected: (frame) => toggle(frame.id),
       onFocusCard: (frame) => {
         const column = columnOf(frame);
         lastColumn.current = column;
@@ -298,7 +335,7 @@ export function CurationBoard({
         const source = columnOf(frame);
         const { selected: sel, selectedIn: inCol } = latest.current;
         const ids = sel.has(frame.id) ? inCol[source] : [frame.id];
-        if (!sel.has(frame.id)) selection.click(frame.id, [], { toggle: false, range: false });
+        if (!sel.has(frame.id)) click(frame.id, [], { toggle: false, range: false });
         dragInfo.current = { source, ids };
         e.dataTransfer.effectAllowed = "move";
         e.dataTransfer.setData(DRAG_MIME, ids.join(","));
@@ -310,10 +347,7 @@ export function CurationBoard({
         setDrag({ source, count: ids.length });
       },
       onDragEnd: endDrag,
-      onMove: (frame) => {
-        const target = otherColumn(columnOf(frame));
-        void latest.current.move([frame.id], target);
-      },
+      onMove: (frame) => void latestMove.current([frame.id], otherColumn(columnOf(frame))),
       onCaptionCommit: async (frame, caption) => {
         if (caption === frame.caption) return;
         try {
@@ -332,26 +366,35 @@ export function CurationBoard({
         }
       },
     }),
-    [selection, endDrag, onFramesChanged],
+    [click, toggle, endDrag, onFramesChanged],
   );
 
   const columnHandlers = useMemo<ColumnHandlers>(
     () => ({
       onSelectAll: (column) => {
         lastColumn.current = column;
-        selection.replace(latest.current.orderedIds[column]);
+        replace(latest.current.orderedIds[column]);
       },
-      onSelectNone: (column) => selection.remove(latest.current.selectedIn[column]),
+      onSelectNone: (column) => remove(latest.current.selectedIn[column]),
       onShowMore: (column) =>
         setVisible((cur) => ({ ...cur, [column]: cur[column] + PAGE_SIZE })),
       onBandStart: (column, additive) => {
         lastColumn.current = column;
         bandBase.current = additive ? latest.current.selected : new Set();
       },
-      onBandChange: (_column, ids) => selection.extend(bandBase.current, ids),
+      onBandChange: (_column, ids) => extend(bandBase.current, ids),
+      onBandEnd: (column, ids) => {
+        // Put focus on the first card the band caught, so arrows go on
+        // from there.
+        const first = latest.current.orderedIds[column].find((id) => ids.includes(id));
+        const card = first
+          ? boardRef.current?.querySelector<HTMLElement>(`[data-frame-id="${CSS.escape(first)}"]`)
+          : null;
+        card?.focus({ preventScroll: true });
+      },
       onEmptyClick: (column) => {
         lastColumn.current = column;
-        selection.clear();
+        clear();
       },
       onDragOver: (column, e) => {
         const info = dragInfo.current;
@@ -370,10 +413,10 @@ export function CurationBoard({
         endDrag();
         if (!info || info.source === column) return;
         e.preventDefault();
-        void latest.current.move(info.ids, column);
+        void latestMove.current(info.ids, column);
       },
     }),
-    [selection, endDrag],
+    [replace, remove, extend, clear, endDrag],
   );
 
   // --- keyboard -----------------------------------------------------------
@@ -384,22 +427,23 @@ export function CurationBoard({
     const isMod = e.ctrlKey || e.metaKey;
     if (isMod && key === "a") {
       const el = e.target instanceof Element ? e.target.closest<HTMLElement>("[data-column]") : null;
-      const column = (el?.dataset.column as ColumnId | undefined) ?? lastColumn.current;
+      const named = el?.dataset.column;
+      const column = named && isColumnId(named) ? named : lastColumn.current;
       e.preventDefault();
       columnHandlers.onSelectAll(column);
-      announce(`${framesLabel(latest.current.orderedIds[column].length)} selected in ${COLUMN_LABEL[column]}`);
+      announce(`${framesLabel(orderedIds[column].length)} selected in ${COLUMN_LABEL[column]}`);
       return;
     }
     if (isMod || e.altKey) return;
     if (key === "k" || key === "d") {
       e.preventDefault();
-      moveFromKeyboard(key === "k" ? "keep" : "discard");
+      moveSelection(key === "k" ? "keep" : "discard");
     } else if (e.key === "Delete") {
       e.preventDefault();
       requestDelete();
     } else if (e.key === "Escape" && selectedTotal > 0) {
       e.preventDefault();
-      selection.clear();
+      clear();
       announce("Selection cleared");
     }
   };
@@ -409,80 +453,26 @@ export function CurationBoard({
   const selectDiscardFilter = (value: string) => {
     setDiscardFilter(value);
     setVisible((cur) => ({ ...cur, discard: PAGE_SIZE }));
-    selection.remove(selectedIn.discard);
+    remove(selectedIn.discard);
     setAssignState({ kind: "idle" });
   };
 
   const dropStateOf = (column: ColumnId) =>
     !drag || drag.source === column ? "none" : dropHover === column ? "hover" : "target";
 
-  const deleteCount = deleteState?.ids.length ?? 0;
-
   return (
     <div className="curation" ref={boardRef} tabIndex={-1} onKeyDown={onKeyDown}>
-      <div className="curation__bar card" role="toolbar" aria-label="Selection">
-        <div className="curation__bar-main">
-          <span className="curation__bar-count" aria-live="off">
-            {selectedTotal > 0
-              ? `${framesLabel(selectedTotal)} selected`
-              : "Click, Ctrl-click, Shift-click or draw a box to select"}
-          </span>
-          <button
-            type="button"
-            className="chip curation__action"
-            disabled={selectedIn.discard.length === 0}
-            onClick={() => void move(selectedIn.discard, "keep")}
-            aria-keyshortcuts="K"
-          >
-            ← Keep{selectedIn.discard.length > 0 ? ` ${selectedIn.discard.length}` : ""}
-            <kbd>K</kbd>
-          </button>
-          <button
-            type="button"
-            className="chip curation__action"
-            disabled={selectedIn.keep.length === 0}
-            onClick={() => void move(selectedIn.keep, "discard")}
-            aria-keyshortcuts="D"
-          >
-            Discard{selectedIn.keep.length > 0 ? ` ${selectedIn.keep.length}` : ""} →<kbd>D</kbd>
-          </button>
-          <button
-            type="button"
-            className="chip curation__action curation__action--danger"
-            disabled={selectedTotal === 0}
-            onClick={requestDelete}
-            aria-keyshortcuts="Delete"
-          >
-            Delete…<kbd>Del</kbd>
-          </button>
-          <button
-            type="button"
-            className="chip"
-            disabled={selectedTotal === 0}
-            onClick={selection.clear}
-            aria-keyshortcuts="Escape"
-          >
-            Clear
-          </button>
-          <div className="curation__density" role="group" aria-label="Card size">
-            <button
-              type="button"
-              className="chip"
-              aria-pressed={isCompact}
-              onClick={() => setIsCompact(true)}
-            >
-              Thumbnails
-            </button>
-            <button
-              type="button"
-              className="chip"
-              aria-pressed={!isCompact}
-              onClick={() => setIsCompact(false)}
-            >
-              Details
-            </button>
-          </div>
-        </div>
+      <SelectionBar
+        selectedTotal={selectedTotal}
+        toKeep={selectedIn.discard.length}
+        toDiscard={selectedIn.keep.length}
+        isCompact={isCompact}
+        onKeep={() => void move(selectedIn.discard, "keep")}
+        onDiscard={() => void move(selectedIn.keep, "discard")}
+        onDelete={requestDelete}
+        onClear={clear}
+        onCompactChange={setIsCompact}
+      >
         {selectedTotal > 0 && (
           <SelectionToolbar
             concepts={concepts}
@@ -493,7 +483,7 @@ export function CurationBoard({
             state={assignState}
           />
         )}
-      </div>
+      </SelectionBar>
 
       {error && (
         <p className="dataset__err" role="alert">
@@ -513,6 +503,7 @@ export function CurationBoard({
             key={column}
             column={column}
             frames={columns[column]}
+            totalCount={column === "discard" ? discardAll.length : keep.length}
             selected={selected}
             selectedHere={selectedIn[column].length}
             activeId={activeIds[column]}
@@ -546,22 +537,11 @@ export function CurationBoard({
         {announcement.seq % 2 === 1 ? String.fromCharCode(0xa0) : ""}
       </p>
 
-      <ConfirmDialog
-        isOpen={deleteState !== null}
-        title={`Delete ${framesLabel(deleteCount)}?`}
-        confirmLabel={`Delete ${framesLabel(deleteCount)}`}
-        tone="danger"
-        isBusy={deleteState?.isBusy ?? false}
-        error={deleteState?.error ?? null}
+      <DeleteFramesDialog
+        request={deleteRequest}
         onConfirm={() => void confirmDelete()}
-        onCancel={() => setDeleteState(null)}
-      >
-        <p>
-          This cannot be undone: the frames' files are removed from disk; your source videos are not
-          touched.
-        </p>
-        <p>To set frames aside without deleting them, move them to Discard instead.</p>
-      </ConfirmDialog>
+        onCancel={() => setDeleteRequest(null)}
+      />
     </div>
   );
 }

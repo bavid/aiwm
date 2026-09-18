@@ -1839,6 +1839,7 @@ export function installDevMock(): void {
           freed_bytes: Number(usage.work_bytes),
           skipped_files: [],
           export_dir_kept: dataset.export_dir ?? null,
+          dataset_deleted: true,
         };
       }
       case "dataset_usage":

@@ -24,6 +24,8 @@ type Handlers = {
   onStart: (additive: boolean) => void;
   /** The ids of every card the band intersects, whenever that set changes. */
   onChange: (ids: string[]) => void;
+  /** The band was released over these cards. */
+  onEnd: (ids: string[]) => void;
   /** A plain click on empty space — Explorer clears the selection then. */
   onEmptyClick: () => void;
   /** What takes keyboard focus when a band starts (so the column's shortcuts
@@ -35,10 +37,10 @@ type Handlers = {
  *  band, so a click stays a click. */
 const THRESHOLD_PX = 4;
 
-/** Anything a press should reach instead of starting a band: the card's
- *  drag handle (its thumbnail) and every control. */
+/** Anything a press should reach instead of starting a band: a card (its
+ *  body is not empty space) and every control. */
 const NOT_EMPTY =
-  "[data-drag-handle], input, textarea, select, button, label, a, [contenteditable='true']";
+  "[data-frame-id], input, textarea, select, button, label, a, [contenteditable='true']";
 
 /** Card elements carry `data-frame-id`; their rects are taken relative to the
  *  container so a scroll of the page during the drag does not skew them. */
@@ -81,13 +83,13 @@ function hitIds(cards: CardRect[], box: Box): string[] {
  *  draw a rectangle; every card it touches is reported. Card rects are
  *  measured once per drag, hit-testing runs at most once per animation frame,
  *  and the only layout read per frame is the container's own rect. */
-export function useRubberBand({ onStart, onChange, onEmptyClick, focusTarget }: Handlers) {
+export function useRubberBand({ onStart, onChange, onEnd, onEmptyClick, focusTarget }: Handlers) {
   const [box, setBox] = useState<Box | null>(null);
   const drag = useRef<Drag | null>(null);
-  const handlers = useRef({ onStart, onChange, onEmptyClick, focusTarget });
+  const handlers = useRef({ onStart, onChange, onEnd, onEmptyClick, focusTarget });
   useEffect(() => {
-    handlers.current = { onStart, onChange, onEmptyClick, focusTarget };
-  }, [onStart, onChange, onEmptyClick, focusTarget]);
+    handlers.current = { onStart, onChange, onEnd, onEmptyClick, focusTarget };
+  }, [onStart, onChange, onEnd, onEmptyClick, focusTarget]);
 
   useEffect(
     () => () => {
@@ -157,7 +159,9 @@ export function useRubberBand({ onStart, onChange, onEmptyClick, focusTarget }: 
     if (isCancel) return;
     if (d.isActive) {
       // The last move may still be waiting for its frame -- settle it now.
-      handlers.current.onChange(hitIds(d.cards, boxOf(d)));
+      const ids = hitIds(d.cards, boxOf(d));
+      handlers.current.onChange(ids);
+      handlers.current.onEnd(ids);
     } else if (!d.additive) {
       handlers.current.onEmptyClick();
     }
