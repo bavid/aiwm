@@ -19,7 +19,7 @@ export function rejectionLabel(reason: string): string {
   return REJECTION_REASONS.find((r) => r.value === reason)?.label ?? reason;
 }
 
-export function countByReason(frames: DatasetFrame[]): Record<string, number> {
+export function countByReason(frames: readonly DatasetFrame[]): Record<string, number> {
   const counts: Record<string, number> = {};
   for (const frame of frames) {
     counts[frame.rejection_reason] = (counts[frame.rejection_reason] ?? 0) + 1;

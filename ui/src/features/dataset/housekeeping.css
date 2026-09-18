@@ -1,0 +1,170 @@
+.housekeeping {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.housekeeping__title {
+  margin: 0;
+}
+
+.housekeeping__usage {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: var(--space-2);
+  margin: 0;
+}
+
+.housekeeping__usage > div {
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+
+.housekeeping__usage dt {
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.housekeeping__usage dd {
+  margin: 2px 0 0;
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+
+.housekeeping__path {
+  display: block;
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  overflow-wrap: anywhere;
+}
+
+.housekeeping__tools {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: var(--space-3);
+}
+
+.housekeeping__tool {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-1);
+  padding-top: var(--space-2);
+  border-top: 2px solid var(--border-soft);
+}
+
+.housekeeping__tool--danger {
+  border-top-color: color-mix(in oklab, var(--load-crit) 45%, var(--border-soft));
+}
+
+.housekeeping__tool input[type="range"] {
+  width: 100%;
+  accent-color: var(--accent);
+}
+
+.housekeeping__tool input[type="range"]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.housekeeping__label {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--text);
+}
+
+.housekeeping__label output {
+  margin-left: var(--space-1);
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-sm);
+  background: color-mix(in oklab, var(--accent) 14%, var(--surface-2));
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+
+.housekeeping__help {
+  flex: 1;
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+}
+
+.housekeeping__tool .chip {
+  margin-top: var(--space-1);
+}
+
+.housekeeping__tool .chip:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.housekeeping__tool .chip:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.housekeeping__danger {
+  color: var(--load-crit);
+  border-color: color-mix(in oklab, var(--load-crit) 40%, var(--border));
+}
+
+.housekeeping__danger:hover:not(:disabled) {
+  color: var(--load-crit);
+  background: color-mix(in oklab, var(--load-crit) 8%, var(--surface-2));
+}
+
+.housekeeping__result .dataset__err,
+.housekeeping__result .dataset__done {
+  margin: 0;
+  line-height: 1.5;
+}
+
+/* --- the skipped-files list (shared with the board's notices) --- */
+
+.skipped {
+  margin-top: var(--space-1);
+  font-size: var(--text-xs);
+  color: var(--muted);
+}
+
+.skipped summary {
+  cursor: pointer;
+  color: var(--load-warn);
+}
+
+.skipped summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.skipped ul {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  max-height: 180px;
+  margin: var(--space-2) 0 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.skipped li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 var(--space-2);
+}
+
+.skipped__path {
+  font-family: var(--font-mono);
+  color: var(--text);
+  overflow-wrap: anywhere;
+}

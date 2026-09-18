@@ -1,0 +1,104 @@
+.confirm {
+  width: min(480px, calc(100vw - 2 * var(--space-4)));
+  padding: var(--space-5);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: 0 24px 64px color-mix(in oklab, black 35%, transparent);
+}
+
+.confirm::backdrop {
+  background: color-mix(in oklab, var(--bg) 55%, black 30%);
+  backdrop-filter: blur(2px);
+}
+
+.confirm__title {
+  margin: 0 0 var(--space-3);
+  font-family: var(--font-display);
+  font-size: var(--text-lg);
+}
+
+.confirm__body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
+  line-height: 1.55;
+}
+
+.confirm__body p {
+  margin: 0;
+}
+
+.confirm__body ul {
+  margin: 0;
+  padding-left: var(--space-5);
+}
+
+.confirm__path {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.confirm__error {
+  margin: var(--space-3) 0 0;
+  padding: var(--space-2) var(--space-3);
+  border-left: 3px solid var(--load-crit);
+  background: color-mix(in oklab, var(--load-crit) 8%, var(--surface));
+  color: var(--load-crit);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+}
+
+.confirm__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  margin-top: var(--space-5);
+}
+
+.confirm__go {
+  padding: var(--space-1) var(--space-4);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: var(--accent);
+  color: var(--accent-fg);
+  font: inherit;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.confirm__go[data-tone="danger"] {
+  background: var(--load-crit);
+  color: var(--surface);
+}
+
+.confirm__go:disabled,
+.confirm__actions .chip:disabled {
+  opacity: 0.55;
+  cursor: progress;
+}
+
+.confirm__go:focus-visible,
+.confirm__actions .chip:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .confirm[open] {
+    animation: confirm-in var(--dur) var(--ease);
+  }
+}
+
+@keyframes confirm-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.98);
+  }
+}
