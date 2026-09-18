@@ -1665,6 +1665,52 @@ für hunderte bis tausende Frames aus Videos ist das zu langsam.
   bestehender Daten in diesem Schritt (höchstens ein späterer
   "Dataset verschieben"-Befehl).
 
+## LoRA-Übersicht & Weitertrainieren (Backlog, User-Wunsch 2026-09-18)
+
+Ziel des Nutzers: nicht alles (bis ~1 TB Rohmaterial) in einem Lauf trainieren,
+sondern eine LoRA schrittweise mit weiteren Datasets verbessern — und dabei
+jederzeit sehen, womit eine LoRA bisher trainiert wurde.
+
+- **LoRA-Übersicht** — eine Ansicht (Training-Tab oder Model Library) mit
+  allen selbst trainierten LoRAs. Eine LoRA auswählen zeigt ihre
+  **Trainingshistorie**: jeder Lauf, der zu ihr beigetragen hat, mit Dataset
+  (Name, Quellordner), Anzahl Frames/Bilder, Captioner, Trigger-Wort,
+  Profil/Basis-Modell, Steps, Learning-Rate/Rank, Dauer, Datum, Ergebnis
+  (fertig/abgebrochen) und die Samples der Läufe. Summen oben: Bilder
+  insgesamt, Steps insgesamt, Anzahl Läufe. Von hier aus direkt "Im
+  Image-Tab testen" (gibt es schon pro Lauf) und **"Mit weiterem Dataset
+  trainieren"**.
+  Grundlage heute: jeder Lauf ist eine `training_runs`-Zeile (Migration 0016)
+  mit Dataset-Bezug, und die fertige LoRA wird mit `source training:<id>` in
+  die Library importiert — die Verknüpfung LoRA → Lauf existiert also für den
+  ersten Lauf; für Folge-Läufe braucht es eine Kette (Eltern-LoRA / Lineage).
+- **Bestehende LoRA mit einem anderen Dataset weitertrainieren** — neuer
+  Lauf, der die gewählte LoRA als Startpunkt nimmt statt bei null anzufangen.
+  Heute nicht möglich: `Runner::resume` (`core/src/training/runner.rs:340`)
+  setzt nur einen *pausierten/unterbrochenen* Lauf mit derselben Config fort
+  (ai-toolkit findet seinen eigenen letzten Checkpoint unter demselben
+  Job-Namen). **Erst prüfen, nicht raten:** ob ai-toolkit (gepinnter Commit
+  `e65c4d0`) einen vorhandenen LoRA-Checkpoint als Startgewichte für einen
+  Lauf mit *anderem* Dataset akzeptiert, und unter welchem Config-Schlüssel.
+  Einschränkungen, die die UI erzwingen/erklären muss: gleiches
+  Basis-Modell/Profil und gleicher Rank wie die Eltern-LoRA; das Ergebnis ist
+  eine **neue Version** (die alte bleibt erhalten, kein Überschreiben), sichtbar
+  in der Lineage der Übersicht.
+- **Vergessen verhindern (wichtig, in UI und Hilfe erklären):** wer nur auf
+  Dataset Y weitertrainiert, driftet in Richtung Y und verliert teilweise, was
+  aus X gelernt wurde. Angebotene Wege: (a) **Mischen** — beim Weitertrainieren
+  einen einstellbaren Anteil der früheren Datasets wieder mit einspeisen
+  (Standard vorgeschlagen, abschaltbar); (b) Alternative ohne Weitertrainieren:
+  ein Dataset schrittweise um neues Material erweitern und neu trainieren.
+  Die Übersicht zeigt pro Version, welche Datasets in welchem Anteil
+  eingeflossen sind.
+- **Datenmenge realistisch einordnen:** für eine LoRA reichen typischerweise
+  einige hundert bis einige tausend gut ausgewählte Bilder; die Pipeline
+  sampelt Frames (Standard 1,5 fps) und filtert Unschärfe/Duplikate. Die
+  Übersicht und die Hilfe sollen das sagen, damit niemand 1 TB Rohvideo für
+  nötig hält. Knüpft an "Speicherort frei wählbar" und die
+  Kuratier-Werkzeuge oben an.
+
 ## In-App-Dokumentation & Tooltips (Backlog, User-Wunsch 2026-09-18)
 
 - **Vollständige Dokumentation in der App selbst** — eine eigene Seite
