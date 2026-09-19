@@ -1891,7 +1891,8 @@ Noch offen aus Plan 6:
     `training.rs`) plus `stacks.rs`, Invarianten-Tests bleiben zentral.
   - `eslint-plugin-jsx-a11y` für die neuen Install-Buttons/Hinweise weiter
     offen (wie schon bei früheren Plänen notiert).
-- **Speicherort für Dataset- und Trainingsdaten frei wählbar (optional)** —
+- ✅ (umgesetzt 2026-09-19, Plan 10 "Storage Locations"; Messung siehe unten)
+  **Speicherort für Dataset- und Trainingsdaten frei wählbar (optional)** —
   User-Wunsch 2026-09-18: die App läuft auf einer 1-TB-SSD, ein
   Trainingsvorhaben erzeugt aber leicht ~100 GB (extrahierte Frames, Export,
   Checkpoints, Samples). Diese Daten sollen auf ein anderes Laufwerk gelegt
@@ -1913,7 +1914,51 @@ Noch offen aus Plan 6:
   Platte abgesteckt) — klare Meldung statt stillem Fehler; kein Verschieben
   bestehender Daten in diesem Schritt (höchstens ein späterer
   "Dataset verschieben"-Befehl).
-- **Zentrale Standard-Pfade in den Settings für *alles*, was die App erzeugt**
+  **Umgesetzt (Plan 10):** zwei neue konfigurierbare Wurzeln `datasets_path`
+  (Standard `<outputs>/datasets`) und `training_path` (Standard
+  `<data>/training`) in `[paths]` von `config.toml`; optionales Feld
+  "Store frames in" im Dataset-Formular (`data_dir` an `POST /jobs`) und
+  "Store run in" im Trainings-Formular (`data_dir` an `POST /training/runs`),
+  gespeichert als `datasets.work_dir` (Migration 0019) bzw.
+  `training_runs.work_dir`, damit Kuratier-Grid, Belegung, Aufräumen, Löschen,
+  Resume und Settle den Ordner wiederfinden. Sicherheitsregeln (im Core
+  erzwungen, getestet und live geprüft): Pfad muss absolut sein; nicht im
+  Quellordner und der Quellordner nicht darin; nicht im Model-Store; nicht im
+  Arbeitsordner eines anderen Datasets oder Trainingslaufs; Plattenplatz-
+  Vorabprüfung (5 GB) auf dem *gewählten* Laufwerk.
+
+  Gemessen 2026-09-19 mit echtem `aiwm-cored` (DB gesichert, Migration 0019
+  live angewendet) auf `D:\Data\Test` (ein Video `20250111-_1.mp4`,
+  153.603.700 B, SHA-256 `15F22FD0…9BF28` vor und nach dem Lauf identisch,
+  mtime unverändert), Frames-Modus, kein Captioner, `data_dir` = ein Ordner im
+  Session-Scratchpad auf `C:`:
+
+  | Schritt | Ergebnis |
+  |---|---|
+  | `POST /jobs` (dataset_prep, `data_dir` gesetzt) | HTTP 201, Job `01a0ba52-1846…`; 296,6 s Wandzeit (Extraktion 21,8 s, Filter 271,5 s); **1.368 Frames** extrahiert, **40 behalten**, 1.328 abgelehnt; keine Fehler-Events |
+  | Ablage | alle 1.368 Dateien / 1.173.444.536 B unter `<data_dir>\<job_id>\raw\Test\20250111-_1\`; `GET /datasets` zeigt `work_dir` = genau dieser Ordner; **nichts** unter `E:\AI\data\outputs\datasets\` (vorher und nachher leer, mtime unverändert) |
+  | Abgelehnt (HTTP 400, nichts angelegt) | `data_dir` = Quellordner; = Elternordner der Quelle; im Model-Store (`E:\AI\models\x`); relativ (`frames`); im Arbeitsordner des eben erzeugten Datasets; Trainingslauf mit `data_dir` = Quellordner ("lies inside its source folder … of dataset \"Test\"") — jeweils mit klarer Meldung |
+  | `GET /datasets/{id}/usage` | `work_files` 1.368, `work_bytes` 1.173.444.536 (identisch mit Dateisystem-Zählung), 1.328 aussortiert / 1.139.669.340 B |
+  | `POST …/cleanup` `dry_run` → echt | Vorschau 1.328 Frames / 1.139.669.340 B, 0 gelöscht → echt: 1.328 Dateien gelöscht in 434 ms; danach 40 Dateien / 33.775.196 B, Belegung stimmt |
+  | `DELETE /datasets/{id}` | 40 Dateien, 33.775.196 B frei, 68 ms; `<data_dir>\<job_id>` weg, `<data_dir>` selbst und eine Kanarienvogel-Datei darin unangetastet |
+  | `GET /storage/locations` | outputs 0 B / 0 Dateien; datasets 0 / 0; training 0 / 0; models 148.274.558.661 B / 116; runtimes 21.878.826.432 B / 199.116; cache 283.550 B / 60; downloads 0 / 0 — alle `exists`, `skipped` 0 |
+
+  Auffälligkeit (vorbestehend, nicht Plan 10): `volume_free_bytes` /
+  `volume_total_bytes` waren für **alle** Orte `null`, und die
+  Plattenplatz-Vorabprüfung loggte "could not determine free disk space" und
+  ließ den Lauf durch (fail-open). Ursache nach Code-Lesung:
+  `cleanup::volume_free` (seit `25e99e4`, Phase 6.8a) kanonisiert den Pfad —
+  unter Windows entsteht `\\?\E:\…` — und vergleicht per `starts_with` mit
+  dem sysinfo-Mount-Point `E:\`, was nie passt. Betrifft auch `GET /storage`
+  und das Download-Freiplatz-Gate. **Offen:** Präfix strippen (oder
+  `std::path::absolute` statt `canonicalize`) plus Test; danach zeigt die
+  Settings-Seite echten freien Platz.
+- ✅ (umgesetzt 2026-09-19, Plan 10 — Settings → "Data locations" listet
+  jetzt Outputs, Datasets, Training, Model-Store, Runtimes, Cache und
+  Download-Staging mit Pfad, Größe, Dateizahl, "Ordner öffnen", "Wählen…" für
+  die konfigurierbaren, "Aktualisieren" und dem Hinweis, dass bestehende Daten
+  liegen bleiben; freier Platz siehe Auffälligkeit oben)
+  **Zentrale Standard-Pfade in den Settings für *alles*, was die App erzeugt**
   (User-Wunsch 2026-09-18, ergänzt den Punkt oben). Settings → "Data
   locations" kennt heute nur `outputs_path`, `runtimes_path` und `cache_path`
   (`ui/src/features/settings/Settings.tsx:253`, `[paths]` in `config.toml`).
