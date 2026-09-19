@@ -176,6 +176,65 @@ pub async fn resolve_qwen_vl_dir(db: &Database, store_root: &Path) -> Result<std
     verified_store_dir(store_root, ModelKind::QwenVlEngine).await
 }
 
+/// Where a run stands with Qwen2.5-VL escalation.
+enum QwenGateState {
+    /// Not re-verified yet in this run.
+    Unchecked,
+    /// Re-verified right before the first escalation call.
+    Ready(std::path::PathBuf),
+    /// The re-check failed; escalation is off for the rest of the run.
+    Disabled,
+}
+
+/// Re-runs the pinned-folder integrity check for Qwen2.5-VL **immediately
+/// before the first escalation call of a run** — the call that makes the
+/// sidecar load Qwen lazily, possibly long after the run-start check in
+/// [`resolve_qwen_vl_dir`]. Later calls reuse the verdict: the sidecar keeps
+/// the loaded engine, so nothing is re-read from disk after that load.
+pub struct QwenGate {
+    store_root: std::path::PathBuf,
+    state: tokio::sync::Mutex<QwenGateState>,
+}
+
+impl QwenGate {
+    pub fn new(store_root: &Path) -> Self {
+        Self {
+            store_root: store_root.to_path_buf(),
+            state: tokio::sync::Mutex::new(QwenGateState::Unchecked),
+        }
+    }
+
+    /// The verified Qwen folder to send with `caption_frame_pair`, or `None`
+    /// when escalation is off: a failed re-check appends one warning event
+    /// to `job_id` and disables escalation for the rest of the run.
+    pub async fn dir_for_escalation(
+        &self,
+        db: &Database,
+        job_id: &str,
+    ) -> Result<Option<std::path::PathBuf>> {
+        let mut state = self.state.lock().await;
+        if let QwenGateState::Unchecked = *state {
+            *state = match verified_store_dir(&self.store_root, ModelKind::QwenVlEngine).await {
+                Ok(dir) => QwenGateState::Ready(dir),
+                Err(e) => {
+                    db.jobs()
+                        .append_event(
+                            job_id,
+                            crate::db::EventLevel::Warn,
+                            &format!("temporal-context escalation disabled \u{2014} {e}"),
+                        )
+                        .await?;
+                    QwenGateState::Disabled
+                }
+            };
+        }
+        Ok(match &*state {
+            QwenGateState::Ready(dir) => Some(dir.clone()),
+            QwenGateState::Unchecked | QwenGateState::Disabled => None,
+        })
+    }
+}
+
 /// The pinned snapshot kind a captioner loads from, when it has one — the
 /// captioners whose folder must pass the load-time integrity check.
 fn pinned_kind_for(c: &Captioner) -> Option<ModelKind> {
@@ -434,6 +493,77 @@ mod tests {
             .await
             .unwrap_err();
         assert!(err.to_string().contains("not installed"), "{err}");
+    }
+
+    async fn warn_events(db: &Database, job_id: &str) -> Vec<String> {
+        db.jobs()
+            .events(job_id)
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|e| e.level == crate::db::EventLevel::Warn)
+            .map(|e| e.message)
+            .collect()
+    }
+
+    /// Qwen loads lazily at the first escalation, possibly long after the
+    /// run-start check -- the gate re-verifies right then, and a failure
+    /// switches escalation off for the rest of the run with one warning
+    /// (not one per uncertain frame).
+    #[tokio::test]
+    async fn the_qwen_gate_disables_escalation_with_one_warning_when_the_recheck_fails() {
+        let db = empty_db().await;
+        let job_id = super::super::testutil::new_job(&db).await;
+        let store = tempfile::tempdir().unwrap();
+        let gate = QwenGate::new(store.path());
+
+        assert_eq!(gate.dir_for_escalation(&db, &job_id).await.unwrap(), None);
+        assert_eq!(gate.dir_for_escalation(&db, &job_id).await.unwrap(), None);
+
+        let warns = warn_events(&db, &job_id).await;
+        assert_eq!(warns.len(), 1, "{warns:?}");
+        assert!(warns[0].contains("escalation disabled"), "{warns:?}");
+        assert!(
+            warns[0].contains("captioner folder check failed"),
+            "{warns:?}"
+        );
+    }
+
+    /// Hard-links the real pinned Qwen2.5-VL files from
+    /// `AIWM_TEST_QWEN_VL_SNAPSHOT` into a temp store (same volume, no
+    /// 16 GB copy); the files themselves are never modified.
+    #[tokio::test]
+    #[ignore = "needs the real pinned Qwen2.5-VL snapshot (AIWM_TEST_QWEN_VL_SNAPSHOT)"]
+    async fn the_qwen_gate_rechecks_the_real_snapshot_before_the_lazy_load() {
+        let src = std::path::PathBuf::from(
+            std::env::var("AIWM_TEST_QWEN_VL_SNAPSHOT").expect("set the snapshot path"),
+        );
+        let db = empty_db().await;
+        let job_id = super::super::testutil::new_job(&db).await;
+        // Beside the snapshot (same volume, so hard links work).
+        let store = tempfile::tempdir_in(src.parent().unwrap()).unwrap();
+        let dir = store.path().join("vision").join("qwen2.5-vl-7b");
+        std::fs::create_dir_all(&dir).unwrap();
+        for name in QWEN_VL_REQUIRED_FILES {
+            std::fs::hard_link(src.join(name), dir.join(name)).unwrap();
+            db.models().insert(qwen_row(name)).await.unwrap();
+        }
+
+        // Run start: the folder verifies.
+        resolve_qwen_vl_dir(&db, store.path()).await.unwrap();
+        let gate = QwenGate::new(store.path());
+        assert_eq!(
+            gate.dir_for_escalation(&db, &job_id).await.unwrap(),
+            Some(store.path().join("vision/qwen2.5-vl-7b"))
+        );
+
+        // Something lands in the folder after the run-start check: a fresh
+        // gate (the next run's first escalation) refuses it by name.
+        std::fs::write(dir.join("sneaky.json"), b"{}").unwrap();
+        let later = QwenGate::new(store.path());
+        assert_eq!(later.dir_for_escalation(&db, &job_id).await.unwrap(), None);
+        let warns = warn_events(&db, &job_id).await;
+        assert!(warns.iter().any(|w| w.contains("sneaky.json")), "{warns:?}");
     }
 
     /// Real-bytes positive path: set `AIWM_TEST_FLORENCE2_SNAPSHOT` to a

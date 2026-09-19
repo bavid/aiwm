@@ -131,6 +131,10 @@ pub async fn run(
         None
     };
     let escalate = escalate && qwen_dir.is_some();
+    // Qwen loads lazily in the sidecar at the first escalation, which can
+    // come long after the check above -- the gate re-verifies the folder
+    // right before that first call (once per run).
+    let qwen_gate = caption::QwenGate::new(store_root);
 
     let items = ingest::walk_dataset_root(&req.root)?;
     if items.is_empty() {
@@ -279,7 +283,8 @@ pub async fn run(
                 vision,
                 captioner: c,
                 model_dir: dir,
-                qwen_dir: qwen_dir.as_deref(),
+                qwen_gate: &qwen_gate,
+                job_id,
                 escalate,
                 req: &req,
             };
@@ -431,7 +436,11 @@ struct CaptionContext<'a> {
     vision: &'a VisionAdapter,
     captioner: &'a Captioner,
     model_dir: &'a Path,
-    qwen_dir: Option<&'a Path>,
+    /// Re-verifies the Qwen2.5-VL folder before the first escalation call
+    /// and hands out the verified directory (or `None` once disabled).
+    qwen_gate: &'a caption::QwenGate,
+    /// For the gate's "escalation disabled" warning event.
+    job_id: &'a str,
     /// Already implies `captioner.supports_escalation`.
     escalate: bool,
     req: &'a DatasetPrepRequest,
@@ -447,7 +456,8 @@ async fn caption_group(
         vision,
         captioner: c,
         model_dir,
-        qwen_dir,
+        qwen_gate,
+        job_id,
         escalate,
         req,
     } = *ctx;
@@ -473,10 +483,14 @@ async fn caption_group(
             } else {
                 None
             };
+            let qwen_dir = match neighbor_idx {
+                Some(_) => qwen_gate.dir_for_escalation(db, job_id).await?,
+                None => None,
+            };
             if let (Some(neighbor_idx), Some(qwen_dir)) = (neighbor_idx, qwen_dir) {
                 let neighbor_path = Path::new(&records[neighbor_idx].frame_path);
                 if let Ok(recap) =
-                    caption::caption_frame_pair(vision, qwen_dir, frame_path, neighbor_path).await
+                    caption::caption_frame_pair(vision, &qwen_dir, frame_path, neighbor_path).await
                 {
                     final_caption = recap;
                     engine = "qwen2.5-vl".to_string();

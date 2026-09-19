@@ -629,13 +629,14 @@ pub const KNOWN_MODELS: &[KnownModel] = &[
         publisher: "SmilingWolf",
         repo: "SmilingWolf/wd-eva02-large-tagger-v3",
         file: "model.onnx",
-        url: "https://huggingface.co/SmilingWolf/wd-eva02-large-tagger-v3/resolve/main/model.onnx",
+        url: "https://huggingface.co/SmilingWolf/wd-eva02-large-tagger-v3/resolve/b25b82a03f7282e41aa2f257a52c7583b710bd1c/model.onnx",
         sha256: "9e768793060c7939b277ccb382783e8670e8a042d29d77aa736be0c8cc898bfc",
         size_bytes: 1_260_435_999,
         license: "Apache-2.0",
         note: "Danbooru-style tag captioner (rating, character and general tags, explicit \
                tags included) for anime/illustration datasets. 0.3B parameters, runs on the \
-               CPU via onnxruntime. Needs the tag list below in the same folder.",
+               CPU via onnxruntime. Needs the tag list below in the same folder. Pinned to \
+               commit b25b82a03f7282e41aa2f257a52c7583b710bd1c.",
         is_default: false,
         media: "training",
     },
@@ -647,12 +648,12 @@ pub const KNOWN_MODELS: &[KnownModel] = &[
         publisher: "SmilingWolf",
         repo: "SmilingWolf/wd-eva02-large-tagger-v3",
         file: "selected_tags.csv",
-        url: "https://huggingface.co/SmilingWolf/wd-eva02-large-tagger-v3/resolve/main/selected_tags.csv",
+        url: "https://huggingface.co/SmilingWolf/wd-eva02-large-tagger-v3/resolve/b25b82a03f7282e41aa2f257a52c7583b710bd1c/selected_tags.csv",
         sha256: "298633d94d0031d2081c0893f29c82eab7f0df00b08483ba8f29d1e979441217",
         size_bytes: 308_468,
         license: "Apache-2.0",
         note: "The tag vocabulary the tagger's outputs map onto. Required companion of the \
-               model above.",
+               model above. Pinned to commit b25b82a03f7282e41aa2f257a52c7583b710bd1c.",
         is_default: false,
         media: "training",
     },
@@ -1784,11 +1785,11 @@ mod tests {
     }
 
     /// Remote code and weights must never change under us: every file of a
-    /// directory-shaped captioner is fetched from one pinned 40-hex commit,
-    /// never a moving branch like `main`.
+    /// directory-shaped captioner (and the WD tagger pair) is fetched from
+    /// one pinned 40-hex commit, never a moving branch like `main`.
     #[test]
     fn captioner_engine_urls_are_pinned_to_one_commit_per_repo() {
-        for kind in ["florence2_engine", "qwen_vl_engine"] {
+        for kind in ["florence2_engine", "qwen_vl_engine", "wd_tagger"] {
             let mut commits: Vec<&str> = Vec::new();
             for m in KNOWN_MODELS.iter().filter(|m| m.kind == kind) {
                 let prefix = format!("https://huggingface.co/{}/resolve/", m.repo);
