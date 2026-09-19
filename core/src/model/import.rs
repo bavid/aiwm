@@ -104,8 +104,19 @@ pub async fn import_model(
         .map_err(|e| CoreError::Config(format!("{}: {e}", source.display())))?;
 
     if let Some(existing) = db.models().find_by_sha256(&sha256).await? {
+        // A pinned captioner file is loaded from its catalog location, so a
+        // re-import ("reinstall the stack") must be able to repair a copy
+        // that was tampered with or deleted there -- not just report the
+        // row it matched.
+        let model = match pinned_file {
+            Some(file) => {
+                let dest = store_root.join(kind.store_subdir()).join(file);
+                repair_pinned_copy(db, existing, &source, &dest, &sha256, req.keep_original).await?
+            }
+            None => existing,
+        };
         return Ok(ImportOutcome {
-            model: existing,
+            model,
             already_present: true,
         });
     }
@@ -165,6 +176,42 @@ pub async fn import_model(
         model,
         already_present: false,
     })
+}
+
+/// Make sure the pinned file `existing` stands for really sits at `dest`
+/// with the verified content `sha256` (the just-hashed `source`): when the
+/// copy there is missing or no longer matches, `source` is placed there, and
+/// the row is re-pointed at `dest` if it recorded another path.
+async fn repair_pinned_copy(
+    db: &Database,
+    existing: Model,
+    source: &Path,
+    dest: &Path,
+    sha256: &str,
+    keep_original: bool,
+) -> Result<Model> {
+    let (src, dst, want) = (source.to_path_buf(), dest.to_path_buf(), sha256.to_string());
+    tokio::task::spawn_blocking(move || -> Result<()> {
+        let intact =
+            dst.is_file() && sha256_file(&dst).is_ok_and(|h| h.eq_ignore_ascii_case(&want));
+        if intact {
+            return Ok(());
+        }
+        if let Some(parent) = dst.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| CoreError::Config(format!("create {}: {e}", parent.display())))?;
+        }
+        tracing::warn!(path = %dst.display(), "restoring a pinned captioner file");
+        place_file(&src, &dst, keep_original)
+    })
+    .await
+    .map_err(|e| CoreError::Other(anyhow::anyhow!("repair worker panicked: {e}")))??;
+
+    let dest_str = dest.to_string_lossy();
+    if existing.file_path == dest_str {
+        return Ok(existing);
+    }
+    db.models().set_file_path(&existing.id, &dest_str).await
 }
 
 /// Extensions of a captioner snapshot directory that can steer code
@@ -1187,6 +1234,94 @@ mod tests {
             .unwrap_err();
         assert!(err.to_string().contains("pinned"), "{err}");
         assert!(db.models().list().await.unwrap().is_empty());
+    }
+
+    /// "Reinstall the stack" must actually repair a pinned folder: a
+    /// re-download matches the existing row by SHA-256, and instead of a
+    /// bare `already_present` no-op it puts the verified bytes back where the
+    /// integrity check will look for them.
+    #[tokio::test]
+    async fn re_importing_a_pinned_file_restores_a_corrupted_or_deleted_copy() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = tmp.path().join("store");
+        let db = Database::connect_in_memory().await.unwrap();
+        let dest = store.join("vision/florence2-large/tokenizer_config.json");
+
+        let first = write_safetensors(
+            tmp.path(),
+            "tokenizer_config.json",
+            FLORENCE2_TOKENIZER_CONFIG,
+        );
+        let out = import_as(&db, &store, &first, "florence2_engine")
+            .await
+            .unwrap();
+        assert!(!out.already_present);
+
+        // Tampered in place, then re-downloaded.
+        std::fs::write(&dest, b"{\"auto_map\": {}}\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n").unwrap();
+        let again = write_safetensors(
+            tmp.path(),
+            "tokenizer_config.json",
+            FLORENCE2_TOKENIZER_CONFIG,
+        );
+        let out = import_as(&db, &store, &again, "florence2_engine")
+            .await
+            .unwrap();
+        assert!(out.already_present);
+        assert_eq!(std::fs::read(&dest).unwrap(), FLORENCE2_TOKENIZER_CONFIG);
+        assert_eq!(Path::new(&out.model.file_path), dest.as_path());
+
+        // Deleted, then re-downloaded.
+        std::fs::remove_file(&dest).unwrap();
+        let third = write_safetensors(
+            tmp.path(),
+            "tokenizer_config.json",
+            FLORENCE2_TOKENIZER_CONFIG,
+        );
+        import_as(&db, &store, &third, "florence2_engine")
+            .await
+            .unwrap();
+        assert_eq!(std::fs::read(&dest).unwrap(), FLORENCE2_TOKENIZER_CONFIG);
+        assert_eq!(
+            db.models().list().await.unwrap().len(),
+            1,
+            "no duplicate row"
+        );
+    }
+
+    /// The row's recorded path is corrected when the repair lands the file
+    /// somewhere else (e.g. the row was re-pointed by hand).
+    #[tokio::test]
+    async fn a_repaired_pinned_file_updates_the_rows_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = tmp.path().join("store");
+        let db = Database::connect_in_memory().await.unwrap();
+        let first = write_safetensors(
+            tmp.path(),
+            "tokenizer_config.json",
+            FLORENCE2_TOKENIZER_CONFIG,
+        );
+        let out = import_as(&db, &store, &first, "florence2_engine")
+            .await
+            .unwrap();
+        let elsewhere = tmp.path().join("elsewhere.json");
+        db.models()
+            .set_file_path(&out.model.id, &elsewhere.to_string_lossy())
+            .await
+            .unwrap();
+
+        let again = write_safetensors(
+            tmp.path(),
+            "tokenizer_config.json",
+            FLORENCE2_TOKENIZER_CONFIG,
+        );
+        let out = import_as(&db, &store, &again, "florence2_engine")
+            .await
+            .unwrap();
+        let dest = store.join("vision/florence2-large/tokenizer_config.json");
+        assert_eq!(Path::new(&out.model.file_path), dest.as_path());
+        let stored = db.models().get(&out.model.id).await.unwrap().unwrap();
+        assert_eq!(Path::new(&stored.file_path), dest.as_path());
     }
 
     /// A pinned file imported under another pinned file's name must land

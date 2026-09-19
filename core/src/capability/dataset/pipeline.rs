@@ -135,6 +135,11 @@ pub async fn run(
     // come long after the check above -- the gate re-verifies the folder
     // right before that first call (once per run).
     let qwen_gate = caption::QwenGate::new(store_root);
+    // Same for a pinned captioner (Florence-2): verified at run start above
+    // and again right before its first `caption_frame` of the run.
+    let captioner_gate = captioner
+        .and_then(caption::pinned_kind_for)
+        .map(|kind| caption::PinnedDirGate::new(store_root, kind));
 
     let items = ingest::walk_dataset_root(&req.root)?;
     if items.is_empty() {
@@ -283,6 +288,7 @@ pub async fn run(
                 vision,
                 captioner: c,
                 model_dir: dir,
+                captioner_gate: captioner_gate.as_ref(),
                 qwen_gate: &qwen_gate,
                 job_id,
                 escalate,
@@ -438,6 +444,9 @@ struct CaptionContext<'a> {
     model_dir: &'a Path,
     /// Re-verifies the Qwen2.5-VL folder before the first escalation call
     /// and hands out the verified directory (or `None` once disabled).
+    /// Set for a captioner with a pinned snapshot (Florence-2): re-verifies
+    /// its folder before the run's first caption call.
+    captioner_gate: Option<&'a caption::PinnedDirGate>,
     qwen_gate: &'a caption::QwenGate,
     /// For the gate's "escalation disabled" warning event.
     job_id: &'a str,
@@ -456,6 +465,7 @@ async fn caption_group(
         vision,
         captioner: c,
         model_dir,
+        captioner_gate,
         qwen_gate,
         job_id,
         escalate,
@@ -466,8 +476,14 @@ async fn caption_group(
             return Ok(());
         }
         let frame_path = Path::new(&record.frame_path);
+        // A pinned captioner (Florence-2) is re-verified right before its
+        // first call of the run -- the one that loads it in the sidecar.
+        let model_dir = match captioner_gate {
+            Some(gate) => gate.dir().await?,
+            None => model_dir.to_path_buf(),
+        };
         let (base_caption, mut engine) =
-            caption::caption_with(vision, c, model_dir, frame_path).await?;
+            caption::caption_with(vision, c, &model_dir, frame_path).await?;
         let mut final_caption = base_caption.clone();
 
         let is_video_frame = record.timestamp_secs.is_some();

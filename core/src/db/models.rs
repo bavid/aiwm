@@ -304,6 +304,25 @@ impl<'a> ModelRepo<'a> {
             .ok_or_else(|| CoreError::Db("model vanished right after rename".into()))
     }
 
+    /// Re-point a model row at its file. The one caller is
+    /// `model::import`'s pinned-file repair, which puts verified bytes back
+    /// at the catalog location and records that path.
+    pub async fn set_file_path(&self, id: &str, file_path: &str) -> Result<Model> {
+        let res = sqlx::query("UPDATE models SET file_path = $1 WHERE id = $2")
+            .bind(file_path)
+            .bind(id)
+            .execute(self.pool)
+            .await?;
+        if res.rows_affected() == 0 {
+            return Err(CoreError::Config(format!(
+                "model {id} is not in the library"
+            )));
+        }
+        self.get(id)
+            .await?
+            .ok_or_else(|| CoreError::Db("model vanished right after a path update".into()))
+    }
+
     /// Overwrite the two provenance fields an import cannot infer for itself.
     /// The training runner ([`crate::training::runner`]) is the one caller:
     /// `model::import` derives `family` from the file name and always records

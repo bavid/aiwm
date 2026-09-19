@@ -346,11 +346,16 @@ class _Recorder:
 
 def _fake_ml_modules(
     monkeypatch: pytest.MonkeyPatch,
+    modules_cache: Path | None = None,
 ) -> list[tuple[str, str, dict[str, Any]]]:
     import sys
     import types
 
     calls: list[tuple[str, str, dict[str, Any]]] = []
+    dmu = types.ModuleType("transformers.dynamic_module_utils")
+    dmu.HF_MODULES_CACHE = str(modules_cache or Path("does-not-exist"))  # type: ignore[attr-defined]
+    dmu.TRANSFORMERS_DYNAMIC_MODULE_NAME = "transformers_modules"  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "transformers.dynamic_module_utils", dmu)
     torch = types.ModuleType("torch")
     torch.cuda = types.SimpleNamespace(is_available=lambda: False)  # type: ignore[attr-defined]
     torch.float16 = "float16"  # type: ignore[attr-defined]
@@ -377,6 +382,46 @@ def test_florence2_loads_model_and_processor_from_local_files_only(
         assert path == model_dir, name
         assert kwargs.get("local_files_only") is True, name
         assert kwargs.get("trust_remote_code") is True, name
+
+
+def test_florence2_clears_its_stale_remote_code_copies_before_the_first_load(
+    monkeypatch: pytest.MonkeyPatch, model_dir: str, tmp_path: Path
+):
+    # transformers copies a local folder's remote code to
+    # <HF_MODULES_CACHE>/transformers_modules/<sanitized folder name>/<hash>/
+    # and imports it from there -- a stale or planted copy must be gone
+    # before the verified folder is loaded.
+    cache = tmp_path / "hf-modules"
+    ours = cache / "transformers_modules" / "florence_hyphen_2_hyphen_large"
+    (ours / "oldhash").mkdir(parents=True)
+    (ours / "oldhash" / "modeling_florence2.py").write_text("import os\n")
+    other = cache / "transformers_modules" / "some_other_model"
+    other.mkdir(parents=True)
+    (other / "x.py").write_text("\n")
+    calls = _fake_ml_modules(monkeypatch, cache)
+
+    seen_stale: list[bool] = []
+    real_from_pretrained = _Recorder.from_pretrained
+
+    def spy(self: _Recorder, path: str, **kwargs: Any) -> Any:
+        seen_stale.append(ours.exists())
+        return real_from_pretrained(self, path, **kwargs)
+
+    monkeypatch.setattr(_Recorder, "from_pretrained", spy)
+    vision._construct_florence2(model_dir)
+
+    assert len(calls) == 2
+    assert seen_stale == [False, False], "cleared before every from_pretrained"
+    assert (other / "x.py").exists(), "only Florence-2's own copies are removed"
+
+
+def test_remote_code_cache_dir_follows_transformers_naming():
+    assert vision._remote_code_cache_dir("C:/store/vision/florence2-large", "/c") == Path(
+        "/c", "transformers_modules", "florence2_hyphen_large"
+    )
+    assert vision._remote_code_cache_dir("/m/2x.v1", "/c") == Path(
+        "/c", "transformers_modules", "_2x_dot_v1"
+    )
 
 
 @pytest.mark.parametrize("quantization", ["4bit", "8bit", "none"])

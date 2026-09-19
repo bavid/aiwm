@@ -176,6 +176,35 @@ pub async fn resolve_qwen_vl_dir(db: &Database, store_root: &Path) -> Result<std
     verified_store_dir(store_root, ModelKind::QwenVlEngine).await
 }
 
+/// Re-runs the pinned-folder integrity check for one captioner kind
+/// **immediately before the first model call of a run** (the call that
+/// makes the sidecar load the model) and reuses that verdict for the rest of
+/// the run: the sidecar keeps the loaded engine, so nothing is re-read from
+/// disk after that load. A failure is not cached — the next call re-checks.
+pub struct PinnedDirGate {
+    kind: ModelKind,
+    store_root: std::path::PathBuf,
+    verified: tokio::sync::OnceCell<std::path::PathBuf>,
+}
+
+impl PinnedDirGate {
+    pub fn new(store_root: &Path, kind: ModelKind) -> Self {
+        Self {
+            kind,
+            store_root: store_root.to_path_buf(),
+            verified: tokio::sync::OnceCell::new(),
+        }
+    }
+
+    /// The verified store folder to send to the sidecar.
+    pub async fn dir(&self) -> Result<std::path::PathBuf> {
+        self.verified
+            .get_or_try_init(|| verified_store_dir(&self.store_root, self.kind))
+            .await
+            .cloned()
+    }
+}
+
 /// Where a run stands with Qwen2.5-VL escalation.
 enum QwenGateState {
     /// Not re-verified yet in this run.
@@ -237,7 +266,7 @@ impl QwenGate {
 
 /// The pinned snapshot kind a captioner loads from, when it has one — the
 /// captioners whose folder must pass the load-time integrity check.
-fn pinned_kind_for(c: &Captioner) -> Option<ModelKind> {
+pub(super) fn pinned_kind_for(c: &Captioner) -> Option<ModelKind> {
     (c.id == FLORENCE2_ID).then_some(ModelKind::Florence2Engine)
 }
 
@@ -527,6 +556,46 @@ mod tests {
             warns[0].contains("captioner folder check failed"),
             "{warns:?}"
         );
+    }
+
+    /// Florence-2's gate: the folder is re-verified right before the first
+    /// `caption_frame` of a run; a failure is the run's error (captioning
+    /// was asked for, so there is nothing to fall back to).
+    #[tokio::test]
+    async fn the_florence2_gate_fails_the_first_caption_when_the_recheck_fails() {
+        let store = tempfile::tempdir().unwrap();
+        let gate = PinnedDirGate::new(store.path(), ModelKind::Florence2Engine);
+        let e = gate.dir().await.unwrap_err().to_string();
+        assert!(e.contains("captioner folder check failed"), "{e}");
+        assert!(e.contains("not installed"), "{e}");
+    }
+
+    /// Hard-links the real Florence-2 snapshot from
+    /// `AIWM_TEST_FLORENCE2_SNAPSHOT` into a temp store beside it.
+    #[tokio::test]
+    #[ignore = "needs the real pinned Florence-2 snapshot (AIWM_TEST_FLORENCE2_SNAPSHOT)"]
+    async fn the_florence2_gate_verifies_once_per_run_right_before_the_first_caption() {
+        let src = std::path::PathBuf::from(
+            std::env::var("AIWM_TEST_FLORENCE2_SNAPSHOT").expect("set the snapshot path"),
+        );
+        let store = tempfile::tempdir_in(src.parent().unwrap()).unwrap();
+        let dir = store.path().join("vision").join("florence2-large");
+        std::fs::create_dir_all(&dir).unwrap();
+        for name in FLORENCE2_REQUIRED_FILES {
+            std::fs::hard_link(src.join(name), dir.join(name)).unwrap();
+        }
+
+        let gate = PinnedDirGate::new(store.path(), ModelKind::Florence2Engine);
+        let expected = store.path().join("vision/florence2-large");
+        assert_eq!(gate.dir().await.unwrap(), expected);
+
+        // Tampered after the run's first caption: this run keeps the engine
+        // the sidecar already loaded; the next run's gate refuses the folder.
+        std::fs::write(dir.join("extra.py"), b"import os").unwrap();
+        assert_eq!(gate.dir().await.unwrap(), expected);
+        let next_run = PinnedDirGate::new(store.path(), ModelKind::Florence2Engine);
+        let e = next_run.dir().await.unwrap_err().to_string();
+        assert!(e.contains("extra.py"), "{e}");
     }
 
     /// Hard-links the real pinned Qwen2.5-VL files from

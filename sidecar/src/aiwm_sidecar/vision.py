@@ -154,9 +154,43 @@ _florence2_cache: dict[str, _Florence2Engine] = {}
 _qwen_vl_cache: dict[tuple[str, str], _QwenVlEngine] = {}
 
 
+def _sanitize_module_name(name: str) -> str:
+    """Mirror of `transformers.dynamic_module_utils._sanitize_module_name`
+    (a private helper, so not imported): the folder name transformers gives
+    a local model's copied remote code."""
+    sanitized = name.replace(".", "_dot_").replace("-", "_hyphen_")
+    if sanitized and sanitized[0].isdigit():
+        sanitized = f"_{sanitized}"
+    return sanitized
+
+
+def _remote_code_cache_dir(model_dir: str, modules_cache: str) -> Path:
+    """Where transformers copies a *local* folder's `trust_remote_code`
+    Python before importing it: `<HF_MODULES_CACHE>/transformers_modules/
+    <sanitized folder name>/<source hash>/` (transformers 5.x)."""
+    name = _sanitize_module_name(Path(model_dir).name)
+    return Path(modules_cache, "transformers_modules", name)
+
+
+def _clear_remote_code_cache(model_dir: str) -> None:
+    """Delete every earlier copy of this folder's remote code from the
+    transformers modules cache (in the user profile, outside anything core
+    verifies) so the load below imports only a fresh copy of the pinned,
+    just-verified files -- never a stale or planted module left there."""
+    import shutil
+
+    from transformers.dynamic_module_utils import HF_MODULES_CACHE
+
+    stale = _remote_code_cache_dir(model_dir, str(HF_MODULES_CACHE))
+    if stale.exists():
+        shutil.rmtree(stale)
+
+
 def _construct_florence2(model_dir: str) -> _Florence2Engine:
     import torch
     from transformers import AutoModelForCausalLM, AutoProcessor
+
+    _clear_remote_code_cache(model_dir)
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     dtype = torch.float16 if device == "cuda" else torch.float32

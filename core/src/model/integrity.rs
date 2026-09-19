@@ -80,9 +80,11 @@ pub async fn verify_captioner_dir_async(store_root: &Path, kind: ModelKind) -> R
         .map_err(|e| CoreError::Other(anyhow::anyhow!("integrity worker panicked: {e}")))?
 }
 
-/// (canonical path, size, mtime) of a large file whose hash matched in this
-/// process -- lets repeat checks skip re-hashing multi-GB weights.
-type VerifiedKey = (PathBuf, u64, SystemTime);
+/// (path, size, mtime, creation time) of a large file whose hash matched in
+/// this process -- lets repeat checks skip re-hashing multi-GB weights. The
+/// creation time also changes when a file is replaced by another one (a
+/// delete-and-recreate, or a rename over it) whose mtime was forged back.
+type VerifiedKey = (PathBuf, u64, SystemTime, SystemTime);
 
 fn verified_cache() -> &'static Mutex<HashMap<VerifiedKey, &'static str>> {
     static CACHE: OnceLock<Mutex<HashMap<VerifiedKey, &'static str>>> = OnceLock::new();
@@ -173,7 +175,8 @@ fn verify_file(path: &Path, want: &ExpectedFile, meta: &std::fs::Metadata) -> Re
     let key = meta
         .modified()
         .ok()
-        .map(|mtime| (path.to_path_buf(), meta.len(), mtime));
+        .zip(meta.created().ok())
+        .map(|(mtime, created)| (path.to_path_buf(), meta.len(), mtime, created));
     if !always_rehash(want.file) {
         let cache = verified_cache()
             .lock()
