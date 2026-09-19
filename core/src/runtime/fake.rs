@@ -41,6 +41,7 @@ pub struct FakeRuntimeAdapter {
     loaded: Mutex<BTreeMap<String, u64>>,
     health_calls: AtomicU32,
     load_calls: AtomicU32,
+    unload_calls: AtomicU32,
 }
 
 impl FakeRuntimeAdapter {
@@ -50,6 +51,7 @@ impl FakeRuntimeAdapter {
             loaded: Mutex::new(BTreeMap::new()),
             health_calls: AtomicU32::new(0),
             load_calls: AtomicU32::new(0),
+            unload_calls: AtomicU32::new(0),
         }
     }
 
@@ -67,6 +69,12 @@ impl FakeRuntimeAdapter {
 
     pub fn load_call_count(&self) -> u32 {
         self.load_calls.load(Ordering::SeqCst)
+    }
+
+    /// Every `unload_model` call, including ones for a model that was never
+    /// loaded — so a test can tell "asked to release" from "had nothing".
+    pub fn unload_call_count(&self) -> u32 {
+        self.unload_calls.load(Ordering::SeqCst)
     }
 
     fn loaded(&self) -> std::sync::MutexGuard<'_, BTreeMap<String, u64>> {
@@ -109,6 +117,7 @@ impl RuntimeAdapter for FakeRuntimeAdapter {
     }
 
     async fn unload_model(&self, model_id: &str) -> Result<()> {
+        self.unload_calls.fetch_add(1, Ordering::SeqCst);
         self.loaded().remove(model_id);
         Ok(())
     }

@@ -289,6 +289,34 @@ impl JobEngine {
     }
 
     async fn drive(&self, job: Job) -> JobOutcome {
+        let is_dataset_prep = job.job_type == "dataset_prep";
+        let job_id = job.id.clone();
+        let outcome = self.drive_to_rest(job).await;
+        if is_dataset_prep && !matches!(outcome, JobOutcome::Blocked { .. }) {
+            self.release_dataset_captioners(&job_id).await;
+        }
+        outcome
+    }
+
+    /// Give a finished `dataset_prep` job's captioner VRAM back — whether it
+    /// completed, failed or was cancelled. Unlike a chat or image model,
+    /// nothing reuses a warm captioner soon enough to justify holding
+    /// Florence-2 / Qwen2.5-VL (~2–10 GB) away from training and generation.
+    /// Asked of the `vision` runtime unconditionally (not only when the
+    /// ledger says resident), so a job that failed mid-load still clears
+    /// whatever the sidecar holds. Only one job is driven at a time
+    /// (`api::run_job_loop`), so no other prep can be using the captioners.
+    async fn release_dataset_captioners(&self, job_id: &str) {
+        let Some(rt) = self.registry.get(VISION) else {
+            return;
+        };
+        self.scheduler.unpin(DATASET_VISION_MODEL_ID);
+        if let Err(e) = rt.unload_model(DATASET_VISION_MODEL_ID).await {
+            tracing::warn!(%job_id, error = %e, "could not release the dataset captioners");
+        }
+    }
+
+    async fn drive_to_rest(&self, job: Job) -> JobOutcome {
         let job_id = job.id.clone();
 
         let (cancel_tx, cancel_rx) = watch::channel(false);
@@ -1624,6 +1652,205 @@ mod tests {
             target.vram_mb,
             crate::capability::dataset::FLORENCE2_VRAM_FALLBACK_MB
         );
+    }
+
+    /// A dataset-prep engine whose registry holds a fake `vision` runtime, so
+    /// a test can see exactly which `unload_model` calls the engine makes
+    /// (the real `VisionAdapter` still runs the pipeline itself).
+    struct VisionFixture {
+        engine: JobEngine,
+        db: Database,
+        vision_rt: Arc<FakeRuntimeAdapter>,
+        _dirs: (tempfile::TempDir, tempfile::TempDir),
+    }
+
+    async fn vision_fixture(budget_mb: u64, load_delay: Duration) -> VisionFixture {
+        let db = Database::connect_in_memory().await.unwrap();
+        let registry = RuntimeRegistry::new();
+        let vision_rt = Arc::new(FakeRuntimeAdapter::new(crate::runtime::FakeConfig {
+            id: VISION.into(),
+            load_delay,
+            ..Default::default()
+        }));
+        registry.register(vision_rt.clone());
+        let scheduler = Arc::new(HybridScheduler::new(registry.clone(), budget_mb));
+        let store = tempfile::tempdir().unwrap();
+        let outputs = tempfile::tempdir().unwrap();
+        let engine = JobEngine::new(
+            db.clone(),
+            registry,
+            scheduler,
+            test_llama(&db),
+            test_comfy(&db),
+            outputs.path().to_path_buf(),
+        )
+        .with_vision(
+            Arc::new(crate::runtime::VisionAdapter::new()),
+            store.path().to_path_buf(),
+        );
+        VisionFixture {
+            engine,
+            db,
+            vision_rt,
+            _dirs: (store, outputs),
+        }
+    }
+
+    /// A root folder holding one sharp image, so a prep without a captioner
+    /// completes (keeps one frame) without any sidecar.
+    fn prep_root_with_one_image() -> tempfile::TempDir {
+        let root = tempfile::tempdir().unwrap();
+        let mut img = ::image::GrayImage::new(32, 32);
+        for (x, y, px) in img.enumerate_pixels_mut() {
+            *px = ::image::Luma([if (x / 4 + y / 4) % 2 == 0 { 255 } else { 0 }]);
+        }
+        img.save(root.path().join("a.png")).unwrap();
+        root
+    }
+
+    async fn submit_prep(engine: &JobEngine, params: serde_json::Value) -> Job {
+        let mut new = NewJob::new("dataset_prep");
+        new.params = params;
+        engine.submit(new).await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_completed_dataset_prep_releases_its_captioners() {
+        let fx = vision_fixture(16_384, Duration::ZERO).await;
+        let root = prep_root_with_one_image();
+        let job = submit_prep(
+            &fx.engine,
+            serde_json::json!({ "root": root.path().to_string_lossy() }),
+        )
+        .await;
+
+        let outcome = fx.engine.run_next().await.unwrap().unwrap();
+
+        assert_eq!(outcome, JobOutcome::Completed { job_id: job.id });
+        assert_eq!(fx.vision_rt.unload_call_count(), 1);
+        assert!(fx.vision_rt.loaded_models().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_failed_dataset_prep_releases_its_captioners() {
+        let fx = vision_fixture(16_384, Duration::ZERO).await;
+        let root = prep_root_with_one_image();
+        // Florence-2 was never installed into the fixture's store: the job
+        // loads (reserves) and then fails inside the pipeline.
+        let job = submit_prep(
+            &fx.engine,
+            serde_json::json!({
+                "root": root.path().to_string_lossy(),
+                "captioner": "florence2",
+                "escalate": false,
+            }),
+        )
+        .await;
+
+        let outcome = fx.engine.run_next().await.unwrap().unwrap();
+
+        assert!(matches!(outcome, JobOutcome::Failed { .. }), "{outcome:?}");
+        let stored = fx.db.jobs().get(&job.id).await.unwrap().unwrap();
+        assert_eq!(stored.state, JobState::Failed);
+        assert_eq!(fx.vision_rt.unload_call_count(), 1);
+        assert!(fx.vision_rt.loaded_models().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_cancelled_dataset_prep_releases_its_captioners() {
+        // A slow load keeps the job in `preparing` long enough to cancel it
+        // while the engine is driving it.
+        let fx = vision_fixture(16_384, Duration::from_millis(300)).await;
+        let root = prep_root_with_one_image();
+        let job = submit_prep(
+            &fx.engine,
+            serde_json::json!({ "root": root.path().to_string_lossy() }),
+        )
+        .await;
+
+        let cancel_while_preparing = async {
+            for _ in 0..400 {
+                let state = fx.db.jobs().get(&job.id).await.unwrap().unwrap().state;
+                if state == JobState::Preparing {
+                    assert!(fx.engine.cancel(&job.id).await.unwrap());
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+            panic!("the job never reached preparing");
+        };
+        let (outcome, ()) = tokio::join!(fx.engine.run_next(), cancel_while_preparing);
+
+        assert_eq!(
+            outcome.unwrap().unwrap(),
+            JobOutcome::Cancelled {
+                job_id: job.id.clone()
+            }
+        );
+        assert_eq!(fx.vision_rt.unload_call_count(), 1);
+        assert!(fx.vision_rt.loaded_models().is_empty());
+    }
+
+    /// A blocked prep never loaded anything and is re-checked every tick —
+    /// no release request for it.
+    #[tokio::test]
+    async fn a_blocked_dataset_prep_does_not_ask_for_a_release() {
+        let fx = vision_fixture(1_000, Duration::ZERO).await;
+        let root = prep_root_with_one_image();
+        submit_prep(
+            &fx.engine,
+            serde_json::json!({
+                "root": root.path().to_string_lossy(),
+                "captioner": "florence2",
+                "escalate": false,
+            }),
+        )
+        .await;
+
+        let outcome = fx.engine.run_next().await.unwrap().unwrap();
+
+        assert!(matches!(outcome, JobOutcome::Blocked { .. }), "{outcome:?}");
+        assert_eq!(fx.vision_rt.unload_call_count(), 0);
+    }
+
+    /// The scheduler's eviction path reaches the vision runtime's
+    /// `unload_model` too (which is what tells the sidecar to let go).
+    #[tokio::test]
+    async fn evicting_a_resident_captioner_pipeline_unloads_it() {
+        let fx = vision_fixture(16_384, Duration::ZERO).await;
+        fx.vision_rt
+            .load_model(DATASET_VISION_MODEL_ID, 10_000)
+            .await
+            .unwrap();
+        fx.engine
+            .submit(NewJob::new("noop").on(VISION, "bigger-model", 10_000))
+            .await
+            .unwrap();
+
+        fx.engine.run_next().await.unwrap().unwrap();
+
+        assert_eq!(fx.vision_rt.unload_call_count(), 1);
+        let resident: Vec<_> = fx
+            .vision_rt
+            .loaded_models()
+            .into_iter()
+            .map(|m| m.model_id)
+            .collect();
+        assert_eq!(resident, vec!["bigger-model".to_string()]);
+    }
+
+    /// A job of another type never touches the vision runtime.
+    #[tokio::test]
+    async fn other_jobs_do_not_release_the_captioners() {
+        let fx = vision_fixture(16_384, Duration::ZERO).await;
+        fx.engine
+            .submit(NewJob::new("noop").on(VISION, "something-else", 100))
+            .await
+            .unwrap();
+
+        fx.engine.run_next().await.unwrap().unwrap();
+
+        assert_eq!(fx.vision_rt.unload_call_count(), 0);
     }
 
     #[tokio::test]
