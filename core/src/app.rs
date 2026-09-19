@@ -225,7 +225,7 @@ impl App {
             .with_registry(registry.clone())
             .with_colibri(colibri.clone())
             .with_tts(tts.clone())
-            .with_vision(vision.clone()),
+            .with_vision(vision.clone(), config.store_path.clone()),
         );
         let coding = Arc::new(LlamaCodingRuntime::new(
             runtimes.clone(),

@@ -5,6 +5,7 @@ mod delete;
 mod directory;
 mod gguf;
 mod import;
+mod integrity;
 mod kind;
 mod safetensors;
 
@@ -18,6 +19,7 @@ pub use delete::{delete_model, DeleteOutcome};
 pub use gguf::{read_gguf_info, GgufInfo};
 pub(crate) use import::media_headroom_mb;
 pub use import::{import_model, ImportOutcome, ImportRequest};
+pub use integrity::{verify_captioner_dir, verify_captioner_dir_async};
 pub use kind::{ModelKind, FLORENCE2_ROLE, QWEN_VL_ROLE, WD_TAGGER_ROLE};
 pub use safetensors::{read_safetensors_info, SafetensorsInfo};
 

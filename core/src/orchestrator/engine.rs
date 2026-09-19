@@ -126,6 +126,10 @@ pub struct JobEngine {
     /// config error rather than a panic if a `job_type=dataset_prep` job is
     /// submitted without one.
     vision: Option<Arc<VisionAdapter>>,
+    /// The model store (`config.store_path`), set with `vision`: the dataset
+    /// captioners' pinned snapshot folders are resolved and integrity-checked
+    /// under it (`model::integrity`), never taken from a model row's parent.
+    vision_store: PathBuf,
     /// Where image jobs write their output (`<job_id>.png`).
     outputs_dir: PathBuf,
     /// Latest system reading — a `bench` job samples the VRAM / RAM peak from it.
@@ -156,6 +160,7 @@ impl JobEngine {
             colibri: None,
             tts: None,
             vision: None,
+            vision_store: PathBuf::new(),
             outputs_dir,
             telemetry: frozen_telemetry(),
             auto_preference: crate::select::AutoPreference::default(),
@@ -205,10 +210,12 @@ impl JobEngine {
     }
 
     /// Wire up the dataset captioning pipeline so `job_type=dataset_prep`
-    /// jobs can run. Optional, same reasoning as `with_tts`.
+    /// jobs can run. Optional, same reasoning as `with_tts`. `store_root` is
+    /// the model store the pinned captioner folders live in.
     #[must_use]
-    pub fn with_vision(mut self, vision: Arc<VisionAdapter>) -> Self {
+    pub fn with_vision(mut self, vision: Arc<VisionAdapter>, store_root: PathBuf) -> Self {
         self.vision = Some(vision);
+        self.vision_store = store_root;
         self
     }
 
@@ -1247,7 +1254,17 @@ impl JobEngine {
             })?;
             let req = DatasetPrepRequest::from_params(&job.params)?;
             let work_dir = self.outputs_dir.join("datasets");
-            match dataset::run(&self.db, &vision, &work_dir, &job.id, req, cancel).await? {
+            match dataset::run(
+                &self.db,
+                &vision,
+                &self.vision_store,
+                &work_dir,
+                &job.id,
+                req,
+                cancel,
+            )
+            .await?
+            {
                 DatasetPrepOutcome::Done(done) => {
                     self.db
                         .jobs()

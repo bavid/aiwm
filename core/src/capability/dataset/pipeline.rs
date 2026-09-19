@@ -88,9 +88,16 @@ async fn discard_empty_dataset(db: &Database, dataset_id: &str) {
 /// stays visible through `prep_job_id`, and a partial dataset is safe to
 /// curate and export — but one that never received a single frame is deleted
 /// again rather than left as an empty shell.
+///
+/// `store_root` is the model store (`config.store_path`): Florence-2 and
+/// Qwen2.5-VL only ever load from its pinned `vision/…` subfolders, and only
+/// after the load-time integrity check (`model::integrity`) passed here —
+/// once per run, before the first `caption_frame` / `caption_frame_pair` is
+/// sent (the sidecar then keeps the loaded engine for the rest of the run).
 pub async fn run(
     db: &Database,
     vision: &VisionAdapter,
+    store_root: &Path,
     work_dir: &Path,
     job_id: &str,
     req: DatasetPrepRequest,
@@ -101,13 +108,13 @@ pub async fn run(
     // for. Extraction, filtering and curation never need a model.
     let captioner = req.captioner.as_deref().and_then(captioner::find_captioner);
     let captioner_dir = match captioner {
-        Some(c) => Some(caption::resolve_captioner_dir(db, c).await?),
+        Some(c) => Some(caption::resolve_captioner_dir(db, store_root, c).await?),
         None => None,
     };
 
     let escalate = req.escalate && captioner.is_some_and(|c| c.supports_escalation);
     let qwen_dir = if escalate {
-        match caption::resolve_qwen_vl_dir(db).await {
+        match caption::resolve_qwen_vl_dir(db, store_root).await {
             Ok(dir) => Some(dir),
             Err(e) => {
                 db.jobs()
@@ -502,7 +509,7 @@ mod tests {
         .unwrap();
         let (_tx, rx) = watch::channel(false);
 
-        let err = run(&db, &vision, tmp.path(), "job-1", req, rx)
+        let err = run(&db, &vision, tmp.path(), tmp.path(), "job-1", req, rx)
             .await
             .unwrap_err();
         assert!(err.to_string().contains("Florence-2"), "{err}");
@@ -544,7 +551,7 @@ mod tests {
         .unwrap();
         let work = tempfile::tempdir().unwrap();
         let (_tx, rx) = watch::channel(false);
-        let outcome = run(&db, &vision, work.path(), &job.id, req, rx)
+        let outcome = run(&db, &vision, work.path(), work.path(), &job.id, req, rx)
             .await
             .unwrap();
         let DatasetPrepOutcome::Done(done) = outcome else {
@@ -589,7 +596,9 @@ mod tests {
                 .unwrap();
         let work = tempfile::tempdir().unwrap();
         let (_tx, rx) = watch::channel(false);
-        let outcome = run(&db, &vision, work.path(), &job, req, rx).await.unwrap();
+        let outcome = run(&db, &vision, work.path(), work.path(), &job, req, rx)
+            .await
+            .unwrap();
         let DatasetPrepOutcome::Done(done) = outcome else {
             panic!("expected Done")
         };
@@ -617,7 +626,7 @@ mod tests {
         .unwrap();
         let work = tempfile::tempdir().unwrap();
         let (_tx, rx) = watch::channel(false);
-        let err = run(&db, &vision, work.path(), &job, req, rx)
+        let err = run(&db, &vision, work.path(), work.path(), &job, req, rx)
             .await
             .unwrap_err()
             .to_string();
@@ -777,9 +786,17 @@ mod tests {
         }))
         .unwrap();
         let (_tx, rx) = watch::channel(false);
-        let err = run(&db, &vision, work.path(), &job, needs_model, rx)
-            .await
-            .unwrap_err();
+        let err = run(
+            &db,
+            &vision,
+            work.path(),
+            work.path(),
+            &job,
+            needs_model,
+            rx,
+        )
+        .await
+        .unwrap_err();
         assert!(err.to_string().contains("Florence-2"), "{err}");
         assert!(db.datasets().list().await.unwrap().is_empty());
 
@@ -788,7 +805,7 @@ mod tests {
         )
         .unwrap();
         let (_tx, rx) = watch::channel(false);
-        let err = run(&db, &vision, work.path(), &job, req, rx)
+        let err = run(&db, &vision, work.path(), work.path(), &job, req, rx)
             .await
             .unwrap_err();
         assert!(err.to_string().contains("dead-frame check"), "{err}");
@@ -819,7 +836,9 @@ mod tests {
             &serde_json::json!({ "root": root.path().to_string_lossy() }),
         )
         .unwrap();
-        let outcome = run(&db, &vision, work.path(), &job, req, rx).await.unwrap();
+        let outcome = run(&db, &vision, work.path(), work.path(), &job, req, rx)
+            .await
+            .unwrap();
         assert!(matches!(outcome, DatasetPrepOutcome::Cancelled));
         assert!(
             db.datasets().list().await.unwrap().is_empty(),

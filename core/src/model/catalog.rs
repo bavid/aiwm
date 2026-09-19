@@ -1809,6 +1809,7 @@ mod tests {
                 assert!(m.note.contains(commit), "{}: note names the commit", m.id);
                 commits.push(commit);
             }
+            commits.sort_unstable();
             commits.dedup();
             assert_eq!(
                 commits.len(),

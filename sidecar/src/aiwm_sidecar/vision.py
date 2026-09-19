@@ -160,12 +160,20 @@ def _construct_florence2(model_dir: str) -> _Florence2Engine:
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     dtype = torch.float16 if device == "cuda" else torch.float32
+    # `local_files_only=True`: core verified this exact folder against the
+    # pinned catalog (`model::integrity`) before sending the request -- an
+    # `auto_map` naming a Hub repo must never make `trust_remote_code` fetch
+    # unpinned Python (or anything else) from the network instead.
     model = (
-        AutoModelForCausalLM.from_pretrained(model_dir, trust_remote_code=True, dtype=dtype)
+        AutoModelForCausalLM.from_pretrained(
+            model_dir, trust_remote_code=True, dtype=dtype, local_files_only=True
+        )
         .to(device)
         .eval()
     )
-    processor = AutoProcessor.from_pretrained(model_dir, trust_remote_code=True)
+    processor = AutoProcessor.from_pretrained(
+        model_dir, trust_remote_code=True, local_files_only=True
+    )
     return _Florence2Engine(model, processor, device)
 
 
@@ -202,8 +210,10 @@ def _construct_qwen_vl(model_dir: str, quantization: str) -> _QwenVlEngine:
         dtype="auto" if quant_config is None else torch.float16,
         device_map="auto",
         quantization_config=quant_config,
+        local_files_only=True,
     )
-    processor = AutoProcessor.from_pretrained(model_dir)
+    # Same offline rule as Florence-2: only the verified local folder.
+    processor = AutoProcessor.from_pretrained(model_dir, local_files_only=True)
     return _QwenVlEngine(model, processor)
 
 

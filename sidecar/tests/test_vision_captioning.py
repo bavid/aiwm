@@ -322,6 +322,76 @@ def test_caption_frame_pair_caches_the_loaded_engine_per_quantization(
     assert construct_calls == [(model_dir, "4bit")]
 
 
+# --- offline loading: every from_pretrained stays on the local folder --------
+
+
+class _Recorder:
+    """A fake `transformers` class whose `from_pretrained` records its call."""
+
+    def __init__(self, calls: list[tuple[str, str, dict[str, Any]]], name: str) -> None:
+        self._calls = calls
+        self._name = name
+
+    def from_pretrained(self, path: str, **kwargs: Any) -> Any:
+        self._calls.append((self._name, path, kwargs))
+        return self
+
+    # The model object's chained calls in `_construct_florence2`.
+    def to(self, _device: str) -> Any:
+        return self
+
+    def eval(self) -> Any:
+        return self
+
+
+def _fake_ml_modules(
+    monkeypatch: pytest.MonkeyPatch,
+) -> list[tuple[str, str, dict[str, Any]]]:
+    import sys
+    import types
+
+    calls: list[tuple[str, str, dict[str, Any]]] = []
+    torch = types.ModuleType("torch")
+    torch.cuda = types.SimpleNamespace(is_available=lambda: False)  # type: ignore[attr-defined]
+    torch.float16 = "float16"  # type: ignore[attr-defined]
+    torch.float32 = "float32"  # type: ignore[attr-defined]
+    transformers = types.ModuleType("transformers")
+    for name in ("AutoModelForCausalLM", "AutoProcessor", "Qwen2_5_VLForConditionalGeneration"):
+        setattr(transformers, name, _Recorder(calls, name))
+    transformers.BitsAndBytesConfig = lambda **kw: ("bnb", kw)  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "torch", torch)
+    monkeypatch.setitem(sys.modules, "transformers", transformers)
+    return calls
+
+
+def test_florence2_loads_model_and_processor_from_local_files_only(
+    monkeypatch: pytest.MonkeyPatch, model_dir: str
+):
+    # `trust_remote_code=True` + an `auto_map` naming a Hub repo would
+    # otherwise fetch unpinned Python -- the folder core verified is the
+    # only source allowed.
+    calls = _fake_ml_modules(monkeypatch)
+    vision._construct_florence2(model_dir)
+    assert [c[0] for c in calls] == ["AutoModelForCausalLM", "AutoProcessor"]
+    for name, path, kwargs in calls:
+        assert path == model_dir, name
+        assert kwargs.get("local_files_only") is True, name
+        assert kwargs.get("trust_remote_code") is True, name
+
+
+@pytest.mark.parametrize("quantization", ["4bit", "8bit", "none"])
+def test_qwen_vl_loads_model_and_processor_from_local_files_only(
+    monkeypatch: pytest.MonkeyPatch, model_dir: str, quantization: str
+):
+    calls = _fake_ml_modules(monkeypatch)
+    vision._construct_qwen_vl(model_dir, quantization)
+    assert [c[0] for c in calls] == ["Qwen2_5_VLForConditionalGeneration", "AutoProcessor"]
+    for name, path, kwargs in calls:
+        assert path == model_dir, name
+        assert kwargs.get("local_files_only") is True, name
+        assert "trust_remote_code" not in kwargs, name
+
+
 # --- pure-function units, no engine/monkeypatching needed -------------------
 
 

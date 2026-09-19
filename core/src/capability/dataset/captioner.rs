@@ -280,9 +280,14 @@ mod tests {
             store.join("vision/florence2-large")
         );
         assert_eq!(
-            super::super::caption::resolve_qwen_vl_dir(&db)
-                .await
-                .unwrap(),
+            complete_dir_for_role(
+                &db,
+                super::super::caption::QWEN_VL_ROLE,
+                super::super::caption::QWEN_VL_REQUIRED_FILES
+            )
+            .await
+            .unwrap()
+            .unwrap(),
             store.join("vision/qwen2.5-vl-7b")
         );
     }

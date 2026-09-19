@@ -1205,7 +1205,7 @@ pub fn model_stacks(app: &App) -> Vec<ModelStackDto> {
                 media: s.media.to_string(),
                 note: s.note.to_string(),
                 is_default: s.is_default,
-                fit: combined_fit(&resolved, budget_mb, free_ram_mb),
+                fit: stack_fit(&resolved, budget_mb, free_ram_mb),
                 members: resolved
                     .iter()
                     .map(|m| enrich_known(m, budget_mb, free_ram_mb))
@@ -1213,6 +1213,42 @@ pub fn model_stacks(app: &App) -> Vec<ModelStackDto> {
             }
         })
         .collect()
+}
+
+/// A stack's fit badge. Dataset captioners (`media == "training"`) are judged
+/// by what they reserve at run time -- the WD tagger runs on the CPU
+/// (always green), Florence-2 by its registry VRAM figure, Qwen2.5-VL by its
+/// 4-bit estimate -- because their download size says nothing about VRAM
+/// (Qwen's ~16 GB of bf16 shards load 4-bit into ~6 GB). Every other stack
+/// keeps [`combined_fit`].
+fn stack_fit(
+    members: &[&crate::model::KnownModel],
+    budget_mb: u64,
+    free_ram_mb: u64,
+) -> crate::compat::FitVerdict {
+    match captioner_vram_need_mb(members) {
+        Some(0) => crate::compat::FitVerdict::Green,
+        Some(need_mb) => crate::compat::verdict_from_total_mb(need_mb, budget_mb, free_ram_mb),
+        None => combined_fit(members, budget_mb, free_ram_mb),
+    }
+}
+
+/// The run-time VRAM a captioner stack reserves, from its base member's
+/// kind: the captioner registry's `vram_mb` for a captioner (WD tagger 0,
+/// Florence-2 its fallback), the 4-bit estimate for the Qwen2.5-VL
+/// escalation model. `None` for anything that is not a captioner stack.
+fn captioner_vram_need_mb(members: &[&crate::model::KnownModel]) -> Option<u64> {
+    use crate::capability::dataset::{CAPTIONERS, QWEN_VL_VRAM_FALLBACK_MB};
+    let base = members.first().filter(|m| m.media == "training")?;
+    let kind = crate::model::ModelKind::from_hint(base.kind)?;
+    if kind == crate::model::ModelKind::QwenVlEngine {
+        return Some(QWEN_VL_VRAM_FALLBACK_MB);
+    }
+    let role = kind.default_role()?;
+    CAPTIONERS
+        .iter()
+        .find(|c| c.role == role)
+        .map(|c| c.vram_mb)
 }
 
 /// Fit for every member's size **summed** — a real render needs the base
@@ -2755,6 +2791,62 @@ mod tests {
         // Still attached on the same port, health untouched -- no restart
         // attempt was made for an unrelated config change.
         assert_eq!(app.comfyui.health().await, crate::runtime::Health::Healthy);
+    }
+
+    fn stack_members(id: &str) -> Vec<&'static crate::model::KnownModel> {
+        crate::model::MODEL_STACKS
+            .iter()
+            .find(|s| s.id == id)
+            .unwrap()
+            .member_ids
+            .iter()
+            .filter_map(|id| crate::model::KNOWN_MODELS.iter().find(|m| &m.id == id))
+            .collect()
+    }
+
+    /// A captioner's fit is what it needs *at run time*, not the bytes it
+    /// downloads: the WD tagger runs on the CPU, Florence-2 needs its
+    /// fallback reservation, Qwen2.5-VL loads 4-bit (~6 GB) from ~16 GB of
+    /// bf16 shards.
+    #[test]
+    fn training_stacks_fit_by_the_captioners_runtime_need_not_the_download_size() {
+        use crate::capability::dataset::{FLORENCE2_VRAM_FALLBACK_MB, QWEN_VL_VRAM_FALLBACK_MB};
+        use crate::compat::{verdict_from_total_mb, FitVerdict};
+
+        // 1 GB budget: the 1.2 GB tagger download would not "fit", but it
+        // never touches VRAM.
+        assert_eq!(
+            stack_fit(&stack_members("wd-tagger"), 1_000, 0),
+            FitVerdict::Green
+        );
+
+        // 16 GB budget: summing Qwen's shards (~15.8 GB) reads tight; the
+        // 4-bit runtime need is comfortable.
+        let qwen = stack_members("qwen2.5-vl-7b");
+        assert_ne!(combined_fit(&qwen, 16_000, 0), FitVerdict::Green);
+        assert_eq!(
+            stack_fit(&qwen, 16_000, 0),
+            verdict_from_total_mb(QWEN_VL_VRAM_FALLBACK_MB, 16_000, 0)
+        );
+        assert_eq!(stack_fit(&qwen, 16_000, 0), FitVerdict::Green);
+
+        // Florence-2: judged by its 2 GB reservation, not its 1.5 GB files.
+        let florence = stack_members("florence2-large");
+        assert_eq!(
+            stack_fit(&florence, 1_900, 0),
+            verdict_from_total_mb(FLORENCE2_VRAM_FALLBACK_MB, 1_900, 0)
+        );
+        assert_ne!(
+            stack_fit(&florence, 1_900, 0),
+            combined_fit(&florence, 1_900, 0)
+        );
+
+        // Every other stack keeps the summed-size rule.
+        let flux = stack_members("flux");
+        assert_eq!(
+            stack_fit(&flux, 16_000, 32_000),
+            combined_fit(&flux, 16_000, 32_000)
+        );
     }
 
     #[test]

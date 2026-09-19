@@ -100,14 +100,8 @@ pub async fn import_model(
     .await
     .map_err(|e| CoreError::Other(anyhow::anyhow!("import worker panicked: {e}")))??;
 
-    if !remote_code_allowed(kind, &ext, &sha256) {
-        return Err(CoreError::Config(format!(
-            "{} is remote code the sidecar would execute (`trust_remote_code`) and is not \
-             one of the pinned catalog files for a {} — refusing to import it",
-            source.display(),
-            kind.as_str()
-        )));
-    }
+    let pinned_file = pinned_file_for(kind, &ext, &sha256)
+        .map_err(|e| CoreError::Config(format!("{}: {e}", source.display())))?;
 
     if let Some(existing) = db.models().find_by_sha256(&sha256).await? {
         return Ok(ImportOutcome {
@@ -122,7 +116,10 @@ pub async fn import_model(
         .or_else(|| file_stem(&source))
         .unwrap_or_else(|| "model".to_string());
 
-    let dest = unique_destination(store_root, kind, &name, &sha256, &source);
+    let dest = match pinned_file {
+        Some(file) => store_root.join(kind.store_subdir()).join(file),
+        None => unique_destination(store_root, kind, &name, &sha256, &source),
+    };
     if let Some(parent) = dest.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|e| CoreError::Config(format!("create {}: {e}", parent.display())))?;
@@ -170,16 +167,43 @@ pub async fn import_model(
     })
 }
 
-/// `false` for a `.py` file unless its SHA-256 is a pinned catalog entry of
-/// this exact kind. Florence-2's architecture ships as Python that the
-/// sidecar runs via `trust_remote_code=True`, so only the reviewed files of
-/// the pinned revision may ever land where it would be executed. Every
-/// other extension is data, not code, and passes.
-fn remote_code_allowed(kind: ModelKind, ext: &str, sha256: &str) -> bool {
-    if !ext.eq_ignore_ascii_case("py") {
-        return true;
+/// Extensions of a captioner snapshot directory that can steer code
+/// execution: Florence-2's `.py` runs via `trust_remote_code=True`, and any
+/// `.json` config can carry an `auto_map` pointing `trust_remote_code` at an
+/// arbitrary Hub repo's Python. Qwen2.5-VL has no remote code, but its
+/// configs are gated the same way so no `auto_map` can ever be slipped in.
+fn is_code_bearing(kind: ModelKind, ext: &str) -> bool {
+    let ext = ext.to_ascii_lowercase();
+    match kind {
+        ModelKind::Florence2Engine => matches!(ext.as_str(), "py" | "json"),
+        ModelKind::QwenVlEngine => ext == "json",
+        _ => false,
     }
-    catalog::find_by_sha256(sha256).is_some_and(|known| known.kind == kind.as_str())
+}
+
+/// For the Florence-2 / Qwen2.5-VL directory kinds: the catalog file name
+/// this content is pinned as (`Some`), so the destination is named after the
+/// catalog entry rather than whatever the source was called -- a pinned
+/// `processing_florence2.py` renamed to `modeling_florence2.py` can never
+/// overwrite the real sibling. A code-bearing file ([`is_code_bearing`])
+/// that is not a pinned catalog entry of this exact kind is refused. `None`
+/// for every other kind, and for uncatalogued weights/tokenizer data (the
+/// load-time `model::integrity` check still verifies those).
+fn pinned_file_for(kind: ModelKind, ext: &str, sha256: &str) -> Result<Option<&'static str>> {
+    if !matches!(kind, ModelKind::Florence2Engine | ModelKind::QwenVlEngine) {
+        return Ok(None);
+    }
+    let pinned = catalog::find_by_sha256(sha256)
+        .filter(|known| known.kind == kind.as_str())
+        .map(|known| known.file);
+    if pinned.is_none() && is_code_bearing(kind, ext) {
+        return Err(CoreError::Config(format!(
+            "this .{ext} file is not one of the pinned catalog files for a {} (it could make \
+             the sidecar run unreviewed code via `trust_remote_code`) — refusing to import it",
+            kind.as_str()
+        )));
+    }
+    Ok(pinned)
 }
 
 /// The requested (or inferred) kind, validated against the file's extension.
@@ -354,7 +378,7 @@ fn file_stem(path: &Path) -> Option<String> {
         .map(str::to_string)
 }
 
-fn sha256_file(path: &Path) -> Result<String> {
+pub(super) fn sha256_file(path: &Path) -> Result<String> {
     let mut file = std::fs::File::open(path)
         .map_err(|e| CoreError::Config(format!("open {}: {e}", path.display())))?;
     let mut hasher = Sha256::new();
@@ -1075,6 +1099,30 @@ mod tests {
         );
     }
 
+    /// Byte-exact copies of two tiny pinned Florence-2 files (the catalog
+    /// hashes them: `tokenizer_config.json` 34 B, `generation_config.json`
+    /// 51 B at commit 21a599d4) -- real pinned JSON without a network fetch.
+    const FLORENCE2_TOKENIZER_CONFIG: &[u8] = b"{\n    \"model_max_length\": 1024\n}\n\n";
+    const FLORENCE2_GENERATION_CONFIG: &[u8] =
+        b"{\n    \"num_beams\": 3,\n    \"early_stopping\": false\n}";
+
+    async fn import_as(
+        db: &Database,
+        store: &Path,
+        src: &Path,
+        kind: &str,
+    ) -> Result<ImportOutcome> {
+        import_model(
+            db,
+            store,
+            ImportRequest {
+                model_type: Some(kind.into()),
+                ..req(src)
+            },
+        )
+        .await
+    }
+
     #[tokio::test]
     async fn florence2_engine_files_land_side_by_side_under_their_original_names() {
         let tmp = tempfile::tempdir().unwrap();
@@ -1083,20 +1131,13 @@ mod tests {
 
         let mut dirs = Vec::new();
         for (name, body) in [
-            ("config.json", &b"{\"model_type\": \"florence2\"}"[..]),
+            ("tokenizer_config.json", FLORENCE2_TOKENIZER_CONFIG),
             ("model.safetensors", &b"not-a-real-header"[..]),
         ] {
             let src = write_safetensors(tmp.path(), name, body);
-            let out = import_model(
-                &db,
-                &store,
-                ImportRequest {
-                    model_type: Some("florence2_engine".into()),
-                    ..req(&src)
-                },
-            )
-            .await
-            .unwrap();
+            let out = import_as(&db, &store, &src, "florence2_engine")
+                .await
+                .unwrap();
             assert_eq!(out.model.roles, ["vision_florence2"]);
             assert!(out.model.runtimes.is_empty(), "sidecar-only kind");
             let p = out.model.file_path.replace('\\', "/");
@@ -1112,6 +1153,75 @@ mod tests {
             );
         }
         assert_eq!(dirs[0], dirs[1], "one directory for `from_pretrained`");
+    }
+
+    /// `auto_map` in a config JSON can point `trust_remote_code` at any Hub
+    /// repo's Python -- so a Florence-2 JSON that is not a pinned catalog
+    /// file is as dangerous as unpinned `.py` and must be refused.
+    #[tokio::test]
+    async fn an_unpinned_florence2_config_json_is_refused() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = tmp.path().join("store");
+        let db = Database::connect_in_memory().await.unwrap();
+        let src = write_safetensors(
+            tmp.path(),
+            "config.json",
+            br#"{"auto_map": {"AutoModelForCausalLM": "evil/repo--modeling.X"}}"#,
+        );
+        let err = import_as(&db, &store, &src, "florence2_engine")
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("pinned"), "{err}");
+        assert!(!store.join("vision/florence2-large/config.json").exists());
+        assert!(db.models().list().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn an_unpinned_qwen_vl_json_is_refused() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = tmp.path().join("store");
+        let db = Database::connect_in_memory().await.unwrap();
+        let src = write_safetensors(tmp.path(), "tokenizer_config.json", b"{}");
+        let err = import_as(&db, &store, &src, "qwen_vl_engine")
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("pinned"), "{err}");
+        assert!(db.models().list().await.unwrap().is_empty());
+    }
+
+    /// A pinned file imported under another pinned file's name must land
+    /// under its *own* catalog name -- never overwrite the real sibling.
+    #[tokio::test]
+    async fn a_pinned_file_lands_under_its_catalog_name_not_the_source_name() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = tmp.path().join("store");
+        let db = Database::connect_in_memory().await.unwrap();
+
+        let real = write_safetensors(
+            tmp.path(),
+            "generation_config.json",
+            FLORENCE2_GENERATION_CONFIG,
+        );
+        import_as(&db, &store, &real, "florence2_engine")
+            .await
+            .unwrap();
+
+        let sub = tmp.path().join("renamed");
+        std::fs::create_dir_all(&sub).unwrap();
+        let renamed = write_safetensors(&sub, "generation_config.json", FLORENCE2_TOKENIZER_CONFIG);
+        let out = import_as(&db, &store, &renamed, "florence2_engine")
+            .await
+            .unwrap();
+        let p = out.model.file_path.replace('\\', "/");
+        assert!(
+            p.ends_with("/vision/florence2-large/tokenizer_config.json"),
+            "{p}"
+        );
+        assert_eq!(
+            std::fs::read(store.join("vision/florence2-large/generation_config.json")).unwrap(),
+            FLORENCE2_GENERATION_CONFIG,
+            "the real sibling is untouched"
+        );
     }
 
     #[tokio::test]
@@ -1168,7 +1278,7 @@ mod tests {
         )
         .await
         .unwrap_err();
-        assert!(err.to_string().contains("remote code"), "{err}");
+        assert!(err.to_string().contains("pinned"), "{err}");
         assert!(!store
             .join("vision/florence2-large/modeling_florence2.py")
             .exists());
@@ -1176,32 +1286,46 @@ mod tests {
     }
 
     #[test]
-    fn remote_code_is_allowed_only_for_a_catalogued_file_of_the_same_kind() {
+    fn code_bearing_files_are_allowed_only_as_catalogued_files_of_the_same_kind() {
         let pinned = crate::model::KNOWN_MODELS
             .iter()
             .find(|m| m.kind == "florence2_engine" && m.file.ends_with(".py"))
             .expect("the catalog pins Florence-2's remote code");
-        assert!(remote_code_allowed(
-            ModelKind::Florence2Engine,
-            "py",
-            pinned.sha256
-        ));
-        assert!(remote_code_allowed(
-            ModelKind::Florence2Engine,
-            "py",
-            &pinned.sha256.to_ascii_uppercase()
-        ));
-        assert!(!remote_code_allowed(
-            ModelKind::Florence2Engine,
-            "py",
-            &"0".repeat(64)
-        ));
-        // Not a `.py` -- the gate does not apply.
-        assert!(remote_code_allowed(
-            ModelKind::Florence2Engine,
-            "json",
-            &"0".repeat(64)
-        ));
+        let florence = ModelKind::Florence2Engine;
+        let qwen = ModelKind::QwenVlEngine;
+        let unknown = "0".repeat(64);
+
+        assert_eq!(
+            pinned_file_for(florence, "py", pinned.sha256).unwrap(),
+            Some(pinned.file)
+        );
+        assert_eq!(
+            pinned_file_for(florence, "PY", &pinned.sha256.to_ascii_uppercase()).unwrap(),
+            Some(pinned.file)
+        );
+        assert!(pinned_file_for(florence, "py", &unknown).is_err());
+        assert!(pinned_file_for(florence, "json", &unknown).is_err());
+        // Another kind's pinned file is not this kind's.
+        // (Qwen never accepts `.py` at all -- `resolve_kind` refuses it
+        // before this gate -- so the cross-kind case is a pinned JSON.)
+        let florence_json = crate::model::KNOWN_MODELS
+            .iter()
+            .find(|m| m.kind == "florence2_engine" && m.file == "config.json")
+            .unwrap();
+        assert!(pinned_file_for(qwen, "json", florence_json.sha256).is_err());
+        assert!(pinned_file_for(qwen, "json", &unknown).is_err());
+        // Weights / tokenizer data are not gated at import (the load-time
+        // integrity check covers them) and keep their source name.
+        assert_eq!(
+            pinned_file_for(florence, "safetensors", &unknown).unwrap(),
+            None
+        );
+        assert_eq!(pinned_file_for(qwen, "txt", &unknown).unwrap(), None);
+        // Other kinds are untouched by the gate.
+        assert_eq!(
+            pinned_file_for(ModelKind::DiaEngine, "json", &unknown).unwrap(),
+            None
+        );
     }
 
     #[tokio::test]
