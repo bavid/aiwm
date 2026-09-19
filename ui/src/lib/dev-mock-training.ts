@@ -133,7 +133,7 @@ export function trainingModelRow(download: AnyRecord): AnyRecord | null {
 }
 
 // Same order and flags as the core's `CAPTIONERS`: the tagger first (the
-// Dataset form preselects the first usable one), Florence-2 flagged.
+// Dataset form preselects the first usable one), neither flagged.
 const CAPTIONERS = [
   {
     id: "wd-eva02-tagger-v3", name: "WD EVA02 Tagger v3 (Danbooru tags)", style: "tags",
@@ -143,7 +143,7 @@ const CAPTIONERS = [
   {
     id: "florence2", name: "Florence-2 (prose)", style: "prose", role: "vision_florence2",
     vram_mb: 2048, license: "MIT", supports_escalation: true, kind: "florence2_engine",
-    known_issue: "Does not load with the bundled transformers 5.x yet \u2014 a fix is planned.",
+    known_issue: null,
   },
 ];
 

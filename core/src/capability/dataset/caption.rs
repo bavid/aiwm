@@ -637,7 +637,7 @@ mod tests {
     }
 
     /// Real-bytes positive path: set `AIWM_TEST_FLORENCE2_SNAPSHOT` to a
-    /// folder holding the ten pinned Florence-2 files (the Plan 7 Task 1
+    /// folder holding the eleven pinned Florence-2 files (the Plan 8
     /// download). Copies ~1.5 GB, hence ignored by default.
     #[tokio::test]
     #[ignore = "needs the real pinned Florence-2 snapshot (AIWM_TEST_FLORENCE2_SNAPSHOT)"]

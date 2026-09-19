@@ -42,12 +42,6 @@ pub struct Captioner {
     pub known_issue: Option<&'static str>,
 }
 
-/// What the person reads next to Florence-2 until it loads again: its
-/// `trust_remote_code` model fails under the transformers 5.x the sidecar
-/// bundles (`Florence2LanguageConfig` has no `forced_bos_token_id`).
-pub const FLORENCE2_KNOWN_ISSUE: &str =
-    "Does not load with the bundled transformers 5.x yet \u{2014} a fix is planned.";
-
 /// Order matters: the Dataset form preselects the first installed entry
 /// that has no known issue, so the one that works out of the box (the CPU
 /// tagger) comes first.
@@ -72,7 +66,7 @@ pub const CAPTIONERS: &[Captioner] = &[
         license: "MIT",
         supports_escalation: true,
         required_files: super::caption::FLORENCE2_REQUIRED_FILES,
-        known_issue: Some(FLORENCE2_KNOWN_ISSUE),
+        known_issue: None,
     },
 ];
 
@@ -593,16 +587,12 @@ mod tests {
         assert_eq!(CAPTIONERS[0].id, WD_TAGGER_ID);
     }
 
-    /// Florence-2 does not load under the bundled transformers 5.x
-    /// (`Florence2LanguageConfig` lacks `forced_bos_token_id`): it carries a
-    /// user-facing known issue; the tagger does not.
+    /// Plan 8: Florence-2 loads natively under the bundled transformers 5.x
+    /// and captioned a real run, so no captioner carries a known issue.
     #[test]
-    fn florence2_carries_a_known_issue_and_the_tagger_does_not() {
-        let issue = find_captioner(FLORENCE2_ID).unwrap().known_issue;
-        assert!(
-            issue.is_some_and(|i| i.contains("transformers") && i.contains("fix is planned")),
-            "{issue:?}"
-        );
-        assert_eq!(find_captioner(WD_TAGGER_ID).unwrap().known_issue, None);
+    fn no_captioner_carries_a_known_issue() {
+        for c in CAPTIONERS {
+            assert_eq!(c.known_issue, None, "{}", c.id);
+        }
     }
 }
