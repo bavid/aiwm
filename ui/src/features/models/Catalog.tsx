@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { useAbout, useFeaturedModels, useModelStacks } from "../../lib/hooks";
 import {
   enqueueDownload,
@@ -13,8 +13,8 @@ import { FileList } from "./FileList";
 import { FitBadge } from "./FitBadge";
 import { weightFiles } from "./registry-files";
 import { TrainingTools } from "./TrainingTools";
+import { formatGB, formatGiB } from "../../lib/units";
 
-const gbBytes = (b: number) => `${(b / 1024 ** 3).toFixed(2)} GB`;
 
 /** Readable names for the kinds whose raw id says little on its own; every
  *  other kind reads fine with its underscores turned into spaces. */
@@ -26,7 +26,7 @@ const KIND_LABELS: Partial<Record<ModelType, string>> = {
   dia_codec: "Dia codec file",
 };
 
-const kindLabel =(kind: ModelType) => KIND_LABELS[kind] ?? kind.replaceAll("_", " ");
+const kindLabel = (kind: ModelType) => KIND_LABELS[kind] ?? kind.replaceAll("_", " ");
 
 // Values match `KnownModel.media` / `FeaturedModel.role` exactly, so the
 // filters below are a plain equality check.
@@ -87,19 +87,44 @@ export function Catalog({ tab, onTabChange, focusRequest, onUseType }: CatalogPr
   const featured = useFeaturedModels();
   const about = useAbout();
   const sectionRef = useRef<HTMLElement>(null);
-  const activeTabRef = useRef<HTMLButtonElement>(null);
+  const tabRefs = useRef<Map<CatalogTab, HTMLButtonElement>>(new Map());
+  const baseId = useId();
+  const tabId = (t: CatalogTab) => `${baseId}-tab-${t}`;
+  const panelId = `${baseId}-panel`;
 
   useEffect(() => {
     if (focusRequest === 0) return;
     sectionRef.current?.scrollIntoView({ block: "start" });
-    activeTabRef.current?.focus({ preventScroll: true });
+    tabRefs.current.get(tab)?.focus({ preventScroll: true });
+    // Only a new request moves focus -- not every tab change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focusRequest]);
 
   const active = CATALOG_TABS.find((t) => t.value === tab)!;
   const isStackTab = STACK_TABS.includes(tab);
-  const stackRows = stacks?.filter((s) => s.media === tab);
+  // Memoized: `TrainingTools` watches this array, and a fresh one per render
+  // would re-run its completion effect on every poll.
+  const stackRows = useMemo(() => stacks?.filter((s) => s.media === tab), [stacks, tab]);
   const featuredRows = featured?.filter((m) => m.role === tab);
   const loading = isStackTab ? !stacks : !featured;
+
+  /** WAI-ARIA tabs: arrows move (and select) with wrap-around, Home/End jump. */
+  const onTabKey = (e: KeyboardEvent<HTMLButtonElement>) => {
+    const i = CATALOG_TABS.findIndex((t) => t.value === tab);
+    const last = CATALOG_TABS.length - 1;
+    const moves: Record<string, number> = {
+      ArrowRight: i === last ? 0 : i + 1,
+      ArrowLeft: i === 0 ? last : i - 1,
+      Home: 0,
+      End: last,
+    };
+    const next = moves[e.key] ?? null;
+    if (next === null) return;
+    e.preventDefault();
+    const target = CATALOG_TABS[next].value;
+    onTabChange(target);
+    tabRefs.current.get(target)?.focus();
+  };
 
   return (
     <section className="card card--wide" ref={sectionRef}>
@@ -107,52 +132,61 @@ export function Catalog({ tab, onTabChange, focusRequest, onUseType }: CatalogPr
         <h2>Recommended models</h2>
         <span className="card__sub">
           {about
-            ? `fit-checked against your ~${(about.vram_budget_mb / 1024).toFixed(0)} GB VRAM budget`
+            ? `fit-checked against your ~${formatGiB(about.vram_budget_mb, 0)} VRAM budget`
             : "what to install, and for what"}
         </span>
       </header>
 
-      <div className="catalog__tabs" role="tablist">
+      <div className="catalog__tabs" role="tablist" aria-label="Model categories">
         {CATALOG_TABS.map((t) => (
           <button
             key={t.value}
+            id={tabId(t.value)}
             type="button"
             role="tab"
             aria-selected={tab === t.value}
-            ref={tab === t.value ? activeTabRef : undefined}
+            aria-controls={panelId}
+            tabIndex={tab === t.value ? 0 : -1}
+            ref={(el) => {
+              if (el) tabRefs.current.set(t.value, el);
+              else tabRefs.current.delete(t.value);
+            }}
             className={`chip ${tab === t.value ? "chip--on" : ""}`}
             onClick={() => onTabChange(t.value)}
+            onKeyDown={onTabKey}
           >
             {t.label}
           </button>
         ))}
       </div>
-      <p className="muted">{active.blurb}</p>
+      <div role="tabpanel" id={panelId} aria-labelledby={tabId(tab)}>
+        <p className="muted">{active.blurb}</p>
 
-      {loading && <p className="muted">Loading…</p>}
-      {!loading && isStackTab && (stackRows?.length ?? 0) === 0 && (
-        <p className="muted">Nothing curated here yet.</p>
-      )}
-      {tab === "training" && stackRows && stackRows.length > 0 && (
-        <TrainingTools stacks={stackRows} />
-      )}
-      {isStackTab && tab !== "training" && stackRows && stackRows.length > 0 && (
-        <div className="stacklist">
-          {stackRows.map((s) => (
-            <StackCard key={s.id} stack={s} onUseType={onUseType} />
-          ))}
-        </div>
-      )}
-      {!loading && !isStackTab && (featuredRows?.length ?? 0) === 0 && (
-        <p className="muted">Nothing curated here yet.</p>
-      )}
-      {!isStackTab && featuredRows && featuredRows.length > 0 && (
-        <ul className="known">
-          {featuredRows.map((m) => (
-            <FeaturedRow key={m.id} model={m} onUseType={onUseType} />
-          ))}
-        </ul>
-      )}
+        {loading && <p className="muted">Loading…</p>}
+        {!loading && isStackTab && (stackRows?.length ?? 0) === 0 && (
+          <p className="muted">Nothing curated here yet.</p>
+        )}
+        {tab === "training" && stackRows && stackRows.length > 0 && (
+          <TrainingTools stacks={stackRows} />
+        )}
+        {isStackTab && tab !== "training" && stackRows && stackRows.length > 0 && (
+          <div className="stacklist">
+            {stackRows.map((s) => (
+              <StackCard key={s.id} stack={s} onUseType={onUseType} />
+            ))}
+          </div>
+        )}
+        {!loading && !isStackTab && (featuredRows?.length ?? 0) === 0 && (
+          <p className="muted">Nothing curated here yet.</p>
+        )}
+        {!isStackTab && featuredRows && featuredRows.length > 0 && (
+          <ul className="known">
+            {featuredRows.map((m) => (
+              <FeaturedRow key={m.id} model={m} onUseType={onUseType} />
+            ))}
+          </ul>
+        )}
+      </div>
     </section>
   );
 }
@@ -204,7 +238,7 @@ function KnownRow({
       <div className="known__main">
         <div className="known__name">
           {model.name}
-          {model.is_default && <span className="badge badge--pick">★ recommended</span>}
+          {model.is_default && <span className="badge badge--pick"><span aria-hidden="true">★</span> recommended</span>}
         </div>
         <span className="known__badges">
           <span className="badge">{kindLabel(model.kind)}</span>
@@ -213,7 +247,7 @@ function KnownRow({
         </span>
         {!compact && <span className="known__note">{model.note}</span>}
         <span className="known__file numeric">
-          {model.file} · {gbBytes(model.size_bytes)} · {model.license}
+          {model.file} · {formatGB(model.size_bytes, 2)} · {model.license}
         </span>
       </div>
       <div className="known__actions">
@@ -269,13 +303,13 @@ function StackCard({ stack, onUseType }: { stack: ModelStack; onUseType: (t: Mod
       <header className="stackcard__head">
         <div className="known__name">
           {stack.label}
-          {stack.is_default && <span className="badge badge--pick">★ recommended</span>}
+          {stack.is_default && <span className="badge badge--pick"><span aria-hidden="true">★</span> recommended</span>}
         </div>
         <span className="known__badges">
           <span className="badge">
             {stack.members.length} file{stack.members.length > 1 ? "s" : ""}
           </span>
-          <span className="badge numeric">{gbBytes(totalBytes)} total</span>
+          <span className="badge numeric">{formatGB(totalBytes)} total</span>
           <FitBadge fit={fit} subject={stack.label} />
         </span>
         <span className="known__note">{stack.note}</span>
@@ -349,7 +383,7 @@ function FeaturedRow({ model, onUseType }: { model: FeaturedModel; onUseType: (t
       <div className="known__main">
         <div className="known__name">
           {model.label}
-          {model.is_default && <span className="badge badge--pick">★ recommended</span>}
+          {model.is_default && <span className="badge badge--pick"><span aria-hidden="true">★</span> recommended</span>}
         </div>
         <span className="known__badges">
           <span className="badge">{model.role}</span>
@@ -357,7 +391,7 @@ function FeaturedRow({ model, onUseType }: { model: FeaturedModel; onUseType: (t
         </span>
         <span className="known__note">{model.note}</span>
         <span className="known__file numeric">
-          {model.quant_hint} · ~{(model.typical_vram_mb / 1024).toFixed(1)} GB VRAM (estimate) ·{" "}
+          {model.quant_hint} · ~{formatGiB(model.typical_vram_mb)} VRAM (estimate) ·{" "}
           {model.license}
         </span>
         <span className="known__note">

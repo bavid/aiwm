@@ -1,8 +1,8 @@
 import { useMemo, useState } from "react";
 import { useStorage } from "../../lib/hooks";
 import { deleteModel, type ModelDisk } from "../../lib/ipc";
+import { formatGB } from "../../lib/units";
 
-const gb = (bytes: number) => `${(bytes / 1024 ** 3).toFixed(1)} GB`;
 
 /** Disk usage + the "safe to delete" reports. */
 export function StoragePanel() {
@@ -26,8 +26,8 @@ export function StoragePanel() {
       <header className="card__head">
         <h2>Storage</h2>
         <span className="card__sub numeric">
-          {gb(store_bytes)} in models
-          {volume_free_bytes != null && ` · ${gb(volume_free_bytes)} free on the store volume`}
+          {formatGB(store_bytes)} in models
+          {volume_free_bytes != null && ` · ${formatGB(volume_free_bytes)} free on the store volume`}
         </span>
       </header>
 
@@ -40,7 +40,7 @@ export function StoragePanel() {
       <div className="st__kinds">
         {by_kind.map((k) => (
           <span key={k.kind} className="chip">
-            {k.kind} <span className="muted numeric">{gb(k.bytes)} · {k.count}</span>
+            {k.kind} <span className="muted numeric">{formatGB(k.bytes)} · {k.count}</span>
           </span>
         ))}
       </div>
@@ -48,7 +48,7 @@ export function StoragePanel() {
       {duplicates.length > 0 && (
         <div className="st__group">
           <h3>
-            Duplicates <span className="muted">— ~{gb(wasted)} wasted across {duplicates.length} group{duplicates.length === 1 ? "" : "s"}</span>
+            Duplicates <span className="muted">— ~{formatGB(wasted)} wasted across {duplicates.length} group{duplicates.length === 1 ? "" : "s"}</span>
           </h3>
           <ul className="st__list">
             {duplicates.map((d) => (
@@ -87,7 +87,7 @@ export function StoragePanel() {
                 <li key={m.id} className="st__unused">
                   <span className="st__name">{m.name}</span>
                   <span className="muted numeric">
-                    {gb(m.size_bytes)} · {m.last_used_at ? `last used ${m.last_used_at.slice(0, 10)}` : "never used"}
+                    {formatGB(m.size_bytes)} · {m.last_used_at ? `last used ${m.last_used_at.slice(0, 10)}` : "never used"}
                   </span>
                   <DeleteButton model={m} />
                 </li>
@@ -113,7 +113,7 @@ export function DeleteButton({
   const run = async () => {
     if (
       !window.confirm(
-        `Permanently delete “${model.name}” (${gb(model.size_bytes)})?\n\nThe file, its runtime links and its benchmark history are removed. This cannot be undone.`,
+        `Permanently delete “${model.name}” (${formatGB(model.size_bytes)})?\n\nThe file, its runtime links and its benchmark history are removed. This cannot be undone.`,
       )
     )
       return;

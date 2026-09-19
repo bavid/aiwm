@@ -29,6 +29,7 @@ import { Downloads } from "./Downloads";
 import { DeleteButton, StoragePanel } from "./StoragePanel";
 import { UpgradeChecks } from "./UpgradeChecks";
 import "./models.css";
+import { formatGB, formatGiB } from "../../lib/units";
 
 const ROLES = ["chat", "coding", "reasoning", "embedding"];
 
@@ -87,7 +88,6 @@ function filenameFromUrl(url: string): string {
   }
 }
 
-const gb = (mb: number | null) => (mb == null ? "—" : `${(mb / 1024).toFixed(1)} GB`);
 const params = (n: number | null) =>
   n == null ? "—" : n >= 1e9 ? `${(n / 1e9).toFixed(1)} B` : `${(n / 1e6).toFixed(0)} M`;
 const ctx = (n: number | null) => (n == null ? "—" : n >= 1024 ? `${Math.round(n / 1024)}K` : `${n}`);
@@ -100,7 +100,7 @@ function scoreTitle(b: Benchmark): string {
     b.gen_tps != null && `${b.gen_tps.toFixed(1)} tok/s generation`,
     b.prompt_tps != null && `${b.prompt_tps.toFixed(0)} tok/s prompt`,
     b.load_ms != null && `${(b.load_ms / 1000).toFixed(1)} s load`,
-    b.vram_peak_mb != null && `${(b.vram_peak_mb / 1024).toFixed(1)} GB VRAM peak`,
+    b.vram_peak_mb != null && `${formatGiB(b.vram_peak_mb)} VRAM peak`,
     `stability ${(b.stability_score * 100).toFixed(0)}%`,
   ].filter(Boolean);
   return `Heuristic score (speed + fit + stability — not a quality score)\n${bits.join(" · ")}`;
@@ -290,13 +290,13 @@ function ModelLibrary({ models, error }: { models: Model[] | null; error: string
                   <td className="muted">{m.family ?? m.arch ?? "—"}</td>
                   <td>{m.quant ?? "—"}</td>
                   <td className="numeric">{params(m.param_count)}</td>
-                  <td className="numeric">{gb(m.size_bytes / (1024 * 1024))}</td>
+                  <td className="numeric">{formatGB(m.size_bytes)}</td>
                   <td className="numeric">{ctx(m.ctx_max)}</td>
                   <td
                     className="numeric"
                     title="Estimate at load — weights + KV cache / activations + runtime overhead"
                   >
-                    {gb(m.vram_estimate_mb)}
+                    {m.vram_estimate_mb == null ? "—" : formatGiB(m.vram_estimate_mb)}
                   </td>
                   <td>
                     <ScoreCell

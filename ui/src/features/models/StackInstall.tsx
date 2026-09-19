@@ -1,5 +1,6 @@
-import { useEffect, useRef, type FocusEvent } from "react";
-import { decimalGb, type MemberPhase, type StackProgress } from "./stack-install";
+import { useEffect, useRef, type FocusEvent, type RefObject } from "react";
+import { formatGB } from "../../lib/units";
+import type { MemberPhase, StackProgress } from "./stack-install";
 import "./stack-install.css";
 
 type Props = {
@@ -7,8 +8,10 @@ type Props = {
   name: string;
   progress: StackProgress | undefined;
   isStarting: boolean;
-  /** Why the last click could not start the download, shown verbatim. */
+  /** Why the last click could not start the download. */
   error: string | null;
+  /** Why the queue/library could not be read (replaces "Checking…"). */
+  loadError: string | null;
   /** The idle button's text, e.g. "Install WD tagger (recommended, 1.3 GB)". */
   installLabel: string;
   /** List every file with its own state while downloading (Models tab). */
@@ -28,38 +31,46 @@ const PHASE_LABEL: Record<MemberPhase, string> = {
   missing: "Not downloaded",
 };
 
-/** Install button → progress → "Installed" for one catalog stack. Owns only
- *  focus: when the button it replaced had focus, focus moves to this block
- *  instead of falling back to the page, so a keyboard user keeps their place
- *  through every state change. Screen-reader announcements are the
- *  container's job (once, on completion). */
+/** Install button → progress → "Installed" for one catalog stack.
+ *
+ *  Focus: when the person activates the button, the button is replaced by
+ *  the progress bar a moment later. On exactly that render — the button just
+ *  unmounted and focus fell back to the page — focus moves to this block
+ *  (without scrolling), and the claim is dropped. Polls never move focus.
+ *  Screen-reader announcements are the container's job (once, on completion). */
 export function StackInstall({
   name,
   progress,
   isStarting,
   error,
+  loadError,
   installLabel,
   showFiles = false,
   quiet = false,
   onInstall,
 }: Props) {
   const rootRef = useRef<HTMLDivElement>(null);
-  const ownsFocus = useRef(false);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  /** Set by a click; cleared on the render where the button is gone. */
+  const restoreFocus = useRef(false);
 
   useEffect(() => {
-    if (ownsFocus.current && document.activeElement === document.body) {
-      rootRef.current?.focus();
+    if (!restoreFocus.current || buttonRef.current) return;
+    restoreFocus.current = false;
+    const active = document.activeElement;
+    if (active === null || active === document.body) {
+      rootRef.current?.focus({ preventScroll: true });
     }
   });
 
-  const onFocus = () => {
-    ownsFocus.current = true;
+  const activate = () => {
+    restoreFocus.current = true;
+    onInstall();
   };
-  const onBlur = (e: FocusEvent<HTMLDivElement>) => {
-    // A null `relatedTarget` is the focused button unmounting — keep the
-    // claim so the effect can pull focus back here.
-    const to = e.relatedTarget;
-    if (to && !e.currentTarget.contains(to)) ownsFocus.current = false;
+  /** Focus moved on to something else (not the button unmounting, which
+   *  blurs with no target): the claim no longer applies. */
+  const buttonLeft = (e: FocusEvent<HTMLButtonElement>) => {
+    if (e.relatedTarget) restoreFocus.current = false;
   };
 
   return (
@@ -67,16 +78,17 @@ export function StackInstall({
       className={quiet ? "stackinstall stackinstall--quiet" : "stackinstall"}
       ref={rootRef}
       tabIndex={-1}
-      onFocus={onFocus}
-      onBlur={onBlur}
     >
       <StackInstallBody
         name={name}
         progress={progress}
         isStarting={isStarting}
+        loadError={loadError}
         installLabel={installLabel}
         showFiles={showFiles}
-        onInstall={onInstall}
+        buttonRef={buttonRef}
+        onActivate={activate}
+        onButtonLeft={buttonLeft}
       />
       {error && (
         <p className="stackinstall__err" role="alert">
@@ -87,15 +99,44 @@ export function StackInstall({
   );
 }
 
+type BodyProps = {
+  name: string;
+  progress: StackProgress | undefined;
+  isStarting: boolean;
+  loadError: string | null;
+  installLabel: string;
+  showFiles: boolean;
+  buttonRef: RefObject<HTMLButtonElement | null>;
+  onActivate: () => void;
+  onButtonLeft: (e: FocusEvent<HTMLButtonElement>) => void;
+};
+
+function idleLabel(progress: StackProgress, installLabel: string): string {
+  if (progress.phase === "paused") return "Resume download";
+  if (progress.phase === "failed") return "Retry download";
+  if (progress.installedCount === 0) return installLabel;
+  const remaining = progress.members.length - progress.installedCount;
+  return `Install the remaining ${remaining} files (${formatGB(progress.bytesTotal - progress.bytesDone)})`;
+}
+
 function StackInstallBody({
   name,
   progress,
   isStarting,
+  loadError,
   installLabel,
   showFiles,
-  onInstall,
-}: Omit<Props, "error" | "quiet" | "showFiles"> & { showFiles: boolean }) {
-  if (!progress) return <p className="stackinstall__meta">Checking what is installed…</p>;
+  buttonRef,
+  onActivate,
+  onButtonLeft,
+}: BodyProps) {
+  if (!progress) {
+    return loadError ? (
+      <p className="stackinstall__err">Could not check what is installed: {loadError}</p>
+    ) : (
+      <p className="stackinstall__meta">Checking what is installed…</p>
+    );
+  }
 
   if (progress.phase === "installed") {
     return <span className="badge badge--installed">Installed ✓</span>;
@@ -106,19 +147,23 @@ function StackInstallBody({
   }
 
   const failed = progress.members.filter((m) => m.phase === "failed");
-  const remaining = progress.bytesTotal - progress.bytesDone;
-  const label =
-    failed.length > 0
-      ? "Retry download"
-      : progress.installedCount > 0
-        ? `Install the remaining ${progress.members.length - progress.installedCount} files (${decimalGb(remaining)})`
-        : installLabel;
-
   return (
     <>
-      <button type="button" className="stackinstall__go" onClick={onInstall}>
-        {label}
+      <button
+        type="button"
+        className="stackinstall__go"
+        ref={buttonRef}
+        onClick={onActivate}
+        onBlur={onButtonLeft}
+      >
+        {idleLabel(progress, installLabel)}
       </button>
+      {progress.phase === "paused" && (
+        <p className="stackinstall__meta numeric">
+          Paused at {Math.round(progress.percent)}% · {formatGB(progress.bytesDone)} of{" "}
+          {formatGB(progress.bytesTotal)}
+        </p>
+      )}
       {failed.map((m) => (
         <p key={m.member.id} className="stackinstall__err">
           {m.member.file}: {m.error ?? "download failed"}
@@ -138,10 +183,9 @@ function StackProgressBar({
   showFiles: boolean;
 }) {
   const pct = Math.round(progress.percent);
-  const amount = `${decimalGb(progress.bytesDone)} of ${decimalGb(progress.bytesTotal)}`;
+  const amount = `${formatGB(progress.bytesDone)} of ${formatGB(progress.bytesTotal)}`;
   const current = progress.current;
-  const fileCount = progress.members.length;
-  const done = `${progress.installedCount} of ${fileCount} files done`;
+  const done = `${progress.installedCount} of ${progress.members.length} files done`;
   const summary = current ? `${PHASE_LABEL[current.phase]} ${current.member.file} · ${done}` : "Starting…";
 
   return (

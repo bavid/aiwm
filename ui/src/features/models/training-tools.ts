@@ -26,14 +26,14 @@ export const TRAINING_TOOLS: Readonly<Record<string, TrainingToolInfo>> = {
   "florence2-large": {
     shortName: "Florence-2",
     purpose: "Prose: one descriptive sentence per frame. Best for photos and general subjects.",
-    runsOn: "GPU · ~2 GB VRAM",
+    runsOn: "GPU · ~2 GiB VRAM",
     captionerId: "florence2",
   },
   "qwen2.5-vl-7b": {
     shortName: "Qwen2.5-VL",
     purpose:
       "Second opinion: re-captions frames where Florence-2 sounds unsure, comparing each with a later frame.",
-    runsOn: "GPU · ~6 GB VRAM (4-bit)",
+    runsOn: "GPU · ~6 GiB VRAM (4-bit)",
     captionerId: null,
   },
 };

@@ -1,4 +1,5 @@
 import type { FitVerdict } from "../../lib/ipc";
+import { formatGiB } from "../../lib/units";
 
 /** The four hardware-fit tiers, exactly as the core reports them
  *  (`core::compat`). The UI never re-judges fit — it only labels, sorts and
@@ -34,7 +35,7 @@ export const fitReason = (fit: FitVerdict): string | null =>
 /** A VRAM estimate as GB (`~6.1 GB`), or `null` when the source did not
  *  estimate one. Never guesses a number. */
 export const fitVramGb = (mb: number | null | undefined): string | null =>
-  mb == null ? null : `~${(mb / 1024).toFixed(1)} GB`;
+  mb == null ? null : `~${formatGiB(mb)}`;
 
 /** Tier-first ordering. `Array#sort` is stable (ES2019), so files inside the
  *  same tier keep the order the source listed them in. Returns a new array —

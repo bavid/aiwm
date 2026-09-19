@@ -109,7 +109,9 @@ export const TRAINING_STACKS_MOCK: AnyRecord[] = [
   },
   {
     id: "qwen2.5-vl-7b", label: "Qwen2.5-VL 7B Instruct (second opinion)", media: "training",
-    is_default: false, fit: { level: "red", reason: "sums every file as VRAM" },
+    // `stack_fit` judges a captioner stack by its run-time VRAM (4-bit ~6 GiB),
+    // not by its 16.6 GB of files.
+    is_default: false, fit: { level: "green" },
     note: "Optional and large: re-captions a frame together with a later one when a Florence-2 caption looks unsure, describing what changes between them. Fourteen files (~16.6 GB download); loaded 4-bit it needs ~6 GB VRAM.",
     members: membersOf("qwen2.5-vl-7b-"),
   },
@@ -160,6 +162,8 @@ export function trainingCaptioners(models: readonly AnyRecord[]): AnyRecord[] {
   });
 }
 
-/** The core's offline-gate refusal, byte for byte as Tauri rejects with it. */
+/** The core's offline-gate refusals, byte for byte as Tauri rejects with them. */
 export const OFFLINE_DOWNLOAD_REFUSAL =
   "configuration error: download: offline mode is on — cannot download";
+export const OFFLINE_RESUME_REFUSAL =
+  "configuration error: download: offline mode is on — cannot resume";

@@ -1,4 +1,5 @@
 import type { Download, DownloadState, KnownModel, Model, ModelStack } from "../../lib/ipc";
+import { formatGB } from "../../lib/units";
 
 /** Where one file of a catalog stack stands, derived from the model library
  *  (already imported?) and the download queue (in flight? failed?). */
@@ -15,16 +16,16 @@ export interface MemberProgress {
   member: KnownModel;
   phase: MemberPhase;
   bytesDone: number;
-  /** The download row behind `phase`, when there is one — a failed one is
-   *  resumed rather than queued again. */
+  /** The download row behind `phase`, when there is one — a paused or
+   *  failed one is resumed rather than queued again. */
   downloadId: string | null;
   error: string | null;
 }
 
 /** `installed` only once **every** file is in the library — the same
  *  complete-directory rule the core uses before it calls a captioner
- *  installed. */
-export type StackPhase = "installed" | "installing" | "failed" | "missing";
+ *  installed. `paused`: nothing transferring, at least one file paused. */
+export type StackPhase = "installed" | "installing" | "paused" | "failed" | "missing";
 
 export interface StackProgress {
   phase: StackPhase;
@@ -45,12 +46,8 @@ const ACTIVE_STATES: ReadonlySet<DownloadState> = new Set([
   "verifying",
 ]);
 
-const IN_FLIGHT: ReadonlySet<MemberPhase> = new Set([
-  "queued",
-  "downloading",
-  "paused",
-  "verifying",
-]);
+/** Moving (or about to): the worker has it or will pick it up. */
+const IN_FLIGHT: ReadonlySet<MemberPhase> = new Set(["queued", "downloading", "verifying"]);
 
 const sameHash = (a: string | null, b: string) => a !== null && a.toLowerCase() === b.toLowerCase();
 
@@ -95,6 +92,7 @@ function memberProgress(
 function stackPhase(members: readonly MemberProgress[]): StackPhase {
   if (members.every((m) => m.phase === "installed")) return "installed";
   if (members.some((m) => IN_FLIGHT.has(m.phase))) return "installing";
+  if (members.some((m) => m.phase === "paused")) return "paused";
   if (members.some((m) => m.phase === "failed")) return "failed";
   return "missing";
 }
@@ -121,16 +119,22 @@ export function stackProgress(
   };
 }
 
-/** The files an "Install" click still has to start: never downloaded, or
- *  failed (those get resumed). Anything in flight or installed is left alone,
- *  so clicking Install from two tabs never queues a file twice. */
+/** The files an Install/Resume click still has to start: never downloaded
+ *  (queued), or paused / failed (resumed). Anything in flight or installed is
+ *  left alone — and the core returns the active download for a file that is
+ *  already queued elsewhere, so two tabs never fetch a file twice. */
 export function pendingMembers(p: StackProgress): MemberProgress[] {
-  return p.members.filter((m) => m.phase === "missing" || m.phase === "failed");
+  return p.members.filter(
+    (m) => m.phase === "missing" || m.phase === "failed" || m.phase === "paused",
+  );
 }
 
-/** Decimal gigabytes, one place — the unit download sizes are quoted in on
- *  model cards ("1.3 GB"). */
-export const decimalGb = (bytes: number) => `${(bytes / 1e9).toFixed(1)} GB`;
+/** Whether a snapshot shows the stack's click has taken effect: files are in
+ *  flight, or it is already complete. */
+export const isUnderway = (p: StackProgress) => p.phase === "installing" || p.phase === "installed";
+
+/** A stack's download size, in the app-wide decimal unit ("1.3 GB"). */
+export const stackSizeLabel = (stack: ModelStack) => formatGB(stackBytes(stack));
 
 /** A stack's whole download size. */
 export const stackBytes = (stack: ModelStack) =>

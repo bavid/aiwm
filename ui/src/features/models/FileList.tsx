@@ -2,8 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { enqueueDownload, type ModelType, type RegistryFile } from "../../lib/ipc";
 import { FitBadge } from "./FitBadge";
 import { countFitTiers, fitTierSummary, sortByFitTier } from "./fit-utils";
+import { formatGB } from "../../lib/units";
 
-const gb = (bytes: number) => `${(bytes / 1024 ** 3).toFixed(2)} GB`;
 
 /** How long "Copied ✓" / "Queued ✓" style feedback stays up. */
 const COPIED_MS = 1500;
@@ -213,7 +213,7 @@ function FileRow({
         {file.shard && ` · part ${file.shard[0]}/${file.shard[1]}`}
         {recommended && <span className="badge badge--pick">★</span>}
       </span>
-      <span className="numeric muted">{gb(file.size_bytes)}</span>
+      <span className="numeric muted">{formatGB(file.size_bytes, 2)}</span>
       {gated && <span className="badge badge--warn">accept licence on HF</span>}
       <ScanBadge pickle={file.pickle_scan_result} virus={file.virus_scan_result} />
       {canDownload && (

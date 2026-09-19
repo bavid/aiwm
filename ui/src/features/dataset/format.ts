@@ -24,17 +24,8 @@ export function parseBound(raw: string): number | null | undefined {
   return Number.isFinite(value) ? value : undefined;
 }
 
-const BYTE_UNITS = ["B", "KB", "MB", "GB", "TB"] as const;
-
-/** A byte count for people: `1.4 MB`, `26 GB`, `0 B` (binary steps, the way
- *  Windows Explorer counts). One decimal below 100, none above. */
-export function formatBytes(bytes: number): string {
-  if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
-  const exponent = Math.min(BYTE_UNITS.length - 1, Math.floor(Math.log(bytes) / Math.log(1024)));
-  const value = bytes / 1024 ** exponent;
-  const digits = exponent === 0 || value >= 100 ? 0 : 1;
-  return `${value.toFixed(digits)} ${BYTE_UNITS[exponent]}`;
-}
+/** A byte count for people — the app-wide decimal convention (`lib/units`). */
+export { formatBytes } from "../../lib/units";
 
 /** The field text for a stored bound; `null` (natural bound) shows as blank. */
 export function boundField(secs: number | null): string {

@@ -6,9 +6,8 @@ import {
   registerColibriModel,
   type ColibriModel,
 } from "../../lib/ipc";
+import { formatGB, formatGiB } from "../../lib/units";
 
-const gb = (bytes: number) => `${(bytes / 1024 ** 3).toFixed(1)} GB`;
-const gbFromMb = (mb: number) => `${(mb / 1024).toFixed(1)} GB`;
 
 /** Colibri (github.com/JustVugg/colibri) — a CPU-only engine for MoE models
  *  too large for GGUF/llama.cpp on a single consumer GPU. AIWM doesn't
@@ -117,14 +116,14 @@ function ColibriRow({
       <div className="colibri__head">
         <strong>{model.label}</strong>
         <span className="muted">
-          {gb(model.disk_estimate_bytes)} download · needs ~{gbFromMb(model.ram_estimate_mb)} RAM
+          {formatGB(model.disk_estimate_bytes)} download · needs ~{formatGiB(model.ram_estimate_mb)} RAM
           resident · {model.license}
         </span>
       </div>
       <p className="muted">{model.note}</p>
       {ramTight && (
         <p className="colibri__warn">
-          Tight: only ~{gbFromMb(freeRamMb ?? 0)} RAM free right now. This will still
+          Tight: only ~{formatGiB(freeRamMb ?? 0)} RAM free right now. This will still
           run — just expect more disk streaming (slower).
         </p>
       )}

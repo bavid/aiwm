@@ -8,6 +8,7 @@ import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import { HIRES_UPSCALE_METHODS } from "../features/image/hires-fix";
 import {
   OFFLINE_DOWNLOAD_REFUSAL,
+  OFFLINE_RESUME_REFUSAL,
   TRAINING_KNOWN_MOCK,
   TRAINING_STACKS_MOCK,
   trainingCaptioners,
@@ -2484,6 +2485,17 @@ export function installDevMock(): void {
         // ADR-009: the real download manager refuses every enqueue offline.
         if (CONFIG.offline_mode) throw new Error(OFFLINE_DOWNLOAD_REFUSAL);
         const body = (a.body ?? {}) as AnyRecord;
+        // Like the core: a file (by SHA-256) that is still downloading is
+        // not queued again -- the active row comes back instead.
+        const sha = typeof body.sha256 === "string" ? body.sha256.toLowerCase() : null;
+        const active = sha
+          ? DOWNLOADS.find(
+              (x) =>
+                String(x.sha256 ?? "").toLowerCase() === sha &&
+                !["done", "failed"].includes(String(x.state)),
+            )
+          : undefined;
+        if (active) return { ...active };
         const d: AnyRecord = {
           id: `dl-${seq++}`, url: String(body.url ?? ""),
           filename: String(body.filename ?? "model.gguf").split("/").pop(),
@@ -2501,6 +2513,7 @@ export function installDevMock(): void {
         return null;
       }
       case "resume_download": {
+        if (CONFIG.offline_mode) throw new Error(OFFLINE_RESUME_REFUSAL);
         const d = DOWNLOADS.find((x) => x.id === a.id);
         if (d && (d.state === "paused" || d.state === "failed")) d.state = "running";
         return null;

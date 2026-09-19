@@ -1,10 +1,9 @@
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
-import { useCaptioners, useModelStacks } from "../../lib/hooks";
-import type { DatasetMode, DatasetPrepParams, ModelStack } from "../../lib/ipc";
-import { TRAINING_TOOLS } from "../models/training-tools";
-import { useStackInstaller } from "../models/useStackInstaller";
+import { useCallback, useId, useMemo, useRef, useState } from "react";
+import { useCaptioners } from "../../lib/hooks";
+import type { DatasetMode, DatasetPrepParams } from "../../lib/ipc";
 import { browseForDirectory } from "./browse";
 import { CaptionerHint, CaptionerPicker } from "./CaptionerSetup";
+import { useCaptionerInstall } from "./useCaptionerInstall";
 
 const DEFAULT_SAMPLE_FPS = 1.5;
 const DEFAULT_BLUR_THRESHOLD = 100;
@@ -55,47 +54,19 @@ export function PrepForm({ isRunning, error, onStart, onMoreCaptioners }: Props)
   const captionOn = captionerId !== null;
   const chosenCaptioner = installed.find((c) => c.id === captionerId) ?? null;
 
-  // One-click captioner installs (the catalog's captioner stacks). A finished
-  // install refreshes the registry at once and selects what was installed, so
-  // the picker enables it without waiting for the next poll.
-  const allStacks = useModelStacks();
-  const captionerStacks = useMemo(
-    () => (allStacks ?? []).filter((s) => TRAINING_TOOLS[s.id]?.captionerId),
-    [allStacks],
-  );
+  // One-click captioner installs: see useCaptionerInstall for when a finished
+  // install may change this form.
   const captioningRef = useRef<HTMLFieldSetElement>(null);
-  const noticeRef = useRef<HTMLParagraphElement>(null);
-  const noticeWantsFocus = useRef(false);
-  const [installedNotice, setInstalledNotice] = useState("");
-  const onStackInstalled = useCallback(
-    (s: ModelStack) => {
-      const tool = TRAINING_TOOLS[s.id];
-      refetchCaptioners();
-      if (tool?.captionerId) {
-        setPickedCaptioner(tool.captionerId);
-        setCaptionWanted(true);
-      }
-      setInstalledNotice(
-        `${tool?.shortName ?? s.label} installed — it is selected for auto-captioning.`,
-      );
-      // The install control that had focus is about to disappear with the
-      // hint; hand focus to the notice instead of dropping it on the page.
-      noticeWantsFocus.current = !!captioningRef.current?.contains(document.activeElement);
-    },
-    [refetchCaptioners],
-  );
-  const installer = useStackInstaller(captionerStacks, onStackInstalled);
-
-  useEffect(() => {
-    if (!noticeWantsFocus.current) return;
-    const active = document.activeElement;
-    if (active === document.body) {
-      noticeRef.current?.focus();
-      noticeWantsFocus.current = false;
-    } else if (!captioningRef.current?.contains(active)) {
-      noticeWantsFocus.current = false;
-    }
-  }, [captioners, installedNotice]);
+  const choose = useCallback((captionerId: string) => {
+    setPickedCaptioner(captionerId);
+    setCaptionWanted(true);
+  }, []);
+  const install = useCaptionerInstall({
+    captioners,
+    refetchCaptioners,
+    onChosen: choose,
+    containerRef: captioningRef,
+  });
 
   const modeId = useId();
 
@@ -223,19 +194,18 @@ export function PrepForm({ isRunning, error, onStart, onMoreCaptioners }: Props)
 
         {noneInstalled && (
           <CaptionerHint
-            stacks={allStacks}
-            installer={installer}
+            stacks={install.stacks}
+            installer={install.installer}
+            settling={install.settling}
+            onInstall={install.startInstall}
             onMoreCaptioners={onMoreCaptioners}
           />
         )}
 
-        {installedNotice && (
-          <p className="datasetform__installed" ref={noticeRef} tabIndex={-1}>
-            {installedNotice}
-          </p>
-        )}
-        <p className="visually-hidden" role="status">
-          {installedNotice}
+        {/* The one announcement of a finished install; focus goes to the
+            newly selected radio, not to this text. */}
+        <p className="datasetform__installed" role="status">
+          {install.notice}
         </p>
 
         {captionOn && captioners && (
@@ -243,8 +213,10 @@ export function PrepForm({ isRunning, error, onStart, onMoreCaptioners }: Props)
             captioners={captioners}
             selectedId={captionerId}
             onSelect={setPickedCaptioner}
-            stacks={allStacks}
-            installer={installer}
+            stacks={install.stacks}
+            installer={install.installer}
+            settling={install.settling}
+            onInstall={install.startInstall}
           />
         )}
 

@@ -1,7 +1,8 @@
 import { useId } from "react";
 import type { Captioner, ModelStack } from "../../lib/ipc";
+import { formatGiB } from "../../lib/units";
 import { StackInstall } from "../models/StackInstall";
-import { decimalGb, stackBytes } from "../models/stack-install";
+import { stackSizeLabel } from "../models/stack-install";
 import { RECOMMENDED_CAPTIONER_STACK, TRAINING_TOOLS, stackIdForCaptioner } from "../models/training-tools";
 import type { StackInstaller } from "../models/useStackInstaller";
 import "./captioner-setup.css";
@@ -10,13 +11,64 @@ type InstallProps = {
   /** The captioner stacks from the catalog (`null` while loading). */
   stacks: readonly ModelStack[] | null;
   installer: StackInstaller;
+  /** Stacks that just finished and await the registry's confirmation. */
+  settling: ReadonlySet<string>;
+  /** Starts a stack's install — the form records that it was asked here. */
+  onInstall: (stack: ModelStack) => void;
 };
+
+/** Every file of the stack is in the library, yet the core does not call the
+ *  captioner usable (e.g. a file failed its load-time integrity check). */
+const NOT_USABLE = "Files present but not usable — reinstall on the Models tab.";
+
+/** One stack's install control, or the "not usable" note when its files are
+ *  all there but the registry (the source of truth) says no. */
+function CaptionerInstall({
+  stack,
+  name,
+  installLabel,
+  quiet,
+  installer,
+  settling,
+  onInstall,
+}: {
+  stack: ModelStack;
+  name: string;
+  installLabel: string;
+  quiet?: boolean;
+  installer: StackInstaller;
+  settling: ReadonlySet<string>;
+  onInstall: (stack: ModelStack) => void;
+}) {
+  const progress = installer.progress.get(stack.id);
+  if (progress?.phase === "installed") {
+    return settling.has(stack.id) ? (
+      <p className="stackinstall__meta">Finishing install…</p>
+    ) : (
+      <p className="stackinstall__err">{NOT_USABLE}</p>
+    );
+  }
+  return (
+    <StackInstall
+      name={name}
+      progress={progress}
+      isStarting={installer.starting.has(stack.id)}
+      error={installer.errors[stack.id] ?? null}
+      loadError={installer.loadError}
+      installLabel={installLabel}
+      quiet={quiet}
+      onInstall={() => onInstall(stack)}
+    />
+  );
+}
 
 /** Shown while no captioner is installed: recommend the WD tagger and
  *  install it right here, through the same download path as the Models tab. */
 export function CaptionerHint({
   stacks,
   installer,
+  settling,
+  onInstall,
   onMoreCaptioners,
 }: InstallProps & { onMoreCaptioners: () => void }) {
   const wd = stacks?.find((s) => s.id === RECOMMENDED_CAPTIONER_STACK) ?? null;
@@ -33,13 +85,13 @@ export function CaptionerHint({
             Recommended: the WD tagger. It writes Danbooru-style tags and runs on the CPU, so it
             never competes with training for VRAM.
           </p>
-          <StackInstall
+          <CaptionerInstall
+            stack={wd}
             name="WD tagger"
-            progress={installer.progress.get(wd.id)}
-            isStarting={installer.starting.has(wd.id)}
-            error={installer.errors[wd.id] ?? null}
-            installLabel={`Install WD tagger (recommended, ${decimalGb(stackBytes(wd))})`}
-            onInstall={() => void installer.install(wd)}
+            installLabel={`Install WD tagger (recommended, ${stackSizeLabel(wd)})`}
+            installer={installer}
+            settling={settling}
+            onInstall={onInstall}
           />
         </>
       ) : (
@@ -56,18 +108,19 @@ export function CaptionerHint({
   );
 }
 
-const runsOn = (c: Captioner) =>
-  c.vram_mb === 0 ? "CPU" : `GPU · ~${(c.vram_mb / 1024).toFixed(0)} GB VRAM`;
+const runsOn = (c: Captioner) => (c.vram_mb === 0 ? "CPU" : `GPU · ~${formatGiB(c.vram_mb, 0)} VRAM`);
 
-/** "Describe with": every captioner in the registry. Installed ones are
- *  selectable; the rest offer their one-click install instead of sitting
- *  there disabled with no explanation. */
+/** "Describe with": every captioner in the registry. `captioner.installed`
+ *  (the core's verdict) decides what is selectable; the rest offer their
+ *  one-click install instead of sitting there disabled with no explanation. */
 export function CaptionerPicker({
   captioners,
   selectedId,
   onSelect,
   stacks,
   installer,
+  settling,
+  onInstall,
 }: InstallProps & {
   captioners: readonly Captioner[];
   selectedId: string | null;
@@ -107,14 +160,14 @@ export function CaptionerPicker({
               <span className="captioner-picker__meta">{meta} · not installed</span>
             </span>
             {stack ? (
-              <StackInstall
+              <CaptionerInstall
+                stack={stack}
                 name={shortName}
-                progress={installer.progress.get(stack.id)}
-                isStarting={installer.starting.has(stack.id)}
-                error={installer.errors[stack.id] ?? null}
-                installLabel={`Install (${decimalGb(stackBytes(stack))})`}
+                installLabel={`Install (${stackSizeLabel(stack)})`}
                 quiet
-                onInstall={() => void installer.install(stack)}
+                installer={installer}
+                settling={settling}
+                onInstall={onInstall}
               />
             ) : (
               <span className="captioner-picker__meta">Import it on the Models tab.</span>

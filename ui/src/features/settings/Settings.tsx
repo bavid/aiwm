@@ -22,6 +22,7 @@ import { SectionNav, type NavSection } from "../../components/SectionNav";
 import { getTheme, setTheme, type Theme } from "../../lib/theme";
 import { BackupCard } from "./BackupCard";
 import "./settings.css";
+import { formatGB } from "../../lib/units";
 
 const SECTIONS: NavSection[] = [
   { id: "general", label: "General" },
@@ -32,7 +33,6 @@ const SECTIONS: NavSection[] = [
   { id: "backup", label: "Backup" },
 ];
 
-const gb = (bytes: number) => `${(bytes / 1024 ** 3).toFixed(2)} GB`;
 
 const THEME_OPTIONS: { value: Theme; label: string }[] = [
   { value: "system", label: "System" },
@@ -310,7 +310,7 @@ export function Settings() {
                   <dd>{about?.outputs_dir ?? "…"}</dd>
                   <dt>Size</dt>
                   <dd className="numeric">
-                    {about ? gb(about.outputs_bytes) : "…"}
+                    {about ? formatGB(about.outputs_bytes, 2) : "…"}
                     {about?.outputs_dir && (
                       <button
                         type="button"
@@ -373,7 +373,7 @@ export function Settings() {
                     <span className="muted numeric">
                       {cleanupResult.deleted_files === 0
                         ? "nothing to remove"
-                        : `removed ${cleanupResult.deleted_files} file(s), freed ${gb(cleanupResult.freed_bytes)}`}
+                        : `removed ${cleanupResult.deleted_files} file(s), freed ${formatGB(cleanupResult.freed_bytes, 2)}`}
                       {cleanupResult.errors.length > 0 &&
                         ` — ${cleanupResult.errors.length} could not be removed`}
                     </span>
