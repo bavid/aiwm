@@ -839,11 +839,13 @@ Kuratier-Grid mit Caption-Edit/Exclude, Export alle im Screenshot bestätigt).
     verifiziert (keine GPU/Testdaten in dieser Umgebung) — nur Unit-Tests
     (Rust, reale kleine PNGs für Blur/Hash-Tests) + Sidecar-Fake-Doubles +
     Browser-Verifikation gegen den dev-mock.
-  - `VisionAdapter.unload_model` räumt nur die Rust-seitige Buchführung auf,
-    nicht den Python-seitigen Modell-Cache im Sidecar-Prozess selbst (gleiche
-    Lücke wie bei den anderen Sidecar-gestützten Adaptern) — reale
-    GPU-Speicher-Freigabe bei Eviction ist ein Folge-Thema, sobald das an
-    echter Hardware gemessen wird.
+  - ✅ ~~`VisionAdapter.unload_model` räumt nur die Rust-seitige Buchführung
+    auf~~ — behoben 2026-09-19 (Plan 9): es sendet jetzt zusätzlich die
+    Sidecar-RPC `unload_vision_models`, die die Python-seitigen
+    Engine-Caches leert und den CUDA-Cache freigibt (Buchführung zuerst,
+    Sidecar-Fehler nur als Warnung). Aufgerufen bei Eviction und am Ende
+    jeder Dataset-Prep; Messung siehe Plan-8-Befund "Modelle bleiben nach
+    dem Job geladen".
 
 ### Teilsystem 1 — Erweiterungen (Plan 1 "Dataset Extensions"): ✅ umgesetzt (2026-09-16)
 
@@ -1850,11 +1852,30 @@ Noch offen aus Plan 6:
       **9.216** (zusammen 11.776; mit 1,8 GB Grundlast passt das auf 16 GB).
       Captioner-Registry, `stack_fit`, UI-Texte und Dev-Mock ziehen mit; ein
       Test pinnt die Werte an die Regel.
-    - **Modelle bleiben nach dem Job geladen:** die Vision-Runtime hält
-      `dataset-vision-pipeline` resident (nach Florence-Läufen ~4,0 GB, nach
-      Eskalation ~11,8 GB belegt) bis zum Entladen/Beenden. Für die zweite
-      Prep ist das schneller (31 s statt 38 s), blockiert aber VRAM fürs
-      Training — Idle-Entladen oder Entladen nach der Prep prüfen.
+    - ✅ **Modelle bleiben nach dem Job geladen** — behoben 2026-09-19
+      (Plan 9, `docs/superpowers/specs/2026-09-19-vision-unload-design.md`).
+      Vorher hielt die Vision-Runtime `dataset-vision-pipeline` resident
+      (nach Florence-Läufen ~4,0 GB, nach Eskalation ~11,8 GB belegt) bis
+      zum Beenden des Daemons. Jetzt fordert der Job-Engine nach jedem
+      `dataset_prep` (fertig, fehlgeschlagen, abgebrochen; nicht bei
+      `blocked`) `VisionAdapter::unload_model` an, das die neue Sidecar-RPC
+      `unload_vision_models` sendet (Engine-Caches leeren, `gc.collect()`,
+      `torch.cuda.empty_cache()`); die Eviction nimmt denselben Weg. Der
+      Job-Loop fährt immer nur einen Job, also nutzt keine zweite Prep die
+      Captioner gleichzeitig. Kosten: die nächste Prep lädt Florence-2 neu
+      (~7 s). Gemessen mit echtem `aiwm-cored` (Worktree-Build, Port 48160,
+      `E:\AI\data`, DB vorher gesichert) auf `D:\Data\Test`, Florence-2 +
+      Eskalation jeder 5. Frame, `nvidia-smi` jede Sekunde: Grundlast
+      **1.818–1.820 MiB**, Spitze **11.867 MiB**, 1 s nach Jobende
+      **2.145 MiB** und bis +21 s unverändert (Sidecar meldet
+      `released: florence2, qwen_vl`, `cuda_cache_cleared: true`); nach
+      Beenden des Daemons **1.818 MiB**. Lauf: 373 s, 1.368 Frames, 40
+      behalten, 33 `florence2` + 7 `qwen2.5-vl`, Quellvideo unverändert
+      (SHA-256 vorher = nachher). Rest: **+325 MiB** bleiben, solange der
+      Sidecar-Prozess lebt — CUDA-Kontext von torch (plus ggf.
+      cuBLAS/bitsandbytes-Workspaces), kein Modellgewicht; nur ein
+      Sidecar-Neustart gibt die frei (Folge-Thema, falls die 325 MiB fürs
+      Training fehlen).
     - Eskalations-Standard (jeder 20. Frame) trifft bei 40 behaltenen Frames
       genau einen Frame, weil der letzte Frame einer Gruppe keinen Nachbarn
       hat und Florence-2 hier nie "unsicher" formuliert.

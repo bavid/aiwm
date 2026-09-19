@@ -31,6 +31,7 @@ CAPABILITIES: list[str] = [
     "caption_frame",
     "caption_frame_pair",
     "tag_frame",
+    "unload_vision_models",
 ]
 
 _METHOD_NOT_FOUND = -32601
@@ -361,6 +362,15 @@ def handle(req: dict[str, Any]) -> dict[str, Any] | None:
             return _error(req_id, _INVALID_PARAMS, str(e))
         except Exception as e:  # pragma: no cover - unexpected engine failure
             return _error(req_id, _INTERNAL_ERROR, f"tagging failed: {e}")
+    elif method == "unload_vision_models":
+        from aiwm_sidecar.vision import unload_vision_models
+
+        try:
+            result = unload_vision_models(params)
+        except ValueError as e:
+            return _error(req_id, _INVALID_PARAMS, str(e))
+        except Exception as e:  # pragma: no cover - unexpected release failure
+            return _error(req_id, _INTERNAL_ERROR, f"unloading failed: {e}")
     elif method in _PLANNED:
         return _error(req_id, _NOT_IMPLEMENTED, f"{method} is not implemented yet")
     else:

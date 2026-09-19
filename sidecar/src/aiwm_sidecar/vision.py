@@ -27,6 +27,8 @@ for Dia.
 
 from __future__ import annotations
 
+import gc
+import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
 
@@ -410,3 +412,71 @@ def tag_frame(params: dict[str, Any]) -> dict[str, Any]:
         "threshold": threshold,
         "engine": "wd-eva02-tagger-v3",
     }
+
+
+# --- releasing the cached engines -------------------------------------------
+#
+# Every engine above is cached for the rest of the process, so one dataset
+# prep loads each model once. Core asks for the release when the prep ends
+# (and on a scheduler eviction) -- otherwise Florence-2 (~2.2 GB) and
+# Qwen2.5-VL 4-bit (~7.9 GB) stay on the GPU until the daemon stops (measured
+# 2026-09-19; docs/superpowers/specs/2026-09-19-vision-unload-design.md).
+
+_UNLOAD_KINDS = ("florence2", "qwen_vl", "wd_tagger")
+
+
+def _cache_entries() -> list[tuple[str, str, dict[Any, Any], Any]]:
+    """(kind, model_dir, cache, key) for every cached engine."""
+    entries: list[tuple[str, str, dict[Any, Any], Any]] = []
+    entries += [("florence2", key, _florence2_cache, key) for key in _florence2_cache]
+    entries += [("qwen_vl", key[0], _qwen_vl_cache, key) for key in _qwen_vl_cache]
+    entries += [("wd_tagger", key, _wd_tagger_cache, key) for key in _wd_tagger_cache]
+    return entries
+
+
+def _empty_cuda_cache() -> tuple[bool, str]:
+    """(cleared, error text). Only when torch is already imported: if it
+    never was, none of these engines ever put anything on the GPU, and
+    importing it just to unload would cost seconds for nothing. A CUDA error
+    here is reported, not raised -- the engines are already dropped by then,
+    and the caller must not see the whole release as failed."""
+    torch = sys.modules.get("torch")
+    if torch is None:
+        return False, ""
+    try:
+        if not torch.cuda.is_available():
+            return False, ""
+        torch.cuda.empty_cache()
+    except Exception as e:
+        return False, str(e)
+    return True, ""
+
+
+def unload_vision_models(params: dict[str, Any]) -> dict[str, Any]:
+    """Drop cached captioner engines and give their memory back.
+    JSON-RPC `unload_vision_models`. Optional `kind` (florence2, qwen_vl,
+    wd_tagger) and `model_dir` narrow the release; none means everything.
+    Safe to call when nothing is loaded."""
+    kind = str(params.get("kind") or "")
+    model_dir = str(params.get("model_dir") or "")
+    if kind and kind not in _UNLOAD_KINDS:
+        raise _vision_value_error(
+            f"unknown kind: {kind!r} (expected one of {', '.join(_UNLOAD_KINDS)})"
+        )
+
+    released: list[dict[str, str]] = []
+    for entry_kind, entry_dir, cache, key in _cache_entries():
+        if (kind and entry_kind != kind) or (model_dir and entry_dir != model_dir):
+            continue
+        del cache[key]
+        released.append({"kind": entry_kind, "model_dir": entry_dir})
+
+    # The engines hold the model/processor/session references; with the
+    # cache entries gone, a collection frees the tensors so the CUDA caching
+    # allocator can hand the blocks back to the driver.
+    gc.collect()
+    cleared, cuda_error = _empty_cuda_cache()
+    result: dict[str, Any] = {"released": released, "cuda_cache_cleared": cleared}
+    if cuda_error:
+        result["cuda_error"] = cuda_error
+    return result

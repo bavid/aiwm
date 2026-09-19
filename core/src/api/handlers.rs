@@ -1131,6 +1131,10 @@ pub async fn detach_engine(app: &App, body: DetachEngineDto) -> Result<()> {
 /// by which one currently has it loaded, rather than assuming llama.cpp like
 /// [`detach_engine`]. A no-op error rather than silent success when the model
 /// isn't actually resident, so a stale "Unload" click says why it did nothing.
+///
+/// Unloading the dataset captioners (`dataset-vision-pipeline`) while a prep
+/// is running is harmless: the sidecar drops its cached engines, and the next
+/// frame's caption request simply loads them again (costing one reload).
 pub async fn unload_model(app: &App, model_id: &str) -> Result<()> {
     match app.runtimes.runtime_with_model(model_id) {
         Some(runtime) => runtime.unload_model(model_id).await,
