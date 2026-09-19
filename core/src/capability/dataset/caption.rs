@@ -58,20 +58,21 @@ pub const FLORENCE2_VRAM_FALLBACK_MB: u64 = 2048;
 pub const QWEN_VL_VRAM_FALLBACK_MB: u64 = 6144;
 
 /// Every file `Florence2ForConditionalGeneration` + `AutoProcessor` read
-/// from the snapshot directory (`vision.py::_construct_florence2`, both with
-/// `trust_remote_code`): weights, configs, the tokenizer, and the three
-/// remote-code modules -- exactly the pinned `florence2-large` stack.
+/// from the snapshot directory (`vision.py::_construct_florence2`, both
+/// built into transformers, no remote code): weights, configs, the processor
+/// and tokenizer files -- exactly the pinned `florence2-large` stack.
 pub const FLORENCE2_REQUIRED_FILES: &[&str] = &[
     "config.json",
     "model.safetensors",
-    "configuration_florence2.py",
-    "modeling_florence2.py",
-    "processing_florence2.py",
-    "preprocessor_config.json",
     "generation_config.json",
+    "preprocessor_config.json",
+    "processor_config.json",
     "tokenizer.json",
     "tokenizer_config.json",
     "vocab.json",
+    "merges.txt",
+    "added_tokens.json",
+    "special_tokens_map.json",
 ];
 
 /// Every file `Qwen2_5_VLForConditionalGeneration` + `AutoProcessor` read
@@ -285,8 +286,8 @@ async fn verified_store_dir(store_root: &Path, kind: ModelKind) -> Result<std::p
 /// reported as missing rather than resolved to a directory that will fail
 /// at caption time.
 ///
-/// For a captioner with a pinned snapshot (Florence-2, which runs its
-/// folder's Python via `trust_remote_code`), the returned directory is the
+/// For a captioner with a pinned snapshot (Florence-2, loaded as a whole
+/// folder by `from_pretrained`), the returned directory is the
 /// store's own subfolder after the load-time integrity check -- never the
 /// rows' parent, which any role assignment could point anywhere.
 pub async fn resolve_captioner_dir(
@@ -494,7 +495,7 @@ mod tests {
     /// Any row can carry the Florence-2 role (`PUT /models/{id}/roles`,
     /// `register_directory_model`), so a folder whose rows look complete
     /// is still refused when its content is not the pinned snapshot -- the
-    /// check that guards `trust_remote_code` runs at load time.
+    /// folder check runs at load time.
     #[tokio::test]
     async fn resolve_captioner_dir_refuses_a_florence2_folder_that_fails_the_integrity_check() {
         use super::super::captioner::find_captioner;

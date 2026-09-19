@@ -430,6 +430,37 @@ mod tests {
         assert_eq!(dir, Path::new("E:\\AI\\models\\vision\\florence2"));
     }
 
+    /// Plan 8: rows left by an install of the old `microsoft/Florence-2-large`
+    /// remote-code snapshot must not make the native captioner read as
+    /// installed -- its file set lacks what the native processor reads.
+    #[tokio::test]
+    async fn rows_of_the_old_remote_code_snapshot_do_not_count_as_installed() {
+        let db = Database::connect_in_memory().await.unwrap();
+        let c = find_captioner(FLORENCE2_ID).unwrap();
+        for name in [
+            "config.json",
+            "model.safetensors",
+            "configuration_florence2.py",
+            "modeling_florence2.py",
+            "processing_florence2.py",
+            "preprocessor_config.json",
+            "generation_config.json",
+            "tokenizer.json",
+            "tokenizer_config.json",
+            "vocab.json",
+        ] {
+            db.models()
+                .insert(model_row(
+                    &format!("E:\\AI\\models\\vision\\florence2-large\\{name}"),
+                    c.role,
+                ))
+                .await
+                .unwrap();
+        }
+        assert_eq!(installed_captioner_dir(&db, c).await.unwrap(), None);
+        assert!(c.required_files.iter().all(|f| !f.ends_with(".py")));
+    }
+
     /// The files a directory captioner needs are exactly the files its
     /// one-click catalog stack installs -- so "stack complete" and
     /// "captioner installed" can never disagree.

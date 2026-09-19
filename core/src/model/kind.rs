@@ -84,12 +84,13 @@ pub enum ModelKind {
     /// co-located, consumed by the Python sidecar (`vision.tag_frame`).
     /// Never a ComfyUI model.
     WdTagger,
-    /// One file of `microsoft/Florence-2-large` (weights, configs,
-    /// tokenizer and the `trust_remote_code` Python files) — the same
-    /// directory shape as [`DiaEngine`](Self::DiaEngine): the sidecar's
-    /// `AutoModelForCausalLM.from_pretrained(<dir>, trust_remote_code=True)`
-    /// reads co-located siblings by their original Hugging Face names, so
-    /// the destination is never hash-suffixed.
+    /// One file of `florence-community/Florence-2-large`, the
+    /// transformers-native conversion (weights, configs, tokenizer and
+    /// processor files; no remote code) — the same directory shape as
+    /// [`DiaEngine`](Self::DiaEngine): the sidecar's
+    /// `Florence2ForConditionalGeneration.from_pretrained(<dir>)` reads
+    /// co-located siblings by their original Hugging Face names, so the
+    /// destination is never hash-suffixed.
     Florence2Engine,
     /// One file of `Qwen/Qwen2.5-VL-7B-Instruct` (five weight shards plus
     /// index, configs, tokenizer and chat template) — directory-shaped like
@@ -150,11 +151,11 @@ impl ModelKind {
             // directory, for both the Dia engine and its DAC codec.
             Self::DiaEngine | Self::DiaCodec => ext == "json" || ext == "safetensors",
             Self::WdTagger => ext == "onnx" || ext == "csv",
-            // `.py` is Florence-2's remote code; `model::import` only lets a
-            // `.py` in when its SHA-256 is a pinned catalog entry.
-            Self::Florence2Engine => matches!(ext.as_str(), "json" | "safetensors" | "py"),
-            // `merges.txt` is half of Qwen2's BPE tokenizer.
-            Self::QwenVlEngine => matches!(ext.as_str(), "json" | "safetensors" | "txt"),
+            // Both load natively in transformers (never a `.py`); `merges.txt`
+            // is half of each one's BPE tokenizer.
+            Self::Florence2Engine | Self::QwenVlEngine => {
+                matches!(ext.as_str(), "json" | "safetensors" | "txt")
+            }
         }
     }
 
@@ -513,10 +514,10 @@ mod tests {
             assert!(!k.accepts_ext("bin"), "never the Pickle weights");
             assert!(!k.accepts_ext("gguf"));
         }
-        // Florence-2 ships its architecture as `trust_remote_code` Python
-        // files; Qwen2.5-VL's BPE tokenizer needs `merges.txt`.
-        assert!(ModelKind::Florence2Engine.accepts_ext("py"));
-        assert!(!ModelKind::Florence2Engine.accepts_ext("txt"));
+        // Both load natively in transformers -- no Python file is ever a
+        // captioner file -- and both BPE tokenizers need `merges.txt`.
+        assert!(!ModelKind::Florence2Engine.accepts_ext("py"));
+        assert!(ModelKind::Florence2Engine.accepts_ext("txt"));
         assert!(ModelKind::QwenVlEngine.accepts_ext("txt"));
         assert!(!ModelKind::QwenVlEngine.accepts_ext("py"));
     }

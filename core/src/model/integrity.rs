@@ -2,8 +2,8 @@
 //! (Florence-2 large, Qwen2.5-VL 7B).
 //!
 //! Import-time pinning (`model::import`) only guards files that go *through*
-//! the importer. The folder the sidecar actually loads — with
-//! `trust_remote_code=True` for Florence-2 — can still be reached other ways:
+//! the importer. The folder the sidecar actually loads as a whole can still
+//! be reached other ways:
 //! any model row can be given the `vision_florence2` role, a folder can be
 //! registered with `register_directory_model`, or a file can be dropped next
 //! to the imported ones. So right before a captioner loads, the folder it
@@ -374,7 +374,8 @@ mod tests {
             .to_string();
         assert!(e.contains("wd_tagger"), "{e}");
         let florence = expected_files(ModelKind::Florence2Engine).unwrap();
-        assert_eq!(florence.len(), 10);
+        assert_eq!(florence.len(), 11);
+        assert!(florence.iter().all(|f| !f.file.ends_with(".py")));
         assert_eq!(expected_files(ModelKind::QwenVlEngine).unwrap().len(), 14);
     }
 
