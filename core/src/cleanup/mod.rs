@@ -5,8 +5,10 @@
 //! Everything here only *reports*. Deleting a model is [`crate::model::delete_model`],
 //! always a confirmed user action.
 
+pub mod locations;
 pub mod outputs;
 
+pub use locations::StorageLocation;
 pub use outputs::{RetentionPolicy, SweepResult};
 
 use std::cmp::Reverse;

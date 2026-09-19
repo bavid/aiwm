@@ -98,6 +98,7 @@ async fn harness_with(extra_args: &[&str]) -> Harness {
         llama,
         comfyui,
         outputs.clone(),
+        outputs.join("datasets"),
     ));
 
     Harness {

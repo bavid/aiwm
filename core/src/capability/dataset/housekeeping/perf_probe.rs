@@ -124,7 +124,7 @@ fn guard_build_timing() {
         ),
     ] {
         let t = std::time::Instant::now();
-        let guard = Guard::build(&outputs, &snap).keeping(&staying);
+        let guard = Guard::build(&outputs, &datasets_root, &snap).keeping(&staying);
         println!(
             "Guard::build, {label}: {:?} (walkable: {})",
             t.elapsed(),

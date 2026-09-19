@@ -13,9 +13,9 @@ use super::dto::{
     DialogueLineDto, EnqueueDownloadDto, ExportDatasetDto, FeaturedModelDto, JobDetailDto,
     KnownModelDto, LaunchExternalDto, LocalApiStatusDto, LocationBodyDto, ModelStackDto,
     NewAgentDto, NewSessionDto, NewVoiceIdentityDto, NpcBodyDto, OpenAgentSessionDto,
-    PersonaBodyDto, ProfileDto, ProfilePresetsDto, RegisterColibriModelDto, RegistryDetailsDto,
-    RegistryFileDto, RegistrySearchDto, RunDetailDto, RuntimeStatusDto, SceneBodyDto,
-    SceneDetailDto, SetSessionPersonaDto, StartRunDto, StoryBodyDto, SubmitJobDto,
+    PathsUpdateDto, PersonaBodyDto, ProfileDto, ProfilePresetsDto, RegisterColibriModelDto,
+    RegistryDetailsDto, RegistryFileDto, RegistrySearchDto, RunDetailDto, RuntimeStatusDto,
+    SceneBodyDto, SceneDetailDto, SetSessionPersonaDto, StartRunDto, StoryBodyDto, SubmitJobDto,
     TrainableModelDto, TrainerStatusDto, UpdateDatasetDto, UpdateDatasetFrameDto,
 };
 use crate::compat::FitVerdict;
@@ -46,6 +46,8 @@ pub fn about(app: &App) -> AboutDto {
         outputs_bytes: dir_file_bytes(&outputs_dir),
         runtimes_dir: app.paths.runtimes_dir().display().to_string(),
         cache_dir: app.paths.cache_dir().display().to_string(),
+        datasets_dir: app.paths.datasets_dir().display().to_string(),
+        training_dir: app.paths.training_dir().display().to_string(),
         core_api_port: app.config.core_api_port,
         vram_budget_mb: app.scheduler.budget_mb(),
         offline_mode: app.offline(),
@@ -96,6 +98,8 @@ pub async fn save_config(app: &App, update: ConfigUpdate) -> Result<Config> {
     cfg.paths.outputs_path = non_empty_path(&update.paths.outputs_path);
     cfg.paths.runtimes_path = non_empty_path(&update.paths.runtimes_path);
     cfg.paths.cache_path = non_empty_path(&update.paths.cache_path);
+    cfg.paths.datasets_path = non_empty_path(&update.paths.datasets_path);
+    cfg.paths.training_path = non_empty_path(&update.paths.training_path);
     cfg.retention = update.retention;
     cfg.save(&app.paths)?;
     app.set_offline(cfg.offline_mode);
@@ -425,6 +429,7 @@ pub async fn delete_dataset(
     crate::capability::dataset::housekeeping::delete_dataset_with_files(
         &app.db,
         &app.paths.outputs_dir(),
+        &app.paths.datasets_dir(),
         id,
     )
     .await
@@ -436,7 +441,13 @@ pub async fn dataset_usage(
     app: &App,
     id: &str,
 ) -> Result<Option<crate::capability::dataset::DatasetUsage>> {
-    crate::capability::dataset::housekeeping::usage(&app.db, &app.paths.outputs_dir(), id).await
+    crate::capability::dataset::housekeeping::usage(
+        &app.db,
+        &app.paths.outputs_dir(),
+        &app.paths.datasets_dir(),
+        id,
+    )
+    .await
 }
 
 /// `POST /datasets/{id}/frames/bulk` — move a whole selection to Keep or
@@ -470,6 +481,7 @@ pub async fn delete_dataset_frames(
     crate::capability::dataset::housekeeping::delete_frames(
         &app.db,
         &app.paths.outputs_dir(),
+        &app.paths.datasets_dir(),
         id,
         &body.frame_ids,
     )
@@ -486,6 +498,7 @@ pub async fn cleanup_dataset(
     crate::capability::dataset::housekeeping::cleanup(
         &app.db,
         &app.paths.outputs_dir(),
+        &app.paths.datasets_dir(),
         id,
         body.dry_run,
     )
@@ -2803,6 +2816,75 @@ mod tests {
         // Still attached on the same port, health untouched -- no restart
         // attempt was made for an unrelated config change.
         assert_eq!(app.comfyui.health().await, crate::runtime::Health::Healthy);
+    }
+
+    /// Plan 10: the two new `[paths]` fields round-trip through
+    /// `save_config` exactly like `outputs_path`/`runtimes_path`/`cache_path`
+    /// already do -- a blank field clears the override, a non-blank one sets
+    /// it.
+    #[tokio::test]
+    async fn save_config_persists_datasets_and_training_path_overrides() {
+        let tmp = tempfile::tempdir().unwrap();
+        let app = crate::App::load(crate::AppPaths::rooted(tmp.path()))
+            .await
+            .unwrap();
+        let datasets_path = tmp.path().join("elsewhere-datasets");
+        let training_path = tmp.path().join("elsewhere-training");
+
+        let update = ConfigUpdate {
+            store_path: app.config.store_path.display().to_string(),
+            offline_mode: false,
+            vram_budget_mb: app.config.vram_budget_mb,
+            llama: app.config.llama.clone(),
+            comfyui: app.config.comfyui.clone(),
+            models: app.config.models,
+            paths: PathsUpdateDto {
+                datasets_path: datasets_path.display().to_string(),
+                training_path: training_path.display().to_string(),
+                ..Default::default()
+            },
+            retention: Default::default(),
+        };
+
+        let saved = save_config(&app, update).await.unwrap();
+        assert_eq!(saved.paths.datasets_path.as_deref(), Some(&*datasets_path));
+        assert_eq!(saved.paths.training_path.as_deref(), Some(&*training_path));
+
+        // A blank field clears the override back to the portable default.
+        let clear = ConfigUpdate {
+            store_path: app.config.store_path.display().to_string(),
+            offline_mode: false,
+            vram_budget_mb: app.config.vram_budget_mb,
+            llama: app.config.llama.clone(),
+            comfyui: app.config.comfyui.clone(),
+            models: app.config.models,
+            paths: PathsUpdateDto::default(),
+            retention: Default::default(),
+        };
+        let saved = save_config(&app, clear).await.unwrap();
+        assert_eq!(saved.paths.datasets_path, None);
+        assert_eq!(saved.paths.training_path, None);
+    }
+
+    /// Plan 10: `about()` reports where dataset-prep and training-run work
+    /// folders land, alongside the existing outputs/runtimes/cache fields.
+    #[tokio::test]
+    async fn about_reports_the_datasets_and_training_dirs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let app = crate::App::load(crate::AppPaths::rooted(tmp.path()))
+            .await
+            .unwrap();
+
+        let dto = about(&app);
+
+        assert_eq!(
+            dto.datasets_dir,
+            app.paths.datasets_dir().display().to_string()
+        );
+        assert_eq!(
+            dto.training_dir,
+            app.paths.training_dir().display().to_string()
+        );
     }
 
     fn stack_members(id: &str) -> Vec<&'static crate::model::KnownModel> {

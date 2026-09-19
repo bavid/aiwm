@@ -217,12 +217,14 @@ fn overlaps(a: &Path, b: &Path) -> bool {
 }
 
 impl Guard {
-    /// Everything except the in-use set; see [`Self::keeping`].
-    pub(super) fn build(outputs_dir: &Path, snap: &Snapshot) -> Self {
+    /// Everything except the in-use set; see [`Self::keeping`]. `outputs_dir`
+    /// is only used for "own export" detection (an export folder must sit
+    /// strictly inside it); the dataset work-folder root is `datasets_dir`
+    /// (`AppPaths::datasets_dir`, independently overridable — Plan 10), no
+    /// longer assumed to be `<outputs_dir>/datasets`.
+    pub(super) fn build(outputs_dir: &Path, datasets_dir: &Path, snap: &Snapshot) -> Self {
         let outputs = std::fs::canonicalize(outputs_dir).ok();
-        let datasets_root = outputs
-            .as_ref()
-            .and_then(|o| std::fs::canonicalize(o.join("datasets")).ok());
+        let datasets_root = std::fs::canonicalize(datasets_dir).ok();
         let work_of = |d: &Dataset| -> Option<PathBuf> {
             let root = datasets_root.as_deref()?;
             let id = single_component(d.prep_job_id.as_deref()?)?;

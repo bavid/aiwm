@@ -62,6 +62,7 @@ impl Harness {
             llama.clone(),
             comfyui,
             tmp.path().join("outputs"),
+            tmp.path().join("datasets"),
         ));
         Self {
             db,

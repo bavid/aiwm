@@ -24,6 +24,10 @@ pub struct AboutDto {
     pub runtimes_dir: String,
     /// Where the disposable registry cache lands.
     pub cache_dir: String,
+    /// Where dataset-prep work folders land.
+    pub datasets_dir: String,
+    /// Where training-run work folders land.
+    pub training_dir: String,
     pub core_api_port: u16,
     pub vram_budget_mb: u64,
     pub offline_mode: bool,
@@ -61,6 +65,13 @@ pub struct PathsUpdateDto {
     pub outputs_path: String,
     pub runtimes_path: String,
     pub cache_path: String,
+    /// New in this slice; older clients that omit it leave the datasets
+    /// override untouched (falls back to the empty-string default via
+    /// `#[serde(default)]` on the containing `ConfigUpdate.paths`).
+    pub datasets_path: String,
+    /// New in this slice; older clients that omit it leave the training
+    /// override untouched.
+    pub training_path: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

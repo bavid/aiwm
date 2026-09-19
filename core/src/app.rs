@@ -150,7 +150,9 @@ impl App {
         let paths = paths
             .with_outputs_override(config.paths.outputs_path.clone())
             .with_runtimes_override(config.paths.runtimes_path.clone())
-            .with_cache_override(config.paths.cache_path.clone());
+            .with_cache_override(config.paths.cache_path.clone())
+            .with_datasets_override(config.paths.datasets_path.clone())
+            .with_training_override(config.paths.training_path.clone());
         let db = Database::connect(&paths.db_file()).await?;
         Self::seed(&db).await?;
 
@@ -219,6 +221,7 @@ impl App {
                 llama.clone(),
                 comfyui.clone(),
                 paths.outputs_dir(),
+                paths.datasets_dir(),
             )
             .with_telemetry(telemetry.subscribe())
             .with_auto_preference(auto_pref)
@@ -284,7 +287,7 @@ impl App {
             training.clone(),
             scheduler.clone(),
             runtimes.clone(),
-            paths.root().join("training"),
+            paths.training_dir(),
             config.store_path.clone(),
         ));
         // Recovery is state repair, not polling: it runs even with the poller
@@ -504,6 +507,31 @@ mod tests {
         // Untouched folders (and the config/db location itself) stay put.
         assert_eq!(app.paths.runtimes_dir(), paths.runtimes_dir());
         assert_eq!(app.paths.root(), paths.root());
+    }
+
+    #[tokio::test]
+    async fn load_applies_datasets_and_training_overrides_from_config() {
+        let tmp = tempfile::tempdir().unwrap();
+        let datasets = tmp.path().join("elsewhere-datasets");
+        let training = tmp.path().join("elsewhere-training");
+        let paths = AppPaths::rooted(tmp.path().join("aiwm"));
+        std::fs::create_dir_all(paths.root()).unwrap();
+        std::fs::write(
+            paths.config_file(),
+            format!(
+                "[paths]\ndatasets_path = '{}'\ntraining_path = '{}'\n",
+                datasets.display().to_string().replace('\\', "\\\\"),
+                training.display().to_string().replace('\\', "\\\\"),
+            ),
+        )
+        .unwrap();
+
+        let app = App::load(paths.clone()).await.unwrap();
+
+        assert_eq!(app.paths.datasets_dir(), datasets);
+        assert_eq!(app.paths.training_dir(), training);
+        // Untouched folders stay put.
+        assert_eq!(app.paths.outputs_dir(), paths.outputs_dir());
     }
 
     #[tokio::test]

@@ -110,6 +110,7 @@ async fn harness() -> Harness {
             llama,
             comfyui,
             tmp.path().join("outputs"),
+            tmp.path().join("datasets"),
         )
         .with_telemetry(tel_rx),
     );

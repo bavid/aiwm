@@ -14,7 +14,10 @@ pub(super) struct Fx {
     pub(super) tmp: tempfile::TempDir,
     pub(super) db: Database,
     pub(super) outputs: PathBuf,
-    /// `<outputs>/datasets/<job>` — the dataset's app-owned work folder.
+    /// The configured datasets root (`<outputs>/datasets` by default, same
+    /// as today — a distinct root is exercised by its own fixture).
+    pub(super) datasets: PathBuf,
+    /// `<datasets>/<job>` — the dataset's app-owned work folder.
     pub(super) work_root: PathBuf,
     /// Where the fixture's frames live inside the work folder.
     pub(super) clip_dir: PathBuf,
@@ -44,7 +47,8 @@ pub(super) async fn fixture_with_mode(mode: DatasetMode) -> Fx {
     let db = Database::connect_in_memory().await.unwrap();
     let job_id = finished_job(&db).await;
     let outputs = tmp.path().join("outputs");
-    let work_root = outputs.join("datasets").join(&job_id);
+    let datasets = outputs.join("datasets");
+    let work_root = datasets.join(&job_id);
     let clip_dir = work_root.join("raw").join("Tag").join("clip");
     std::fs::create_dir_all(&clip_dir).unwrap();
     let src_dir = tmp.path().join("src");
@@ -65,6 +69,7 @@ pub(super) async fn fixture_with_mode(mode: DatasetMode) -> Fx {
         tmp,
         db,
         outputs,
+        datasets,
         work_root,
         clip_dir,
         job_id,
@@ -75,6 +80,47 @@ pub(super) async fn fixture_with_mode(mode: DatasetMode) -> Fx {
 
 pub(super) async fn fixture() -> Fx {
     fixture_with_mode(DatasetMode::Frames).await
+}
+
+/// Like [`fixture`], but the datasets root lives entirely outside the
+/// outputs folder (Plan 10: `AppPaths::datasets_dir` is independently
+/// overridable) — proves the guard finds the dataset's work folder from the
+/// configured datasets root, not by deriving `<outputs>/datasets`.
+pub(super) async fn fixture_with_separate_datasets_root() -> Fx {
+    let tmp = tempfile::tempdir().unwrap();
+    let db = Database::connect_in_memory().await.unwrap();
+    let job_id = finished_job(&db).await;
+    let outputs = tmp.path().join("outputs");
+    std::fs::create_dir_all(&outputs).unwrap();
+    let datasets = tmp.path().join("elsewhere").join("datasets");
+    let work_root = datasets.join(&job_id);
+    let clip_dir = work_root.join("raw").join("Tag").join("clip");
+    std::fs::create_dir_all(&clip_dir).unwrap();
+    let src_dir = tmp.path().join("src");
+    std::fs::create_dir_all(&src_dir).unwrap();
+    let source = src_dir.join("clip.mp4");
+    std::fs::write(&source, vec![7u8; 1000]).unwrap();
+    let dataset = db
+        .datasets()
+        .create(NewDataset {
+            name: "Demo".into(),
+            mode: DatasetMode::Frames,
+            source_root: src_dir.to_string_lossy().into_owned(),
+            prep_job_id: Some(job_id.clone()),
+        })
+        .await
+        .unwrap();
+    Fx {
+        tmp,
+        db,
+        outputs,
+        datasets,
+        work_root,
+        clip_dir,
+        job_id,
+        dataset,
+        source,
+    }
 }
 
 impl Fx {
@@ -226,7 +272,7 @@ async fn usage_walks_the_work_folder_and_sizes_discarded_frames() {
     // A non-frame file in the work folder (a preview, a log) counts too.
     std::fs::write(fx.work_root.join("note.txt"), vec![0u8; 50]).unwrap();
 
-    let u = usage(&fx.db, &fx.outputs, &fx.dataset.id)
+    let u = usage(&fx.db, &fx.outputs, &fx.datasets, &fx.dataset.id)
         .await
         .unwrap()
         .unwrap();
@@ -238,10 +284,42 @@ async fn usage_walks_the_work_folder_and_sizes_discarded_frames() {
     assert_eq!(u.export_dir, None);
     assert!(!u.export_app_owned);
 
-    assert!(usage(&fx.db, &fx.outputs, "no-such-dataset")
+    assert!(usage(&fx.db, &fx.outputs, &fx.datasets, "no-such-dataset")
         .await
         .unwrap()
         .is_none());
+}
+
+#[tokio::test]
+async fn usage_and_delete_find_the_work_folder_under_a_datasets_root_outside_outputs() {
+    // Plan 10: the dataset work folder root comes from the configured
+    // `datasets_dir`, independent of `outputs_dir` — not derived as
+    // `<outputs>/datasets`.
+    let fx = fixture_with_separate_datasets_root().await;
+    assert!(
+        !fx.datasets.starts_with(&fx.outputs) && !fx.outputs.starts_with(&fx.datasets),
+        "the fixture's roots must be unrelated for this test to prove anything"
+    );
+    fx.frame("kept.png", 100, "", false).await;
+
+    let u = usage(&fx.db, &fx.outputs, &fx.datasets, &fx.dataset.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        u.work_walkable,
+        "the work folder must be found and walkable"
+    );
+    assert_eq!(u.work_bytes, 100);
+    assert!(u.work_dir.as_deref().unwrap().ends_with(&fx.job_id));
+
+    let s = delete_dataset_with_files(&fx.db, &fx.outputs, &fx.datasets, &fx.dataset.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(s.dataset_deleted);
+    assert_eq!(s.deleted_files, 1);
+    assert!(!fx.work_root.exists());
 }
 
 // --- delete frames ------------------------------------------------------------
@@ -271,10 +349,16 @@ async fn delete_frames_removes_files_rows_and_concept_links_and_counts_freed_byt
         .await
         .unwrap();
 
-    let s = delete_frames(&fx.db, &fx.outputs, &fx.dataset.id, &[a.clone(), b.clone()])
-        .await
-        .unwrap()
-        .unwrap();
+    let s = delete_frames(
+        &fx.db,
+        &fx.outputs,
+        &fx.datasets,
+        &fx.dataset.id,
+        &[a.clone(), b.clone()],
+    )
+    .await
+    .unwrap()
+    .unwrap();
     assert_eq!(s.deleted, 2);
     assert_eq!(s.deleted_files, 2);
     assert_eq!(s.freed_bytes, 350);
@@ -302,7 +386,7 @@ async fn delete_frames_never_deletes_a_file_outside_the_app_folders() {
     let victim = victim(&fx);
     let evil = fx.row(&victim, &fx.source, "", false).await;
 
-    let s = delete_frames(&fx.db, &fx.outputs, &fx.dataset.id, &[evil])
+    let s = delete_frames(&fx.db, &fx.outputs, &fx.datasets, &fx.dataset.id, &[evil])
         .await
         .unwrap()
         .unwrap();
@@ -329,10 +413,16 @@ async fn delete_frames_never_deletes_a_source_file_even_inside_the_work_folder()
     // The fixture's video source itself, crafted as a frame_path.
     let src_row = fx.row(&fx.source, &fx.source, "", false).await;
 
-    let s = delete_frames(&fx.db, &fx.outputs, &fx.dataset.id, &[id, src_row])
-        .await
-        .unwrap()
-        .unwrap();
+    let s = delete_frames(
+        &fx.db,
+        &fx.outputs,
+        &fx.datasets,
+        &fx.dataset.id,
+        &[id, src_row],
+    )
+    .await
+    .unwrap()
+    .unwrap();
     assert!(in_place.exists());
     assert!(fx.source.exists());
     assert_eq!(s.deleted_files, 0);
@@ -347,7 +437,7 @@ async fn delete_frames_keeps_a_file_another_remaining_frame_still_uses() {
     let a = fx.frame_at(&shared, 80, "", false).await;
     let _b = fx.row(&shared, &fx.source, "", false).await;
 
-    let s = delete_frames(&fx.db, &fx.outputs, &fx.dataset.id, &[a])
+    let s = delete_frames(&fx.db, &fx.outputs, &fx.datasets, &fx.dataset.id, &[a])
         .await
         .unwrap()
         .unwrap();
@@ -359,10 +449,12 @@ async fn delete_frames_keeps_a_file_another_remaining_frame_still_uses() {
 #[tokio::test]
 async fn delete_frames_of_an_unknown_dataset_is_none() {
     let fx = fixture().await;
-    assert!(delete_frames(&fx.db, &fx.outputs, "nope", &[])
-        .await
-        .unwrap()
-        .is_none());
+    assert!(
+        delete_frames(&fx.db, &fx.outputs, &fx.datasets, "nope", &[])
+            .await
+            .unwrap()
+            .is_none()
+    );
 }
 
 // --- active-training refusal ------------------------------------------------
@@ -382,6 +474,7 @@ async fn an_active_training_run_blocks_every_deletion_until_it_finishes() {
         delete_frames(
             &fx.db,
             &fx.outputs,
+            &fx.datasets,
             &fx.dataset.id,
             std::slice::from_ref(&a),
         )
@@ -389,12 +482,12 @@ async fn an_active_training_run_blocks_every_deletion_until_it_finishes() {
         .map(|o| o.map(|_| ())),
     );
     expect_refusal(
-        cleanup(&fx.db, &fx.outputs, &fx.dataset.id, false)
+        cleanup(&fx.db, &fx.outputs, &fx.datasets, &fx.dataset.id, false)
             .await
             .map(|o| o.map(|_| ())),
     );
     expect_refusal(
-        delete_dataset_with_files(&fx.db, &fx.outputs, &fx.dataset.id)
+        delete_dataset_with_files(&fx.db, &fx.outputs, &fx.datasets, &fx.dataset.id)
             .await
             .map(|o| o.map(|_| ())),
     );
@@ -402,7 +495,7 @@ async fn an_active_training_run_blocks_every_deletion_until_it_finishes() {
     assert_eq!(fx.frame_ids().await.len(), 1);
 
     // A preview deletes nothing, so it is allowed.
-    let preview = cleanup(&fx.db, &fx.outputs, &fx.dataset.id, true)
+    let preview = cleanup(&fx.db, &fx.outputs, &fx.datasets, &fx.dataset.id, true)
         .await
         .unwrap()
         .unwrap();
@@ -414,7 +507,7 @@ async fn an_active_training_run_blocks_every_deletion_until_it_finishes() {
         .set_state(&run, RunState::Cancelled)
         .await
         .unwrap();
-    let s = delete_dataset_with_files(&fx.db, &fx.outputs, &fx.dataset.id)
+    let s = delete_dataset_with_files(&fx.db, &fx.outputs, &fx.datasets, &fx.dataset.id)
         .await
         .unwrap()
         .unwrap();
@@ -430,7 +523,7 @@ async fn cleanup_dry_run_only_measures_and_the_real_run_deletes_discarded_frames
     fx.frame("excluded.png", 200, "", true).await;
     fx.frame("dup.png", 300, "duplicate_global", false).await;
 
-    let preview = cleanup(&fx.db, &fx.outputs, &fx.dataset.id, true)
+    let preview = cleanup(&fx.db, &fx.outputs, &fx.datasets, &fx.dataset.id, true)
         .await
         .unwrap()
         .unwrap();
@@ -442,7 +535,7 @@ async fn cleanup_dry_run_only_measures_and_the_real_run_deletes_discarded_frames
     assert!(fx.clip_dir.join("dup.png").exists());
     assert_eq!(fx.frame_ids().await.len(), 3);
 
-    let done = cleanup(&fx.db, &fx.outputs, &fx.dataset.id, false)
+    let done = cleanup(&fx.db, &fx.outputs, &fx.datasets, &fx.dataset.id, false)
         .await
         .unwrap()
         .unwrap();
@@ -477,7 +570,7 @@ async fn delete_dataset_removes_the_work_folder_and_an_app_owned_export() {
         .await
         .unwrap();
 
-    let s = delete_dataset_with_files(&fx.db, &fx.outputs, &fx.dataset.id)
+    let s = delete_dataset_with_files(&fx.db, &fx.outputs, &fx.datasets, &fx.dataset.id)
         .await
         .unwrap()
         .unwrap();
@@ -516,14 +609,14 @@ async fn delete_dataset_leaves_a_user_chosen_export_folder_alone() {
         .await
         .unwrap();
 
-    let u = usage(&fx.db, &fx.outputs, &fx.dataset.id)
+    let u = usage(&fx.db, &fx.outputs, &fx.datasets, &fx.dataset.id)
         .await
         .unwrap()
         .unwrap();
     assert!(!u.export_app_owned);
     assert_eq!(u.export_bytes, 0);
 
-    let s = delete_dataset_with_files(&fx.db, &fx.outputs, &fx.dataset.id)
+    let s = delete_dataset_with_files(&fx.db, &fx.outputs, &fx.datasets, &fx.dataset.id)
         .await
         .unwrap()
         .unwrap();
@@ -548,14 +641,14 @@ async fn an_export_in_the_outputs_folder_only_loses_its_numbered_files() {
         .await
         .unwrap();
 
-    let u = usage(&fx.db, &fx.outputs, &fx.dataset.id)
+    let u = usage(&fx.db, &fx.outputs, &fx.datasets, &fx.dataset.id)
         .await
         .unwrap()
         .unwrap();
     assert!(u.export_app_owned);
     assert_eq!(u.export_bytes, 40);
 
-    let s = delete_dataset_with_files(&fx.db, &fx.outputs, &fx.dataset.id)
+    let s = delete_dataset_with_files(&fx.db, &fx.outputs, &fx.datasets, &fx.dataset.id)
         .await
         .unwrap()
         .unwrap();
@@ -567,8 +660,10 @@ async fn an_export_in_the_outputs_folder_only_loses_its_numbered_files() {
 #[tokio::test]
 async fn delete_dataset_of_an_unknown_id_is_none() {
     let fx = fixture().await;
-    assert!(delete_dataset_with_files(&fx.db, &fx.outputs, "nope")
-        .await
-        .unwrap()
-        .is_none());
+    assert!(
+        delete_dataset_with_files(&fx.db, &fx.outputs, &fx.datasets, "nope")
+            .await
+            .unwrap()
+            .is_none()
+    );
 }

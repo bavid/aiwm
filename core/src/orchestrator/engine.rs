@@ -132,6 +132,12 @@ pub struct JobEngine {
     vision_store: PathBuf,
     /// Where image jobs write their output (`<job_id>.png`).
     outputs_dir: PathBuf,
+    /// Where a `dataset_prep` job writes its work folder
+    /// (`<datasets_dir>/<prep_job_id>/{raw|previews}/…`). Overridable via
+    /// `config.toml`'s `[paths]` table (`AppPaths::datasets_dir`);
+    /// independent of `outputs_dir` so a dataset override doesn't move
+    /// generated media and vice versa.
+    datasets_dir: PathBuf,
     /// Latest system reading — a `bench` job samples the VRAM / RAM peak from it.
     telemetry: watch::Receiver<SystemTelemetry>,
     /// How `Auto` weighs speed vs heft (`[models]` config, 6.6).
@@ -150,6 +156,7 @@ impl JobEngine {
         llama: Arc<LlamaCppAdapter>,
         comfyui: Arc<ComfyUiAdapter>,
         outputs_dir: PathBuf,
+        datasets_dir: PathBuf,
     ) -> Self {
         Self {
             db,
@@ -162,6 +169,7 @@ impl JobEngine {
             vision: None,
             vision_store: PathBuf::new(),
             outputs_dir,
+            datasets_dir,
             telemetry: frozen_telemetry(),
             auto_preference: crate::select::AutoPreference::default(),
             model_index: None,
@@ -1282,7 +1290,7 @@ impl JobEngine {
                 )
             })?;
             let req = DatasetPrepRequest::from_params(&job.params)?;
-            let work_dir = self.outputs_dir.join("datasets");
+            let work_dir = self.datasets_dir.clone();
             match dataset::run(
                 &self.db,
                 &vision,
@@ -1581,6 +1589,7 @@ mod tests {
             test_llama(db),
             test_comfy(db),
             std::env::temp_dir(),
+            std::env::temp_dir().join("datasets"),
         )
     }
 
@@ -1666,6 +1675,17 @@ mod tests {
     }
 
     async fn vision_fixture(budget_mb: u64, load_delay: Duration) -> VisionFixture {
+        let outputs = tempfile::tempdir().unwrap();
+        let datasets_dir = outputs.path().join("datasets");
+        vision_fixture_with_datasets_dir(budget_mb, load_delay, outputs, datasets_dir).await
+    }
+
+    async fn vision_fixture_with_datasets_dir(
+        budget_mb: u64,
+        load_delay: Duration,
+        outputs: tempfile::TempDir,
+        datasets_dir: PathBuf,
+    ) -> VisionFixture {
         let db = Database::connect_in_memory().await.unwrap();
         let registry = RuntimeRegistry::new();
         let vision_rt = Arc::new(FakeRuntimeAdapter::new(crate::runtime::FakeConfig {
@@ -1676,7 +1696,6 @@ mod tests {
         registry.register(vision_rt.clone());
         let scheduler = Arc::new(HybridScheduler::new(registry.clone(), budget_mb));
         let store = tempfile::tempdir().unwrap();
-        let outputs = tempfile::tempdir().unwrap();
         let engine = JobEngine::new(
             db.clone(),
             registry,
@@ -1684,6 +1703,7 @@ mod tests {
             test_llama(&db),
             test_comfy(&db),
             outputs.path().to_path_buf(),
+            datasets_dir,
         )
         .with_vision(
             Arc::new(crate::runtime::VisionAdapter::new()),
@@ -1730,6 +1750,41 @@ mod tests {
         assert_eq!(outcome, JobOutcome::Completed { job_id: job.id });
         assert_eq!(fx.vision_rt.unload_call_count(), 1);
         assert!(fx.vision_rt.loaded_models().is_empty());
+    }
+
+    #[tokio::test]
+    async fn dataset_prep_uses_the_engine_s_configured_datasets_dir_not_outputs() {
+        // The dataset-prep work folder must come from the engine's own
+        // `datasets_dir` field (wired from `AppPaths::datasets_dir`, Plan
+        // 10), never recomputed as `outputs_dir.join("datasets")` — a
+        // dataset-location override must not depend on where outputs live.
+        let outputs = tempfile::tempdir().unwrap();
+        let datasets_tmp = tempfile::tempdir().unwrap();
+        let datasets_dir = datasets_tmp.path().join("elsewhere-datasets");
+        let fx =
+            vision_fixture_with_datasets_dir(16_384, Duration::ZERO, outputs, datasets_dir.clone())
+                .await;
+
+        assert_eq!(fx.engine.datasets_dir, datasets_dir);
+        assert_ne!(
+            fx.engine.datasets_dir,
+            fx.engine.outputs_dir.join("datasets"),
+            "the configured datasets root must not equal the outputs-derived default here"
+        );
+
+        // End to end: a real prep run still completes normally against the
+        // custom root (image mode never touches disk under `work_dir` — see
+        // `capability::dataset::pipeline` — so this only proves the run isn't
+        // broken by threading a distinct root through, not that files land
+        // there; that is covered by the pipeline's own `work_dir` handling).
+        let root = prep_root_with_one_image();
+        let job = submit_prep(
+            &fx.engine,
+            serde_json::json!({ "root": root.path().to_string_lossy() }),
+        )
+        .await;
+        let outcome = fx.engine.run_next().await.unwrap().unwrap();
+        assert_eq!(outcome, JobOutcome::Completed { job_id: job.id });
     }
 
     #[tokio::test]
