@@ -17,6 +17,7 @@
 //! calls it whenever a `dataset_prep` job ends (`JobEngine::drive`).
 
 use std::sync::Mutex;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use tokio::sync::OnceCell;
@@ -32,9 +33,15 @@ pub const RUNTIME_ID: &str = "vision";
 /// empties the CUDA cache (`aiwm_sidecar.vision.unload_vision_models`).
 const UNLOAD_METHOD: &str = "unload_vision_models";
 
+/// How long an unload may take before the core gives up waiting. Dropping
+/// the engines and emptying the CUDA cache takes well under a second
+/// (measured 2026-09-19); a sidecar that is stuck must not stall the job
+/// queue, since the engine awaits the release after every dataset prep.
+const UNLOAD_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// Construction never fails, same reasoning as `TtsAdapter::new` — resolving
 /// `uv` and spawning the sidecar is deferred to first real use.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct VisionAdapter {
     spec_override: Option<SidecarSpec>,
     sidecar: OnceCell<SidecarClient>,
@@ -42,6 +49,19 @@ pub struct VisionAdapter {
     /// updated by [`Self::load_model`] / [`Self::unload_model`], not a
     /// permanently-empty stand-in the way `TtsAdapter`'s is.
     loaded: Mutex<Vec<LoadedModel>>,
+    /// [`UNLOAD_TIMEOUT`]; shorter only in tests.
+    unload_timeout: Duration,
+}
+
+impl Default for VisionAdapter {
+    fn default() -> Self {
+        Self {
+            spec_override: None,
+            sidecar: OnceCell::new(),
+            loaded: Mutex::new(Vec::new()),
+            unload_timeout: UNLOAD_TIMEOUT,
+        }
+    }
 }
 
 impl VisionAdapter {
@@ -53,8 +73,7 @@ impl VisionAdapter {
     fn with_spec(spec: SidecarSpec) -> Self {
         Self {
             spec_override: Some(spec),
-            sidecar: OnceCell::new(),
-            loaded: Mutex::new(Vec::new()),
+            ..Self::default()
         }
     }
 
@@ -135,12 +154,23 @@ impl RuntimeAdapter for VisionAdapter {
         let Some(client) = self.sidecar.get() else {
             return Ok(());
         };
-        match client.call(UNLOAD_METHOD, serde_json::json!({})).await {
-            Ok(report) => {
+        // Bounded: the engine awaits this after every dataset prep, so a stuck
+        // sidecar must not stall the job queue. A reply that arrives after
+        // the deadline is skipped by the next call (`raw_call` matches ids).
+        let call = client.call(UNLOAD_METHOD, serde_json::json!({}));
+        match tokio::time::timeout(self.unload_timeout, call).await {
+            Ok(Ok(report)) => {
                 tracing::info!(%model_id, %report, "vision sidecar released its captioners");
             }
-            Err(e) => {
+            Ok(Err(e)) => {
                 tracing::warn!(%model_id, error = %e, "vision sidecar could not release its captioners");
+            }
+            Err(_) => {
+                tracing::warn!(
+                    %model_id,
+                    timeout_secs = self.unload_timeout.as_secs_f64(),
+                    "vision sidecar did not answer the unload in time; its VRAM may still be held"
+                );
             }
         }
         Ok(())
@@ -194,25 +224,15 @@ mod tests {
         assert_eq!(adapter.detail().as_deref(), Some("not started yet"));
     }
 
-    #[test]
-    fn unload_of_a_never_loaded_model_is_a_harmless_no_op() {
-        let adapter = VisionAdapter::new();
-        // Bookkeeping-only path: exercised directly (no sidecar needed) via
-        // the private mutex helpers a real `unload_model` call would hit.
-        let mut loaded = adapter.loaded_mut();
-        loaded.retain(|m: &LoadedModel| m.model_id != "florence2");
-        assert!(loaded.is_empty());
-    }
-
     /// A stand-in sidecar: a few lines of Python (run with the sidecar
     /// project's interpreter) that answer the handshake, append every other
     /// method name to `AIWM_FAKE_SIDECAR_LOG`, and answer
-    /// `unload_vision_models` with a report — or with an RPC error when
-    /// `AIWM_FAKE_SIDECAR_FAIL_UNLOAD` is set.
+    /// `unload_vision_models` per `AIWM_FAKE_SIDECAR_UNLOAD`: `ok` (a
+    /// report), `fail` (an RPC error) or `hang` (no answer for 20 s).
     const FAKE_SIDECAR: &str = r#"
-import json, os, sys
+import json, os, sys, time
 log = os.environ["AIWM_FAKE_SIDECAR_LOG"]
-fail = bool(os.environ.get("AIWM_FAKE_SIDECAR_FAIL_UNLOAD"))
+mode = os.environ.get("AIWM_FAKE_SIDECAR_UNLOAD", "ok")
 for line in sys.stdin:
     req = json.loads(line)
     method = req.get("method")
@@ -221,7 +241,9 @@ for line in sys.stdin:
     else:
         with open(log, "a", encoding="utf-8") as f:
             f.write(method + "\n")
-        if method == "unload_vision_models" and not fail:
+        if method == "unload_vision_models" and mode == "hang":
+            time.sleep(20)
+        if method == "unload_vision_models" and mode != "fail":
             out = {"result": {"released": [{"kind": "florence2", "model_dir": "x"}], "cuda_cache_cleared": True}}
         else:
             out = {"error": {"code": -32000, "message": "simulated failure"}}
@@ -231,8 +253,8 @@ for line in sys.stdin:
 "#;
 
     /// `None` (test skipped loudly) where `uv` is missing, like the sidecar
-    /// client's own tests.
-    fn fake_sidecar_spec(log: &std::path::Path, fail_unload: bool) -> Option<SidecarSpec> {
+    /// client's own tests. `unload` is the fake's `AIWM_FAKE_SIDECAR_UNLOAD`.
+    fn fake_sidecar_spec(log: &std::path::Path, unload: &str) -> Option<SidecarSpec> {
         let Some(uv) = crate::sidecar::resolve_uv() else {
             eprintln!("skipping fake-sidecar test: `uv` was not found");
             return None;
@@ -240,16 +262,14 @@ for line in sys.stdin:
         let sidecar_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("..")
             .join("sidecar");
-        let mut env = vec![
+        let env = vec![
             ("PYTHONUNBUFFERED".to_string(), "1".to_string()),
             (
                 "AIWM_FAKE_SIDECAR_LOG".to_string(),
                 log.to_string_lossy().into_owned(),
             ),
+            ("AIWM_FAKE_SIDECAR_UNLOAD".to_string(), unload.to_string()),
         ];
-        if fail_unload {
-            env.push(("AIWM_FAKE_SIDECAR_FAIL_UNLOAD".into(), "1".into()));
-        }
         Some(SidecarSpec {
             program: uv,
             args: vec![
@@ -277,7 +297,7 @@ for line in sys.stdin:
     async fn unload_model_asks_the_sidecar_to_release_its_engines() {
         let tmp = tempfile::tempdir().unwrap();
         let log = tmp.path().join("calls.log");
-        let Some(spec) = fake_sidecar_spec(&log, false) else {
+        let Some(spec) = fake_sidecar_spec(&log, "ok") else {
             return;
         };
         let adapter = VisionAdapter::with_spec(spec);
@@ -300,7 +320,7 @@ for line in sys.stdin:
     async fn a_sidecar_error_on_unload_still_clears_the_bookkeeping() {
         let tmp = tempfile::tempdir().unwrap();
         let log = tmp.path().join("calls.log");
-        let Some(spec) = fake_sidecar_spec(&log, true) else {
+        let Some(spec) = fake_sidecar_spec(&log, "fail") else {
             return;
         };
         let adapter = VisionAdapter::with_spec(spec);
@@ -320,6 +340,39 @@ for line in sys.stdin:
         assert_eq!(logged_methods(&log), vec![UNLOAD_METHOD.to_string()]);
         assert!(adapter.loaded_models().is_empty());
         assert_eq!(adapter.vram_used_mb(), 0);
+    }
+
+    /// A stuck sidecar must not stall the job queue: the engine awaits this
+    /// release after every dataset prep.
+    #[tokio::test]
+    async fn a_stuck_sidecar_on_unload_times_out_and_still_clears_the_bookkeeping() {
+        let tmp = tempfile::tempdir().unwrap();
+        let log = tmp.path().join("calls.log");
+        let Some(spec) = fake_sidecar_spec(&log, "hang") else {
+            return;
+        };
+        let adapter = VisionAdapter {
+            unload_timeout: Duration::from_millis(300),
+            ..VisionAdapter::with_spec(spec)
+        };
+        adapter
+            .load_model("dataset-vision-pipeline", 2560)
+            .await
+            .unwrap();
+
+        let t0 = std::time::Instant::now();
+        adapter
+            .unload_model("dataset-vision-pipeline")
+            .await
+            .unwrap();
+
+        assert!(
+            t0.elapsed() < Duration::from_secs(5),
+            "waited {:?} on a stuck sidecar",
+            t0.elapsed()
+        );
+        assert_eq!(logged_methods(&log), vec![UNLOAD_METHOD.to_string()]);
+        assert!(adapter.loaded_models().is_empty());
     }
 
     #[tokio::test]

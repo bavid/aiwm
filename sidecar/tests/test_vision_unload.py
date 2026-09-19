@@ -80,6 +80,28 @@ def test_unload_clears_the_cuda_cache_when_cuda_is_available(monkeypatch: pytest
     assert result["cuda_cache_cleared"] is True
 
 
+def test_a_cuda_error_after_the_release_is_reported_not_raised(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    def broken_empty_cache() -> None:
+        raise RuntimeError("CUDA error: an illegal memory access was encountered")
+
+    torch = types.ModuleType("torch")
+    torch.cuda = types.SimpleNamespace(  # type: ignore[attr-defined]
+        is_available=lambda: True, empty_cache=broken_empty_cache
+    )
+    monkeypatch.setitem(sys.modules, "torch", torch)
+    _fill_caches()
+
+    resp = _rpc({})
+
+    result = resp["result"]
+    assert len(result["released"]) == 3, "the engines are dropped regardless"
+    assert vision._florence2_cache == {}
+    assert result["cuda_cache_cleared"] is False
+    assert "illegal memory access" in result["cuda_error"]
+
+
 def test_unload_does_not_touch_cuda_when_it_is_unavailable(monkeypatch: pytest.MonkeyPatch):
     calls = _fake_torch(monkeypatch, cuda=False)
     _fill_caches()

@@ -1163,6 +1163,8 @@ async fn rename_model(
     Ok(Json(handlers::rename_model(&app, &id, &body.name).await?))
 }
 
+/// `POST /models/{id}/unload` — see [`handlers::unload_model`]. Unloading a
+/// captioner during a running dataset prep only makes the next frame reload it.
 async fn unload_model(
     State(app): AppState,
     Path(id): Path<String>,

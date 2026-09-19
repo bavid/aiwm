@@ -310,6 +310,7 @@ impl JobEngine {
         let Some(rt) = self.registry.get(VISION) else {
             return;
         };
+        // Defensive only: preps are never agent sessions, so nothing pins it.
         self.scheduler.unpin(DATASET_VISION_MODEL_ID);
         if let Err(e) = rt.unload_model(DATASET_VISION_MODEL_ID).await {
             tracing::warn!(%job_id, error = %e, "could not release the dataset captioners");

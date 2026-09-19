@@ -434,15 +434,22 @@ def _cache_entries() -> list[tuple[str, str, dict[Any, Any], Any]]:
     return entries
 
 
-def _empty_cuda_cache() -> bool:
-    # Only when torch is already imported: if it never was, none of these
-    # engines ever put anything on the GPU, and importing it just to unload
-    # would cost seconds for nothing.
+def _empty_cuda_cache() -> tuple[bool, str]:
+    """(cleared, error text). Only when torch is already imported: if it
+    never was, none of these engines ever put anything on the GPU, and
+    importing it just to unload would cost seconds for nothing. A CUDA error
+    here is reported, not raised -- the engines are already dropped by then,
+    and the caller must not see the whole release as failed."""
     torch = sys.modules.get("torch")
-    if torch is None or not torch.cuda.is_available():
-        return False
-    torch.cuda.empty_cache()
-    return True
+    if torch is None:
+        return False, ""
+    try:
+        if not torch.cuda.is_available():
+            return False, ""
+        torch.cuda.empty_cache()
+    except Exception as e:
+        return False, str(e)
+    return True, ""
 
 
 def unload_vision_models(params: dict[str, Any]) -> dict[str, Any]:
@@ -468,4 +475,8 @@ def unload_vision_models(params: dict[str, Any]) -> dict[str, Any]:
     # cache entries gone, a collection frees the tensors so the CUDA caching
     # allocator can hand the blocks back to the driver.
     gc.collect()
-    return {"released": released, "cuda_cache_cleared": _empty_cuda_cache()}
+    cleared, cuda_error = _empty_cuda_cache()
+    result: dict[str, Any] = {"released": released, "cuda_cache_cleared": cleared}
+    if cuda_error:
+        result["cuda_error"] = cuda_error
+    return result
