@@ -32,8 +32,9 @@ pub struct Captioner {
     /// A tagger has no sentence to judge for confidence, so it cannot.
     pub supports_escalation: bool,
     /// File names that must all sit in one directory for the captioner to
-    /// be usable; empty = any model row carrying the role counts (whole-
-    /// directory snapshots like Florence-2).
+    /// be usable — every file its loader reads, which is also exactly the
+    /// file set of its one-click catalog stack, so a stack still
+    /// downloading never reads as installed.
     pub required_files: &'static [&'static str],
 }
 
@@ -46,7 +47,7 @@ pub const CAPTIONERS: &[Captioner] = &[
         vram_mb: super::caption::FLORENCE2_VRAM_FALLBACK_MB,
         license: "MIT",
         supports_escalation: true,
-        required_files: &[],
+        required_files: super::caption::FLORENCE2_REQUIRED_FILES,
     },
     Captioner {
         id: WD_TAGGER_ID,
@@ -76,51 +77,41 @@ pub struct CaptionerStatus {
     pub installed: bool,
 }
 
-/// The directory that satisfies `c` — the parent of the first model row
-/// carrying its role when `required_files` is empty (Florence-2: any single
-/// imported row is the whole snapshot), or the first (sorted, for
-/// determinism) directory among that role's rows whose sibling file names
-/// cover every entry in `required_files`. `None` when no directory
-/// qualifies, including when the role has no rows at all.
+/// The directory that satisfies `c`: see [`complete_dir_for_role`].
 pub async fn installed_captioner_dir(db: &Database, c: &Captioner) -> Result<Option<PathBuf>> {
-    let rows = db.models().for_role(c.role).await?;
+    complete_dir_for_role(db, c.role, c.required_files).await
+}
 
-    if c.required_files.is_empty() {
-        return Ok(rows
-            .first()
-            .and_then(|m| Path::new(&m.file_path).parent())
-            .map(Path::to_path_buf));
-    }
-
-    let mut dirs: Vec<PathBuf> = rows
+/// The first (sorted, for determinism) directory among `role`'s model rows
+/// whose sibling file names cover every entry in `required`. `None` when no
+/// directory qualifies, including when the role has no rows at all.
+pub async fn complete_dir_for_role(
+    db: &Database,
+    role: &str,
+    required: &[&str],
+) -> Result<Option<PathBuf>> {
+    let rows = db.models().for_role(role).await?;
+    let entries: Vec<(&Path, &str)> = rows
         .iter()
-        .filter_map(|m| Path::new(&m.file_path).parent())
-        .map(Path::to_path_buf)
+        .filter_map(|m| {
+            let path = Path::new(&m.file_path);
+            let name = path.file_name().and_then(|f| f.to_str())?;
+            Some((path.parent()?, name))
+        })
         .collect();
+
+    let mut dirs: Vec<&Path> = entries.iter().map(|(dir, _)| *dir).collect();
     dirs.sort();
     dirs.dedup();
 
-    for dir in dirs {
-        let names: Vec<String> = rows
-            .iter()
-            .filter_map(|m| Path::new(&m.file_path).parent().map(|p| (p, m)))
-            .filter(|(p, _)| *p == dir)
-            .filter_map(|(_, m)| {
-                Path::new(&m.file_path)
-                    .file_name()
-                    .and_then(|f| f.to_str())
-                    .map(str::to_string)
-            })
-            .collect();
-        let has_all = c
-            .required_files
-            .iter()
-            .all(|req| names.iter().any(|n| n == req));
-        if has_all {
-            return Ok(Some(dir));
-        }
-    }
-    Ok(None)
+    Ok(dirs
+        .into_iter()
+        .find(|dir| {
+            required
+                .iter()
+                .all(|req| entries.iter().any(|(d, name)| d == dir && name == req))
+        })
+        .map(Path::to_path_buf))
 }
 
 pub async fn captioner_statuses(db: &Database) -> Result<Vec<CaptionerStatus>> {
@@ -296,20 +287,77 @@ mod tests {
         );
     }
 
+    /// Florence-2's loader reads the model *and* its processor (tokenizer,
+    /// preprocessor config, remote code) from one directory, so a stack
+    /// download that has landed only some files must not read as installed.
     #[tokio::test]
-    async fn florence2_counts_as_installed_with_any_single_row_carrying_its_role() {
+    async fn florence2_counts_as_installed_only_when_every_snapshot_file_is_present() {
         let db = Database::connect_in_memory().await.unwrap();
         let c = find_captioner(FLORENCE2_ID).unwrap();
         assert_eq!(installed_captioner_dir(&db, c).await.unwrap(), None);
+        assert!(c.required_files.len() > 1, "{:?}", c.required_files);
+
+        let (last, rest) = c.required_files.split_last().unwrap();
+        for name in rest {
+            db.models()
+                .insert(model_row(
+                    &format!("E:\\AI\\models\\vision\\florence2\\{name}"),
+                    super::super::caption::FLORENCE2_ROLE,
+                ))
+                .await
+                .unwrap();
+        }
+        assert_eq!(
+            installed_captioner_dir(&db, c).await.unwrap(),
+            None,
+            "one file short of the snapshot is not installed"
+        );
 
         db.models()
             .insert(model_row(
-                "E:\\AI\\models\\vision\\florence2\\anything.bin",
+                &format!("E:\\AI\\models\\vision\\florence2\\{last}"),
                 super::super::caption::FLORENCE2_ROLE,
             ))
             .await
             .unwrap();
         let dir = installed_captioner_dir(&db, c).await.unwrap().unwrap();
         assert_eq!(dir, Path::new("E:\\AI\\models\\vision\\florence2"));
+    }
+
+    /// The files a directory captioner needs are exactly the files its
+    /// one-click catalog stack installs -- so "stack complete" and
+    /// "captioner installed" can never disagree.
+    #[test]
+    fn required_files_are_exactly_the_files_of_each_catalog_stack() {
+        use crate::model::{KNOWN_MODELS, MODEL_STACKS};
+
+        let stack_files = |stack_id: &str| -> Vec<&'static str> {
+            let stack = MODEL_STACKS.iter().find(|s| s.id == stack_id).unwrap();
+            let mut files: Vec<&'static str> = stack
+                .member_ids
+                .iter()
+                .map(|id| KNOWN_MODELS.iter().find(|m| &m.id == id).unwrap().file)
+                .collect();
+            files.sort_unstable();
+            files
+        };
+        let sorted = |files: &[&'static str]| -> Vec<&'static str> {
+            let mut v = files.to_vec();
+            v.sort_unstable();
+            v
+        };
+
+        assert_eq!(
+            sorted(find_captioner(FLORENCE2_ID).unwrap().required_files),
+            stack_files("florence2-large")
+        );
+        assert_eq!(
+            sorted(find_captioner(WD_TAGGER_ID).unwrap().required_files),
+            stack_files("wd-tagger")
+        );
+        assert_eq!(
+            sorted(super::super::caption::QWEN_VL_REQUIRED_FILES),
+            stack_files("qwen2.5-vl-7b")
+        );
     }
 }

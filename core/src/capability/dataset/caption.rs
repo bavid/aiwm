@@ -35,7 +35,7 @@ use crate::db::Database;
 use crate::runtime::VisionAdapter;
 use crate::Result;
 
-use super::captioner::{installed_captioner_dir, Captioner, FLORENCE2_ID};
+use super::captioner::{complete_dir_for_role, installed_captioner_dir, Captioner, FLORENCE2_ID};
 use super::dataset_err;
 
 /// Model-library roles a Florence-2 / Qwen2.5-VL checkpoint is imported
@@ -55,6 +55,44 @@ pub const FLORENCE2_VRAM_FALLBACK_MB: u64 = 2048;
 /// for that reason; `quantization` stays a request-level knob (see
 /// `caption_frame_pair`'s `quantization` param) for a bigger card.
 pub const QWEN_VL_VRAM_FALLBACK_MB: u64 = 6144;
+
+/// Every file `Florence2ForConditionalGeneration` + `AutoProcessor` read
+/// from the snapshot directory (`vision.py::_construct_florence2`, both with
+/// `trust_remote_code`): weights, configs, the tokenizer, and the three
+/// remote-code modules -- exactly the pinned `florence2-large` stack.
+pub const FLORENCE2_REQUIRED_FILES: &[&str] = &[
+    "config.json",
+    "model.safetensors",
+    "configuration_florence2.py",
+    "modeling_florence2.py",
+    "processing_florence2.py",
+    "preprocessor_config.json",
+    "generation_config.json",
+    "tokenizer.json",
+    "tokenizer_config.json",
+    "vocab.json",
+];
+
+/// Every file `Qwen2_5_VLForConditionalGeneration` + `AutoProcessor` read
+/// (`vision.py::_construct_qwen_vl`): the sharded weights with their index,
+/// configs, chat template and tokenizer -- exactly the pinned
+/// `qwen2.5-vl-7b` stack.
+pub const QWEN_VL_REQUIRED_FILES: &[&str] = &[
+    "config.json",
+    "model.safetensors.index.json",
+    "model-00001-of-00005.safetensors",
+    "model-00002-of-00005.safetensors",
+    "model-00003-of-00005.safetensors",
+    "model-00004-of-00005.safetensors",
+    "model-00005-of-00005.safetensors",
+    "generation_config.json",
+    "preprocessor_config.json",
+    "chat_template.json",
+    "tokenizer.json",
+    "tokenizer_config.json",
+    "vocab.json",
+    "merges.txt",
+];
 
 pub const DEFAULT_ESCALATE: bool = true;
 pub const DEFAULT_ESCALATE_EVERY_NTH: u32 = 20;
@@ -79,13 +117,13 @@ fn vision_err(msg: impl std::fmt::Display) -> crate::CoreError {
     dataset_err(msg)
 }
 
-/// The shared "not imported" error both `resolve_model_dir` and
+/// The shared "not installed" error both `resolve_qwen_vl_dir` and
 /// `resolve_captioner_dir` report — same wording, same Models-tab pointer,
 /// just parameterized by what's missing and which role to assign it.
 fn not_imported_err(label: &str, role: &str) -> crate::CoreError {
     vision_err(format!(
-        "no {label} imported — import it on the Models tab (Add models \u{2192} point at its \
-         downloaded snapshot folder \u{2192} role \u{201c}{role}\u{201d})"
+        "no complete {label} installed — install it on the Models tab (Training & captioning), \
+         or import its downloaded snapshot folder with role \u{201c}{role}\u{201d}"
     ))
 }
 
@@ -121,21 +159,14 @@ pub fn is_low_confidence_caption(
     escalate_every_nth > 0 && (kept_index + 1) % escalate_every_nth as usize == 0
 }
 
-/// The imported Florence-2 / Qwen2.5-VL checkpoint's on-disk snapshot
-/// directory, resolved by role — mirrors
-/// `capability::tts::resolve_dia_component_dir`'s "any file in the role
-/// names the shared directory" shape.
-async fn resolve_model_dir(db: &Database, role: &str, label: &str) -> Result<std::path::PathBuf> {
-    let files = db.models().for_role(role).await?;
-    let first = files.first().ok_or_else(|| not_imported_err(label, role))?;
-    Path::new(&first.file_path)
-        .parent()
-        .map(Path::to_path_buf)
-        .ok_or_else(|| vision_err(format!("{label} file has no parent directory")))
-}
-
+/// The imported Qwen2.5-VL snapshot directory: the one directory among the
+/// role's rows that holds every one of [`QWEN_VL_REQUIRED_FILES`] -- the
+/// same complete-directory rule captioners use, so a half-finished stack
+/// download is reported as missing rather than handed to the sidecar.
 pub async fn resolve_qwen_vl_dir(db: &Database) -> Result<std::path::PathBuf> {
-    resolve_model_dir(db, QWEN_VL_ROLE, "Qwen2.5-VL").await
+    complete_dir_for_role(db, QWEN_VL_ROLE, QWEN_VL_REQUIRED_FILES)
+        .await?
+        .ok_or_else(|| not_imported_err("Qwen2.5-VL", QWEN_VL_ROLE))
 }
 
 /// Directory holding the captioner's files, or the same "import it on the
@@ -278,29 +309,47 @@ mod tests {
         assert!(err.to_string().contains("Qwen2.5-VL"), "{err}");
     }
 
-    /// Pins `resolve_model_dir`'s "any file in the role names the shared
-    /// directory" shape — the parent of the imported row, not the row itself.
+    fn qwen_row(name: &str) -> NewModel {
+        NewModel {
+            name: name.into(),
+            format: "safetensors".into(),
+            file_path: format!("E:\\AI\\models\\vision\\qwen2.5-vl-7b\\{name}"),
+            size_bytes: 1,
+            source: "manual".into(),
+            roles: vec![QWEN_VL_ROLE.into()],
+            ..NewModel::default()
+        }
+    }
+
+    /// The directory holding every file of the snapshot -- the parent of
+    /// the imported rows, not a row itself.
     #[tokio::test]
-    async fn resolve_qwen_vl_dir_finds_the_snapshot_folder() {
+    async fn resolve_qwen_vl_dir_finds_the_complete_snapshot_folder() {
         let db = empty_db().await;
-        db.models()
-            .insert(NewModel {
-                name: "qwen2.5-vl-7b-instruct".into(),
-                format: "safetensors".into(),
-                file_path: "E:\\AI\\models\\vision\\qwen2.5-vl-7b\\model.safetensors".into(),
-                size_bytes: 1,
-                source: "manual".into(),
-                roles: vec![QWEN_VL_ROLE.into()],
-                ..NewModel::default()
-            })
-            .await
-            .unwrap();
+        for name in QWEN_VL_REQUIRED_FILES {
+            db.models().insert(qwen_row(name)).await.unwrap();
+        }
 
         let dir = resolve_qwen_vl_dir(&db).await.unwrap();
         assert_eq!(
             dir.to_string_lossy().replace('\\', "/"),
             "E:/AI/models/vision/qwen2.5-vl-7b"
         );
+    }
+
+    /// A stack download that has landed one shard must not be handed to
+    /// the sidecar as a loadable checkpoint.
+    #[tokio::test]
+    async fn resolve_qwen_vl_dir_rejects_a_partial_snapshot() {
+        let db = empty_db().await;
+        db.models()
+            .insert(qwen_row("model-00001-of-00005.safetensors"))
+            .await
+            .unwrap();
+        db.models().insert(qwen_row("config.json")).await.unwrap();
+
+        let err = resolve_qwen_vl_dir(&db).await.unwrap_err();
+        assert!(err.to_string().contains("Qwen2.5-VL"), "{err}");
     }
 
     #[test]
