@@ -44,6 +44,10 @@ const MODELS: AnyRecord[] = [
   mkModel("m-sdxl", "SDXL Base 1.0", { family: "sdxl", roles: ["base_diffusion"], runtimes: ["comfyui"], vram_estimate_mb: 8200 }),
   mkModel("m-lora-detail", "Add Detail XL", { family: "sdxl", roles: ["lora"], runtimes: ["comfyui"], size_bytes: 220_000_000 }),
   mkModel("m-lora-flux-style", "Ink Wash Style (Flux)", { family: "flux", roles: ["lora"], runtimes: ["comfyui"], size_bytes: 340_000_000 }),
+  // The two-run lineage the "Your LoRAs" overview shows: v0 trained from
+  // scratch, v1 continued from it (see `TRAINING_RUNS`).
+  mkModel("m-lora-ghibli-v0", "Ghibli Look v0", { family: "flux2", roles: ["lora"], runtimes: ["comfyui"], size_bytes: 168_000_000, source: "training:tr-v0", imported_at: "2026-09-12T18:04:00Z" }),
+  mkModel("m-lora-ghibli-v1", "Ghibli Look v1", { family: "flux2", roles: ["lora"], runtimes: ["comfyui"], size_bytes: 168_000_000, source: "training:tr-done", imported_at: "2026-09-17T21:40:00Z" }),
   mkModel("m-flux2-klein", "FLUX.2 [klein] 9B — Q4_K_M (GGUF)", { family: "flux2", format: "gguf", roles: ["base_diffusion"], runtimes: ["comfyui"], vram_estimate_mb: 5900 }),
   mkModel("m-lora-flux2-detail", "Realistic Detail LoRA (FLUX.2 Klein 9B)", { family: "flux2", roles: ["lora"], runtimes: ["comfyui"], size_bytes: 165_704_488 }),
   mkModel("m-qwen", "Qwen2.5 7B Instruct", { family: "qwen2", format: "gguf", quant: "Q5_K_M", param_count: 7_615_616_512, ctx_max: 32_768, roles: ["chat"], runtimes: ["llamacpp"], vram_estimate_mb: 6400 }),
@@ -616,14 +620,29 @@ const TRAINING_STEPS_PER_TICK = 25;
 const TRAINING_CHECKPOINT_EVERY = 250;
 
 const TRAINING_RUNS: AnyRecord[] = [
+  mkTrainingRun("tr-v0", "Ghibli Look v0", {
+    state: "completed",
+    step: 1000,
+    total_steps: 1000,
+    last_loss: 0.0587,
+    last_checkpoint_at: "2026-09-12T18:02:00Z",
+    result_model_id: "m-lora-ghibli-v0",
+    created_at: "2026-09-12T16:30:00Z",
+    started_at: "2026-09-12T16:31:00Z",
+    finished_at: "2026-09-12T18:04:00Z",
+    image_count: 260,
+  }),
   mkTrainingRun("tr-done", "Ghibli Look v1", {
     state: "completed",
     step: 1500,
     total_steps: 1500,
     last_loss: 0.0412,
     last_checkpoint_at: now(),
-    result_model_id: "m-lora-flux-style",
-    finished_at: now(),
+    result_model_id: "m-lora-ghibli-v1",
+    init_lora_model_id: "m-lora-ghibli-v0",
+    created_at: "2026-09-17T19:10:00Z",
+    started_at: "2026-09-17T19:11:00Z",
+    finished_at: "2026-09-17T21:40:00Z",
   }),
   mkTrainingRun("tr-live", "Kenji Character v2", {
     state: "running",
@@ -704,6 +723,99 @@ function progressTrainingRuns(): void {
     MODELS.push(model);
     r.result_model_id = model.id;
   }
+}
+
+/** A library row is a LoRA. The real core decides by the store folder; the
+ *  mock has no files, so the role stands in. */
+function isMockLora(model: AnyRecord): boolean {
+  return Array.isArray(model.roles) && model.roles.includes("lora");
+}
+
+/** The runs that led to a LoRA, oldest first — the same walk as the core's
+ *  `training::lineage`: model → `source = training:<run>` → that run's
+ *  `init_lora_model_id` → … ; a missing link or a loop ends it. */
+function loraChain(modelId: string): AnyRecord[] {
+  const seen = new Set<string>();
+  const newestFirst: AnyRecord[] = [];
+  let model = MODELS.find((m) => m.id === modelId);
+  while (model) {
+    const source = String(model.source ?? "");
+    if (!source.startsWith("training:")) break;
+    const runId = source.slice("training:".length);
+    const run = TRAINING_RUNS.find((r) => r.id === runId);
+    if (!run || seen.has(runId)) break;
+    seen.add(runId);
+    newestFirst.push(run);
+    model = MODELS.find((m) => m.id === run.init_lora_model_id);
+  }
+  return newestFirst.reverse();
+}
+
+function loraSummary(model: AnyRecord): AnyRecord {
+  const chain = loraChain(String(model.id));
+  const trained = String(model.source ?? "").startsWith("training:");
+  const counts = chain.map((r) => r.image_count);
+  const everyCountKnown = chain.length > 0 && counts.every((n) => typeof n === "number");
+  return {
+    model_id: model.id,
+    name: model.name,
+    family: model.family,
+    trained,
+    rank: trained ? 16 : null,
+    size_bytes: model.size_bytes,
+    created_at: model.imported_at,
+    runs: chain.length,
+    total_steps: chain
+      .filter((r) => r.state === "completed")
+      .reduce((sum, r) => sum + Number(r.step), 0),
+    total_images: everyCountKnown ? counts.reduce((sum, n) => sum + Number(n), 0) : null,
+  };
+}
+
+function lineageRun(run: AnyRecord): AnyRecord {
+  const dataset = DATASETS.find((d) => d.id === run.dataset_id);
+  const result = MODELS.find((m) => m.id === run.result_model_id);
+  const init = MODELS.find((m) => m.id === run.init_lora_model_id);
+  const started = run.started_at ? Date.parse(String(run.started_at)) : NaN;
+  const finished = run.finished_at ? Date.parse(String(run.finished_at)) : NaN;
+  let hyperparams: AnyRecord | null = null;
+  try {
+    hyperparams = JSON.parse(String(run.hyperparams_json)) as AnyRecord;
+  } catch {
+    hyperparams = null;
+  }
+  return {
+    run_id: run.id,
+    name: run.name,
+    state: run.state,
+    dataset: dataset
+      ? {
+          id: dataset.id,
+          name: dataset.name,
+          source_root: dataset.source_root,
+          captioner: "florence2",
+        }
+      : null,
+    image_count: run.image_count,
+    trigger_word: run.trigger_word,
+    profile_family: run.profile_family,
+    preset: run.preset,
+    hyperparams,
+    hyperparams_json: run.hyperparams_json,
+    step: run.step,
+    total_steps: run.total_steps,
+    started_at: run.started_at,
+    finished_at: run.finished_at,
+    duration_secs:
+      Number.isFinite(started) && Number.isFinite(finished)
+        ? Math.round((finished - started) / 1000)
+        : null,
+    result_model_id: run.result_model_id,
+    result_model_name: result ? result.name : null,
+    init_lora_model_id: run.init_lora_model_id,
+    init_lora_name: init ? init.name : null,
+    samples: run.last_checkpoint_at ? ["0", "1"] : [],
+  };
 }
 
 /** The four seeded profiles. Only the 4B base is staged, so the dev preview
@@ -2207,6 +2319,18 @@ export function installDevMock(): void {
         }
         removeWhere(TRAINING_RUNS, (r) => r.id === a.id);
         return null;
+      }
+      case "list_loras": {
+        progressTrainingRuns();
+        return MODELS.filter(isMockLora)
+          .map(loraSummary)
+          .sort((x, y) => String(y.created_at).localeCompare(String(x.created_at)));
+      }
+      case "lora_lineage": {
+        progressTrainingRuns();
+        const model = MODELS.find((m) => m.id === a.modelId);
+        if (!model || !isMockLora(model)) return null;
+        return { lora: loraSummary(model), runs: loraChain(String(model.id)).map(lineageRun) };
       }
       /** Mock-only: flip a running run to `interrupted` so the "Fortsetzen"
        *  branch can be checked in the browser preview. There is no process to

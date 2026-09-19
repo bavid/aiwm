@@ -11,11 +11,11 @@ use super::dto::{
     CivitaiSearchDto, CleanupDatasetDto, ColibriModelDto, ConceptBodyDto, ConceptFramesDto,
     ConceptSummaryDto, ConfigUpdate, DedupDatasetDto, DeleteFramesDto, DetachEngineDto,
     DialogueLineDto, EnqueueDownloadDto, ExportDatasetDto, FeaturedModelDto, JobDetailDto,
-    KnownModelDto, LaunchExternalDto, LocalApiStatusDto, LocationBodyDto, ModelStackDto,
-    NewAgentDto, NewSessionDto, NewVoiceIdentityDto, NpcBodyDto, OpenAgentSessionDto,
-    PersonaBodyDto, ProfileDto, ProfilePresetsDto, RegisterColibriModelDto, RegistryDetailsDto,
-    RegistryFileDto, RegistrySearchDto, RunDetailDto, RuntimeStatusDto, SceneBodyDto,
-    SceneDetailDto, SetSessionPersonaDto, StartRunDto, StoryBodyDto, SubmitJobDto,
+    KnownModelDto, LaunchExternalDto, LocalApiStatusDto, LocationBodyDto, LoraLineageDto,
+    LoraSummaryDto, ModelStackDto, NewAgentDto, NewSessionDto, NewVoiceIdentityDto, NpcBodyDto,
+    OpenAgentSessionDto, PersonaBodyDto, ProfileDto, ProfilePresetsDto, RegisterColibriModelDto,
+    RegistryDetailsDto, RegistryFileDto, RegistrySearchDto, RunDetailDto, RuntimeStatusDto,
+    SceneBodyDto, SceneDetailDto, SetSessionPersonaDto, StartRunDto, StoryBodyDto, SubmitJobDto,
     TrainableModelDto, TrainerStatusDto, UpdateDatasetDto, UpdateDatasetFrameDto,
 };
 use crate::compat::FitVerdict;
@@ -919,13 +919,7 @@ fn run_work_dir(app: &App, run: &crate::db::TrainingRun) -> PathBuf {
 /// newest-checkpoint first. Never returned to a caller as paths — see
 /// [`RunDetailDto::latest_samples`].
 fn latest_sample_paths(app: &App, run: &crate::db::TrainingRun) -> Vec<PathBuf> {
-    let dir = crate::training::config::training_folder(&run_work_dir(app, run)).join(&run.name);
-    crate::training::progress::scan_work_dir(&dir, &run.name)
-        .map(|state| state.latest_samples)
-        .unwrap_or_else(|e| {
-            tracing::debug!(run = %run.id, error = %e, "could not scan a run's work directory");
-            Vec::new()
-        })
+    crate::training::lineage::latest_sample_paths(&run_work_dir(app, run), &run.name)
 }
 
 /// The last [`LOG_TAIL_LINES`] updates of a run's `train.log`. A missing log
@@ -1092,6 +1086,24 @@ pub async fn training_sample_path(app: &App, id: &str, n: usize) -> Result<Optio
         .into_iter()
         .nth(n)
         .filter(|p| p.is_file()))
+}
+
+/// `GET /training/loras` — every library LoRA, newest first, trained and
+/// imported alike, with what its lineage adds up to.
+pub async fn list_loras(app: &App) -> Result<Vec<LoraSummaryDto>> {
+    crate::training::lineage::list_loras(&app.db, &app.config.store_path).await
+}
+
+/// `GET /training/loras/{model_id}` — a LoRA's runs, oldest first. `None`
+/// when the model is not a library LoRA (the route answers 404).
+pub async fn lora_lineage(app: &App, model_id: &str) -> Result<Option<LoraLineageDto>> {
+    crate::training::lineage::lineage(
+        &app.db,
+        &app.config.store_path,
+        &app.paths.training_dir(),
+        model_id,
+    )
+    .await
 }
 
 pub async fn list_models(app: &App) -> Result<Vec<Model>> {

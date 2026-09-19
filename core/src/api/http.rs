@@ -177,6 +177,8 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/training/runs/{id}/resume", post(resume_training_run))
         .route("/training/runs/{id}/cancel", post(cancel_training_run))
         .route("/training/runs/{id}/samples/{n}", get(training_sample))
+        .route("/training/loras", get(list_loras))
+        .route("/training/loras/{model_id}", get(lora_lineage))
         .route("/models", get(list_models).post(import_model))
         .route("/models/known", get(known_models))
         .route("/models/stacks", get(model_stacks))
@@ -1359,6 +1361,24 @@ async fn training_sample(
 
 fn no_such_run() -> Response {
     error_response(StatusCode::NOT_FOUND, "no such training run")
+}
+
+async fn list_loras(
+    State(app): AppState,
+) -> Result<Json<Vec<super::dto::LoraSummaryDto>>, ApiError> {
+    Ok(Json(handlers::list_loras(&app).await?))
+}
+
+/// 404 for a model that is not a library LoRA — a checkpoint, a deleted
+/// row, or an id that never existed all look the same to the caller.
+async fn lora_lineage(
+    State(app): AppState,
+    Path(model_id): Path<String>,
+) -> Result<Response, ApiError> {
+    match handlers::lora_lineage(&app, &model_id).await? {
+        Some(lineage) => Ok(Json(lineage).into_response()),
+        None => Ok(error_response(StatusCode::NOT_FOUND, "no such LoRA")),
+    }
 }
 
 /// A minimal JSON error body, shaped like [`ApiError`]'s, for the hand-rolled

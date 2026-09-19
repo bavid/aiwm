@@ -490,6 +490,18 @@ pub struct RunDetailDto {
     pub work_dir: String,
 }
 
+/// `GET /training/loras` — one library LoRA with its lineage's totals. The
+/// shape is [`crate::training::lineage::LoraSummary`] itself: it is already
+/// what the Training tab shows, with nothing to hide or rename.
+pub type LoraSummaryDto = crate::training::lineage::LoraSummary;
+
+/// One run of a LoRA's history ([`crate::training::lineage::LineageRun`]);
+/// `samples` are the same opaque tokens as [`RunDetailDto::latest_samples`].
+pub type LineageRunDto = crate::training::lineage::LineageRun;
+
+/// `GET /training/loras/{model_id}` — the LoRA and its runs, oldest first.
+pub type LoraLineageDto = crate::training::lineage::LoraLineage;
+
 // --- Story Studio (Phase 1: text + plain image, docs/TODO.md) -------------
 
 /// Body for `POST /stories` and `PUT /stories/{id}` — every editable Story
