@@ -18,7 +18,10 @@
 //! export cannot be observed here. The checks run before the file work
 //! starts; a run or prep job started in the moment between the check and the
 //! deletion is not seen — an accepted race, as both are started by the same
-//! single user from the same UI.
+//! single user from the same UI. Likewise the guard protects the datasets
+//! and frames that exist when the deletion reads its snapshot; a dataset
+//! created while a deletion runs is not known to it (a new prep run writes
+//! into its own, new work folder, which no deletion ever targets).
 //!
 //! **Blocking work.** All file-system walking, deleting and image decoding
 //! runs on `spawn_blocking` so a large dataset never stalls the async
@@ -67,8 +70,15 @@ pub struct SkippedFile {
 /// `GET /datasets/{id}/usage` — sizes measured by walking the folders.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct DatasetUsage {
-    /// The app-owned work folder, `None` when it does not exist (any more).
+    /// The app-owned work folder `<outputs>/datasets/<prep_job_id>`, `None`
+    /// when it does not exist (any more) or the prep job is gone.
     pub work_dir: Option<String>,
+    /// `true` when deleting the dataset removes the whole work folder (no
+    /// other dataset and no source folder points into it).
+    pub work_walkable: bool,
+    /// What deleting the dataset frees from its work folder: the whole
+    /// folder when `work_walkable`, otherwise only this dataset's own frame
+    /// files the guard would delete (file by file).
     pub work_bytes: u64,
     pub work_files: u64,
     /// The last export destination, app-owned or not.
@@ -166,30 +176,40 @@ pub async fn usage(
     blocking(move || {
         let (discarded, staying): (Vec<&DatasetFrame>, Vec<&DatasetFrame>) =
             snap.frames.iter().partition(|f| is_discarded(f));
-        let staying: Vec<&str> = staying.iter().map(|f| f.frame_path.as_str()).collect();
-        let guard = Guard::build(&outputs_dir, &snap, &staying);
-        let (work_files, work_bytes) = guard.work_dir.as_deref().map(dir_totals).unwrap_or((0, 0));
+        let discarded_frames = discarded.len() as u64;
+        let guard = Guard::build(&outputs_dir, &snap);
+        let walkable = guard.walkable;
+        let work_dir = guard.work_dir.as_deref().map(display);
+        // What deleting the dataset frees from its work folder: the walk
+        // when the folder may go as a whole, otherwise its own frame files
+        // one by one (nothing stays when the whole dataset is deleted).
+        let (work_files, work_bytes) = match guard.work_dir.as_deref().filter(|_| walkable) {
+            Some(work) => dir_totals(work),
+            None => deletable_totals(&guard, snap.frames.iter()),
+        };
         let export_bytes = guard
             .export_dir
             .as_deref()
             .map(|d| export_files(d).iter().map(|(_, len)| len).sum())
             .unwrap_or(0);
-        let mut seen = HashSet::new();
-        let discarded_bytes = discarded
-            .iter()
-            .filter_map(|f| match guard.check(Path::new(&f.frame_path)) {
-                Verdict::Delete { path, bytes } => seen.insert(path).then_some(bytes),
-                Verdict::Missing | Verdict::Skip(_) => None,
-            })
-            .sum();
+        let export_app_owned = guard.export_dir.is_some();
+        // A cleanup keeps every non-discarded frame; without discarded frames
+        // there is nothing to check.
+        let discarded_bytes = if discarded.is_empty() {
+            0
+        } else {
+            let staying: Vec<&str> = staying.iter().map(|f| f.frame_path.as_str()).collect();
+            deletable_totals(&guard.keeping(&staying), discarded.into_iter()).1
+        };
         DatasetUsage {
-            work_dir: guard.work_dir.as_deref().map(display),
+            work_dir,
+            work_walkable: walkable,
             work_bytes,
             work_files,
             export_dir: snap.dataset.export_dir.clone(),
             export_bytes,
-            export_app_owned: guard.export_dir.is_some(),
-            discarded_frames: discarded.len() as u64,
+            export_app_owned,
+            discarded_frames,
             discarded_bytes,
         }
     })
@@ -214,7 +234,7 @@ pub async fn delete_dataset_with_files(
     let frame_count = snap.frames.len() as u64;
     let outputs = outputs_dir.to_path_buf();
     let (tally, export_kept) = blocking(move || {
-        let guard = Guard::build(&outputs, &snap, &[]);
+        let guard = Guard::build(&outputs, &snap);
         let mut tally = Tally::default();
         if let Some(work) = guard.work_dir.as_deref().filter(|_| guard.walkable) {
             for file in walk_files(work) {
@@ -493,7 +513,7 @@ async fn remove_frames(
             .filter(|f| !targets.contains(&f.id))
             .map(|f| f.frame_path.as_str())
             .collect();
-        let guard = Guard::build(&outputs, &snap, &staying);
+        let guard = Guard::build(&outputs, &snap).keeping(&staying);
         let mut tally = Tally::default();
         let mut row_ids = Vec::with_capacity(targets.len());
         for f in snap.frames.iter().filter(|f| targets.contains(&f.id)) {
@@ -515,6 +535,20 @@ async fn remove_frames(
         freed_bytes: tally.freed_bytes,
         skipped_files: tally.skipped,
     })
+}
+
+/// (files, bytes) of the frames' files `guard` would delete, each file once.
+fn deletable_totals<'a>(
+    guard: &Guard,
+    frames: impl Iterator<Item = &'a DatasetFrame>,
+) -> (u64, u64) {
+    let mut seen = HashSet::new();
+    frames
+        .filter_map(|f| match guard.check(Path::new(&f.frame_path)) {
+            Verdict::Delete { path, bytes } => seen.insert(path).then_some(bytes),
+            Verdict::Missing | Verdict::Skip(_) => None,
+        })
+        .fold((0, 0), |(n, total), bytes| (n + 1, total + bytes))
 }
 
 /// The files an export wrote: `NNNN.<ext>` directly in the folder, with their
@@ -650,6 +684,8 @@ fn display(p: &Path) -> String {
 
 #[cfg(test)]
 mod dedup_tests;
+#[cfg(test)]
+mod perf_probe;
 #[cfg(test)]
 mod safety_tests;
 #[cfg(test)]

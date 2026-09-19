@@ -702,7 +702,10 @@ mod tests {
             hashes[0].dist(&hashes[4])
         );
 
-        let req = DatasetPrepRequest::from_params(&serde_json::json!({ "root": "x" })).unwrap();
+        let req = DatasetPrepRequest::from_params(
+            &serde_json::json!({ "root": std::env::temp_dir().to_string_lossy() }),
+        )
+        .unwrap();
         let (_tx, rx) = watch::channel(false);
         let (judged, extracted, kept) = filter_groups(&rx, vec![group], &req).unwrap().unwrap();
         assert_eq!((extracted, kept), (5, 2));
@@ -724,7 +727,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let group = mixed_group(tmp.path());
         let req = DatasetPrepRequest::from_params(
-            &serde_json::json!({ "root": "x", "max_frames_per_clip": 1 }),
+            &serde_json::json!({ "root": std::env::temp_dir().to_string_lossy(), "max_frames_per_clip": 1 }),
         )
         .unwrap();
         let (_tx, rx) = watch::channel(false);

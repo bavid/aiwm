@@ -24,7 +24,7 @@
 //! source folder lies inside it; otherwise deletion goes file by file over
 //! the dataset's own frame rows.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
 use std::path::{Component, Path, PathBuf};
 
@@ -67,8 +67,12 @@ pub(super) struct Guard {
     claimed: HashSet<OsString>,
     /// Canonical export folder, only when it is this dataset's own.
     pub(super) export_dir: Option<PathBuf>,
+    /// This dataset's source files near its roots (canonical), and all of
+    /// them as stored (an in-place frame's path equals its source path).
     own_sources: HashSet<PathBuf>,
+    own_source_raws: HashSet<String>,
     source_dirs: Vec<PathBuf>,
+    /// Other datasets' frame/source files near this dataset's roots.
     foreign_files: HashSet<PathBuf>,
     foreign_dirs: Vec<PathBuf>,
     in_use: HashSet<PathBuf>,
@@ -87,6 +91,58 @@ fn canonical_all<'a>(raws: impl Iterator<Item = &'a str>) -> HashSet<PathBuf> {
         .into_iter()
         .filter_map(canonical)
         .collect()
+}
+
+/// Many stored paths reduced to what the guard needs, without
+/// canonicalising every file: frames live in a few hundred folders, so each
+/// distinct *folder* is canonicalised once, and a file is canonicalised on
+/// its own only when its folder lies inside one of `roots` (this dataset's
+/// deletable folders) — usually never for another dataset's frames.
+///
+/// Accepted residual gap: a file whose folder is outside the roots but which
+/// is itself a link into them is not recognised by its target. The prep
+/// pipeline never creates links, and `check` resolves the file being deleted
+/// itself, so the gap only matters for a hand-made link in another
+/// dataset's folder pointing at one of this dataset's own files.
+struct PathIndex {
+    /// Canonical folders the paths live in (folders that no longer exist
+    /// are left out — their files are gone too).
+    folders: HashSet<PathBuf>,
+    /// Canonical paths of the files whose folder lies inside a root.
+    near_roots: HashSet<PathBuf>,
+    /// `false` when a path was relative and so cannot be located at all.
+    all_absolute: bool,
+}
+
+fn index_paths<'a>(raws: impl Iterator<Item = &'a str>, roots: &[&Path]) -> PathIndex {
+    let mut by_folder: HashMap<&Path, Vec<&str>> = HashMap::new();
+    let mut all_absolute = true;
+    for raw in raws.filter(|r| !r.is_empty()).collect::<HashSet<&str>>() {
+        let path = Path::new(raw);
+        if !path.is_absolute() {
+            all_absolute = false;
+            continue;
+        }
+        if let Some(folder) = path.parent() {
+            by_folder.entry(folder).or_default().push(raw);
+        }
+    }
+    let mut folders = HashSet::new();
+    let mut near_roots = HashSet::new();
+    for (folder, files) in by_folder {
+        let Ok(folder) = std::fs::canonicalize(folder) else {
+            continue;
+        };
+        if roots.iter().any(|r| folder.starts_with(r)) {
+            near_roots.extend(files.iter().filter_map(|f| std::fs::canonicalize(f).ok()));
+        }
+        folders.insert(folder);
+    }
+    PathIndex {
+        folders,
+        near_roots,
+        all_absolute,
+    }
 }
 
 /// `name` when it is exactly one ordinary path component (no separator, no
@@ -110,8 +166,8 @@ fn overlaps(a: &Path, b: &Path) -> bool {
 }
 
 impl Guard {
-    /// `staying`: frame paths of this dataset that are not being deleted.
-    pub(super) fn build(outputs_dir: &Path, snap: &Snapshot, staying: &[&str]) -> Self {
+    /// Everything except the in-use set; see [`Self::keeping`].
+    pub(super) fn build(outputs_dir: &Path, snap: &Snapshot) -> Self {
         let outputs = std::fs::canonicalize(outputs_dir).ok();
         let datasets_root = outputs
             .as_ref()
@@ -123,18 +179,12 @@ impl Guard {
             (dir.is_dir() && strictly_inside(&dir, root)).then_some(dir)
         };
 
-        let own_sources = canonical_all(snap.frames.iter().map(|f| f.source_path.as_str()));
         let source_dirs: Vec<PathBuf> = canonical_all(
             std::iter::once(snap.dataset.source_root.as_str())
                 .chain(snap.others.iter().map(|d| d.source_root.as_str())),
         )
         .into_iter()
         .collect();
-        let foreign_files = canonical_all(
-            snap.foreign_frames
-                .iter()
-                .flat_map(|(frame, source)| [frame.as_str(), source.as_str()]),
-        );
         let other_exports: Vec<PathBuf> =
             canonical_all(snap.others.iter().filter_map(|d| d.export_dir.as_deref()))
                 .into_iter()
@@ -144,15 +194,44 @@ impl Guard {
             .cloned()
             .chain(snap.others.iter().filter_map(work_of))
             .collect();
-        let in_use = canonical_all(staying.iter().copied());
-
         let work_dir = work_of(&snap.dataset);
-        let walkable = work_dir.as_deref().is_some_and(|w| {
-            !foreign_files.iter().any(|f| f.starts_with(w))
-                && !own_sources.iter().any(|f| f.starts_with(w))
-                && !foreign_dirs.iter().any(|d| overlaps(d, w))
-                && !source_dirs.iter().any(|d| overlaps(d, w))
-        });
+        let export_dir = match (&outputs, &snap.dataset.export_dir) {
+            (Some(o), Some(e)) => own_export(o, datasets_root.as_deref(), e, &other_exports),
+            _ => None,
+        };
+        let loose = snap.dataset.prep_job_id.is_none();
+
+        // The folders files may be deleted from. Without a prep job that is
+        // any unclaimed `<datasets_root>/<X>` — and a foreign file's folder
+        // claims its whole X (below), so other datasets' files need no
+        // per-file check there; this dataset's own sources still do.
+        let roots: Vec<&Path> = [work_dir.as_deref(), export_dir.as_deref()]
+            .into_iter()
+            .flatten()
+            .collect();
+        let mut own_roots = roots.clone();
+        if loose {
+            own_roots.extend(datasets_root.as_deref());
+        }
+        let foreign = index_paths(
+            snap.foreign_frames
+                .iter()
+                .flat_map(|(frame, source)| [frame.as_str(), source.as_str()]),
+            &roots,
+        );
+        let own = index_paths(
+            snap.frames.iter().map(|f| f.source_path.as_str()),
+            &own_roots,
+        );
+
+        let walkable = foreign.all_absolute
+            && own.all_absolute
+            && work_dir.as_deref().is_some_and(|w| {
+                !foreign.folders.iter().any(|f| f.starts_with(w))
+                    && !own.folders.iter().any(|f| f.starts_with(w))
+                    && !foreign_dirs.iter().any(|d| overlaps(d, w))
+                    && !source_dirs.iter().any(|d| overlaps(d, w))
+            });
 
         let mut claimed: HashSet<OsString> = snap
             .others
@@ -167,29 +246,40 @@ impl Guard {
                     _ => None,
                 }
             };
-            claimed.extend(foreign_files.iter().filter_map(under));
+            claimed.extend(foreign.folders.iter().filter_map(under));
             claimed.extend(foreign_dirs.iter().filter_map(under));
             claimed.extend(source_dirs.iter().filter_map(under));
         }
 
-        let export_dir = match (&outputs, &snap.dataset.export_dir) {
-            (Some(o), Some(e)) => own_export(o, datasets_root.as_deref(), e, &other_exports),
-            _ => None,
-        };
-
         Self {
-            loose: snap.dataset.prep_job_id.is_none(),
+            loose,
             outputs,
             datasets_root,
             work_dir,
             walkable,
             claimed,
             export_dir,
-            own_sources,
+            own_sources: own.near_roots,
+            own_source_raws: snap
+                .frames
+                .iter()
+                .map(|f| f.source_path.clone())
+                .filter(|s| !s.is_empty())
+                .collect(),
             source_dirs,
-            foreign_files,
+            foreign_files: foreign.near_roots,
             foreign_dirs,
-            in_use,
+            in_use: HashSet::new(),
+        }
+    }
+
+    /// The same guard, also refusing every file one of `staying` (frame
+    /// paths of this dataset that are not being deleted) still shows —
+    /// compared by canonical path.
+    pub(super) fn keeping(self, staying: &[&str]) -> Self {
+        Self {
+            in_use: canonical_all(staying.iter().copied()),
+            ..self
         }
     }
 
@@ -217,8 +307,11 @@ impl Guard {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Verdict::Missing,
             Err(e) => return Verdict::Skip(skipped(raw, &format!("{SKIP_ERROR}: {e}"))),
         };
-        if self.own_sources.contains(&path) || self.source_dirs.iter().any(|d| path.starts_with(d))
-        {
+        let own_source = self.own_sources.contains(&path)
+            || raw
+                .to_str()
+                .is_some_and(|r| self.own_source_raws.contains(r));
+        if own_source || self.source_dirs.iter().any(|d| path.starts_with(d)) {
             return Verdict::Skip(skipped(raw, SKIP_SOURCE));
         }
         if self.foreign_files.contains(&path)

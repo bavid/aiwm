@@ -148,7 +148,19 @@ pub async fn job_detail(app: &App, id: &str) -> Result<Option<JobDetailDto>> {
 }
 
 pub async fn submit_job(app: &App, body: SubmitJobDto) -> Result<Job> {
-    app.jobs.submit(new_job_from(body)).await
+    let new = new_job_from(body);
+    // A dataset prep request is fully checkable up front (e.g. a relative
+    // root folder): refuse it now with a 400 instead of queueing a job that
+    // can only fail.
+    if new.job_type == "dataset_prep" {
+        crate::capability::dataset::DatasetPrepRequest::from_params(&new.params).map_err(|e| {
+            match e {
+                CoreError::Config(msg) => CoreError::Config(msg),
+                other => CoreError::Config(other.to_string()),
+            }
+        })?;
+    }
+    app.jobs.submit(new).await
 }
 
 fn new_job_from(body: SubmitJobDto) -> NewJob {

@@ -392,3 +392,38 @@ async fn a_running_prep_job_is_a_400() {
         "{err}"
     );
 }
+
+/// A dataset prep job with a relative root is refused at submission (400),
+/// before any job row exists.
+#[tokio::test]
+async fn a_relative_dataset_root_is_a_400_at_submission() {
+    let fx = fixture().await;
+    let before = fx
+        .app
+        .db
+        .jobs()
+        .list(&aiwm_core::db::JobFilter::default())
+        .await
+        .unwrap()
+        .len();
+    let (status, body) = post(
+        &fx,
+        "/jobs",
+        json!({ "job_type": "dataset_prep", "params": { "root": "Data\\Ghibli" } }),
+    )
+    .await;
+    assert_eq!(status, 400, "{body}");
+    assert!(
+        body["error"].as_str().unwrap().contains("absolute"),
+        "{body}"
+    );
+    let after = fx
+        .app
+        .db
+        .jobs()
+        .list(&aiwm_core::db::JobFilter::default())
+        .await
+        .unwrap()
+        .len();
+    assert_eq!(before, after, "no job was created");
+}

@@ -407,18 +407,18 @@ async fn a_junction_inside_the_work_folder_is_never_followed() {
     assert!(victim.parent().unwrap().exists());
 }
 
+/// Opt-in: creating a file symlink needs Developer Mode or admin rights.
+/// Run with `--ignored` on a machine that has them; without them it fails
+/// loudly instead of passing silently.
 #[cfg(windows)]
 #[tokio::test]
+#[ignore = "needs symlink privilege (Developer Mode)"]
 async fn a_file_symlink_inside_the_work_folder_never_deletes_its_target() {
     let fx = fixture().await;
     let victim = victim(&fx);
     let link = fx.clip_dir.join("link.png");
     if let Err(e) = std::os::windows::fs::symlink_file(&victim, &link) {
-        eprintln!(
-            "SKIPPED a_file_symlink_inside_the_work_folder_never_deletes_its_target: \
-             creating a file symlink needs Developer Mode or admin rights here ({e})"
-        );
-        return;
+        panic!("cannot create a file symlink here (needs Developer Mode or admin): {e}");
     }
     let id = fx.row(&link, &fx.source, "", false).await;
     delete_frames(&fx.db, &fx.outputs, &fx.dataset.id, &[id])
@@ -614,6 +614,96 @@ fn the_guard_refuses_a_relative_path_whatever_the_working_directory() {
             panic!("a relative path must be skipped")
         }
     }
+}
+
+/// A source file is recognised by its resolved path (a frame row spelling it
+/// differently) and, outside every root, reported as a source by its stored
+/// path rather than merely "outside".
+#[tokio::test]
+async fn own_sources_are_recognised_resolved_and_as_stored() {
+    let fx = fixture().await;
+    let src_in_work = write(&fx.clip_dir.join("src.png"), 12);
+    let respelled = fx.clip_dir.join("..").join("clip").join("src.png");
+    let a = fx.row(&respelled, &src_in_work, "", false).await;
+    let elsewhere = write(&fx.tmp.path().join("pictures").join("img.png"), 5);
+    let b = fx.row(&elsewhere, &elsewhere, "", false).await;
+
+    let s = delete_frames(&fx.db, &fx.outputs, &fx.dataset.id, &[a, b])
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(src_in_work.exists());
+    assert!(elsewhere.exists());
+    let reasons: Vec<&str> = s.skipped_files.iter().map(|f| f.reason.as_str()).collect();
+    assert_eq!(reasons, vec![SKIP_SOURCE, SKIP_SOURCE], "{s:?}");
+}
+
+/// A relative path in another dataset's rows cannot be located, so it may
+/// point anywhere — including into this work folder. The folder is then not
+/// walked: only this dataset's own frames go.
+#[tokio::test]
+async fn a_relative_foreign_path_stops_the_walk() {
+    let fx = fixture().await;
+    fx.frame("own.png", 10, "", false).await;
+    let preview = write(&fx.work_root.join("preview.png"), 30);
+    let b = fx.other_dataset(None, &fx.tmp.path().join("src")).await;
+    fx.row_in(&b, Path::new("preview.png"), Path::new("clip.mp4"))
+        .await;
+
+    let s = delete_dataset_with_files(&fx.db, &fx.outputs, &fx.dataset.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(s.freed_bytes, 10, "{s:?}");
+    assert!(preview.exists(), "no walk while a foreign path is relative");
+}
+
+/// `work_walkable` and `work_bytes`: a walkable work folder reports its whole
+/// size; otherwise only this dataset's own frame files deleting would free.
+#[tokio::test]
+async fn usage_reports_what_deleting_would_free_from_the_work_folder() {
+    let fx = fixture().await;
+    fx.frame("own.png", 100, "", false).await;
+    write(&fx.work_root.join("preview.png"), 30);
+    let u = usage(&fx.db, &fx.outputs, &fx.dataset.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(u.work_walkable);
+    assert_eq!((u.work_files, u.work_bytes), (2, 130));
+
+    // Another dataset built in place from this work folder.
+    let b = fx.other_dataset(None, &fx.work_root).await;
+    let shared = write(&fx.clip_dir.join("shared.png"), 7);
+    fx.row_in(&b, &shared, &shared).await;
+    let u = usage(&fx.db, &fx.outputs, &fx.dataset.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(!u.work_walkable);
+    assert_eq!(
+        (u.work_files, u.work_bytes),
+        (0, 0),
+        "B's source folder covers this frame, so deleting frees nothing"
+    );
+}
+
+/// Without a prep job there is no work folder to walk; `work_bytes` counts
+/// the own frame files deleting would free.
+#[tokio::test]
+async fn usage_without_a_prep_job_counts_own_deletable_frames() {
+    let fx = fixture().await;
+    let x = fx.outputs.join("datasets").join("orphan-job");
+    let own = write(&x.join("raw").join("f1.png"), 64);
+    let src = fx.tmp.path().join("src2");
+    std::fs::create_dir_all(&src).unwrap();
+    let c = fx.other_dataset(None, &src).await;
+    fx.row_in(&c, &own, &src.join("v.mp4")).await;
+
+    let u = usage(&fx.db, &fx.outputs, &c).await.unwrap().unwrap();
+    assert_eq!(u.work_dir, None);
+    assert!(!u.work_walkable);
+    assert_eq!((u.work_files, u.work_bytes), (1, 64));
 }
 
 #[test]
