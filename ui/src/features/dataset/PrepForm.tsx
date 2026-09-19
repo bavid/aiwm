@@ -252,7 +252,11 @@ export function PrepForm({ isRunning, error, onStart }: Props) {
       >
         {isRunning ? "Pipeline running…" : "Run pipeline"}
       </button>
-      {error && <p className="dataset__err">{error}</p>}
+      {error && (
+        <p className="dataset__err" role="alert">
+          {error}
+        </p>
+      )}
     </div>
   );
 }

@@ -8,8 +8,9 @@ use std::sync::{Arc, Mutex};
 
 use aiwm_core::api::dto::{
     AboutDto, ActivePersonaDto, AgentPermissionDto, AgentSessionDetailDto, AssignedDto,
-    AttachExternalDto, BenchmarkOptionsDto, CharacterBodyDto, CivitaiSearchDto, ColibriModelDto,
-    ConceptBodyDto, ConceptFramesDto, ConceptSummaryDto, ConfigUpdate, EnqueueDownloadDto,
+    AttachExternalDto, BenchmarkOptionsDto, BulkFramesDto, BulkUpdatedDto, CharacterBodyDto,
+    CivitaiSearchDto, CleanupDatasetDto, ColibriModelDto, ConceptBodyDto, ConceptFramesDto,
+    ConceptSummaryDto, ConfigUpdate, DedupDatasetDto, DeleteFramesDto, EnqueueDownloadDto,
     ExportDatasetDto, FeaturedModelDto, JobDetailDto, KnownModelDto, LaunchExternalDto,
     LocalApiStatusDto, LocationBodyDto, ModelStackDto, NewAgentDto, NewSessionDto,
     NewVoiceIdentityDto, NpcBodyDto, OpenAgentSessionDto, PersonaBodyDto, ProfileDto,
@@ -18,7 +19,10 @@ use aiwm_core::api::dto::{
     TrainerStatusDto, UpdateDatasetDto, UpdateDatasetFrameDto,
 };
 use aiwm_core::api::handlers;
-use aiwm_core::capability::dataset::{CaptionerStatus, ExportSummary};
+use aiwm_core::capability::dataset::{
+    CaptionerStatus, CleanupSummary, DatasetDeleteSummary, DatasetUsage, DedupSummary,
+    ExportSummary, FramesDeleteSummary,
+};
 use aiwm_core::config::Config;
 use aiwm_core::db::Document;
 use aiwm_core::db::{
@@ -340,9 +344,77 @@ async fn update_dataset(
     to_ipc(handlers::update_dataset(&app, &id, body).await)
 }
 
+/// A dataset-keyed handler's `None` (unknown dataset) as the error the UI
+/// shows — the HTTP twin answers 404 there.
+fn dataset_found<T>(r: aiwm_core::Result<Option<T>>, id: &str) -> Result<T, String> {
+    to_ipc(r)?.ok_or_else(|| format!("no such dataset {id}"))
+}
+
 #[tauri::command]
-async fn delete_dataset(app: tauri::State<'_, Arc<App>>, id: String) -> Result<(), String> {
-    to_ipc(handlers::delete_dataset(&app, &id).await)
+async fn delete_dataset(
+    app: tauri::State<'_, Arc<App>>,
+    id: String,
+) -> Result<DatasetDeleteSummary, String> {
+    dataset_found(handlers::delete_dataset(&app, &id).await, &id)
+}
+
+#[tauri::command]
+async fn dataset_usage(
+    app: tauri::State<'_, Arc<App>>,
+    dataset_id: String,
+) -> Result<DatasetUsage, String> {
+    dataset_found(
+        handlers::dataset_usage(&app, &dataset_id).await,
+        &dataset_id,
+    )
+}
+
+#[tauri::command]
+async fn bulk_update_dataset_frames(
+    app: tauri::State<'_, Arc<App>>,
+    dataset_id: String,
+    body: BulkFramesDto,
+) -> Result<BulkUpdatedDto, String> {
+    dataset_found(
+        handlers::bulk_update_dataset_frames(&app, &dataset_id, body).await,
+        &dataset_id,
+    )
+}
+
+#[tauri::command]
+async fn delete_dataset_frames(
+    app: tauri::State<'_, Arc<App>>,
+    dataset_id: String,
+    body: DeleteFramesDto,
+) -> Result<FramesDeleteSummary, String> {
+    dataset_found(
+        handlers::delete_dataset_frames(&app, &dataset_id, body).await,
+        &dataset_id,
+    )
+}
+
+#[tauri::command]
+async fn cleanup_dataset(
+    app: tauri::State<'_, Arc<App>>,
+    dataset_id: String,
+    body: CleanupDatasetDto,
+) -> Result<CleanupSummary, String> {
+    dataset_found(
+        handlers::cleanup_dataset(&app, &dataset_id, body).await,
+        &dataset_id,
+    )
+}
+
+#[tauri::command]
+async fn dedup_dataset(
+    app: tauri::State<'_, Arc<App>>,
+    dataset_id: String,
+    body: DedupDatasetDto,
+) -> Result<DedupSummary, String> {
+    dataset_found(
+        handlers::dedup_dataset(&app, &dataset_id, body).await,
+        &dataset_id,
+    )
 }
 
 #[tauri::command]
@@ -1298,6 +1370,11 @@ fn try_run() -> anyhow::Result<()> {
             get_dataset,
             update_dataset,
             delete_dataset,
+            dataset_usage,
+            bulk_update_dataset_frames,
+            delete_dataset_frames,
+            cleanup_dataset,
+            dedup_dataset,
             list_dataset_frames_for_dataset,
             frame_concept_map,
             list_concepts,

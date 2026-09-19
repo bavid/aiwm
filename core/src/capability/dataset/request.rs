@@ -56,6 +56,14 @@ impl DatasetPrepRequest {
             .map(str::trim)
             .filter(|s| !s.is_empty())
             .ok_or_else(|| dataset_err("dataset_prep job has no `root` folder"))?;
+        // A relative root would resolve against the process's working
+        // directory; the frames and the housekeeping guard need real,
+        // absolute paths.
+        if !std::path::Path::new(root).is_absolute() {
+            return Err(crate::CoreError::Config(format!(
+                "dataset root must be an absolute folder path, got {root:?}"
+            )));
+        }
 
         let mode = match params.get("mode").and_then(Value::as_str) {
             None => DatasetMode::Frames,
@@ -205,6 +213,17 @@ mod tests {
         assert!(DatasetPrepRequest::from_params(&serde_json::json!({ "root": "  " })).is_err());
     }
 
+    /// A relative root would resolve against the process's working
+    /// directory; it is a user mistake, reported as a configuration error
+    /// (400), never guessed at.
+    #[test]
+    fn from_params_rejects_a_relative_root() {
+        let err = DatasetPrepRequest::from_params(&serde_json::json!({ "root": "Data\\Ghibli" }))
+            .unwrap_err();
+        assert!(matches!(err, crate::CoreError::Config(_)), "{err}");
+        assert!(err.to_string().contains("absolute"), "{err}");
+    }
+
     #[test]
     fn from_params_fills_defaults() {
         let r = DatasetPrepRequest::from_params(&serde_json::json!({ "root": "E:\\Data\\Ghibli" }))
@@ -221,7 +240,7 @@ mod tests {
     #[test]
     fn from_params_clamps_out_of_range_values() {
         let r = DatasetPrepRequest::from_params(&serde_json::json!({
-            "root": "x",
+            "root": r"E:\Data\x",
             "sample_fps": 999.0,
             "blur_threshold": -5.0,
             "phash_max_distance": 999,
@@ -248,13 +267,13 @@ mod tests {
     #[test]
     fn vram_estimate_adds_qwen_only_when_escalating() {
         let base = DatasetPrepRequest::from_params(&serde_json::json!({
-            "root": "x", "captioner": "florence2", "escalate": false
+            "root": r"E:\Data\x", "captioner": "florence2", "escalate": false
         }))
         .unwrap();
         assert_eq!(base.vram_estimate_mb(), FLORENCE2_VRAM_FALLBACK_MB);
 
         let with_escalation = DatasetPrepRequest::from_params(&serde_json::json!({
-            "root": "x", "captioner": "florence2", "escalate": true
+            "root": r"E:\Data\x", "captioner": "florence2", "escalate": true
         }))
         .unwrap();
         assert_eq!(
@@ -264,7 +283,8 @@ mod tests {
     }
     #[test]
     fn from_params_defaults_to_frames_mode_no_captioner_and_the_diversity_cap() {
-        let r = DatasetPrepRequest::from_params(&serde_json::json!({ "root": "x" })).unwrap();
+        let r =
+            DatasetPrepRequest::from_params(&serde_json::json!({ "root": r"E:\Data\x" })).unwrap();
         assert_eq!(r.mode, crate::db::DatasetMode::Frames);
         assert_eq!(r.captioner, None);
         assert_eq!(r.max_frames_per_clip, filter::DEFAULT_MAX_FRAMES_PER_CLIP);
@@ -275,7 +295,7 @@ mod tests {
     #[test]
     fn from_params_accepts_a_registry_captioner_and_rejects_unknown_ones() {
         let r = DatasetPrepRequest::from_params(
-            &serde_json::json!({ "root": "x", "captioner": "florence2", "escalate": true }),
+            &serde_json::json!({ "root": r"E:\Data\x", "captioner": "florence2", "escalate": true }),
         )
         .unwrap();
         assert_eq!(r.captioner.as_deref(), Some("florence2"));
@@ -285,7 +305,7 @@ mod tests {
         );
 
         let tagger = DatasetPrepRequest::from_params(&serde_json::json!({
-            "root": "x", "captioner": "wd-eva02-tagger-v3", "escalate": true
+            "root": r"E:\Data\x", "captioner": "wd-eva02-tagger-v3", "escalate": true
         }))
         .unwrap();
         assert_eq!(
@@ -295,7 +315,7 @@ mod tests {
         );
 
         let err = DatasetPrepRequest::from_params(
-            &serde_json::json!({ "root": "x", "captioner": "nope" }),
+            &serde_json::json!({ "root": r"E:\Data\x", "captioner": "nope" }),
         )
         .unwrap_err();
         assert!(err.to_string().contains("unknown captioner"), "{err}");
@@ -304,15 +324,16 @@ mod tests {
     #[test]
     fn from_params_parses_clip_mode_and_clamps_the_cap() {
         let r = DatasetPrepRequest::from_params(&serde_json::json!({
-            "root": "x", "mode": "clips", "max_frames_per_clip": 999_999, "min_clip_secs": -3.0
+            "root": r"E:\Data\x", "mode": "clips", "max_frames_per_clip": 999_999, "min_clip_secs": -3.0
         }))
         .unwrap();
         assert_eq!(r.mode, crate::db::DatasetMode::Clips);
         assert_eq!(r.max_frames_per_clip, MAX_FRAMES_PER_CLIP_CEILING);
         assert_eq!(r.min_clip_secs, 0.0);
-        let err =
-            DatasetPrepRequest::from_params(&serde_json::json!({ "root": "x", "mode": "stills" }))
-                .unwrap_err();
+        let err = DatasetPrepRequest::from_params(
+            &serde_json::json!({ "root": r"E:\Data\x", "mode": "stills" }),
+        )
+        .unwrap_err();
         assert!(err.to_string().contains("mode"), "{err}");
     }
 }

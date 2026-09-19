@@ -13,10 +13,11 @@ use serde::Deserialize;
 
 use super::dto::{
     AddSceneImageDto, AgentMessageDto, AgentPermissionDto, AttachDocumentDto, AttachExternalDto,
-    BenchmarkHistoryDto, BenchmarkOptionsDto, CharacterBodyDto, ConceptBodyDto, ConceptFramesDto,
-    DetachEngineDto, ExportDatasetDto, LaunchExternalDto, LocationBodyDto, NewAgentDto,
-    NewRelationshipDto, NewSessionDto, NewVoiceIdentityDto, NpcBodyDto, OpenAgentSessionDto,
-    PersonaBodyDto, RenameModelDto, RenameSessionDto, SceneBodyDto, SceneDetailDto, SetArchivedDto,
+    BenchmarkHistoryDto, BenchmarkOptionsDto, BulkFramesDto, CharacterBodyDto, CleanupDatasetDto,
+    ConceptBodyDto, ConceptFramesDto, DedupDatasetDto, DeleteFramesDto, DetachEngineDto,
+    ExportDatasetDto, LaunchExternalDto, LocationBodyDto, NewAgentDto, NewRelationshipDto,
+    NewSessionDto, NewVoiceIdentityDto, NpcBodyDto, OpenAgentSessionDto, PersonaBodyDto,
+    RenameModelDto, RenameSessionDto, SceneBodyDto, SceneDetailDto, SetArchivedDto,
     SetInventoryDto, SetReferenceJobDto, SetRolesDto, SetSessionPersonaDto, SetTagsDto,
     SetTokenDto, StartRunDto, StoryBodyDto, SubmitJobDto, UpdateDatasetDto, UpdateDatasetFrameDto,
 };
@@ -140,6 +141,14 @@ pub fn router(app: Arc<App>) -> Router {
             "/datasets/{id}/frames/{frame_id}/image",
             get(dataset_frame_image_by_dataset),
         )
+        .route("/datasets/{id}/usage", get(dataset_usage))
+        .route(
+            "/datasets/{id}/frames/bulk",
+            post(bulk_update_dataset_frames),
+        )
+        .route("/datasets/{id}/frames/delete", post(delete_dataset_frames))
+        .route("/datasets/{id}/cleanup", post(cleanup_dataset))
+        .route("/datasets/{id}/dedup", post(dedup_dataset))
         .route("/datasets/{id}/frame-concepts", get(frame_concept_map))
         .route(
             "/datasets/{id}/concepts",
@@ -944,12 +953,71 @@ async fn update_dataset(
     Ok(Json(handlers::update_dataset(&app, &id, body).await?))
 }
 
+/// `Some` -> 200 with the JSON body, `None` -> 404 "no such dataset" — the
+/// shape every dataset-keyed housekeeping route answers with.
+fn dataset_or_404<T: serde::Serialize>(value: Option<T>) -> Response {
+    match value {
+        Some(v) => Json(v).into_response(),
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "no such dataset" })),
+        )
+            .into_response(),
+    }
+}
+
+/// 200 with `{ frames, deleted_files, freed_bytes, skipped_files,
+/// export_dir_kept }` (the files went too), 404 for an unknown dataset, 400
+/// while a training run of the dataset is active.
 async fn delete_dataset(
     State(app): AppState,
     Path(id): Path<String>,
-) -> Result<StatusCode, ApiError> {
-    handlers::delete_dataset(&app, &id).await?;
-    Ok(StatusCode::NO_CONTENT)
+) -> Result<Response, ApiError> {
+    Ok(dataset_or_404(handlers::delete_dataset(&app, &id).await?))
+}
+
+async fn dataset_usage(State(app): AppState, Path(id): Path<String>) -> Result<Response, ApiError> {
+    Ok(dataset_or_404(handlers::dataset_usage(&app, &id).await?))
+}
+
+async fn bulk_update_dataset_frames(
+    State(app): AppState,
+    Path(id): Path<String>,
+    Json(body): Json<BulkFramesDto>,
+) -> Result<Response, ApiError> {
+    Ok(dataset_or_404(
+        handlers::bulk_update_dataset_frames(&app, &id, body).await?,
+    ))
+}
+
+async fn delete_dataset_frames(
+    State(app): AppState,
+    Path(id): Path<String>,
+    Json(body): Json<DeleteFramesDto>,
+) -> Result<Response, ApiError> {
+    Ok(dataset_or_404(
+        handlers::delete_dataset_frames(&app, &id, body).await?,
+    ))
+}
+
+async fn cleanup_dataset(
+    State(app): AppState,
+    Path(id): Path<String>,
+    Json(body): Json<CleanupDatasetDto>,
+) -> Result<Response, ApiError> {
+    Ok(dataset_or_404(
+        handlers::cleanup_dataset(&app, &id, body).await?,
+    ))
+}
+
+async fn dedup_dataset(
+    State(app): AppState,
+    Path(id): Path<String>,
+    Json(body): Json<DedupDatasetDto>,
+) -> Result<Response, ApiError> {
+    Ok(dataset_or_404(
+        handlers::dedup_dataset(&app, &id, body).await?,
+    ))
 }
 
 async fn list_dataset_frames_for_dataset(

@@ -125,6 +125,16 @@ pub fn phash_of(path: &Path) -> Result<ImageHash> {
     Ok(hasher.hash_image(&img))
 }
 
+/// Both numbers the dataset-wide dedup needs from one decode: the same
+/// perceptual hash [`phash_of`] computes (same hasher config) and the
+/// Laplacian variance [`is_blurry`] thresholds — higher means sharper.
+pub fn phash_and_sharpness(path: &Path) -> Result<(ImageHash, f64)> {
+    let img = image::open(path)
+        .map_err(|e| dataset_err(format!("read {} for dedup check: {e}", path.display())))?;
+    let hasher = HasherConfig::new().to_hasher();
+    Ok((hasher.hash_image(&img), laplacian_variance(&img.to_luma8())))
+}
+
 /// Why a frame was dropped. Stored on the row (`dataset_frames.rejection_reason`)
 /// so the curation grid can show each reason as a filter chip and restore
 /// individual frames. `""` on the row means "kept".
@@ -137,16 +147,20 @@ pub enum RejectionReason {
     Cap,
     /// Clip mode only: undecodable or shorter than the minimum.
     Unusable,
+    /// Marked by the dataset-wide dedup (`housekeeping::dedup`): a near-copy
+    /// of a sharper frame anywhere in the dataset, not just its neighbour.
+    DuplicateGlobal,
 }
 
 impl RejectionReason {
-    pub const ALL: [RejectionReason; 6] = [
+    pub const ALL: [RejectionReason; 7] = [
         Self::Black,
         Self::Transition,
         Self::Blur,
         Self::Duplicate,
         Self::Cap,
         Self::Unusable,
+        Self::DuplicateGlobal,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -157,6 +171,7 @@ impl RejectionReason {
             Self::Duplicate => "duplicate",
             Self::Cap => "cap",
             Self::Unusable => "unusable",
+            Self::DuplicateGlobal => "duplicate_global",
         }
     }
 
@@ -352,6 +367,34 @@ mod tests {
         }
         assert_eq!(RejectionReason::parse(""), None);
         assert_eq!(RejectionReason::parse("nonsense"), None);
+    }
+
+    #[test]
+    fn duplicate_global_is_a_known_reason() {
+        assert_eq!(
+            RejectionReason::parse("duplicate_global"),
+            Some(RejectionReason::DuplicateGlobal)
+        );
+        assert_eq!(
+            RejectionReason::DuplicateGlobal.as_str(),
+            "duplicate_global"
+        );
+    }
+
+    #[test]
+    fn phash_and_sharpness_matches_the_separate_checks() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sharp = tmp.path().join("sharp.png");
+        let flat = tmp.path().join("flat.png");
+        write_png(&sharp, &sharp_checkerboard(32));
+        write_png(&flat, &flat_gray(32, 128));
+
+        let (hash, sharpness) = phash_and_sharpness(&sharp).unwrap();
+        assert_eq!(hash, phash_of(&sharp).unwrap());
+        assert!(sharpness > DEFAULT_BLUR_THRESHOLD);
+        let (_, flat_sharpness) = phash_and_sharpness(&flat).unwrap();
+        assert_eq!(flat_sharpness, 0.0);
+        assert!(phash_and_sharpness(&tmp.path().join("gone.png")).is_err());
     }
 
     #[test]

@@ -25,6 +25,12 @@
   --space-5: 1.5rem;
   --space-6: 2rem;
 
+  /* Scrims over images (tag, duration and badge labels on thumbnails): the
+     same dark veil and light text in both themes, since the image decides
+     the ground, not the theme. */
+  --scrim: color-mix(in oklab, black 55%, transparent);
+  --on-scrim: #ffffff;
+
   --radius: 12px;
   --radius-sm: 8px;
   --radius-lg: 18px;

@@ -1592,15 +1592,14 @@ mod tests {
         let fx = fixture(16_384).await;
 
         let mut plain = NewJob::new("dataset_prep");
-        plain.params = serde_json::json!({ "root": "x" });
+        plain.params = serde_json::json!({ "root": std::env::temp_dir().to_string_lossy() });
         let plain = fx.engine.submit(plain).await.unwrap();
         let target = fx.engine.resolve_target(&plain).await.unwrap();
         assert_eq!(target.model_id, DATASET_VISION_MODEL_ID);
         assert_eq!(target.vram_mb, 0, "no captioner, nothing to reserve");
 
         let mut with_florence = NewJob::new("dataset_prep");
-        with_florence.params =
-            serde_json::json!({ "root": "x", "captioner": "florence2", "escalate": false });
+        with_florence.params = serde_json::json!({ "root": std::env::temp_dir().to_string_lossy(), "captioner": "florence2", "escalate": false });
         let with_florence = fx.engine.submit(with_florence).await.unwrap();
         let target = fx.engine.resolve_target(&with_florence).await.unwrap();
         assert_eq!(target.model_id, DATASET_VISION_MODEL_ID);

@@ -410,6 +410,93 @@ function datasetForJob(job: AnyRecord): AnyRecord {
   return dataset;
 }
 
+/** Stand-in size of one extracted still (roughly a 1080p PNG) — the mock has
+ *  no real files to measure. A clip row without a preview has no file. */
+const MOCK_FRAME_BYTES = 1_450_000;
+const ACTIVE_RUN_STATES = ["preparing", "running", "paused", "interrupted", "resuming", "finishing"];
+
+function mockFrameBytes(f: AnyRecord): number {
+  return f.frame_path ? MOCK_FRAME_BYTES : 0;
+}
+
+function isMockDiscarded(f: AnyRecord): boolean {
+  return f.excluded === true || f.rejection_reason !== "";
+}
+
+function requireDataset(id: unknown): AnyRecord {
+  const dataset = DATASETS.find((d) => d.id === id);
+  if (!dataset) throw new Error(`no such dataset ${String(id)}`);
+  return dataset;
+}
+
+/** Same cap and message as the core's `check_frame_ids`. */
+const MOCK_MAX_FRAME_IDS = 10_000;
+
+function checkFrameIds(ids: readonly string[]): void {
+  if (ids.length > MOCK_MAX_FRAME_IDS) {
+    throw new Error(
+      `configuration error: at most ${MOCK_MAX_FRAME_IDS} frames per request, got ${ids.length}`,
+    );
+  }
+}
+
+/** Same refusal as the core's `refuse_if_training`. */
+function refuseIfTraining(dataset: AnyRecord): void {
+  const run = TRAINING_RUNS.find(
+    (r) => r.dataset_id === dataset.id && ACTIVE_RUN_STATES.includes(String(r.state)),
+  );
+  if (run) {
+    throw new Error(
+      `configuration error: dataset "${String(dataset.name)}" is in use by training run ` +
+        `"${String(run.name)}" (${String(run.state)}) — wait for it to finish or cancel it first`,
+    );
+  }
+}
+
+const TERMINAL_JOB_STATES = ["completed", "failed", "cancelled"];
+
+/** Same refusal as the core's prep-job check in `refuse_if_busy`. */
+function refuseIfPrepRunning(dataset: AnyRecord): void {
+  const job = JOBS.find((j) => j.id === dataset.prep_job_id);
+  if (job && !TERMINAL_JOB_STATES.includes(String(job.state))) {
+    throw new Error(
+      `configuration error: dataset "${String(dataset.name)}" is still being prepared ` +
+        `(job ${String(job.id)} is ${String(job.state)}) — wait for it to finish or cancel it first`,
+    );
+  }
+}
+
+/** The mock's `GET /datasets/{id}/usage`: sizes from the frame rows. */
+function mockUsage(dataset: AnyRecord): AnyRecord {
+  const frames = DATASET_FRAMES.filter((f) => f.dataset_id === dataset.id);
+  const discarded = frames.filter(isMockDiscarded);
+  const withFile = frames.filter((f) => mockFrameBytes(f) > 0);
+  // The mock's work folders are never shared, so a dataset with a prep job
+  // is always walkable; one without has no folder, only its own frames.
+  const hasWorkDir = dataset.prep_job_id != null;
+  return {
+    work_dir: hasWorkDir ? `E:\\AI\\data\\outputs\\datasets\\${String(dataset.prep_job_id)}` : null,
+    work_walkable: hasWorkDir,
+    work_bytes: withFile.length * MOCK_FRAME_BYTES,
+    work_files: withFile.length,
+    export_dir: dataset.export_dir ?? null,
+    export_bytes: 0,
+    export_app_owned: false,
+    discarded_frames: discarded.length,
+    discarded_bytes: discarded.reduce((sum, f) => sum + mockFrameBytes(f), 0),
+  };
+}
+
+/** Remove the dataset's frames matching `pick` (and their concept links);
+ *  returns the removed rows. */
+function dropFrames(dataset: AnyRecord, pick: (f: AnyRecord) => boolean): AnyRecord[] {
+  const gone = DATASET_FRAMES.filter((f) => f.dataset_id === dataset.id && pick(f));
+  const ids = new Set(gone.map((f) => String(f.id)));
+  removeWhere(FRAME_CONCEPTS, (fc) => ids.has(fc.frame_id));
+  removeWhere(DATASET_FRAMES, (f) => ids.has(String(f.id)));
+  return gone;
+}
+
 /** Grows a running `dataset_prep` job's curation set by one frame per tick
  *  (mirrors how the real pipeline lands rows incrementally, per source, as
  *  ffmpeg/captioning works through the tree), then completes the job once
@@ -422,7 +509,14 @@ function progressDatasetJobs(): void {
     const jobId = String(j.id);
     const dataset = datasetForJob(j);
     const clips = dataset.mode === "clips";
-    const target = clips ? DATASET_MOCK_CLIPS.length : DATASET_MOCK_TOTAL_FRAMES;
+    // Dev-only: `mock_frame_count` lands a large frame set in one tick, to try
+    // the curation board and the per-request frame cap at scale.
+    const bulk = Number(((j.params ?? {}) as AnyRecord).mock_frame_count ?? 0);
+    const target = clips
+      ? DATASET_MOCK_CLIPS.length
+      : bulk > 0
+        ? bulk
+        : DATASET_MOCK_TOTAL_FRAMES;
     const existing = DATASET_FRAMES.filter((f) => f.job_id === jobId);
     if (existing.length >= target) {
       j.state = "completed";
@@ -453,25 +547,32 @@ function progressDatasetJobs(): void {
       continue;
     }
 
-    const escalated = idx % 6 === 0;
-    // A slice of every run is auto-rejected, so the "verworfen" filter and the
-    // "doch behalten" button have something to act on in the dev preview.
-    const rejection = idx % 7 === 0 ? "blur" : idx % 11 === 0 ? "cap" : "";
-    DATASET_FRAMES.push(
-      mkDatasetFrame(`${jobId}-f${idx}`, jobId, tag, {
-        dataset_id: dataset.id,
-        source_path: `E:\\Data\\Demo\\${tag}\\clip.mp4`,
-        frame_path: `E:\\Data\\Demo\\${tag}\\clip_${String(idx).padStart(4, "0")}.png`,
-        timestamp_secs: idx * 0.7,
-        caption: escalated
-          ? `${tag} scene, dev-mock: the figure turns and walks toward the doorway`
-          : `${tag} scene, dev-mock caption ${idx}`,
-        caption_engine: escalated ? "qwen2.5-vl" : "florence2",
-        rejection_reason: rejection,
-        duration_secs: null,
-      }),
-    );
+    const count = bulk > 0 ? target - existing.length : 1;
+    for (let n = 0; n < count; n += 1) pushMockFrame(jobId, dataset, idx + n);
   }
+}
+
+/** One still of a running mock prep job. */
+function pushMockFrame(jobId: string, dataset: AnyRecord, idx: number): void {
+  const tag = DATASET_TAGS[(idx - 1) % DATASET_TAGS.length];
+  const escalated = idx % 6 === 0;
+  // A slice of every run is auto-rejected, so the "verworfen" filter and the
+  // "doch behalten" button have something to act on in the dev preview.
+  const rejection = idx % 7 === 0 ? "blur" : idx % 11 === 0 ? "cap" : "";
+  DATASET_FRAMES.push(
+    mkDatasetFrame(`${jobId}-f${idx}`, jobId, tag, {
+      dataset_id: dataset.id,
+      source_path: `E:\\Data\\Demo\\${tag}\\clip.mp4`,
+      frame_path: `E:\\Data\\Demo\\${tag}\\clip_${String(idx).padStart(4, "0")}.png`,
+      timestamp_secs: idx * 0.7,
+      caption: escalated
+        ? `${tag} scene, dev-mock: the figure turns and walks toward the doorway`
+        : `${tag} scene, dev-mock caption ${idx}`,
+      caption_engine: escalated ? "qwen2.5-vl" : "florence2",
+      rejection_reason: rejection,
+      duration_secs: null,
+    }),
+  );
 }
 
 // --- training orchestrator ----------------------------------------------
@@ -1483,6 +1584,16 @@ export function installDevMock(): void {
       case "submit_job": {
         const body = (a.body ?? {}) as AnyRecord;
         const jobType = String(body.job_type ?? "video");
+        // Same up-front refusal as the core: a relative root would resolve
+        // against the process's working directory.
+        const prepRoot = String(((body.params ?? {}) as AnyRecord).root ?? "");
+        // Like the core on Windows: a drive letter or a UNC path; `\foo` and
+        // `/foo` are relative to the current drive, not absolute.
+        if (jobType === "dataset_prep" && !/^([A-Za-z]:[\\/]|\\\\)/.test(prepRoot)) {
+          throw new Error(
+            `configuration error: dataset root must be an absolute folder path, got ${JSON.stringify(prepRoot)}`,
+          );
+        }
         // Auto's real per-role pick isn't mocked -- just default sanely per
         // job type instead of always falling back to a video model.
         const autoModel: Record<string, string> = {
@@ -1765,12 +1876,105 @@ export function installDevMock(): void {
         return { ...dataset };
       }
       case "delete_dataset": {
+        const dataset = requireDataset(a.id);
+        refuseIfTraining(dataset);
+        refuseIfPrepRunning(dataset);
+        const usage = mockUsage(dataset);
+        const frames = DATASET_FRAMES.filter((f) => f.dataset_id === a.id);
         const dropped = CONCEPTS.filter((c) => c.dataset_id === a.id).map((c) => c.id);
         removeWhere(FRAME_CONCEPTS, (fc) => dropped.includes(fc.concept_id));
         removeWhere(CONCEPTS, (c) => c.dataset_id === a.id);
         removeWhere(DATASET_FRAMES, (f) => f.dataset_id === a.id);
         removeWhere(DATASETS, (d) => d.id === a.id);
-        return null;
+        return {
+          frames: frames.length,
+          deleted_files: Number(usage.work_files),
+          freed_bytes: Number(usage.work_bytes),
+          skipped_files: [],
+          export_dir_kept: dataset.export_dir ?? null,
+          dataset_deleted: true,
+        };
+      }
+      case "dataset_usage":
+        return mockUsage(requireDataset(a.datasetId));
+      case "bulk_update_dataset_frames": {
+        requireDataset(a.datasetId);
+        const body = (a.body ?? {}) as AnyRecord;
+        const ids = (body.frame_ids as string[]) ?? [];
+        checkFrameIds(ids);
+        const wanted = new Set(ids);
+        const excluded = body.excluded === true;
+        let updated = 0;
+        for (const frame of DATASET_FRAMES) {
+          if (frame.dataset_id !== a.datasetId || !wanted.has(String(frame.id))) continue;
+          frame.excluded = excluded;
+          // Keeping also clears a filter rejection, like the core.
+          if (!excluded) frame.rejection_reason = "";
+          updated += 1;
+        }
+        return { requested: ids.length, updated };
+      }
+      case "delete_dataset_frames": {
+        const dataset = requireDataset(a.datasetId);
+        refuseIfTraining(dataset);
+        refuseIfPrepRunning(dataset);
+        const body = (a.body ?? {}) as AnyRecord;
+        const idList = (body.frame_ids as string[]) ?? [];
+        checkFrameIds(idList);
+        const ids = new Set(idList);
+        const gone = dropFrames(dataset, (f) => ids.has(String(f.id)));
+        return {
+          deleted: gone.length,
+          deleted_files: gone.filter((f) => mockFrameBytes(f) > 0).length,
+          freed_bytes: gone.reduce((sum, f) => sum + mockFrameBytes(f), 0),
+          skipped_files: [],
+        };
+      }
+      case "cleanup_dataset": {
+        const dataset = requireDataset(a.datasetId);
+        const body = (a.body ?? {}) as AnyRecord;
+        if (body.dry_run !== false) {
+          const usage = mockUsage(dataset);
+          return {
+            dry_run: true,
+            frames: usage.discarded_frames,
+            bytes: usage.discarded_bytes,
+            deleted_files: 0,
+            skipped_files: [],
+          };
+        }
+        refuseIfTraining(dataset);
+        refuseIfPrepRunning(dataset);
+        const gone = dropFrames(dataset, isMockDiscarded);
+        return {
+          dry_run: false,
+          frames: gone.length,
+          bytes: gone.reduce((sum, f) => sum + mockFrameBytes(f), 0),
+          deleted_files: gone.filter((f) => mockFrameBytes(f) > 0).length,
+          skipped_files: [],
+        };
+      }
+      case "dedup_dataset": {
+        const dataset = requireDataset(a.datasetId);
+        if (dataset.mode === "clips") {
+          throw new Error("duplicate search works on still frames; this dataset holds clips");
+        }
+        const body = (a.body ?? {}) as AnyRecord;
+        const requested = typeof body.threshold === "number" ? body.threshold : 6;
+        const threshold = Math.max(0, Math.min(16, Math.round(requested)));
+        const kept = DATASET_FRAMES.filter(
+          (f) => f.dataset_id === dataset.id && !isMockDiscarded(f),
+        );
+        // Every fifth kept frame reads as a near-copy of the one before it.
+        const marked = kept.filter((_, i) => i % 5 === 4);
+        for (const f of marked) f.rejection_reason = "duplicate_global";
+        return {
+          threshold,
+          scanned: kept.length,
+          groups: marked.length,
+          marked: marked.length,
+          unreadable: 0,
+        };
       }
       case "list_dataset_frames_for_dataset":
         progressDatasetJobs();

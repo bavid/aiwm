@@ -1,0 +1,305 @@
+/* The Keep / Discard curation board (CurationBoard.tsx, CurationColumn.tsx). */
+
+.curation {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  container-type: inline-size;
+}
+
+/* --- selection bar --- */
+
+.curation__bar {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  box-shadow: 0 8px 20px -14px color-mix(in oklab, black 50%, transparent);
+}
+
+.curation__bar-main,
+.curation__concepts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.curation__concepts {
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--border-soft);
+}
+
+.curation__bar-count {
+  margin-right: auto;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.curation__action {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--text);
+}
+
+.curation__action kbd {
+  padding: 0 5px;
+  border: 1px solid var(--border);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  line-height: 1.4;
+}
+
+.curation__action--danger:not(:disabled) {
+  color: var(--load-crit);
+  border-color: color-mix(in oklab, var(--load-crit) 35%, var(--border));
+}
+
+.curation__bar .chip:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.curation .chip:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.curation__density {
+  display: flex;
+  gap: 2px;
+  padding-left: var(--space-2);
+  border-left: 1px solid var(--border-soft);
+}
+
+.curation__notice {
+  padding: var(--space-2) var(--space-3);
+  border-left: 3px solid var(--load-ok);
+  border-radius: var(--radius-sm);
+  background: color-mix(in oklab, var(--load-ok) 7%, var(--surface));
+}
+
+.curation__notice .dataset__done {
+  margin: 0;
+}
+
+/* --- the two columns --- */
+
+.curation__columns {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3);
+  align-items: start;
+}
+
+@container (max-width: 620px) {
+  .curation__columns {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.curation__column {
+  --column-tint: var(--load-ok);
+  position: relative;
+  /* The band is drawn on the whole column; no text selection while drawing. */
+  touch-action: pan-y;
+  user-select: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-top: 3px solid color-mix(in oklab, var(--column-tint) 70%, var(--border));
+  border-radius: var(--radius);
+  background: var(--surface);
+  transition:
+    border-color var(--dur) var(--ease),
+    background-color var(--dur) var(--ease);
+}
+
+.curation__column[data-column="discard"] {
+  --column-tint: var(--load-crit);
+  background: color-mix(in oklab, var(--load-crit) 3%, var(--surface));
+}
+
+.curation__column[data-drop="target"] {
+  border-style: dashed;
+  border-color: color-mix(in oklab, var(--column-tint) 55%, var(--border));
+}
+
+.curation__column[data-drop="hover"] {
+  border-style: solid;
+  border-color: var(--column-tint);
+  background: color-mix(in oklab, var(--column-tint) 10%, var(--surface));
+}
+
+.curation__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.curation__title {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: var(--text-lg);
+}
+
+.curation__count {
+  color: var(--column-tint);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+.curation__head-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.curation__head-actions .chip {
+  padding: 2px var(--space-2);
+  font-size: var(--text-xs);
+}
+
+.curation__head-actions .chip:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.curation__selected {
+  margin-right: var(--space-1);
+  color: var(--accent);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.curation__filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+
+.curation__filter {
+  padding: 1px var(--space-2);
+  font-size: var(--text-xs);
+}
+
+.curation__filter-count {
+  margin-left: 2px;
+  font-family: var(--font-mono);
+  opacity: 0.8;
+}
+
+/* Overlays the column instead of pushing the grid down mid-drag. */
+.curation__drop-hint {
+  position: absolute;
+  inset: auto var(--space-3) var(--space-3);
+  z-index: 2;
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--column-tint);
+  border-radius: var(--radius-sm);
+  background: color-mix(in oklab, var(--column-tint) 16%, var(--surface));
+  color: var(--text);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  text-align: center;
+  pointer-events: none;
+}
+
+.curation__column[data-drop="target"] .curation__drop-hint {
+  opacity: 0.75;
+}
+
+.curation__empty {
+  display: grid;
+  place-items: center;
+  min-height: 160px;
+  margin: 0;
+  padding: var(--space-4);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+  font-size: var(--text-sm);
+  text-align: center;
+}
+
+.curation__grid {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: var(--space-2);
+  min-height: 160px;
+  padding-bottom: var(--space-5);
+}
+
+.curation__grid[data-compact="true"] {
+  grid-template-columns: repeat(auto-fill, minmax(104px, 1fr));
+  gap: 6px;
+}
+
+.curation__grid:focus-visible {
+  outline: 2px dashed color-mix(in oklab, var(--accent) 60%, transparent);
+  outline-offset: 4px;
+}
+
+/* Text fields inside cards stay selectable. */
+.curation__column textarea,
+.curation__column input {
+  user-select: text;
+}
+
+.curation__band {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 2;
+  border: 1px solid var(--accent);
+  border-radius: 2px;
+  background: color-mix(in oklab, var(--accent) 16%, transparent);
+  pointer-events: none;
+}
+
+.curation__more {
+  align-self: center;
+}
+
+/* The drag image: kept in the DOM (off-screen) so setDragImage can use it. */
+.curation__ghost {
+  position: fixed;
+  top: -200px;
+  left: -200px;
+  padding: var(--space-1) var(--space-3);
+  border-radius: var(--radius-sm);
+  background: var(--accent);
+  color: var(--accent-fg);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .curation__column {
+    transition: none;
+  }
+}

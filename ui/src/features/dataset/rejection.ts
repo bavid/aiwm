@@ -9,6 +9,7 @@ export const REJECTION_REASONS: readonly { value: string; label: string }[] = [
   { value: "transition", label: "Transition" },
   { value: "blur", label: "Blur" },
   { value: "duplicate", label: "Duplicate" },
+  { value: "duplicate_global", label: "Duplicate (dataset)" },
   { value: "cap", label: "Cap" },
   { value: "unusable", label: "Unusable" },
 ];
@@ -18,7 +19,7 @@ export function rejectionLabel(reason: string): string {
   return REJECTION_REASONS.find((r) => r.value === reason)?.label ?? reason;
 }
 
-export function countByReason(frames: DatasetFrame[]): Record<string, number> {
+export function countByReason(frames: readonly DatasetFrame[]): Record<string, number> {
   const counts: Record<string, number> = {};
   for (const frame of frames) {
     counts[frame.rejection_reason] = (counts[frame.rejection_reason] ?? 0) + 1;

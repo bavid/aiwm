@@ -346,6 +346,28 @@ impl<'a> TrainingRunRepo<'a> {
             .collect::<Result<Vec<_>>>()
     }
 
+    /// Runs of one dataset that are not finished yet — every state that is
+    /// not [`RunState::is_terminal`], so a new state can never be missed.
+    /// Deleting the dataset's files under such a run would pull the data out
+    /// from under the trainer, so housekeeping refuses.
+    pub async fn list_active_for_dataset(&self, dataset_id: &str) -> Result<Vec<TrainingRun>> {
+        let rows = sqlx::query_as::<_, TrainingRunRow>(sqlx::AssertSqlSafe(format!(
+            "SELECT {SELECT_COLS} FROM training_runs WHERE dataset_id = $1
+             ORDER BY created_at DESC, id DESC"
+        )))
+        .bind(dataset_id)
+        .fetch_all(self.pool)
+        .await?;
+        let runs = rows
+            .into_iter()
+            .map(TrainingRun::try_from)
+            .collect::<Result<Vec<_>>>()?;
+        Ok(runs
+            .into_iter()
+            .filter(|r| !r.state.is_terminal())
+            .collect())
+    }
+
     /// Move a run to `next`, validating the transition first. Sets
     /// `started_at` the first time a run reaches `running`, and
     /// `finished_at` when it lands in a terminal state.
@@ -678,6 +700,74 @@ mod tests {
 
         let got = db.training_runs().get(&run.id).await.unwrap().unwrap();
         assert_eq!(got.dataset_id, None);
+    }
+
+    #[tokio::test]
+    async fn list_active_for_dataset_skips_finished_runs_and_other_datasets() {
+        let db = Database::connect_in_memory().await.unwrap();
+        let mut ds_ids = Vec::new();
+        for name in ["A", "B"] {
+            let ds = db
+                .datasets()
+                .create(NewDataset {
+                    name: name.into(),
+                    mode: DatasetMode::Frames,
+                    source_root: "E:\\Data\\X".into(),
+                    prep_job_id: None,
+                })
+                .await
+                .unwrap();
+            ds_ids.push(ds.id);
+        }
+        let run_on = |ds: &str| {
+            let mut r = sample_run();
+            r.dataset_id = Some(ds.to_string());
+            r
+        };
+
+        // Every non-terminal state counts as active.
+        let preparing = db.training_runs().create(run_on(&ds_ids[0])).await.unwrap();
+        let paused = db.training_runs().create(run_on(&ds_ids[0])).await.unwrap();
+        for next in [RunState::Running, RunState::Paused] {
+            db.training_runs()
+                .set_state(&paused.id, next)
+                .await
+                .unwrap();
+        }
+        let finishing = db.training_runs().create(run_on(&ds_ids[0])).await.unwrap();
+        for next in [RunState::Running, RunState::Finishing] {
+            db.training_runs()
+                .set_state(&finishing.id, next)
+                .await
+                .unwrap();
+        }
+        // Finished runs and another dataset's runs do not.
+        let completed = db.training_runs().create(run_on(&ds_ids[0])).await.unwrap();
+        for next in [RunState::Running, RunState::Finishing, RunState::Completed] {
+            db.training_runs()
+                .set_state(&completed.id, next)
+                .await
+                .unwrap();
+        }
+        let cancelled = db.training_runs().create(run_on(&ds_ids[0])).await.unwrap();
+        db.training_runs()
+            .set_state(&cancelled.id, RunState::Cancelled)
+            .await
+            .unwrap();
+        db.training_runs().create(run_on(&ds_ids[1])).await.unwrap();
+
+        let mut active: Vec<String> = db
+            .training_runs()
+            .list_active_for_dataset(&ds_ids[0])
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|r| r.id)
+            .collect();
+        active.sort();
+        let mut expected = vec![preparing.id, paused.id, finishing.id];
+        expected.sort();
+        assert_eq!(active, expected);
     }
 
     #[tokio::test]
