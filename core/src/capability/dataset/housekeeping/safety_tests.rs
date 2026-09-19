@@ -638,6 +638,83 @@ async fn own_sources_are_recognised_resolved_and_as_stored() {
     assert_eq!(reasons, vec![SKIP_SOURCE, SKIP_SOURCE], "{s:?}");
 }
 
+/// Pins the canonical-folder decision: another dataset's frame whose folder
+/// is spelled differently (`…\clip\..\clip\f.png`) but lies inside this work
+/// folder is recognised — kept as another dataset's file, and the work
+/// folder is not walked.
+#[tokio::test]
+async fn a_foreign_frame_in_a_respelled_folder_inside_the_work_folder_is_kept() {
+    let fx = fixture().await;
+    let shared = write(&fx.clip_dir.join("f.png"), 9);
+    let mine = fx.row(&shared, &fx.source, "", false).await;
+    let preview = write(&fx.work_root.join("preview.png"), 30);
+    let respelled = fx.clip_dir.join("..").join("clip").join("f.png");
+    let b = fx.other_dataset(None, &fx.tmp.path().join("src")).await;
+    fx.row_in(&b, &respelled, &fx.source).await;
+
+    let s = delete_frames(&fx.db, &fx.outputs, &fx.dataset.id, &[mine])
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(shared.exists());
+    assert_eq!(s.skipped_files[0].reason, SKIP_OTHER_DATASET, "{s:?}");
+
+    delete_dataset_with_files(&fx.db, &fx.outputs, &fx.dataset.id)
+        .await
+        .unwrap();
+    assert!(shared.exists());
+    assert!(preview.exists(), "the work folder was not walked");
+}
+
+/// A folder that exists but cannot be resolved (permission denied, a broken
+/// reparse point, …) is not the same as a gone folder: its files may still
+/// be there, so it must stop the walk and protect everything under it.
+/// Constructing such a folder portably needs ACL changes, so the error
+/// classification is tested directly.
+#[test]
+fn only_a_missing_folder_counts_as_gone() {
+    use std::io::{Error, ErrorKind};
+    let p = PathBuf::from(r"C:\x");
+    assert!(matches!(
+        guard::classify_folder(Ok(p.clone())),
+        guard::FolderState::Resolved(q) if q == p
+    ));
+    assert!(matches!(
+        guard::classify_folder(Err(Error::from(ErrorKind::NotFound))),
+        guard::FolderState::Gone
+    ));
+    for kind in [
+        ErrorKind::PermissionDenied,
+        ErrorKind::InvalidInput,
+        ErrorKind::Other,
+    ] {
+        assert!(
+            matches!(
+                guard::classify_folder(Err(Error::from(kind))),
+                guard::FolderState::Unresolvable
+            ),
+            "{kind:?}"
+        );
+    }
+}
+
+/// An unresolvable folder of another dataset stops the walk and its files
+/// (matched by the stored folder) are never deleted.
+#[test]
+fn an_unresolvable_foreign_folder_stops_the_walk_and_protects_its_files() {
+    let tmp = tempfile::tempdir().unwrap();
+    let folder = tmp.path().join("locked");
+    let file = write(&folder.join("f.png"), 3);
+    let index = guard::index_folders(
+        vec![(folder.clone(), vec![file.to_string_lossy().into_owned()])],
+        &[tmp.path()],
+        |_| Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied)),
+    );
+    assert!(!index.all_located, "the walk must stop");
+    assert_eq!(index.unresolved, vec![folder]);
+    assert!(index.folders.is_empty());
+}
+
 /// A relative path in another dataset's rows cannot be located, so it may
 /// point anywhere — including into this work folder. The folder is then not
 /// walked: only this dataset's own frames go.

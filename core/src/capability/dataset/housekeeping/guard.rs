@@ -72,6 +72,10 @@ pub(super) struct Guard {
     own_sources: HashSet<PathBuf>,
     own_source_raws: HashSet<String>,
     source_dirs: Vec<PathBuf>,
+    /// Folders (as stored) of this dataset's sources / other datasets'
+    /// files that exist but could not be resolved: nothing under them goes.
+    unresolved_own: Vec<PathBuf>,
+    unresolved_foreign: Vec<PathBuf>,
     /// Other datasets' frame/source files near this dataset's roots.
     foreign_files: HashSet<PathBuf>,
     foreign_dirs: Vec<PathBuf>,
@@ -104,18 +108,41 @@ fn canonical_all<'a>(raws: impl Iterator<Item = &'a str>) -> HashSet<PathBuf> {
 /// pipeline never creates links, and `check` resolves the file being deleted
 /// itself, so the gap only matters for a hand-made link in another
 /// dataset's folder pointing at one of this dataset's own files.
-struct PathIndex {
+pub(super) struct PathIndex {
     /// Canonical folders the paths live in (folders that no longer exist
     /// are left out — their files are gone too).
-    folders: HashSet<PathBuf>,
+    pub(super) folders: HashSet<PathBuf>,
     /// Canonical paths of the files whose folder lies inside a root.
-    near_roots: HashSet<PathBuf>,
-    /// `false` when a path was relative and so cannot be located at all.
-    all_absolute: bool,
+    pub(super) near_roots: HashSet<PathBuf>,
+    /// Folders (as stored) that exist but could not be resolved; everything
+    /// under them is protected.
+    pub(super) unresolved: Vec<PathBuf>,
+    /// `false` when a path was relative or its folder could not be resolved,
+    /// so where it really is is unknown — the work folder is then not walked.
+    pub(super) all_located: bool,
+}
+
+/// What resolving one folder told us.
+pub(super) enum FolderState {
+    Resolved(PathBuf),
+    /// The folder does not exist: its files are gone too.
+    Gone,
+    /// It may exist but cannot be resolved (permission denied, a broken
+    /// reparse point, …): its files may still be there.
+    Unresolvable,
+}
+
+/// Only `NotFound` means "gone"; every other error means "unknown".
+pub(super) fn classify_folder(resolved: std::io::Result<PathBuf>) -> FolderState {
+    match resolved {
+        Ok(p) => FolderState::Resolved(p),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => FolderState::Gone,
+        Err(_) => FolderState::Unresolvable,
+    }
 }
 
 fn index_paths<'a>(raws: impl Iterator<Item = &'a str>, roots: &[&Path]) -> PathIndex {
-    let mut by_folder: HashMap<&Path, Vec<&str>> = HashMap::new();
+    let mut by_folder: HashMap<PathBuf, Vec<String>> = HashMap::new();
     let mut all_absolute = true;
     for raw in raws.filter(|r| !r.is_empty()).collect::<HashSet<&str>>() {
         let path = Path::new(raw);
@@ -124,24 +151,48 @@ fn index_paths<'a>(raws: impl Iterator<Item = &'a str>, roots: &[&Path]) -> Path
             continue;
         }
         if let Some(folder) = path.parent() {
-            by_folder.entry(folder).or_default().push(raw);
+            by_folder
+                .entry(folder.to_path_buf())
+                .or_default()
+                .push(raw.to_string());
         }
     }
+    let index = index_folders(by_folder, roots, |p| std::fs::canonicalize(p));
+    PathIndex {
+        all_located: index.all_located && all_absolute,
+        ..index
+    }
+}
+
+/// The folder half of [`index_paths`], with the resolver injectable so an
+/// unresolvable folder can be tested without changing file permissions.
+pub(super) fn index_folders(
+    by_folder: impl IntoIterator<Item = (PathBuf, Vec<String>)>,
+    roots: &[&Path],
+    resolve: impl Fn(&Path) -> std::io::Result<PathBuf>,
+) -> PathIndex {
     let mut folders = HashSet::new();
     let mut near_roots = HashSet::new();
-    for (folder, files) in by_folder {
-        let Ok(folder) = std::fs::canonicalize(folder) else {
-            continue;
+    let mut unresolved = Vec::new();
+    for (raw_folder, files) in by_folder {
+        let folder = match classify_folder(resolve(&raw_folder)) {
+            FolderState::Resolved(folder) => folder,
+            FolderState::Gone => continue,
+            FolderState::Unresolvable => {
+                unresolved.push(raw_folder);
+                continue;
+            }
         };
         if roots.iter().any(|r| folder.starts_with(r)) {
-            near_roots.extend(files.iter().filter_map(|f| std::fs::canonicalize(f).ok()));
+            near_roots.extend(files.iter().filter_map(|f| resolve(Path::new(f)).ok()));
         }
         folders.insert(folder);
     }
     PathIndex {
+        all_located: unresolved.is_empty(),
         folders,
         near_roots,
-        all_absolute,
+        unresolved,
     }
 }
 
@@ -224,8 +275,8 @@ impl Guard {
             &own_roots,
         );
 
-        let walkable = foreign.all_absolute
-            && own.all_absolute
+        let walkable = foreign.all_located
+            && own.all_located
             && work_dir.as_deref().is_some_and(|w| {
                 !foreign.folders.iter().any(|f| f.starts_with(w))
                     && !own.folders.iter().any(|f| f.starts_with(w))
@@ -267,6 +318,8 @@ impl Guard {
                 .filter(|s| !s.is_empty())
                 .collect(),
             source_dirs,
+            unresolved_own: own.unresolved,
+            unresolved_foreign: foreign.unresolved,
             foreign_files: foreign.near_roots,
             foreign_dirs,
             in_use: HashSet::new(),
@@ -311,11 +364,21 @@ impl Guard {
             || raw
                 .to_str()
                 .is_some_and(|r| self.own_source_raws.contains(r));
-        if own_source || self.source_dirs.iter().any(|d| path.starts_with(d)) {
+        // An unresolvable folder is matched both as stored and as resolved
+        // here: where it really points is unknown.
+        let under = |dirs: &[PathBuf]| {
+            dirs.iter()
+                .any(|d| raw.starts_with(d) || path.starts_with(d))
+        };
+        if own_source
+            || self.source_dirs.iter().any(|d| path.starts_with(d))
+            || under(&self.unresolved_own)
+        {
             return Verdict::Skip(skipped(raw, SKIP_SOURCE));
         }
         if self.foreign_files.contains(&path)
             || self.foreign_dirs.iter().any(|d| path.starts_with(d))
+            || under(&self.unresolved_foreign)
         {
             return Verdict::Skip(skipped(raw, SKIP_OTHER_DATASET));
         }
