@@ -267,10 +267,11 @@ fn is_code_bearing(kind: ModelKind, ext: &str) -> bool {
 /// this content is pinned as (`Some`), so the destination is named after the
 /// catalog entry rather than whatever the source was called -- a pinned
 /// `processing_florence2.py` renamed to `modeling_florence2.py` can never
-/// overwrite the real sibling. A code-bearing file ([`is_code_bearing`])
-/// that is not a pinned catalog entry of this exact kind is refused. `None`
-/// for every other kind, and for uncatalogued weights/tokenizer data (the
-/// load-time `model::integrity` check still verifies those).
+/// overwrite the real sibling. **Any** file that is not a pinned catalog
+/// entry of this exact kind is refused -- code-bearing files because they
+/// could run unreviewed code, weights and tokenizer data because the folder
+/// is loaded as a whole and would only fail the load-time
+/// `model::integrity` check later. `None` for every other kind.
 fn pinned_file_for(kind: ModelKind, ext: &str, sha256: &str) -> Result<Option<&'static str>> {
     if !matches!(kind, ModelKind::Florence2Engine | ModelKind::QwenVlEngine) {
         return Ok(None);
@@ -278,10 +279,15 @@ fn pinned_file_for(kind: ModelKind, ext: &str, sha256: &str) -> Result<Option<&'
     let pinned = catalog::find_by_sha256(sha256)
         .filter(|known| known.kind == kind.as_str())
         .map(|known| known.file);
-    if pinned.is_none() && is_code_bearing(kind, ext) {
+    if pinned.is_none() {
+        let why = if is_code_bearing(kind, ext) {
+            "it could make the sidecar run unreviewed code via `trust_remote_code`"
+        } else {
+            "the snapshot folder may only hold the pinned files, or it will not load"
+        };
         return Err(CoreError::Config(format!(
-            "this .{ext} file is not one of the pinned catalog files for a {} (it could make \
-             the sidecar run unreviewed code via `trust_remote_code`) — refusing to import it",
+            "this .{ext} file is not one of the pinned catalog files for a {} ({why}) — \
+             refusing to import it",
             kind.as_str()
         )));
     }
@@ -1212,9 +1218,10 @@ mod tests {
         let db = Database::connect_in_memory().await.unwrap();
 
         let mut dirs = Vec::new();
+        // Two real pinned files: an uncatalogued one would be refused.
         for (name, body) in [
             ("tokenizer_config.json", FLORENCE2_TOKENIZER_CONFIG),
-            ("model.safetensors", &b"not-a-real-header"[..]),
+            ("generation_config.json", FLORENCE2_GENERATION_CONFIG),
         ] {
             let src = write_safetensors(tmp.path(), name, body);
             let out = import_as(&db, &store, &src, "florence2_engine")
@@ -1457,39 +1464,43 @@ mod tests {
         );
     }
 
+    /// Every file of a pinned snapshot kind must be a catalog entry of that
+    /// kind -- weights and tokenizer data included, not only code-bearing
+    /// files: the folder is loaded as a whole, and anything else in it only
+    /// fails later, at load time. (Side-by-side placement is shared with
+    /// Florence-2, covered above with real pinned files.)
     #[tokio::test]
-    async fn qwen_vl_engine_files_land_side_by_side_under_their_original_names() {
+    async fn uncatalogued_weights_or_tokenizer_files_of_a_pinned_kind_are_refused() {
         let tmp = tempfile::tempdir().unwrap();
         let store = tmp.path().join("store");
         let db = Database::connect_in_memory().await.unwrap();
 
-        let mut dirs = Vec::new();
-        for (name, body) in [
-            ("merges.txt", &b"#version: 0.2\n"[..]),
-            ("model-00001-of-00005.safetensors", &b"shard-bytes"[..]),
+        for (kind, name, body, subdir) in [
+            (
+                "qwen_vl_engine",
+                "merges.txt",
+                &b"#version: 0.2\n"[..],
+                "vision/qwen2.5-vl-7b",
+            ),
+            (
+                "qwen_vl_engine",
+                "model-00001-of-00005.safetensors",
+                &b"shard-bytes"[..],
+                "vision/qwen2.5-vl-7b",
+            ),
+            (
+                "florence2_engine",
+                "model.safetensors",
+                &b"not-a-real-header"[..],
+                "vision/florence2-large",
+            ),
         ] {
             let src = write_safetensors(tmp.path(), name, body);
-            let out = import_model(
-                &db,
-                &store,
-                ImportRequest {
-                    model_type: Some("qwen_vl_engine".into()),
-                    ..req(&src)
-                },
-            )
-            .await
-            .unwrap();
-            assert_eq!(out.model.roles, ["vision_qwen2_5_vl"]);
-            let p = out.model.file_path.replace('\\', "/");
-            assert!(p.ends_with(&format!("/vision/qwen2.5-vl-7b/{name}")), "{p}");
-            dirs.push(
-                Path::new(&out.model.file_path)
-                    .parent()
-                    .unwrap()
-                    .to_path_buf(),
-            );
+            let err = import_as(&db, &store, &src, kind).await.unwrap_err();
+            assert!(err.to_string().contains("pinned"), "{kind} {name}: {err}");
+            assert!(!store.join(subdir).join(name).exists(), "{kind} {name}");
         }
-        assert_eq!(dirs[0], dirs[1]);
+        assert!(db.models().list().await.unwrap().is_empty());
     }
 
     #[tokio::test]
@@ -1519,7 +1530,7 @@ mod tests {
     }
 
     #[test]
-    fn code_bearing_files_are_allowed_only_as_catalogued_files_of_the_same_kind() {
+    fn pinned_kind_files_are_allowed_only_as_catalogued_files_of_the_same_kind() {
         let pinned = crate::model::KNOWN_MODELS
             .iter()
             .find(|m| m.kind == "florence2_engine" && m.file.ends_with(".py"))
@@ -1547,13 +1558,10 @@ mod tests {
             .unwrap();
         assert!(pinned_file_for(qwen, "json", florence_json.sha256).is_err());
         assert!(pinned_file_for(qwen, "json", &unknown).is_err());
-        // Weights / tokenizer data are not gated at import (the load-time
-        // integrity check covers them) and keep their source name.
-        assert_eq!(
-            pinned_file_for(florence, "safetensors", &unknown).unwrap(),
-            None
-        );
-        assert_eq!(pinned_file_for(qwen, "txt", &unknown).unwrap(), None);
+        // Weights / tokenizer data are gated too: only catalog entries of
+        // the kind are imported.
+        assert!(pinned_file_for(florence, "safetensors", &unknown).is_err());
+        assert!(pinned_file_for(qwen, "txt", &unknown).is_err());
         // Other kinds are untouched by the gate.
         assert_eq!(
             pinned_file_for(ModelKind::DiaEngine, "json", &unknown).unwrap(),

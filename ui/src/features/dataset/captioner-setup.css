@@ -121,3 +121,15 @@ label.captioner-picker__row:has(input:checked) {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
+
+/* A captioner with a known issue: listed so its absence is explained, but
+   neither selectable nor installable. */
+.captioner-picker__row--issue {
+  background: var(--surface-2);
+  color: var(--muted);
+}
+
+.captioner-picker__issue {
+  color: var(--load-warn);
+  font-size: var(--text-xs);
+}

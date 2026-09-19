@@ -141,6 +141,18 @@ export function CaptionerPicker({
       <legend>Describe with</legend>
       {captioners.map((c) => {
         const meta = `${c.style === "tags" ? "tags" : "prose"} · ${runsOn(c)} · ${c.license}`;
+        if (c.known_issue) {
+          // Neither selectable nor installable while it cannot work.
+          return (
+            <div key={c.id} className="captioner-picker__row captioner-picker__row--issue">
+              <span className="captioner-picker__text">
+                <span className="captioner-picker__name">{c.name}</span>
+                <span className="captioner-picker__meta">{meta}</span>
+                <span className="captioner-picker__issue">{c.known_issue}</span>
+              </span>
+            </div>
+          );
+        }
         if (c.installed) {
           return (
             <label key={c.id} className="captioner-picker__row">

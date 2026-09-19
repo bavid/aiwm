@@ -36,19 +36,22 @@ pub struct Captioner {
     /// file set of its one-click catalog stack, so a stack still
     /// downloading never reads as installed.
     pub required_files: &'static [&'static str],
+    /// A known problem that keeps this captioner from working right now,
+    /// in words for the person picking one. The UI shows it and offers
+    /// neither selection nor install while it is set.
+    pub known_issue: Option<&'static str>,
 }
 
+/// What the person reads next to Florence-2 until it loads again: its
+/// `trust_remote_code` model fails under the transformers 5.x the sidecar
+/// bundles (`Florence2LanguageConfig` has no `forced_bos_token_id`).
+pub const FLORENCE2_KNOWN_ISSUE: &str =
+    "Does not load with the bundled transformers 5.x yet \u{2014} a fix is planned.";
+
+/// Order matters: the Dataset form preselects the first installed entry
+/// that has no known issue, so the one that works out of the box (the CPU
+/// tagger) comes first.
 pub const CAPTIONERS: &[Captioner] = &[
-    Captioner {
-        id: FLORENCE2_ID,
-        name: "Florence-2 (prose)",
-        style: CaptionStyle::Prose,
-        role: super::caption::FLORENCE2_ROLE,
-        vram_mb: super::caption::FLORENCE2_VRAM_FALLBACK_MB,
-        license: "MIT",
-        supports_escalation: true,
-        required_files: super::caption::FLORENCE2_REQUIRED_FILES,
-    },
     Captioner {
         id: WD_TAGGER_ID,
         name: "WD EVA02 Tagger v3 (Danbooru tags)",
@@ -58,6 +61,18 @@ pub const CAPTIONERS: &[Captioner] = &[
         license: "Apache-2.0",
         supports_escalation: false,
         required_files: &["model.onnx", "selected_tags.csv"],
+        known_issue: None,
+    },
+    Captioner {
+        id: FLORENCE2_ID,
+        name: "Florence-2 (prose)",
+        style: CaptionStyle::Prose,
+        role: super::caption::FLORENCE2_ROLE,
+        vram_mb: super::caption::FLORENCE2_VRAM_FALLBACK_MB,
+        license: "MIT",
+        supports_escalation: true,
+        required_files: super::caption::FLORENCE2_REQUIRED_FILES,
+        known_issue: Some(FLORENCE2_KNOWN_ISSUE),
     },
 ];
 
@@ -538,5 +553,25 @@ mod tests {
         assert!(present.files_present);
         assert!(!present.usable, "{present:?}");
         assert!(present.reason.is_some(), "{present:?}");
+    }
+
+    /// The Dataset form preselects the first installed captioner, so the
+    /// first entry must be the one that works out of the box: the tagger.
+    #[test]
+    fn the_wd_tagger_is_listed_first_so_it_is_the_default_pick() {
+        assert_eq!(CAPTIONERS[0].id, WD_TAGGER_ID);
+    }
+
+    /// Florence-2 does not load under the bundled transformers 5.x
+    /// (`Florence2LanguageConfig` lacks `forced_bos_token_id`): it carries a
+    /// user-facing known issue; the tagger does not.
+    #[test]
+    fn florence2_carries_a_known_issue_and_the_tagger_does_not() {
+        let issue = find_captioner(FLORENCE2_ID).unwrap().known_issue;
+        assert!(
+            issue.is_some_and(|i| i.contains("transformers") && i.contains("fix is planned")),
+            "{issue:?}"
+        );
+        assert_eq!(find_captioner(WD_TAGGER_ID).unwrap().known_issue, None);
     }
 }

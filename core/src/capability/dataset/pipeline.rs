@@ -107,6 +107,13 @@ pub async fn run(
     // the disk, so a missing model fails fast — but only when one was asked
     // for. Extraction, filtering and curation never need a model.
     let captioner = req.captioner.as_deref().and_then(captioner::find_captioner);
+    // A captioner with a known issue (Florence-2 on transformers 5.x) would
+    // only fail after the whole extraction — refuse it here, with the reason.
+    if let Some((name, issue)) = captioner.and_then(|c| Some((c.name, c.known_issue?))) {
+        return Err(dataset_err(format!(
+            "{name} cannot caption right now: {issue}"
+        )));
+    }
     let captioner_dir = match captioner {
         Some(c) => Some(caption::resolve_captioner_dir(db, store_root, c).await?),
         None => None,
@@ -528,7 +535,27 @@ mod tests {
     use crate::capability::dataset::DEFAULT_PHASH_MAX_DISTANCE;
 
     #[tokio::test]
-    async fn run_reports_a_clear_error_when_florence2_is_not_imported() {
+    async fn run_reports_a_clear_error_when_the_captioner_is_not_imported() {
+        let db = Database::connect_in_memory().await.unwrap();
+        let vision = VisionAdapter::new();
+        let tmp = tempfile::tempdir().unwrap();
+        let req = DatasetPrepRequest::from_params(&serde_json::json!({
+            "root": tmp.path().to_string_lossy(),
+            "captioner": "wd-eva02-tagger-v3",
+        }))
+        .unwrap();
+        let (_tx, rx) = watch::channel(false);
+
+        let err = run(&db, &vision, tmp.path(), tmp.path(), "job-1", req, rx)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("WD EVA02 Tagger v3"), "{err}");
+    }
+    /// A captioner with a known issue (Florence-2 on transformers 5.x) is
+    /// refused up front with the reason — not after minutes of extraction,
+    /// leaving an uncaptioned dataset behind.
+    #[tokio::test]
+    async fn run_refuses_a_captioner_with_a_known_issue_before_touching_the_disk() {
         let db = Database::connect_in_memory().await.unwrap();
         let vision = VisionAdapter::new();
         let tmp = tempfile::tempdir().unwrap();
@@ -542,8 +569,10 @@ mod tests {
         let err = run(&db, &vision, tmp.path(), tmp.path(), "job-1", req, rx)
             .await
             .unwrap_err();
-        assert!(err.to_string().contains("Florence-2"), "{err}");
+        assert!(err.to_string().contains("fix is planned"), "{err}");
+        assert!(db.datasets().list().await.unwrap().is_empty());
     }
+
     #[tokio::test]
     async fn run_without_a_captioner_creates_a_dataset_and_keeps_and_rejects_frames_with_reasons() {
         let db = Database::connect_in_memory().await.unwrap();

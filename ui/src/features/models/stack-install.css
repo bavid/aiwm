@@ -157,3 +157,19 @@
   color: var(--load-ok);
   background: color-mix(in srgb, var(--load-ok) 12%, var(--surface));
 }
+
+/* A captioner that cannot work right now (known issue): warning, not error. */
+.badge--issue {
+  padding: 0 var(--space-2);
+  border: 1px solid var(--load-warn);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--load-warn) 12%, var(--surface));
+  color: var(--load-warn);
+  font-size: var(--text-xs);
+}
+
+.toolcard__issue {
+  margin: 0;
+  color: var(--load-warn);
+  font-size: var(--text-sm);
+}

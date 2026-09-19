@@ -28,7 +28,12 @@ type Props = {
  *  finished {@link DatasetPrepParams} to the container, which submits them. */
 export function PrepForm({ isRunning, error, onStart, onMoreCaptioners }: Props) {
   const { data: captioners, refetch: refetchCaptioners } = useCaptioners();
-  const installed = useMemo(() => (captioners ?? []).filter((c) => c.installed), [captioners]);
+  // Selectable = installed and without a known issue (Florence-2 on
+  // transformers 5.x would only fail after the whole extraction).
+  const installed = useMemo(
+    () => (captioners ?? []).filter((c) => c.installed && !c.known_issue),
+    [captioners],
+  );
   const noneInstalled = captioners !== null && installed.length === 0;
 
   const [root, setRoot] = useState("");
@@ -69,6 +74,7 @@ export function PrepForm({ isRunning, error, onStart, onMoreCaptioners }: Props)
   });
 
   const modeId = useId();
+  const escalateNoteId = useId();
 
   const start = () => {
     const path = root.trim();
@@ -221,20 +227,28 @@ export function PrepForm({ isRunning, error, onStart, onMoreCaptioners }: Props)
           />
         )}
 
-        {captionOn && chosenCaptioner?.supports_escalation && (
+        {captionOn && chosenCaptioner && (
           <>
             <label className="datasetform__check">
               <input
                 type="checkbox"
-                checked={escalate}
+                checked={escalate && chosenCaptioner.supports_escalation}
+                disabled={!chosenCaptioner.supports_escalation}
+                aria-describedby={chosenCaptioner.supports_escalation ? undefined : escalateNoteId}
                 onChange={(e) => setEscalate(e.target.checked)}
               />
               <span>
                 Escalate uncertain captions to Qwen2.5-VL with temporal context (frame vs. a later
                 frame)
+                {!chosenCaptioner.supports_escalation && (
+                  <em id={escalateNoteId}>
+                    Only a prose captioner can escalate — {chosenCaptioner.name} writes tags, so
+                    there is no uncertain sentence to re-check.
+                  </em>
+                )}
               </span>
             </label>
-            {escalate && (
+            {escalate && chosenCaptioner.supports_escalation && (
               <>
                 <label className="datasetform__field datasetform__field--inline">
                   <span>Escalate every Nth frame too</span>

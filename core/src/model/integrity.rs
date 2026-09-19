@@ -72,8 +72,24 @@ pub fn verify_captioner_dir(store_root: &Path, kind: ModelKind) -> Result<PathBu
     verify_dir(store_root, kind.store_subdir(), &expected)
 }
 
-/// [`verify_captioner_dir`] off the async runtime.
+/// One check at a time per kind: after a restart the weights' hash cache is
+/// empty, and concurrent callers (the captioner list polled from two tabs,
+/// a prep run) would otherwise each re-hash the same multi-GB shards in
+/// parallel. The second caller waits and then hits the warm cache.
+fn kind_lock(kind: ModelKind) -> &'static tokio::sync::Mutex<()> {
+    static FLORENCE2: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    static QWEN_VL: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    static OTHER: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    match kind {
+        ModelKind::Florence2Engine => &FLORENCE2,
+        ModelKind::QwenVlEngine => &QWEN_VL,
+        _ => &OTHER,
+    }
+}
+
+/// [`verify_captioner_dir`] off the async runtime, serialised per kind.
 pub async fn verify_captioner_dir_async(store_root: &Path, kind: ModelKind) -> Result<PathBuf> {
+    let _one_at_a_time = kind_lock(kind).lock().await;
     let root = store_root.to_path_buf();
     tokio::task::spawn_blocking(move || verify_captioner_dir(&root, kind))
         .await

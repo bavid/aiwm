@@ -368,8 +368,6 @@ pub async fn export_dataset(
 
 // --- datasets as objects, concepts, captioners (spec 3A/3D) ----------------
 
-/// `GET /captioners` — the captioner registry plus whether each one's files
-/// are in the model library; the "Beschreiben mit" dropdown filters on it.
 /// `GET /captioners` — the registry with install state. A captioner that
 /// loads from a pinned snapshot folder only counts as installed when that
 /// folder passes the load-time integrity check; otherwise `unusable` says

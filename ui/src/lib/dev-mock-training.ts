@@ -131,15 +131,18 @@ export function trainingModelRow(download: AnyRecord): AnyRecord | null {
   };
 }
 
+// Same order and flags as the core's `CAPTIONERS`: the tagger first (the
+// Dataset form preselects the first usable one), Florence-2 flagged.
 const CAPTIONERS = [
-  {
-    id: "florence2", name: "Florence-2 (prose)", style: "prose", role: "vision_florence2",
-    vram_mb: 2048, license: "MIT", supports_escalation: true, kind: "florence2_engine",
-  },
   {
     id: "wd-eva02-tagger-v3", name: "WD EVA02 Tagger v3 (Danbooru tags)", style: "tags",
     role: "vision_wd_tagger", vram_mb: 0, license: "Apache-2.0", supports_escalation: false,
-    kind: "wd_tagger",
+    kind: "wd_tagger", known_issue: null,
+  },
+  {
+    id: "florence2", name: "Florence-2 (prose)", style: "prose", role: "vision_florence2",
+    vram_mb: 2048, license: "MIT", supports_escalation: true, kind: "florence2_engine",
+    known_issue: "Does not load with the bundled transformers 5.x yet \u2014 a fix is planned.",
   },
 ];
 

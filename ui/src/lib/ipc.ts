@@ -913,6 +913,10 @@ export interface Captioner {
   /** Why a complete set of files cannot be used (tampered, missing or extra
    *  file in the pinned folder); `null` when installed or simply absent. */
   unusable: string | null;
+  /** A known problem that keeps this captioner from working right now (in
+   *  words for the person picking one). While set, the UI offers neither
+   *  selection nor install — and the core refuses a run that asks for it. */
+  known_issue: string | null;
 }
 
 /** The Qwen2.5-VL escalation model (`GET /captioners/escalation`) — not a

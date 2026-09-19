@@ -47,10 +47,15 @@ export function TrainingTools({ stacks }: { stacks: readonly ModelStack[] }) {
    *  window) — say why and offer to fetch them again. The captioners report
    *  it through the registry, the escalation model through its own status;
    *  both come from the load-time integrity check. */
+  const captionerFor = (s: ModelStack) => {
+    const captionerId = TRAINING_TOOLS[s.id]?.captionerId;
+    return captioners?.find((c) => c.id === captionerId);
+  };
+  /** A known issue is not an integrity problem: no Re-download for it. */
   const unusableFor = (s: ModelStack): Unusable | undefined => {
     if (settling.has(s.id)) return undefined;
-    const captionerId = TRAINING_TOOLS[s.id]?.captionerId;
-    const captioner = captioners?.find((c) => c.id === captionerId);
+    const captioner = captionerFor(s);
+    if (captioner?.known_issue) return undefined;
     const reason =
       s.id === ESCALATION_STACK
         ? escalation?.files_present && !escalation.usable
@@ -66,6 +71,13 @@ export function TrainingTools({ stacks }: { stacks: readonly ModelStack[] }) {
     };
   };
 
+  // The escalation model only re-checks Florence-2 captions: say so while
+  // Florence-2 itself cannot run.
+  const florence = captioners?.find((c) => c.style === "prose" && c.supports_escalation);
+  const escalationDependencyIssue = florence?.known_issue
+    ? `Only used together with ${florence.name}, which has a known issue: ${florence.known_issue}`
+    : null;
+
   return (
     <>
       <div className="stacklist">
@@ -78,6 +90,8 @@ export function TrainingTools({ stacks }: { stacks: readonly ModelStack[] }) {
             error={installer.errors[s.id] ?? null}
             loadError={installer.loadError}
             unusable={unusableFor(s)}
+            knownIssue={captionerFor(s)?.known_issue ?? null}
+            dependsOnIssue={s.id === ESCALATION_STACK ? escalationDependencyIssue : null}
             onInstall={() => void installer.install(s)}
             onRedownload={() => void installer.redownload(s)}
           />
@@ -97,6 +111,8 @@ function TrainingToolCard({
   error,
   loadError,
   unusable,
+  knownIssue,
+  dependsOnIssue,
   onInstall,
   onRedownload,
 }: {
@@ -106,6 +122,10 @@ function TrainingToolCard({
   error: string | null;
   loadError: string | null;
   unusable: Unusable | undefined;
+  /** This captioner cannot work right now: no install offered. */
+  knownIssue: string | null;
+  /** What this stack depends on cannot work right now (informational). */
+  dependsOnIssue: string | null;
   onInstall: () => void;
   onRedownload: () => void;
 }) {
@@ -128,6 +148,11 @@ function TrainingToolCard({
               <span aria-hidden="true">★</span> Recommended
             </span>
           )}
+          {knownIssue && (
+            <span className="badge badge--issue">
+              <span aria-hidden="true">⚠</span> Known issue
+            </span>
+          )}
         </div>
         {info && <p className="toolcard__purpose">{info.purpose}</p>}
         <span className="known__badges">
@@ -140,18 +165,23 @@ function TrainingToolCard({
           <FitBadge fit={stack.fit} subject={stack.label} />
         </span>
         <span className="known__note">{stack.note}</span>
+        {dependsOnIssue && <p className="toolcard__issue">{dependsOnIssue}</p>}
       </header>
-      <StackInstall
-        name={shortName}
-        progress={progress}
-        isStarting={isStarting}
-        error={error}
-        loadError={loadError}
-        unusable={unusable}
-        installLabel={`Install ${shortName} (${size})`}
-        showFiles
-        onInstall={unusable && progress?.phase === "installed" ? onRedownload : onInstall}
-      />
+      {knownIssue ? (
+        <p className="toolcard__issue">{knownIssue}</p>
+      ) : (
+        <StackInstall
+          name={shortName}
+          progress={progress}
+          isStarting={isStarting}
+          error={error}
+          loadError={loadError}
+          unusable={unusable}
+          installLabel={`Install ${shortName} (${size})`}
+          showFiles
+          onInstall={unusable && progress?.phase === "installed" ? onRedownload : onInstall}
+        />
+      )}
     </section>
   );
 }
