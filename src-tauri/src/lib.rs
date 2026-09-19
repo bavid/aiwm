@@ -12,11 +12,11 @@ use aiwm_core::api::dto::{
     CivitaiSearchDto, CleanupDatasetDto, ColibriModelDto, ConceptBodyDto, ConceptFramesDto,
     ConceptSummaryDto, ConfigUpdate, DedupDatasetDto, DeleteFramesDto, EnqueueDownloadDto,
     ExportDatasetDto, FeaturedModelDto, JobDetailDto, KnownModelDto, LaunchExternalDto,
-    LocalApiStatusDto, LocationBodyDto, ModelStackDto, NewAgentDto, NewSessionDto,
-    NewVoiceIdentityDto, NpcBodyDto, OpenAgentSessionDto, PersonaBodyDto, ProfileDto,
-    RegisterColibriModelDto, RegistryDetailsDto, RegistrySearchDto, RunDetailDto, RuntimeStatusDto,
-    SceneBodyDto, SceneDetailDto, SetSessionPersonaDto, StartRunDto, StoryBodyDto, SubmitJobDto,
-    TrainerStatusDto, UpdateDatasetDto, UpdateDatasetFrameDto,
+    LocalApiStatusDto, LocationBodyDto, LoraLineageDto, LoraSummaryDto, ModelStackDto, NewAgentDto,
+    NewSessionDto, NewVoiceIdentityDto, NpcBodyDto, OpenAgentSessionDto, PersonaBodyDto,
+    ProfileDto, RegisterColibriModelDto, RegistryDetailsDto, RegistrySearchDto, RunDetailDto,
+    RuntimeStatusDto, SceneBodyDto, SceneDetailDto, SetSessionPersonaDto, StartRunDto,
+    StoryBodyDto, SubmitJobDto, TrainerStatusDto, UpdateDatasetDto, UpdateDatasetFrameDto,
 };
 use aiwm_core::api::handlers;
 use aiwm_core::capability::dataset::{
@@ -581,6 +581,19 @@ async fn delete_training_run(
     purge: bool,
 ) -> Result<(), String> {
     to_ipc(handlers::delete_training_run(&app, &id, purge).await)
+}
+
+#[tauri::command]
+async fn list_loras(app: tauri::State<'_, Arc<App>>) -> Result<Vec<LoraSummaryDto>, String> {
+    to_ipc(handlers::list_loras(&app).await)
+}
+
+#[tauri::command]
+async fn lora_lineage(
+    app: tauri::State<'_, Arc<App>>,
+    model_id: String,
+) -> Result<Option<LoraLineageDto>, String> {
+    to_ipc(handlers::lora_lineage(&app, &model_id).await)
 }
 
 // --- Story Studio (Phase 1: text + plain image, docs/TODO.md) ---
@@ -1413,6 +1426,8 @@ fn try_run() -> anyhow::Result<()> {
             resume_training_run,
             cancel_training_run,
             delete_training_run,
+            list_loras,
+            lora_lineage,
             list_agents,
             create_agent,
             delete_agent,

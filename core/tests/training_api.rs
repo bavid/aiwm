@@ -10,7 +10,7 @@
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 
-use aiwm_core::db::{DatasetMode, NewTrainingRun, Preset, RunState};
+use aiwm_core::db::{DatasetMode, NewModel, NewTrainingRun, Preset, RunState};
 use aiwm_core::{ApiServer, App, AppOptions, AppPaths};
 
 /// A live server over a fresh store. The `TempDir` must outlive the test (it
@@ -53,6 +53,8 @@ fn new_run() -> NewTrainingRun {
         hyperparams_json: "{}".into(),
         sample_prompts_json: "[\"ghibli_xy portrait\"]".into(),
         work_dir: "E:\\Data\\training\\does-not-exist".into(),
+        init_lora_model_id: None,
+        image_count: None,
     }
 }
 
@@ -444,4 +446,113 @@ async fn an_unknown_run_is_404_everywhere() {
         .await
         .unwrap();
     assert_eq!(sample.status(), 404);
+}
+
+/// A model row filed under `<store>/<subdir>` — a LoRA when `subdir` is the
+/// LoRA folder, anything else otherwise. No file is written: the overview
+/// must cope with a row whose file is gone.
+async fn insert_model(app: &App, subdir: &str, name: &str, source: &str) -> String {
+    let path = app
+        .config
+        .store_path
+        .join(subdir)
+        .join(format!("{name}.safetensors"));
+    app.db
+        .models()
+        .insert(NewModel {
+            name: name.into(),
+            family: Some("flux2".into()),
+            format: "safetensors".into(),
+            file_path: path.to_string_lossy().into_owned(),
+            size_bytes: 4096,
+            source: source.into(),
+            roles: vec!["lora".into()],
+            ..NewModel::default()
+        })
+        .await
+        .unwrap()
+        .id
+}
+
+#[tokio::test]
+async fn the_lora_overview_lists_library_loras_with_their_lineage() {
+    let (server, _tmp, app) = fixture().await;
+    let base = format!("http://{}", server.addr);
+    let http = reqwest::Client::new();
+
+    // One completed run whose LoRA is in the library, one hand-imported
+    // LoRA, and a checkpoint that must not show up at all.
+    let run_id = insert_running_run(&app).await;
+    let runs = app.db.training_runs();
+    runs.set_progress(&run_id, 1500, 1500, Some(0.04))
+        .await
+        .unwrap();
+    runs.set_state(&run_id, RunState::Finishing).await.unwrap();
+    runs.set_state(&run_id, RunState::Completed).await.unwrap();
+    let trained = insert_model(
+        &app,
+        "image/loras",
+        "anime_style_v1",
+        &format!("training:{run_id}"),
+    )
+    .await;
+    runs.set_result(&run_id, &trained).await.unwrap();
+    let imported = insert_model(&app, "image/loras", "downloaded", "civitai:1").await;
+    insert_model(&app, "image/checkpoints", "base", "manual").await;
+
+    let list = http
+        .get(format!("{base}/training/loras"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(list.status(), 200);
+    let loras: serde_json::Value = list.json().await.unwrap();
+    let loras = loras.as_array().unwrap();
+    assert_eq!(loras.len(), 2, "got: {loras:?}");
+    let by_id = |id: &str| {
+        loras
+            .iter()
+            .find(|l| l["model_id"] == id)
+            .unwrap_or_else(|| panic!("{id} is listed"))
+    };
+    assert_eq!(by_id(&trained)["trained"], true);
+    assert_eq!(by_id(&trained)["runs"], 1);
+    assert_eq!(by_id(&trained)["total_steps"], 1500);
+    assert!(by_id(&trained)["rank"].is_null(), "no file on disk");
+    assert_eq!(by_id(&imported)["trained"], false);
+    assert_eq!(by_id(&imported)["runs"], 0);
+
+    let detail = http
+        .get(format!("{base}/training/loras/{trained}"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(detail.status(), 200);
+    let lineage: serde_json::Value = detail.json().await.unwrap();
+    assert_eq!(lineage["lora"]["model_id"], trained);
+    let chain = lineage["runs"].as_array().unwrap();
+    assert_eq!(chain.len(), 1);
+    assert_eq!(chain[0]["run_id"], run_id);
+    assert_eq!(chain[0]["state"], "completed");
+    assert_eq!(chain[0]["result_model_name"], "anime_style_v1");
+    assert_eq!(chain[0]["samples"], serde_json::json!([]));
+}
+
+#[tokio::test]
+async fn a_lineage_is_404_for_anything_that_is_not_a_library_lora() {
+    let (server, _tmp, app) = fixture().await;
+    let base = format!("http://{}", server.addr);
+    let http = reqwest::Client::new();
+    let checkpoint = insert_model(&app, "image/checkpoints", "base", "manual").await;
+
+    for id in ["nope", checkpoint.as_str()] {
+        let resp = http
+            .get(format!("{base}/training/loras/{id}"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 404, "{id}");
+        let body: serde_json::Value = resp.json().await.unwrap();
+        assert_eq!(body["error"], "no such LoRA", "{id}");
+    }
 }

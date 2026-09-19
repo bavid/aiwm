@@ -445,6 +445,10 @@ pub struct StartRunDto {
     /// unlike the Settings paths, leaving it out is the normal case here.
     #[serde(default)]
     pub data_dir: Option<String>,
+    /// "Start from": the library LoRA to continue (Plan 11). Omitted or
+    /// blank means a fresh LoRA — the normal case.
+    #[serde(default)]
+    pub init_lora_model_id: Option<String>,
 }
 
 impl StartRunDto {
@@ -456,6 +460,15 @@ impl StartRunDto {
             .filter(|d| !d.is_empty())
             .map(std::path::PathBuf::from)
     }
+
+    /// The LoRA to continue from, `None` when omitted or blank.
+    pub fn chosen_init_lora(&self) -> Option<String> {
+        self.init_lora_model_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+            .map(str::to_string)
+    }
 }
 
 /// `GET /training/runs/{id}` — the stored row plus the two things that live
@@ -463,6 +476,10 @@ impl StartRunDto {
 #[derive(Debug, Clone, Serialize)]
 pub struct RunDetailDto {
     pub run: crate::db::TrainingRun,
+    /// The library name of `run.init_lora_model_id`, when the run continued
+    /// a LoRA that is still in the library; `None` for a from-scratch run or
+    /// a source LoRA that has since been deleted.
+    pub init_lora_name: Option<String>,
     /// Opaque tokens for `GET /training/runs/{id}/samples/{n}`, newest
     /// checkpoint first. Deliberately *not* file paths: the work dir never
     /// leaves the core, and the route resolves the token by re-scanning.
@@ -472,6 +489,18 @@ pub struct RunDetailDto {
     pub log_tail: Vec<String>,
     pub work_dir: String,
 }
+
+/// `GET /training/loras` — one library LoRA with its lineage's totals. The
+/// shape is [`crate::training::lineage::LoraSummary`] itself: it is already
+/// what the Training tab shows, with nothing to hide or rename.
+pub type LoraSummaryDto = crate::training::lineage::LoraSummary;
+
+/// One run of a LoRA's history ([`crate::training::lineage::LineageRun`]);
+/// `samples` are the same opaque tokens as [`RunDetailDto::latest_samples`].
+pub type LineageRunDto = crate::training::lineage::LineageRun;
+
+/// `GET /training/loras/{model_id}` — the LoRA and its runs, oldest first.
+pub type LoraLineageDto = crate::training::lineage::LoraLineage;
 
 // --- Story Studio (Phase 1: text + plain image, docs/TODO.md) -------------
 

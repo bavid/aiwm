@@ -12,22 +12,22 @@ use crate::training::config::training_folder;
 const DEAD_PID: u32 = 4_000_000;
 
 /// The only profile with a complete contract at this point in the plan.
-const FAMILY: &str = "flux2-klein-4b";
+pub(super) const FAMILY: &str = "flux2-klein-4b";
 
-struct Fx {
+pub(super) struct Fx {
     _tmp: tempfile::TempDir,
-    db: Database,
-    adapter: Arc<TrainingAdapter>,
-    scheduler: Arc<HybridScheduler>,
-    runner: Runner,
-    runtimes: RuntimeRegistry,
-    runtimes_dir: PathBuf,
-    root: PathBuf,
+    pub(super) db: Database,
+    pub(super) adapter: Arc<TrainingAdapter>,
+    pub(super) scheduler: Arc<HybridScheduler>,
+    pub(super) runner: Runner,
+    pub(super) runtimes: RuntimeRegistry,
+    pub(super) runtimes_dir: PathBuf,
+    pub(super) root: PathBuf,
 }
 
 /// A complete-looking trainer install so preflight gets past its
 /// "is it installed?" guard without a real download.
-fn fake_install(runtimes_dir: &Path) {
+pub(super) fn fake_install(runtimes_dir: &Path) {
     let py = install::venv_python(runtimes_dir);
     std::fs::create_dir_all(py.parent().expect("venv python has a parent"))
         .expect("create the venv dir");
@@ -38,7 +38,7 @@ fn fake_install(runtimes_dir: &Path) {
         .expect("write the marker");
 }
 
-async fn fixture() -> Fx {
+pub(super) async fn fixture() -> Fx {
     let tmp = tempfile::tempdir().expect("tempdir");
     let root = tmp.path().to_path_buf();
     let db = Database::connect_in_memory().await.expect("in-memory db");
@@ -73,7 +73,7 @@ async fn fixture() -> Fx {
 }
 
 /// A library model the profile registry resolves to the 4B klein profile.
-async fn target_model(db: &Database) -> String {
+pub(super) async fn target_model(db: &Database) -> String {
     db.models()
         .insert(NewModel {
             publisher: None,
@@ -102,7 +102,7 @@ async fn target_model(db: &Database) -> String {
         .id
 }
 
-async fn dataset(db: &Database, export_dir: Option<&Path>) -> String {
+pub(super) async fn dataset(db: &Database, export_dir: Option<&Path>) -> String {
     let ds = db
         .datasets()
         .create(NewDataset {
@@ -126,7 +126,7 @@ async fn dataset(db: &Database, export_dir: Option<&Path>) -> String {
     ds.id
 }
 
-fn start_request(target: &str, dataset_id: &str) -> StartRequest {
+pub(super) fn start_request(target: &str, dataset_id: &str) -> StartRequest {
     StartRequest {
         name: "testlora".into(),
         target_model_id: target.into(),
@@ -136,6 +136,7 @@ fn start_request(target: &str, dataset_id: &str) -> StartRequest {
         hyperparams: Hyperparams::default(),
         sample_prompts: vec!["tgr_xy a cat".into()],
         data_dir: None,
+        init_lora_model_id: None,
     }
 }
 
@@ -156,6 +157,8 @@ async fn running_run(fx: &Fx, log: &str) -> TrainingRun {
             hyperparams_json: "{}".into(),
             sample_prompts_json: "[\"tgr_xy a cat\"]".into(),
             work_dir: String::new(),
+            init_lora_model_id: None,
+            image_count: None,
         })
         .await
         .expect("create the run");
@@ -187,7 +190,7 @@ async fn running_run(fx: &Fx, log: &str) -> TrainingRun {
 
 /// The complete base-weight directory the 4B klein profile insists on,
 /// registered under its role so preflight can find it.
-async fn install_base_weights(fx: &Fx) -> PathBuf {
+pub(super) async fn install_base_weights(fx: &Fx) -> PathBuf {
     let profile = find_for_family(FAMILY).expect("the 4B klein profile exists");
     let dir = fx.root.join("base");
     for rel in profile.base.required_files {
@@ -227,7 +230,7 @@ async fn install_base_weights(fx: &Fx) -> PathBuf {
 
 /// Everything preflight asks for, so a test can reach the check it is
 /// actually about.
-async fn ready_fixture() -> (Fx, String, String) {
+pub(super) async fn ready_fixture() -> (Fx, String, String) {
     let fx = fixture().await;
     fake_install(&fx.runtimes_dir);
     install_base_weights(&fx).await;
@@ -246,6 +249,8 @@ fn prepared(fx: &Fx, base_dir: PathBuf) -> Prepared {
         data_kind: DatasetMode::Frames,
         hyperparams: Hyperparams::default(),
         prompts: vec!["tgr_xy a cat".to_string()],
+        init_lora_path: None,
+        media_count: 1,
     }
 }
 
@@ -261,7 +266,7 @@ fn write_checkpoint(fx: &Fx, run: &TrainingRun) -> PathBuf {
     path
 }
 
-async fn reload(fx: &Fx, run_id: &str) -> TrainingRun {
+pub(super) async fn reload(fx: &Fx, run_id: &str) -> TrainingRun {
     fx.db
         .training_runs()
         .get(run_id)
@@ -699,6 +704,8 @@ async fn a_failed_adoption_kills_the_process_it_just_spawned() {
             hyperparams_json: "{}".into(),
             sample_prompts_json: "[\"tgr_xy a cat\"]".into(),
             work_dir: String::new(),
+            init_lora_model_id: None,
+            image_count: None,
         })
         .await
         .expect("create the run");
@@ -875,7 +882,7 @@ fn probed(path: &Path) -> bool {
 }
 
 /// The fixture's runner, but measuring the disk with [`record_probe`].
-fn recording_runner(fx: &Fx) -> Runner {
+pub(super) fn recording_runner(fx: &Fx) -> Runner {
     Runner::new(
         fx.db.clone(),
         fx.adapter.clone(),
@@ -940,6 +947,8 @@ async fn stored_run(
             hyperparams_json: "{}".into(),
             sample_prompts_json: "[\"tgr_xy a cat\"]".into(),
             work_dir: dir.to_string_lossy().into_owned(),
+            init_lora_model_id: None,
+            image_count: None,
         })
         .await
         .expect("create the run");

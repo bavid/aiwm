@@ -2275,11 +2275,17 @@ export interface TrainingRun {
   created_at: string;
   started_at: string | null;
   finished_at: string | null;
+  /** The library LoRA this run continued from; `null` = from scratch. */
+  init_lora_model_id: string | null;
+  /** Images/clips the trainer was fed at start; `null` on older runs. */
+  image_count: number | null;
 }
 
 /** A run plus the two things that live on disk rather than in the store. */
 export interface RunDetail {
   run: TrainingRun;
+  /** Library name of `run.init_lora_model_id`, when that LoRA still exists. */
+  init_lora_name: string | null;
   /** Opaque tokens for {@link trainingSampleUrl}, newest checkpoint first —
    *  deliberately not file paths. */
   latest_samples: string[];
@@ -2300,6 +2306,10 @@ export interface StartRunBody {
   /** "Store run in": the run gets `<data_dir>\<run_id>`. Omit for the
    *  default training folder (Settings → Data locations). */
   data_dir?: string;
+  /** "Start from": a library LoRA of the same family and rank to continue.
+   *  Omit for a fresh LoRA. The core refuses a missing file, another family,
+   *  another rank, a non-LoRA, or a LoRA whose own run is still going. */
+  init_lora_model_id?: string;
 }
 
 export const trainerStatus = () => invoke<TrainerStatus>("training_status");
@@ -2330,6 +2340,82 @@ export const cancelTrainingRun = (id: string) => invoke<TrainingRun>("cancel_tra
  *  directory — checkpoints and preview images included. */
 export const deleteTrainingRun = (id: string, purge: boolean) =>
   invoke<void>("delete_training_run", { id, purge });
+
+// --- LoRA overview & lineage (spec `2026-09-19-lora-lineage-design`) --------
+
+/** One library LoRA as the "Your LoRAs" overview lists it, with what its
+ *  whole lineage adds up to. */
+export interface LoraSummary {
+  model_id: string;
+  name: string;
+  family: string | null;
+  /** `true` when the LoRA came out of a training run here; `false` for one
+   *  imported by hand. */
+  trained: boolean;
+  /** From the safetensors header; `null` when the file cannot be read. */
+  rank: number | null;
+  size_bytes: number;
+  /** When the row entered the library. */
+  created_at: string;
+  /** How many runs contributed, oldest source to this LoRA. */
+  runs: number;
+  /** Steps of the completed runs in the lineage. */
+  total_steps: number;
+  /** Images/clips summed over the lineage; `null` when any run has no
+   *  count (older than migration 0020). */
+  total_images: number | null;
+}
+
+/** The dataset a lineage run trained on, as far as it is still known. */
+export interface LineageDataset {
+  id: string;
+  name: string;
+  source_root: string;
+  /** The captioner its prep job used; `null` when unknown or none. */
+  captioner: string | null;
+}
+
+/** One run in a LoRA's history. */
+export interface LineageRun {
+  run_id: string;
+  name: string;
+  state: TrainingRunState;
+  /** `null` when the dataset row has since been deleted. */
+  dataset: LineageDataset | null;
+  image_count: number | null;
+  trigger_word: string;
+  profile_family: string;
+  preset: TrainingPreset;
+  /** The stored overrides, parsed; `null` when the stored JSON is unreadable. */
+  hyperparams: TrainingHyperparams | null;
+  hyperparams_json: string;
+  step: number;
+  total_steps: number;
+  started_at: string | null;
+  finished_at: string | null;
+  /** `finished_at - started_at` in whole seconds, when both are set. */
+  duration_secs: number | null;
+  result_model_id: string | null;
+  result_model_name: string | null;
+  init_lora_model_id: string | null;
+  init_lora_name: string | null;
+  /** Opaque tokens for {@link trainingSampleUrl} with `run_id`, newest
+   *  checkpoint first — the same tokens as {@link RunDetail.latest_samples}. */
+  samples: string[];
+}
+
+/** A LoRA with its history, oldest run first. */
+export interface LoraLineage {
+  lora: LoraSummary;
+  runs: LineageRun[];
+}
+
+/** Every library LoRA, newest first — trained and imported alike. */
+export const listLoras = () => invoke<LoraSummary[]>("list_loras");
+
+/** A LoRA's history; `null` when `modelId` is not a library LoRA. */
+export const loraLineage = (modelId: string) =>
+  invoke<LoraLineage | null>("lora_lineage", { modelId });
 
 /** URL the loopback core serves the `n`-th latest preview image from — same
  *  shape as {@link jobOutputUrl}. `n` indexes

@@ -39,12 +39,14 @@ import {
   externalEngines,
   jobProgressWsUrl,
   listDownloads,
+  listLoras,
   listModels,
   listSessions,
   listTrainingProfiles,
   listTrainingRuns,
   listVoiceIdentities,
   localApiStatus,
+  loraLineage,
   modelTags,
   getTrainingRun,
   registrySearch,
@@ -88,6 +90,8 @@ import {
   type Model,
   type ModelStack,
   type RegistrySearchParams,
+  type LoraLineage,
+  type LoraSummary,
   type RegistrySearchResult,
   type RunDetail,
   type RuntimeStatus,
@@ -486,6 +490,19 @@ export const useTrainingRun = (runId: string | null) =>
     `training-run:${runId ?? ""}`,
     () => (runId ? getTrainingRun(runId) : Promise.resolve(null)),
     2000,
+  );
+
+/** Every library LoRA with its lineage aggregates, newest first. A LoRA only
+ *  appears when a run settles or a file is imported, so the runs' cadence
+ *  is plenty. */
+export const useLoras = () => usePolled<LoraSummary[]>("loras", listLoras, 3000);
+
+/** One LoRA's run history; `null` disables polling (nothing selected). */
+export const useLoraLineage = (modelId: string | null) =>
+  usePolled<LoraLineage | null>(
+    `lora-lineage:${modelId ?? ""}`,
+    () => (modelId ? loraLineage(modelId) : Promise.resolve(null)),
+    3000,
   );
 
 // --- Story Studio (Phase 1) ---------------------------------------------

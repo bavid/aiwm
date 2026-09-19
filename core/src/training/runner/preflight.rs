@@ -12,14 +12,31 @@ use std::path::{Path, PathBuf};
 use super::{Runner, BYTES_PER_GB, MIN_FREE_DISK_BYTES};
 use crate::capability::dataset::location::nearest_existing;
 use crate::cleanup::volume_label;
-use crate::db::{DatasetMode, TrainingRun};
+use crate::db::{DatasetMode, Preset, TrainingRun};
 use crate::runtime::training::RUNTIME_ID as TRAINING_RUNTIME_ID;
 use crate::scheduler::Scheduler;
 use crate::training::bases::find_base;
-use crate::training::config::Hyperparams;
-use crate::training::profile::{find_for_model, find_staged_base, TrainingProfile};
+use crate::training::config::{merge_hyperparams, Hyperparams};
+use crate::training::profile::{find_for_model, find_staged_base, preset_values, TrainingProfile};
 use crate::training::{training_err, training_refusal};
 use crate::Result;
+
+/// What a run wants, as [`Runner::preflight`] takes it — the same shape
+/// whether it comes from a fresh [`super::StartRequest`] or is re-derived
+/// from a stored row on start/resume.
+#[derive(Debug, Clone)]
+pub(super) struct PreflightInput<'a> {
+    pub(super) target_model_id: Option<&'a str>,
+    pub(super) dataset_id: Option<&'a str>,
+    /// The library LoRA to continue from; `None` starts from scratch.
+    pub(super) init_lora_model_id: Option<&'a str>,
+    pub(super) preset: Preset,
+    pub(super) hyperparams: Hyperparams,
+    pub(super) prompts: Vec<String>,
+    /// Where the run writes: its own folder, or for a run not created yet
+    /// the folder its own one will be made in.
+    pub(super) folder: &'a Path,
+}
 
 /// Everything preflight resolved for one run — the profile it maps to and the
 /// directories the rendered config points at.
@@ -31,21 +48,26 @@ pub(super) struct Prepared {
     pub(super) data_kind: DatasetMode,
     pub(super) hyperparams: Hyperparams,
     pub(super) prompts: Vec<String>,
+    /// The library LoRA file the run continues from, already checked by
+    /// [`Runner::check_init_lora`]; `None` starts from scratch.
+    pub(super) init_lora_path: Option<PathBuf>,
+    /// Images/clips in the export folder — exactly what the trainer is fed.
+    pub(super) media_count: usize,
 }
 
 impl Runner {
     /// Everything that must be true before a trainer process may be spawned.
     /// Every message is meant to be readable straight out of the UI.
-    /// `folder` is where the run writes: its own folder, or for a run not
-    /// created yet the folder its own one will be made in.
-    pub(super) async fn preflight(
-        &self,
-        target_model_id: Option<&str>,
-        dataset_id: Option<&str>,
-        hyperparams: Hyperparams,
-        prompts: Vec<String>,
-        folder: &Path,
-    ) -> Result<Prepared> {
+    pub(super) async fn preflight(&self, input: PreflightInput<'_>) -> Result<Prepared> {
+        let PreflightInput {
+            target_model_id,
+            dataset_id,
+            init_lora_model_id,
+            preset,
+            hyperparams,
+            prompts,
+            folder,
+        } = input;
         if !self.adapter.is_installed() {
             return Err(training_refusal(
                 "the trainer is not installed yet — set it up in Settings first",
@@ -118,7 +140,8 @@ impl Runner {
                 dataset_dir.display()
             )));
         }
-        if media_count(&dataset_dir) == 0 {
+        let media = media_count(&dataset_dir);
+        if media == 0 {
             return Err(training_refusal(format!(
                 "the export folder of \"{}\" contains no images or clips — export it again",
                 dataset.name
@@ -138,6 +161,16 @@ impl Runner {
             ));
         }
         hyperparams.validate()?;
+
+        // Before the disk and GPU checks: those are about this machine right
+        // now, this is about whether the run makes sense at all.
+        let init_lora_path = match init_lora_model_id {
+            Some(id) => {
+                let rank = merge_hyperparams(preset_values(profile, preset), &hyperparams).rank;
+                Some(self.check_init_lora(id, profile, rank).await?)
+            }
+            None => None,
+        };
 
         self.check_disk(folder)?;
 
@@ -161,23 +194,30 @@ impl Runner {
             data_kind: dataset.mode,
             hyperparams,
             prompts,
+            init_lora_path,
+            media_count: media,
         })
     }
 
     /// Re-derive [`Prepared`] for an existing row (start/resume of a run the
-    /// user created earlier, possibly in a previous session).
+    /// user created earlier, possibly in a previous session). The LoRA it
+    /// continues from is re-checked and re-rendered too: a resume rewrites
+    /// the config, and a config without `pretrained_lora_path` would be a
+    /// different run.
     pub(super) async fn prepare_from_row(&self, run: &TrainingRun) -> Result<Prepared> {
         let hyperparams: Hyperparams = serde_json::from_str(&run.hyperparams_json)
             .map_err(|e| training_err(format!("this run's fine settings are unreadable: {e}")))?;
         let prompts: Vec<String> = serde_json::from_str(&run.sample_prompts_json)
             .map_err(|e| training_err(format!("this run's sample prompts are unreadable: {e}")))?;
-        self.preflight(
-            run.target_model_id.as_deref(),
-            run.dataset_id.as_deref(),
+        self.preflight(PreflightInput {
+            target_model_id: run.target_model_id.as_deref(),
+            dataset_id: run.dataset_id.as_deref(),
+            init_lora_model_id: run.init_lora_model_id.as_deref(),
+            preset: run.preset,
             hyperparams,
             prompts,
-            &self.run_dir(run),
-        )
+            folder: &self.run_dir(run),
+        })
         .await
     }
 

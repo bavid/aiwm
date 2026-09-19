@@ -2,12 +2,17 @@ import { useEffect, useMemo, useState } from "react";
 import {
   useAbout,
   useDatasets,
+  useLoraLineage,
+  useLoras,
   useModels,
   useTrainerStatus,
   useTrainingProfiles,
   useTrainingRuns,
 } from "../../lib/hooks";
-import { NewRunForm } from "./NewRunForm";
+import type { LoraLineage, LoraSummary, TrainingProfile, TrainingRun } from "../../lib/ipc";
+import { LoraHistory } from "./LoraHistory";
+import { LoraList } from "./LoraList";
+import { NewRunForm, type RunSeed } from "./NewRunForm";
 import { RunCard } from "./RunCard";
 import "./training.css";
 
@@ -21,8 +26,32 @@ type Props = {
   onTestLora: (loraModelId: string, prompt: string) => void;
 };
 
-/** The Training tab: every run the store knows about, newest first, plus the
- *  run form as an inline card on top. */
+/** What "Continue with another dataset" prefills: the LoRA's last run's
+ *  target (when it is still trainable), else the first trainable model of the
+ *  LoRA's family; and the last run's trigger word. The dataset stays open —
+ *  it is the one thing that is meant to change. */
+function continueSeed(
+  lora: LoraSummary,
+  lineage: LoraLineage | null,
+  runs: TrainingRun[],
+  profiles: TrainingProfile[],
+): RunSeed {
+  const last = lineage?.runs.at(-1) ?? null;
+  const lastRun = last ? (runs.find((r) => r.id === last.run_id) ?? null) : null;
+  const trainable = profiles.flatMap((p) => p.trainable_models);
+  const lastTarget = lastRun?.target_model_id ?? null;
+  const targetModelId = trainable.some((m) => m.id === lastTarget)
+    ? lastTarget
+    : (trainable.find((m) => m.family === lora.family)?.id ?? null);
+  return {
+    initLoraModelId: lora.model_id,
+    targetModelId,
+    triggerWord: last?.trigger_word ?? "",
+  };
+}
+
+/** The Training tab: the LoRA overview with its history panel, the run form
+ *  as an inline card, and every run the store knows about, newest first. */
 export function Training({ pendingDatasetId, onPendingDatasetConsumed, onTestLora }: Props) {
   const about = useAbout();
   const { data: runs, error: runsError, refetch: refetchRuns } = useTrainingRuns();
@@ -30,14 +59,20 @@ export function Training({ pendingDatasetId, onPendingDatasetConsumed, onTestLor
   const { data: status, refetch: refetchStatus } = useTrainerStatus();
   const { data: datasets, refetch: refetchDatasets } = useDatasets();
   const { data: models } = useModels();
+  const { data: loras, error: lorasError, refetch: refetchLoras } = useLoras();
 
   const [showForm, setShowForm] = useState(false);
   /** Which dataset the (re-keyed) form should start on. */
   const [seedDatasetId, setSeedDatasetId] = useState<string | null>(null);
+  /** Which LoRA the (re-keyed) form should continue from. */
+  const [seed, setSeed] = useState<RunSeed | null>(null);
+  const [selectedLoraId, setSelectedLoraId] = useState<string | null>(null);
+  const { data: lineage, error: lineageError } = useLoraLineage(selectedLoraId);
 
   useEffect(() => {
     if (!pendingDatasetId) return;
     setSeedDatasetId(pendingDatasetId);
+    setSeed(null);
     setShowForm(true);
     // The export that just happened is what makes this dataset selectable at
     // all; without a fresh read the option is missing for up to one poll and
@@ -47,57 +82,111 @@ export function Training({ pendingDatasetId, onPendingDatasetConsumed, onTestLor
   }, [pendingDatasetId, onPendingDatasetConsumed, refetchDatasets]);
 
   const profileList = useMemo(() => profiles ?? [], [profiles]);
+  const loraList = useMemo(() => loras ?? [], [loras]);
+  const runList = useMemo(() => runs ?? [], [runs]);
+
   const labelByFamily = useMemo(() => {
     const map: Record<string, string> = {};
     for (const p of profileList) map[p.family] = p.label;
     return map;
   }, [profileList]);
 
+  const profileByFamily = useMemo(() => {
+    const map: Record<string, TrainingProfile> = {};
+    for (const p of profileList) map[p.family] = p;
+    return map;
+  }, [profileList]);
+
   const nameByModelId = useMemo(() => {
     const map: Record<string, string> = {};
     for (const m of models ?? []) map[m.id] = m.name;
+    for (const l of loraList) map[l.model_id] = l.name;
     return map;
-  }, [models]);
+  }, [models, loraList]);
+
+  const nameByDatasetId = useMemo(() => {
+    const map: Record<string, string> = {};
+    for (const d of datasets ?? []) map[d.id] = d.name;
+    return map;
+  }, [datasets]);
 
   const ordered = useMemo(
-    () => [...(runs ?? [])].sort((a, b) => b.created_at.localeCompare(a.created_at)),
-    [runs],
+    () => [...runList].sort((a, b) => b.created_at.localeCompare(a.created_at)),
+    [runList],
   );
+
+  const selectedLora = loraList.find((l) => l.model_id === selectedLoraId) ?? null;
+  // The poll keeps the previous LoRA's answer until the next tick; a history
+  // under the wrong heading, even for a second, reads as a lie.
+  const selectedLineage =
+    lineage !== null && lineage.lora.model_id === selectedLoraId ? lineage : null;
+
+  const openFreshForm = () => {
+    setSeedDatasetId(null);
+    setSeed(null);
+    setShowForm(true);
+  };
+
+  const openContinueForm = (lora: LoraSummary) => {
+    setSeedDatasetId(null);
+    setSeed(continueSeed(lora, selectedLineage, runList, profileList));
+    setShowForm(true);
+  };
+
+  const formKey = seed ? `continue:${seed.initLoraModelId}` : (seedDatasetId ?? "new");
 
   return (
     <section className="training" aria-label="Training">
       <header className="training__head">
         <h2>Training</h2>
         <span className="training__status">{status ? status.detail : "…"}</span>
-        <button
-          type="button"
-          className="training__new"
-          onClick={() => {
-            setSeedDatasetId(null);
-            setShowForm(true);
-          }}
-          disabled={showForm}
-        >
+        <button type="button" className="training__new" onClick={openFreshForm} disabled={showForm}>
           New run
         </button>
       </header>
 
       {showForm && (
         <NewRunForm
-          // A fresh hand-over from the Dataset tab has to reach a form that is
-          // already open -- remount it rather than reach into its state.
-          key={seedDatasetId ?? "new"}
+          // A fresh hand-over (a dataset from the Dataset tab, a LoRA from
+          // the history) has to reach a form that is already open -- remount
+          // it rather than reach into its state.
+          key={formKey}
           profiles={profileList}
           status={status}
           datasets={datasets ?? []}
+          loras={loraList}
           initialDatasetId={seedDatasetId}
+          seed={seed}
           onStatusChanged={refetchStatus}
           onStarted={() => {
             setShowForm(false);
             setSeedDatasetId(null);
+            setSeed(null);
             refetchRuns();
+            refetchLoras();
           }}
           onClose={() => setShowForm(false)}
+        />
+      )}
+
+      <LoraList
+        loras={loraList}
+        isLoading={loras === null}
+        error={lorasError}
+        selectedId={selectedLoraId}
+        onSelect={(id) => setSelectedLoraId((cur) => (cur === id ? null : id))}
+      />
+
+      {selectedLora && (
+        <LoraHistory
+          lora={selectedLora}
+          lineage={selectedLineage}
+          error={lineageError}
+          profiles={profileList}
+          corePort={about?.core_api_port ?? null}
+          onTestLora={onTestLora}
+          onContinue={() => openContinueForm(selectedLora)}
+          onClose={() => setSelectedLoraId(null)}
         />
       )}
 
@@ -123,9 +212,17 @@ export function Training({ pendingDatasetId, onPendingDatasetConsumed, onTestLor
               key={run.id}
               run={run}
               profileLabel={labelByFamily[run.profile_family] ?? run.profile_family}
+              presetValues={profileByFamily[run.profile_family]?.presets[run.preset] ?? null}
+              datasetName={run.dataset_id ? (nameByDatasetId[run.dataset_id] ?? null) : null}
               loraName={run.result_model_id ? (nameByModelId[run.result_model_id] ?? null) : null}
+              initLoraName={
+                run.init_lora_model_id ? (nameByModelId[run.init_lora_model_id] ?? null) : null
+              }
               corePort={about?.core_api_port ?? null}
-              onChanged={refetchRuns}
+              onChanged={() => {
+                refetchRuns();
+                refetchLoras();
+              }}
               onTestLora={onTestLora}
             />
           ))}

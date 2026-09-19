@@ -23,6 +23,25 @@ pub struct DeleteOutcome {
 /// or a missing file must not block the DB cleanup); a real I/O error removing a
 /// present file *is* surfaced.
 pub async fn delete_model(db: &Database, model: &Model) -> Result<DeleteOutcome> {
+    // 0. A LoRA that an unfinished training run continues from stays. The
+    //    row's `init_lora_model_id` is `ON DELETE SET NULL` (migration 0020),
+    //    so deleting now would let a later resume re-render its config
+    //    without `pretrained_lora_path` and quietly train from scratch.
+    if let Some(run) = db
+        .training_runs()
+        .list_active_for_init_lora(&model.id)
+        .await?
+        .first()
+    {
+        return Err(CoreError::Config(format!(
+            "\u{201c}{}\u{201d} is the LoRA that \u{201c}{}\u{201d} continues from and that run \
+             is still {} — wait until it has finished, or cancel it first",
+            model.name,
+            run.name,
+            run.state.as_str()
+        )));
+    }
+
     // 1. Tear down runtime links. Passthrough / ExtraPath are no-ops; junctions
     //    and copies leave something on disk.
     for link in db.models().links(&model.id).await.unwrap_or_default() {
@@ -147,6 +166,112 @@ mod tests {
         assert_eq!(out.freed_bytes, 20_000_000_000);
         assert!(!model_dir.exists(), "the whole model directory is removed");
         assert!(db.models().get(&model.id).await.unwrap().is_none());
+    }
+
+    /// A library LoRA plus a run that continues from it, moved through
+    /// `states` (an empty list leaves it `preparing`).
+    async fn lora_with_continuing_run(
+        db: &Database,
+        states: &[crate::db::RunState],
+    ) -> (Model, crate::db::TrainingRun) {
+        let lora = db
+            .models()
+            .insert(NewModel {
+                name: "Anime style v1".into(),
+                format: "safetensors".into(),
+                file_path: "E:\\AI\\models\\image\\loras\\anime-style-v1.safetensors".into(),
+                size_bytes: 128,
+                source: "training:run-0".into(),
+                roles: vec!["lora".into()],
+                ..NewModel::default()
+            })
+            .await
+            .unwrap();
+        let run = db
+            .training_runs()
+            .create(crate::db::NewTrainingRun {
+                name: "Anime style v2".into(),
+                profile_family: "flux2-klein-4b".into(),
+                target_model_id: None,
+                dataset_id: None,
+                data_kind: crate::db::DatasetMode::Frames,
+                trigger_word: "ghibli_xy".into(),
+                preset: crate::db::Preset::Fast,
+                hyperparams_json: "{}".into(),
+                sample_prompts_json: "[]".into(),
+                work_dir: "E:\\AI\\data\\training\\run-1".into(),
+                init_lora_model_id: Some(lora.id.clone()),
+                image_count: Some(3),
+            })
+            .await
+            .unwrap();
+        for next in states {
+            db.training_runs().set_state(&run.id, *next).await.unwrap();
+        }
+        (lora, run)
+    }
+
+    #[tokio::test]
+    async fn delete_refuses_the_source_lora_of_a_paused_continue_run() {
+        // Migration 0020 nulls `init_lora_model_id` on delete; a resume would
+        // then render no `pretrained_lora_path` and quietly train from
+        // scratch. So while the run can still be resumed, its source stays.
+        use crate::db::RunState;
+        let db = Database::connect_in_memory().await.unwrap();
+        let (lora, run) =
+            lora_with_continuing_run(&db, &[RunState::Running, RunState::Paused]).await;
+
+        let err = delete_model(&db, &lora)
+            .await
+            .expect_err("the source of a paused run must not be deletable");
+
+        assert!(matches!(err, CoreError::Config(_)), "{err}");
+        let msg = err.to_string();
+        assert!(msg.contains("Anime style v2"), "names the run: {msg}");
+        assert!(msg.contains("paused"), "names its state: {msg}");
+        assert!(
+            db.models().get(&lora.id).await.unwrap().is_some(),
+            "the row must still be there"
+        );
+        assert_eq!(
+            db.training_runs()
+                .get(&run.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .init_lora_model_id
+                .as_deref(),
+            Some(lora.id.as_str()),
+            "the link must be intact"
+        );
+    }
+
+    #[tokio::test]
+    async fn delete_allows_the_source_lora_once_its_continue_run_has_settled() {
+        use crate::db::RunState;
+        let db = Database::connect_in_memory().await.unwrap();
+        let (lora, run) = lora_with_continuing_run(
+            &db,
+            &[RunState::Running, RunState::Finishing, RunState::Completed],
+        )
+        .await;
+
+        let out = delete_model(&db, &lora)
+            .await
+            .expect("a settled run holds nothing");
+
+        assert_eq!(out.id, lora.id);
+        assert!(db.models().get(&lora.id).await.unwrap().is_none());
+        assert_eq!(
+            db.training_runs()
+                .get(&run.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .init_lora_model_id,
+            None,
+            "the history keeps the run, with the link nulled by the database"
+        );
     }
 
     #[tokio::test]

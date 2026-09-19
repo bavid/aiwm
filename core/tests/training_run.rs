@@ -307,6 +307,7 @@ fn start_request(name: &str, target: &str, dataset: &str, steps: u32) -> StartRe
         },
         sample_prompts: vec!["tgr_xy a test".into()],
         data_dir: None,
+        init_lora_model_id: None,
     }
 }
 

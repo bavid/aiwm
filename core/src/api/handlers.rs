@@ -11,11 +11,11 @@ use super::dto::{
     CivitaiSearchDto, CleanupDatasetDto, ColibriModelDto, ConceptBodyDto, ConceptFramesDto,
     ConceptSummaryDto, ConfigUpdate, DedupDatasetDto, DeleteFramesDto, DetachEngineDto,
     DialogueLineDto, EnqueueDownloadDto, ExportDatasetDto, FeaturedModelDto, JobDetailDto,
-    KnownModelDto, LaunchExternalDto, LocalApiStatusDto, LocationBodyDto, ModelStackDto,
-    NewAgentDto, NewSessionDto, NewVoiceIdentityDto, NpcBodyDto, OpenAgentSessionDto,
-    PersonaBodyDto, ProfileDto, ProfilePresetsDto, RegisterColibriModelDto, RegistryDetailsDto,
-    RegistryFileDto, RegistrySearchDto, RunDetailDto, RuntimeStatusDto, SceneBodyDto,
-    SceneDetailDto, SetSessionPersonaDto, StartRunDto, StoryBodyDto, SubmitJobDto,
+    KnownModelDto, LaunchExternalDto, LocalApiStatusDto, LocationBodyDto, LoraLineageDto,
+    LoraSummaryDto, ModelStackDto, NewAgentDto, NewSessionDto, NewVoiceIdentityDto, NpcBodyDto,
+    OpenAgentSessionDto, PersonaBodyDto, ProfileDto, ProfilePresetsDto, RegisterColibriModelDto,
+    RegistryDetailsDto, RegistryFileDto, RegistrySearchDto, RunDetailDto, RuntimeStatusDto,
+    SceneBodyDto, SceneDetailDto, SetSessionPersonaDto, StartRunDto, StoryBodyDto, SubmitJobDto,
     TrainableModelDto, TrainerStatusDto, UpdateDatasetDto, UpdateDatasetFrameDto,
 };
 use crate::compat::FitVerdict;
@@ -877,6 +877,7 @@ pub async fn start_training_run(app: &App, body: StartRunDto) -> Result<crate::d
     let trigger_word = check_trigger_word(&body.trigger_word)?;
     let sample_prompts = check_sample_prompts(&body.sample_prompts)?;
     let data_dir = body.chosen_data_dir();
+    let init_lora_model_id = body.chosen_init_lora();
     if let Some(dir) = &data_dir {
         let datasets = app.db.datasets().list().await?;
         let runs = app.db.training_runs().list().await?;
@@ -902,6 +903,7 @@ pub async fn start_training_run(app: &App, body: StartRunDto) -> Result<crate::d
             hyperparams: body.hyperparams,
             sample_prompts,
             data_dir,
+            init_lora_model_id,
         })
         .await
 }
@@ -917,13 +919,7 @@ fn run_work_dir(app: &App, run: &crate::db::TrainingRun) -> PathBuf {
 /// newest-checkpoint first. Never returned to a caller as paths — see
 /// [`RunDetailDto::latest_samples`].
 fn latest_sample_paths(app: &App, run: &crate::db::TrainingRun) -> Vec<PathBuf> {
-    let dir = crate::training::config::training_folder(&run_work_dir(app, run)).join(&run.name);
-    crate::training::progress::scan_work_dir(&dir, &run.name)
-        .map(|state| state.latest_samples)
-        .unwrap_or_else(|e| {
-            tracing::debug!(run = %run.id, error = %e, "could not scan a run's work directory");
-            Vec::new()
-        })
+    crate::training::lineage::latest_sample_paths(&run_work_dir(app, run), &run.name)
 }
 
 /// The last [`LOG_TAIL_LINES`] updates of a run's `train.log`. A missing log
@@ -954,10 +950,15 @@ pub async fn get_training_run(app: &App, id: &str) -> Result<Option<RunDetailDto
         .map(|i| i.to_string())
         .collect();
     let log_tail = log_tail(app, &run).await;
+    let init_lora_name = match run.init_lora_model_id.as_deref() {
+        Some(id) => app.db.models().get(id).await?.map(|m| m.name),
+        None => None,
+    };
     Ok(Some(RunDetailDto {
         work_dir: run_work_dir(app, &run).to_string_lossy().into_owned(),
         latest_samples,
         log_tail,
+        init_lora_name,
         run,
     }))
 }
@@ -1085,6 +1086,24 @@ pub async fn training_sample_path(app: &App, id: &str, n: usize) -> Result<Optio
         .into_iter()
         .nth(n)
         .filter(|p| p.is_file()))
+}
+
+/// `GET /training/loras` — every library LoRA, newest first, trained and
+/// imported alike, with what its lineage adds up to.
+pub async fn list_loras(app: &App) -> Result<Vec<LoraSummaryDto>> {
+    crate::training::lineage::list_loras(&app.db, &app.config.store_path).await
+}
+
+/// `GET /training/loras/{model_id}` — a LoRA's runs, oldest first. `None`
+/// when the model is not a library LoRA (the route answers 404).
+pub async fn lora_lineage(app: &App, model_id: &str) -> Result<Option<LoraLineageDto>> {
+    crate::training::lineage::lineage(
+        &app.db,
+        &app.config.store_path,
+        &app.paths.training_dir(),
+        model_id,
+    )
+    .await
 }
 
 pub async fn list_models(app: &App) -> Result<Vec<Model>> {
@@ -3358,6 +3377,7 @@ mod tests {
             hyperparams: crate::training::config::Hyperparams::default(),
             sample_prompts: vec!["tgr_xy a cat".into()],
             data_dir: data_dir.map(|d| d.to_string_lossy().into_owned()),
+            init_lora_model_id: None,
         }
     }
 
@@ -3381,6 +3401,8 @@ mod tests {
             hyperparams_json: "{}".into(),
             sample_prompts_json: "[]".into(),
             work_dir: work_dir.to_string_lossy().into_owned(),
+            init_lora_model_id: None,
+            image_count: None,
         }
     }
 
@@ -3418,6 +3440,28 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(set.chosen_data_dir(), Some(PathBuf::from("E:\\runs")));
+    }
+
+    #[test]
+    fn a_blank_or_missing_init_lora_means_a_fresh_lora() {
+        let body: StartRunDto = serde_json::from_value(serde_json::json!({
+            "name": "l", "target_model_id": "m", "dataset_id": "d",
+            "trigger_word": "t", "preset": "fast"
+        }))
+        .unwrap();
+        assert_eq!(body.chosen_init_lora(), None);
+        let blank: StartRunDto = serde_json::from_value(serde_json::json!({
+            "name": "l", "target_model_id": "m", "dataset_id": "d",
+            "trigger_word": "t", "preset": "fast", "init_lora_model_id": "  "
+        }))
+        .unwrap();
+        assert_eq!(blank.chosen_init_lora(), None);
+        let set: StartRunDto = serde_json::from_value(serde_json::json!({
+            "name": "l", "target_model_id": "m", "dataset_id": "d",
+            "trigger_word": "t", "preset": "fast", "init_lora_model_id": " lora-1 "
+        }))
+        .unwrap();
+        assert_eq!(set.chosen_init_lora().as_deref(), Some("lora-1"));
     }
 
     #[tokio::test]
