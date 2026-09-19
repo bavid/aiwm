@@ -47,31 +47,36 @@ use super::dataset_err;
 /// install and this resolver can never disagree on the string.
 pub use crate::model::{FLORENCE2_ROLE, QWEN_VL_ROLE};
 
-/// fp16 weights (~770M params \u{2248} 1.5 GB) plus activation/runtime
-/// overhead for the `large` Florence-2 checkpoint used by default.
-pub const FLORENCE2_VRAM_FALLBACK_MB: u64 = 2048;
+/// What the vision runtime reserves for the `large` Florence-2 checkpoint
+/// (fp16). Measured in Plan 8 (RTX 4080 SUPER, above the idle baseline):
+/// 2,187 MiB resident; rule: measured + 15 % margin, rounded up to the next
+/// 512 MiB.
+pub const FLORENCE2_VRAM_FALLBACK_MB: u64 = 2_560;
 /// Qwen2.5-VL-7B-Instruct loaded 4-bit (`bitsandbytes`) — the only way a 7B
 /// VLM comfortably shares a 16 GB card with everything else AIWM already
 /// puts on it. fp16 (~14 GB weights alone) is deliberately not the default
 /// for that reason; `quantization` stays a request-level knob (see
 /// `caption_frame_pair`'s `quantization` param) for a bigger card.
-pub const QWEN_VL_VRAM_FALLBACK_MB: u64 = 6144;
+/// Measured in Plan 8: 7,864 MiB incl. a two-image generation; same rule
+/// as Florence-2 (+15 %, next 512 MiB).
+pub const QWEN_VL_VRAM_FALLBACK_MB: u64 = 9_216;
 
 /// Every file `Florence2ForConditionalGeneration` + `AutoProcessor` read
-/// from the snapshot directory (`vision.py::_construct_florence2`, both with
-/// `trust_remote_code`): weights, configs, the tokenizer, and the three
-/// remote-code modules -- exactly the pinned `florence2-large` stack.
+/// from the snapshot directory (`vision.py::_construct_florence2`, both
+/// built into transformers, no remote code): weights, configs, the processor
+/// and tokenizer files -- exactly the pinned `florence2-large` stack.
 pub const FLORENCE2_REQUIRED_FILES: &[&str] = &[
     "config.json",
     "model.safetensors",
-    "configuration_florence2.py",
-    "modeling_florence2.py",
-    "processing_florence2.py",
-    "preprocessor_config.json",
     "generation_config.json",
+    "preprocessor_config.json",
+    "processor_config.json",
     "tokenizer.json",
     "tokenizer_config.json",
     "vocab.json",
+    "merges.txt",
+    "added_tokens.json",
+    "special_tokens_map.json",
 ];
 
 /// Every file `Qwen2_5_VLForConditionalGeneration` + `AutoProcessor` read
@@ -285,8 +290,8 @@ async fn verified_store_dir(store_root: &Path, kind: ModelKind) -> Result<std::p
 /// reported as missing rather than resolved to a directory that will fail
 /// at caption time.
 ///
-/// For a captioner with a pinned snapshot (Florence-2, which runs its
-/// folder's Python via `trust_remote_code`), the returned directory is the
+/// For a captioner with a pinned snapshot (Florence-2, loaded as a whole
+/// folder by `from_pretrained`), the returned directory is the
 /// store's own subfolder after the load-time integrity check -- never the
 /// rows' parent, which any role assignment could point anywhere.
 pub async fn resolve_captioner_dir(
@@ -378,6 +383,23 @@ fn extract_caption(result: &Value) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Plan 8 measurement (RTX 4080 SUPER, VRAM above the idle baseline):
+    /// Florence-2 fp16 resident 2,187 MiB; Qwen2.5-VL 4-bit incl. a two-image
+    /// generation 7,864 MiB. Rule: measured + 15 % margin, rounded up to the
+    /// next 512 MiB.
+    #[test]
+    fn vram_reservations_follow_the_measured_need_plus_margin() {
+        fn reserve(measured_mb: u64) -> u64 {
+            (measured_mb * 115).div_ceil(100).div_ceil(512) * 512
+        }
+        assert_eq!(FLORENCE2_VRAM_FALLBACK_MB, reserve(2_187));
+        assert_eq!(QWEN_VL_VRAM_FALLBACK_MB, reserve(7_864));
+        assert_eq!(
+            (FLORENCE2_VRAM_FALLBACK_MB, QWEN_VL_VRAM_FALLBACK_MB),
+            (2_560, 9_216)
+        );
+    }
     use crate::db::NewModel;
 
     #[test]
@@ -494,7 +516,7 @@ mod tests {
     /// Any row can carry the Florence-2 role (`PUT /models/{id}/roles`,
     /// `register_directory_model`), so a folder whose rows look complete
     /// is still refused when its content is not the pinned snapshot -- the
-    /// check that guards `trust_remote_code` runs at load time.
+    /// folder check runs at load time.
     #[tokio::test]
     async fn resolve_captioner_dir_refuses_a_florence2_folder_that_fails_the_integrity_check() {
         use super::super::captioner::find_captioner;
@@ -636,7 +658,7 @@ mod tests {
     }
 
     /// Real-bytes positive path: set `AIWM_TEST_FLORENCE2_SNAPSHOT` to a
-    /// folder holding the ten pinned Florence-2 files (the Plan 7 Task 1
+    /// folder holding the eleven pinned Florence-2 files (the Plan 8
     /// download). Copies ~1.5 GB, hence ignored by default.
     #[tokio::test]
     #[ignore = "needs the real pinned Florence-2 snapshot (AIWM_TEST_FLORENCE2_SNAPSHOT)"]

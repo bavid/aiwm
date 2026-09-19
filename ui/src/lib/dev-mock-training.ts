@@ -8,7 +8,7 @@
 
 type AnyRecord = Record<string, unknown>;
 
-const FLORENCE_REV = "21a599d414c4d928c9032694c424fb94458e3594";
+const FLORENCE_REV = "4271c66b88cdbc05735372ec13b2360108de5317";
 const QWEN_REV = "cc594898137f460bfe9f0759e9844b3ce807cfb5";
 
 interface KindInfo {
@@ -32,10 +32,10 @@ const KINDS: Record<string, KindInfo> = {
   florence2_engine: {
     role: "vision_florence2",
     dir: "vision\\florence2-large",
-    repo: "microsoft/Florence-2-large",
-    publisher: "Microsoft",
+    repo: "florence-community/Florence-2-large",
+    publisher: "Microsoft (converted by florence-community)",
     license: "MIT",
-    urlBase: `https://huggingface.co/microsoft/Florence-2-large/resolve/${FLORENCE_REV}`,
+    urlBase: `https://huggingface.co/florence-community/Florence-2-large/resolve/${FLORENCE_REV}`,
   },
   qwen_vl_engine: {
     role: "vision_qwen2_5_vl",
@@ -51,16 +51,17 @@ const KINDS: Record<string, KindInfo> = {
 const MEMBERS: [string, string, string, number, string][] = [
   ["wd-eva02-large-tagger-v3-model", "wd_tagger", "model.onnx", 1_260_435_999, "WD EVA02-Large Tagger v3 — model"],
   ["wd-eva02-large-tagger-v3-tags", "wd_tagger", "selected_tags.csv", 308_468, "WD EVA02-Large Tagger v3 — tag list"],
-  ["florence2-large-model", "florence2_engine", "model.safetensors", 1_553_563_458, "Florence-2 large — weights"],
-  ["florence2-large-config", "florence2_engine", "config.json", 2_445, "Florence-2 large — model config"],
-  ["florence2-large-configuration-florence2", "florence2_engine", "configuration_florence2.py", 15_119, "Florence-2 large — remote code (config)"],
-  ["florence2-large-modeling-florence2", "florence2_engine", "modeling_florence2.py", 127_455, "Florence-2 large — remote code (model)"],
-  ["florence2-large-processing-florence2", "florence2_engine", "processing_florence2.py", 48_674, "Florence-2 large — remote code (processor)"],
-  ["florence2-large-preprocessor-config", "florence2_engine", "preprocessor_config.json", 806, "Florence-2 large — preprocessor config"],
-  ["florence2-large-generation-config", "florence2_engine", "generation_config.json", 51, "Florence-2 large — generation defaults"],
-  ["florence2-large-tokenizer", "florence2_engine", "tokenizer.json", 1_355_863, "Florence-2 large — tokenizer"],
-  ["florence2-large-tokenizer-config", "florence2_engine", "tokenizer_config.json", 34, "Florence-2 large — tokenizer config"],
-  ["florence2-large-vocab", "florence2_engine", "vocab.json", 1_099_884, "Florence-2 large — vocabulary"],
+  ["florence2-large-model", "florence2_engine", "model.safetensors", 1_553_541_016, "Florence-2 large — weights"],
+  ["florence2-large-config", "florence2_engine", "config.json", 2_396, "Florence-2 large — model config"],
+  ["florence2-large-generation-config", "florence2_engine", "generation_config.json", 292, "Florence-2 large — generation defaults"],
+  ["florence2-large-preprocessor-config", "florence2_engine", "preprocessor_config.json", 603, "Florence-2 large — preprocessor config"],
+  ["florence2-large-processor-config", "florence2_engine", "processor_config.json", 2_264, "Florence-2 large — processor config"],
+  ["florence2-large-tokenizer", "florence2_engine", "tokenizer.json", 3_748_144, "Florence-2 large — tokenizer"],
+  ["florence2-large-tokenizer-config", "florence2_engine", "tokenizer_config.json", 197_922, "Florence-2 large — tokenizer config"],
+  ["florence2-large-vocab", "florence2_engine", "vocab.json", 798_293, "Florence-2 large — vocabulary"],
+  ["florence2-large-merges", "florence2_engine", "merges.txt", 456_318, "Florence-2 large — BPE merges"],
+  ["florence2-large-added-tokens", "florence2_engine", "added_tokens.json", 22_430, "Florence-2 large — added tokens"],
+  ["florence2-large-special-tokens-map", "florence2_engine", "special_tokens_map.json", 146_627, "Florence-2 large — special tokens map"],
   ["qwen2.5-vl-7b-model-00001-of-00005", "qwen_vl_engine", "model-00001-of-00005.safetensors", 3_900_233_256, "Qwen2.5-VL 7B Instruct — weights (shard 1 of 5)"],
   ["qwen2.5-vl-7b-model-00002-of-00005", "qwen_vl_engine", "model-00002-of-00005.safetensors", 3_864_726_320, "Qwen2.5-VL 7B Instruct — weights (shard 2 of 5)"],
   ["qwen2.5-vl-7b-model-00003-of-00005", "qwen_vl_engine", "model-00003-of-00005.safetensors", 3_864_726_424, "Qwen2.5-VL 7B Instruct — weights (shard 3 of 5)"],
@@ -104,15 +105,15 @@ export const TRAINING_STACKS_MOCK: AnyRecord[] = [
   {
     id: "florence2-large", label: "Florence-2 large (prose captions)", media: "training",
     is_default: false, fit: { level: "green" },
-    note: "Sentence-style captions instead of tags. Ten files (~1.56 GB), pinned to one revision because three of them are Python the model runs on load. Needs ~2 GB VRAM.",
+    note: "Sentence-style captions instead of tags. Eleven files (~1.56 GB) of the transformers-native checkpoint, pinned to one revision; no remote code runs. Needs ~2.5 GB VRAM.",
     members: membersOf("florence2-large-"),
   },
   {
     id: "qwen2.5-vl-7b", label: "Qwen2.5-VL 7B Instruct (second opinion)", media: "training",
-    // `stack_fit` judges a captioner stack by its run-time VRAM (4-bit ~6 GiB),
+    // `stack_fit` judges a captioner stack by its run-time VRAM (4-bit ~9 GiB),
     // not by its 16.6 GB of files.
     is_default: false, fit: { level: "green" },
-    note: "Optional and large: re-captions a frame together with a later one when a Florence-2 caption looks unsure, describing what changes between them. Fourteen files (~16.6 GB download); loaded 4-bit it needs ~6 GB VRAM.",
+    note: "Optional and large: re-captions a frame together with a later one when a Florence-2 caption looks unsure, describing what changes between them. Fourteen files (~16.6 GB download); loaded 4-bit it needs ~9 GB VRAM.",
     members: membersOf("qwen2.5-vl-7b-"),
   },
 ];
@@ -132,7 +133,7 @@ export function trainingModelRow(download: AnyRecord): AnyRecord | null {
 }
 
 // Same order and flags as the core's `CAPTIONERS`: the tagger first (the
-// Dataset form preselects the first usable one), Florence-2 flagged.
+// Dataset form preselects the first usable one), neither flagged.
 const CAPTIONERS = [
   {
     id: "wd-eva02-tagger-v3", name: "WD EVA02 Tagger v3 (Danbooru tags)", style: "tags",
@@ -141,8 +142,8 @@ const CAPTIONERS = [
   },
   {
     id: "florence2", name: "Florence-2 (prose)", style: "prose", role: "vision_florence2",
-    vram_mb: 2048, license: "MIT", supports_escalation: true, kind: "florence2_engine",
-    known_issue: "Does not load with the bundled transformers 5.x yet \u2014 a fix is planned.",
+    vram_mb: 2560, license: "MIT", supports_escalation: true, kind: "florence2_engine",
+    known_issue: null,
   },
 ];
 

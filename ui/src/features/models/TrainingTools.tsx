@@ -15,8 +15,8 @@ const ESCALATION_STACK = "qwen2.5-vl-7b";
  *  one-click stacks, each with what it is for, where it runs, its size and
  *  licence, its fit, and whether it is installed. The fit comes from the
  *  core's `stack_fit`, which judges a captioner stack by the VRAM it actually
- *  reserves at run time (WD tagger: none, CPU; Florence-2: ~2 GiB; Qwen2.5-VL
- *  loaded 4-bit: ~6 GiB) — not by summing its file sizes. */
+ *  reserves at run time (WD tagger: none, CPU; Florence-2: ~2.5 GiB; Qwen2.5-VL
+ *  loaded 4-bit: ~9 GiB) — not by summing its file sizes. */
 export function TrainingTools({ stacks }: { stacks: readonly ModelStack[] }) {
   const [announcement, setAnnouncement] = useState("");
   const { data: captioners, refetch: refetchCaptioners } = useCaptioners();

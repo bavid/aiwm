@@ -2814,8 +2814,8 @@ mod tests {
 
     /// A captioner's fit is what it needs *at run time*, not the bytes it
     /// downloads: the WD tagger runs on the CPU, Florence-2 needs its
-    /// fallback reservation, Qwen2.5-VL loads 4-bit (~6 GB) from ~16 GB of
-    /// bf16 shards.
+    /// fallback reservation, Qwen2.5-VL loads 4-bit (~9 GB reserved, measured
+    /// ~7.7 GB) from ~16 GB of bf16 shards.
     #[test]
     fn training_stacks_fit_by_the_captioners_runtime_need_not_the_download_size() {
         use crate::capability::dataset::{FLORENCE2_VRAM_FALLBACK_MB, QWEN_VL_VRAM_FALLBACK_MB};
@@ -2838,7 +2838,7 @@ mod tests {
         );
         assert_eq!(stack_fit(&qwen, 16_000, 0), FitVerdict::Green);
 
-        // Florence-2: judged by its 2 GB reservation, not its 1.5 GB files.
+        // Florence-2: judged by its 2.5 GB reservation, not its 1.5 GB files.
         let florence = stack_members("florence2-large");
         assert_eq!(
             stack_fit(&florence, 1_900, 0),

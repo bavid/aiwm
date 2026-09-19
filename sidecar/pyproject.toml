@@ -12,9 +12,10 @@ dependencies = [
     "accelerate>=0.34",
     "noisereduce>=3.0",
     "scipy>=1.11",
-    # Dataset-prep captioning (WP: Lokale KI-Trainings-Engine). Florence-2's
-    # `trust_remote_code` modeling file needs timm (its DaViT vision
-    # backbone) and einops directly, not just via transformers. `pillow` is
+    # Dataset-prep captioning (WP: Lokale KI-Trainings-Engine). timm and
+    # einops were needed by the old remote-code Florence-2; the native
+    # transformers Florence-2 (Plan 8) uses neither -- dropping them waits for
+    # a lock refresh (docs/TODO.md). `pillow` is
     # used explicitly (`aiwm_sidecar.vision` opens frames with PIL directly,
     # not only through a transformers image processor).
     "pillow>=10",

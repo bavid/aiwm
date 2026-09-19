@@ -111,6 +111,9 @@ pub async fn import_model(
         let model = match pinned_file {
             Some(file) => {
                 let dest = store_root.join(kind.store_subdir()).join(file);
+                // First: a stale old-revision row may hold `dest`, which the
+                // repair re-points this row to (`models.file_path` is unique).
+                prune_pinned_folder(db, store_root, kind).await?;
                 repair_pinned_copy(db, existing, &source, &dest, &sha256, req.keep_original).await?
             }
             None => existing,
@@ -136,8 +139,13 @@ pub async fn import_model(
             .map_err(|e| CoreError::Config(format!("create {}: {e}", parent.display())))?;
     }
 
-    let (src, dst, keep) = (source.clone(), dest.clone(), req.keep_original);
     let is_pinned = pinned_file.is_some();
+    if is_pinned {
+        // Before the insert: `models.file_path` is unique, and a file of an
+        // earlier catalog revision may still hold this very path.
+        prune_pinned_folder(db, store_root, kind).await?;
+    }
+    let (src, dst, keep) = (source.clone(), dest.clone(), req.keep_original);
     tokio::task::spawn_blocking(move || {
         if is_pinned {
             // Same rule as the repair path: never write through a link.
@@ -249,25 +257,112 @@ fn remove_link_at(dst: &Path) -> Result<()> {
         .map_err(|e| CoreError::Config(format!("remove link {}: {e}", dst.display())))
 }
 
-/// Extensions of a captioner snapshot directory that can steer code
-/// execution: Florence-2's `.py` runs via `trust_remote_code=True`, and any
-/// `.json` config can carry an `auto_map` pointing `trust_remote_code` at an
-/// arbitrary Hub repo's Python. Qwen2.5-VL has no remote code, but its
-/// configs are gated the same way so no `auto_map` can ever be slipped in.
-fn is_code_bearing(kind: ModelKind, ext: &str) -> bool {
-    let ext = ext.to_ascii_lowercase();
-    match kind {
-        ModelKind::Florence2Engine => matches!(ext.as_str(), "py" | "json"),
-        ModelKind::QwenVlEngine => ext == "json",
-        _ => false,
+/// After a pinned captioner file of `kind` landed (install or repair): bring
+/// its store folder back to "only catalog files". An install of an earlier
+/// catalog revision (Plan 8: the `microsoft/Florence-2-large` remote-code
+/// snapshot) leaves files the current catalog does not list, and the
+/// load-time check refuses any extra file -- so they are removed here, and
+/// every library row under that folder whose content is not a current
+/// catalog file of this kind is dropped (the rows of removed files and of
+/// files a new download overwrote), so stale rows can never make the
+/// captioner read as installed.
+///
+/// Only entries directly inside the exact store folder are touched: a folder
+/// that resolves elsewhere (junction) is left alone, links inside it are
+/// removed as links (never followed), real subfolders are left in place.
+async fn prune_pinned_folder(db: &Database, store_root: &Path, kind: ModelKind) -> Result<()> {
+    let root = store_root.to_path_buf();
+    let in_store = tokio::task::spawn_blocking(move || prune_non_catalog_entries(&root, kind))
+        .await
+        .map_err(|e| CoreError::Other(anyhow::anyhow!("prune worker panicked: {e}")))??;
+    if !in_store {
+        return Ok(());
     }
+    let dir = store_root.join(kind.store_subdir());
+    for m in db.models().list().await? {
+        let path = Path::new(&m.file_path);
+        if path.parent() != Some(dir.as_path()) || is_current_catalog_row(kind, &m) {
+            continue;
+        }
+        tracing::warn!(id = %m.id, path = %m.file_path, "dropping the row of a stale captioner file");
+        db.models().delete(&m.id).await?;
+    }
+    Ok(())
+}
+
+/// The row's content is a current catalog file of `kind`, under its name.
+fn is_current_catalog_row(kind: ModelKind, m: &Model) -> bool {
+    let name = Path::new(&m.file_path).file_name().and_then(|n| n.to_str());
+    m.sha256
+        .as_deref()
+        .and_then(catalog::find_by_sha256)
+        .is_some_and(|known| known.kind == kind.as_str() && Some(known.file) == name)
+}
+
+/// Remove every entry of `<store>/<kind.store_subdir()>` that is not named
+/// after a catalog file of `kind`. Returns `false` (and touches nothing)
+/// when the folder is missing or resolves outside the store.
+fn prune_non_catalog_entries(store_root: &Path, kind: ModelKind) -> Result<bool> {
+    let subdir = kind.store_subdir();
+    let dir = store_root.join(subdir);
+    let (Ok(canonical_dir), Ok(canonical_root)) = (dir.canonicalize(), store_root.canonicalize())
+    else {
+        return Ok(false);
+    };
+    if canonical_dir != canonical_root.join(subdir) {
+        tracing::warn!(dir = %dir.display(), "pinned folder resolves outside the store; not pruning");
+        return Ok(false);
+    }
+    let keep: Vec<&str> = catalog::KNOWN_MODELS
+        .iter()
+        .filter(|m| m.kind == kind.as_str())
+        .map(|m| m.file)
+        .collect();
+    let entries = std::fs::read_dir(&dir)
+        .map_err(|e| CoreError::Config(format!("cannot list {}: {e}", dir.display())))?;
+    for entry in entries {
+        let entry = entry.map_err(|e| CoreError::Config(format!("{}: {e}", dir.display())))?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if keep.contains(&name.as_str()) {
+            continue;
+        }
+        remove_stale_entry(&entry.path())?;
+    }
+    Ok(true)
+}
+
+/// Delete one stale folder entry: a regular file, or a link as a link.
+fn remove_stale_entry(path: &Path) -> Result<()> {
+    let meta = std::fs::symlink_metadata(path)
+        .map_err(|e| CoreError::Config(format!("{}: {e}", path.display())))?;
+    let file_type = meta.file_type();
+    if file_type.is_file() {
+        tracing::warn!(path = %path.display(), "removing a file that is not in the captioner catalog");
+        std::fs::remove_file(path)
+            .map_err(|e| CoreError::Config(format!("remove {}: {e}", path.display())))
+    } else if file_type.is_symlink() {
+        remove_link_at(path)
+    } else {
+        tracing::warn!(path = %path.display(), "leaving a subfolder in a captioner folder");
+        Ok(())
+    }
+}
+
+/// Extensions of a captioner snapshot directory that can steer what gets
+/// loaded: any `.json` config can carry an `auto_map` that would point
+/// `trust_remote_code` at an arbitrary Hub repo's Python. Neither captioner
+/// loads remote code, but their configs are gated so no `auto_map` can ever
+/// be slipped in.
+fn is_code_bearing(kind: ModelKind, ext: &str) -> bool {
+    matches!(kind, ModelKind::Florence2Engine | ModelKind::QwenVlEngine)
+        && ext.eq_ignore_ascii_case("json")
 }
 
 /// For the Florence-2 / Qwen2.5-VL directory kinds: the catalog file name
 /// this content is pinned as (`Some`), so the destination is named after the
 /// catalog entry rather than whatever the source was called -- a pinned
-/// `processing_florence2.py` renamed to `modeling_florence2.py` can never
-/// overwrite the real sibling. **Any** file that is not a pinned catalog
+/// `generation_config.json` renamed to `config.json` can never overwrite the
+/// real sibling. **Any** file that is not a pinned catalog
 /// entry of this exact kind is refused -- code-bearing files because they
 /// could run unreviewed code, weights and tokenizer data because the folder
 /// is loaded as a whole and would only fail the load-time
@@ -281,7 +376,7 @@ fn pinned_file_for(kind: ModelKind, ext: &str, sha256: &str) -> Result<Option<&'
         .map(|known| known.file);
     if pinned.is_none() {
         let why = if is_code_bearing(kind, ext) {
-            "it could make the sidecar run unreviewed code via `trust_remote_code`"
+            "an unreviewed config could steer what the sidecar loads"
         } else {
             "the snapshot folder may only hold the pinned files, or it will not load"
         };
@@ -1187,12 +1282,12 @@ mod tests {
         );
     }
 
-    /// Byte-exact copies of two tiny pinned Florence-2 files (the catalog
-    /// hashes them: `tokenizer_config.json` 34 B, `generation_config.json`
-    /// 51 B at commit 21a599d4) -- real pinned JSON without a network fetch.
-    const FLORENCE2_TOKENIZER_CONFIG: &[u8] = b"{\n    \"model_max_length\": 1024\n}\n\n";
-    const FLORENCE2_GENERATION_CONFIG: &[u8] =
-        b"{\n    \"num_beams\": 3,\n    \"early_stopping\": false\n}";
+    /// Byte-exact copies of two small pinned Florence-2 files (the catalog
+    /// hashes them: `preprocessor_config.json` 603 B, `generation_config.json`
+    /// 292 B of `florence-community/Florence-2-large` at commit 4271c66b) --
+    /// real pinned JSON without a network fetch.
+    const FLORENCE2_PREPROCESSOR_CONFIG: &[u8] = b"{\n  \"auto_map\": {\n    \"AutoProcessor\": \"processing_florence2.Florence2Processor\"\n  },\n  \"crop_size\": {\n    \"height\": 768,\n    \"width\": 768\n  },\n  \"do_center_crop\": false,\n  \"do_convert_rgb\": null,\n  \"do_normalize\": true,\n  \"do_rescale\": true,\n  \"do_resize\": true,\n  \"image_mean\": [\n    0.485,\n    0.456,\n    0.406\n  ],\n  \"image_processor_type\": \"CLIPImageProcessor\",\n  \"image_seq_length\": 577,\n  \"image_std\": [\n    0.229,\n    0.224,\n    0.225\n  ],\n  \"processor_class\": \"Florence2Processor\",\n  \"resample\": 3,\n  \"rescale_factor\": 0.00392156862745098,\n  \"size\": {\n    \"height\": 768,\n    \"width\": 768\n  }\n}\n";
+    const FLORENCE2_GENERATION_CONFIG: &[u8] = b"{\n  \"_from_model_config\": true,\n  \"bos_token_id\": 0,\n  \"decoder_start_token_id\": 2,\n  \"early_stopping\": true,\n  \"eos_token_id\": 2,\n  \"forced_bos_token_id\": 0,\n  \"forced_eos_token_id\": 2,\n  \"no_repeat_ngram_size\": 3,\n  \"num_beams\": 3,\n  \"pad_token_id\": 1,\n  \"transformers_version\": \"4.56.1\"\n}\n";
 
     async fn import_as(
         db: &Database,
@@ -1220,7 +1315,7 @@ mod tests {
         let mut dirs = Vec::new();
         // Two real pinned files: an uncatalogued one would be refused.
         for (name, body) in [
-            ("tokenizer_config.json", FLORENCE2_TOKENIZER_CONFIG),
+            ("preprocessor_config.json", FLORENCE2_PREPROCESSOR_CONFIG),
             ("generation_config.json", FLORENCE2_GENERATION_CONFIG),
         ] {
             let src = write_safetensors(tmp.path(), name, body);
@@ -1287,12 +1382,12 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let store = tmp.path().join("store");
         let db = Database::connect_in_memory().await.unwrap();
-        let dest = store.join("vision/florence2-large/tokenizer_config.json");
+        let dest = store.join("vision/florence2-large/preprocessor_config.json");
 
         let first = write_safetensors(
             tmp.path(),
-            "tokenizer_config.json",
-            FLORENCE2_TOKENIZER_CONFIG,
+            "preprocessor_config.json",
+            FLORENCE2_PREPROCESSOR_CONFIG,
         );
         let out = import_as(&db, &store, &first, "florence2_engine")
             .await
@@ -1303,27 +1398,27 @@ mod tests {
         std::fs::write(&dest, b"{\"auto_map\": {}}\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n").unwrap();
         let again = write_safetensors(
             tmp.path(),
-            "tokenizer_config.json",
-            FLORENCE2_TOKENIZER_CONFIG,
+            "preprocessor_config.json",
+            FLORENCE2_PREPROCESSOR_CONFIG,
         );
         let out = import_as(&db, &store, &again, "florence2_engine")
             .await
             .unwrap();
         assert!(out.already_present);
-        assert_eq!(std::fs::read(&dest).unwrap(), FLORENCE2_TOKENIZER_CONFIG);
+        assert_eq!(std::fs::read(&dest).unwrap(), FLORENCE2_PREPROCESSOR_CONFIG);
         assert_eq!(Path::new(&out.model.file_path), dest.as_path());
 
         // Deleted, then re-downloaded.
         std::fs::remove_file(&dest).unwrap();
         let third = write_safetensors(
             tmp.path(),
-            "tokenizer_config.json",
-            FLORENCE2_TOKENIZER_CONFIG,
+            "preprocessor_config.json",
+            FLORENCE2_PREPROCESSOR_CONFIG,
         );
         import_as(&db, &store, &third, "florence2_engine")
             .await
             .unwrap();
-        assert_eq!(std::fs::read(&dest).unwrap(), FLORENCE2_TOKENIZER_CONFIG);
+        assert_eq!(std::fs::read(&dest).unwrap(), FLORENCE2_PREPROCESSOR_CONFIG);
         assert_eq!(
             db.models().list().await.unwrap().len(),
             1,
@@ -1342,8 +1437,8 @@ mod tests {
         let db = Database::connect_in_memory().await.unwrap();
         let first = write_safetensors(
             tmp.path(),
-            "tokenizer_config.json",
-            FLORENCE2_TOKENIZER_CONFIG,
+            "preprocessor_config.json",
+            FLORENCE2_PREPROCESSOR_CONFIG,
         );
         import_as(&db, &store, &first, "florence2_engine")
             .await
@@ -1352,7 +1447,7 @@ mod tests {
         let dest = store
             .join("vision")
             .join("florence2-large")
-            .join("tokenizer_config.json");
+            .join("preprocessor_config.json");
         std::fs::remove_file(&dest).unwrap();
         let outside = tmp.path().join("outside");
         std::fs::create_dir_all(&outside).unwrap();
@@ -1369,8 +1464,8 @@ mod tests {
         // back to, where the write would otherwise follow the link.
         let again = write_safetensors(
             tmp.path(),
-            "tokenizer_config.json",
-            FLORENCE2_TOKENIZER_CONFIG,
+            "preprocessor_config.json",
+            FLORENCE2_PREPROCESSOR_CONFIG,
         );
         import_model(
             &db,
@@ -1386,7 +1481,7 @@ mod tests {
 
         let meta = std::fs::symlink_metadata(&dest).unwrap();
         assert!(meta.file_type().is_file(), "a regular file, not a link");
-        assert_eq!(std::fs::read(&dest).unwrap(), FLORENCE2_TOKENIZER_CONFIG);
+        assert_eq!(std::fs::read(&dest).unwrap(), FLORENCE2_PREPROCESSOR_CONFIG);
         assert_eq!(
             std::fs::read_dir(&outside).unwrap().count(),
             0,
@@ -1403,8 +1498,8 @@ mod tests {
         let db = Database::connect_in_memory().await.unwrap();
         let first = write_safetensors(
             tmp.path(),
-            "tokenizer_config.json",
-            FLORENCE2_TOKENIZER_CONFIG,
+            "preprocessor_config.json",
+            FLORENCE2_PREPROCESSOR_CONFIG,
         );
         let out = import_as(&db, &store, &first, "florence2_engine")
             .await
@@ -1417,13 +1512,13 @@ mod tests {
 
         let again = write_safetensors(
             tmp.path(),
-            "tokenizer_config.json",
-            FLORENCE2_TOKENIZER_CONFIG,
+            "preprocessor_config.json",
+            FLORENCE2_PREPROCESSOR_CONFIG,
         );
         let out = import_as(&db, &store, &again, "florence2_engine")
             .await
             .unwrap();
-        let dest = store.join("vision/florence2-large/tokenizer_config.json");
+        let dest = store.join("vision/florence2-large/preprocessor_config.json");
         assert_eq!(Path::new(&out.model.file_path), dest.as_path());
         let stored = db.models().get(&out.model.id).await.unwrap().unwrap();
         assert_eq!(Path::new(&stored.file_path), dest.as_path());
@@ -1448,13 +1543,17 @@ mod tests {
 
         let sub = tmp.path().join("renamed");
         std::fs::create_dir_all(&sub).unwrap();
-        let renamed = write_safetensors(&sub, "generation_config.json", FLORENCE2_TOKENIZER_CONFIG);
+        let renamed = write_safetensors(
+            &sub,
+            "generation_config.json",
+            FLORENCE2_PREPROCESSOR_CONFIG,
+        );
         let out = import_as(&db, &store, &renamed, "florence2_engine")
             .await
             .unwrap();
         let p = out.model.file_path.replace('\\', "/");
         assert!(
-            p.ends_with("/vision/florence2-large/tokenizer_config.json"),
+            p.ends_with("/vision/florence2-large/preprocessor_config.json"),
             "{p}"
         );
         assert_eq!(
@@ -1462,6 +1561,273 @@ mod tests {
             FLORENCE2_GENERATION_CONFIG,
             "the real sibling is untouched"
         );
+    }
+
+    /// A library row for a file of an earlier catalog revision, the way the
+    /// old importer left it (role and path of the pinned folder).
+    async fn insert_stale_row(db: &Database, path: &Path, body: &[u8]) -> Model {
+        let sha = {
+            let tmp = tempfile::tempdir().unwrap();
+            let p = tmp.path().join("x");
+            std::fs::write(&p, body).unwrap();
+            sha256_file(&p).unwrap()
+        };
+        db.models()
+            .insert(NewModel {
+                name: "stale".into(),
+                format: "json".into(),
+                file_path: path.to_string_lossy().into_owned(),
+                sha256: Some(sha),
+                size_bytes: body.len() as i64,
+                source: "manual".into(),
+                roles: vec!["vision_florence2".into()],
+                ..NewModel::default()
+            })
+            .await
+            .unwrap()
+    }
+
+    /// Plan 8 migration: an install of the old `microsoft/Florence-2-large`
+    /// snapshot (remote-code `.py` files, other JSON) sits in the pinned
+    /// folder. Installing the new catalog files must leave only catalog
+    /// files there -- otherwise the "no extra file" integrity rule keeps the
+    /// captioner unusable forever -- and drop the rows of the replaced
+    /// files, never touching anything outside that exact folder.
+    #[tokio::test]
+    async fn a_pinned_import_prunes_files_and_rows_of_an_earlier_catalog_revision() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = tmp.path().join("store");
+        let db = Database::connect_in_memory().await.unwrap();
+        let dir = store.join("vision").join("florence2-large");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // The old snapshot: remote code plus an old config under a name the
+        // new catalog also uses.
+        let old_py = dir.join("modeling_florence2.py");
+        std::fs::write(&old_py, b"import os\n").unwrap();
+        let old_config = dir.join("config.json");
+        std::fs::write(&old_config, b"{\"auto_map\": {}}").unwrap();
+        let py_row = insert_stale_row(&db, &old_py, b"import os\n").await;
+        let config_row = insert_stale_row(&db, &old_config, b"{\"auto_map\": {}}").await;
+
+        // Look-alikes outside the exact folder stay untouched.
+        let sibling = store.join("vision").join("florence2-large-old");
+        std::fs::create_dir_all(&sibling).unwrap();
+        let sibling_py = sibling.join("modeling_florence2.py");
+        std::fs::write(&sibling_py, b"import os\n").unwrap();
+        let sibling_row = insert_stale_row(&db, &sibling_py, b"import os\n").await;
+        let above = store.join("vision").join("modeling_florence2.py");
+        std::fs::write(&above, b"import os\n").unwrap();
+
+        let src = write_safetensors(
+            tmp.path(),
+            "generation_config.json",
+            FLORENCE2_GENERATION_CONFIG,
+        );
+        let out = import_as(&db, &store, &src, "florence2_engine")
+            .await
+            .unwrap();
+
+        assert!(!old_py.exists(), "the non-catalog file is removed");
+        assert!(
+            old_config.exists(),
+            "a catalog-named file stays for its own download to replace"
+        );
+        let models = db.models();
+        assert!(
+            models.get(&py_row.id).await.unwrap().is_none(),
+            "row of the removed file"
+        );
+        assert!(
+            models.get(&config_row.id).await.unwrap().is_none(),
+            "row whose content is not a catalog entry"
+        );
+        assert!(
+            models.get(&out.model.id).await.unwrap().is_some(),
+            "the new file's row"
+        );
+        assert!(sibling_py.exists() && above.exists(), "outside the folder");
+        assert!(
+            models.get(&sibling_row.id).await.unwrap().is_some(),
+            "outside the folder"
+        );
+    }
+
+    /// Found in the real Plan 8 run: `models.file_path` is unique, so a new
+    /// catalog file sharing its name with an old-revision file (`config.json`,
+    /// `model.safetensors`, ...) must drop the old row *before* its own row
+    /// is inserted -- not fail with a UNIQUE violation.
+    #[tokio::test]
+    async fn a_new_catalog_file_replaces_the_old_revisions_row_at_the_same_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = tmp.path().join("store");
+        let db = Database::connect_in_memory().await.unwrap();
+        // Exactly the path string the importer records (same join), so the
+        // old row really collides with the new one.
+        let dir = store.join(ModelKind::Florence2Engine.store_subdir());
+        std::fs::create_dir_all(&dir).unwrap();
+        let dest = dir.join("generation_config.json");
+        let old_body = b"{\n    \"num_beams\": 3,\n    \"early_stopping\": false\n}";
+        std::fs::write(&dest, old_body).unwrap();
+        let old_row = insert_stale_row(&db, &dest, old_body).await;
+
+        let src = write_safetensors(
+            tmp.path(),
+            "generation_config.json",
+            FLORENCE2_GENERATION_CONFIG,
+        );
+        let out = import_as(&db, &store, &src, "florence2_engine")
+            .await
+            .unwrap();
+
+        assert!(!out.already_present);
+        assert_eq!(Path::new(&out.model.file_path), dest.as_path());
+        assert_eq!(std::fs::read(&dest).unwrap(), FLORENCE2_GENERATION_CONFIG);
+        assert!(db.models().get(&old_row.id).await.unwrap().is_none());
+        assert_eq!(db.models().list().await.unwrap().len(), 1);
+    }
+
+    /// Repair branch, same UNIQUE hazard: the row already holding the new
+    /// hash points elsewhere, while a stale old-revision row holds the
+    /// destination path. Re-pointing the row must not collide with it.
+    #[tokio::test]
+    async fn a_repair_repoints_its_row_past_a_stale_row_holding_the_destination() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = tmp.path().join("store");
+        let db = Database::connect_in_memory().await.unwrap();
+        let first = write_safetensors(
+            tmp.path(),
+            "generation_config.json",
+            FLORENCE2_GENERATION_CONFIG,
+        );
+        let out = import_as(&db, &store, &first, "florence2_engine")
+            .await
+            .unwrap();
+        let elsewhere = tmp.path().join("elsewhere.json");
+        db.models()
+            .set_file_path(&out.model.id, &elsewhere.to_string_lossy())
+            .await
+            .unwrap();
+        // Exactly the importer's path string for the destination.
+        let dest = store
+            .join(ModelKind::Florence2Engine.store_subdir())
+            .join("generation_config.json");
+        let old_body = b"{\n    \"num_beams\": 3,\n    \"early_stopping\": false\n}";
+        std::fs::write(&dest, old_body).unwrap();
+        let stale = insert_stale_row(&db, &dest, old_body).await;
+
+        let again = write_safetensors(
+            tmp.path(),
+            "generation_config.json",
+            FLORENCE2_GENERATION_CONFIG,
+        );
+        let out = import_as(&db, &store, &again, "florence2_engine")
+            .await
+            .unwrap();
+        assert!(out.already_present);
+        assert_eq!(Path::new(&out.model.file_path), dest.as_path());
+        assert_eq!(std::fs::read(&dest).unwrap(), FLORENCE2_GENERATION_CONFIG);
+        assert!(db.models().get(&stale.id).await.unwrap().is_none());
+        assert_eq!(db.models().list().await.unwrap().len(), 1);
+    }
+
+    /// The repair path (the file's hash already in the library) prunes the
+    /// same way, so "Re-download" alone fixes a folder with a leftover file.
+    #[tokio::test]
+    async fn a_pinned_repair_also_prunes_a_leftover_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = tmp.path().join("store");
+        let db = Database::connect_in_memory().await.unwrap();
+        let first = write_safetensors(
+            tmp.path(),
+            "generation_config.json",
+            FLORENCE2_GENERATION_CONFIG,
+        );
+        import_as(&db, &store, &first, "florence2_engine")
+            .await
+            .unwrap();
+        let leftover = store.join("vision/florence2-large/processing_florence2.py");
+        std::fs::write(&leftover, b"x = 1\n").unwrap();
+
+        let again = write_safetensors(
+            tmp.path(),
+            "generation_config.json",
+            FLORENCE2_GENERATION_CONFIG,
+        );
+        let out = import_as(&db, &store, &again, "florence2_engine")
+            .await
+            .unwrap();
+        assert!(out.already_present);
+        assert!(!leftover.exists());
+        assert!(store
+            .join("vision/florence2-large/generation_config.json")
+            .is_file());
+    }
+
+    /// Pruning never follows a link: a junction inside the pinned folder is
+    /// removed as a link, and its target keeps every file.
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn pruning_removes_a_junction_itself_never_its_target() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = tmp.path().join("store");
+        let db = Database::connect_in_memory().await.unwrap();
+        let dir = store.join("vision").join("florence2-large");
+        std::fs::create_dir_all(&dir).unwrap();
+        let outside = tmp.path().join("outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("keep.txt"), b"keep").unwrap();
+        let status = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(dir.join("linked"))
+            .arg(&outside)
+            .stdout(std::process::Stdio::null())
+            .status()
+            .unwrap();
+        assert!(status.success(), "mklink /J failed");
+
+        let src = write_safetensors(
+            tmp.path(),
+            "generation_config.json",
+            FLORENCE2_GENERATION_CONFIG,
+        );
+        import_as(&db, &store, &src, "florence2_engine")
+            .await
+            .unwrap();
+        assert!(std::fs::symlink_metadata(dir.join("linked")).is_err());
+        assert_eq!(std::fs::read(outside.join("keep.txt")).unwrap(), b"keep");
+    }
+
+    /// A pinned folder that is itself redirected out of the store is never
+    /// pruned: nothing outside the store's own folder is deleted.
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn a_redirected_pinned_folder_is_not_pruned() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = tmp.path().join("store");
+        let db = Database::connect_in_memory().await.unwrap();
+        std::fs::create_dir_all(store.join("vision")).unwrap();
+        let outside = tmp.path().join("outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("precious.py"), b"keep").unwrap();
+        let status = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(store.join("vision").join("florence2-large"))
+            .arg(&outside)
+            .stdout(std::process::Stdio::null())
+            .status()
+            .unwrap();
+        assert!(status.success(), "mklink /J failed");
+
+        let src = write_safetensors(
+            tmp.path(),
+            "generation_config.json",
+            FLORENCE2_GENERATION_CONFIG,
+        );
+        // Whatever the import does with the file itself, the prune must not
+        // delete anything in the junction's target.
+        let _ = import_as(&db, &store, &src, "florence2_engine").await;
+        assert_eq!(std::fs::read(outside.join("precious.py")).unwrap(), b"keep");
     }
 
     /// Every file of a pinned snapshot kind must be a catalog entry of that
@@ -1503,26 +1869,18 @@ mod tests {
         assert!(db.models().list().await.unwrap().is_empty());
     }
 
+    /// Florence-2 loads natively now: no Python file is ever a captioner
+    /// file, so a `.py` offered as one is refused outright.
     #[tokio::test]
-    async fn a_remote_code_python_file_outside_the_catalog_is_refused() {
-        // Florence-2 runs its `.py` files via `trust_remote_code=True` --
-        // only the exact, pinned files the catalog lists may ever be placed
-        // where the sidecar would execute them.
+    async fn a_python_file_is_never_imported_as_a_florence2_file() {
         let tmp = tempfile::tempdir().unwrap();
         let store = tmp.path().join("store");
         let db = Database::connect_in_memory().await.unwrap();
         let src = write_safetensors(tmp.path(), "modeling_florence2.py", b"import os\n");
-        let err = import_model(
-            &db,
-            &store,
-            ImportRequest {
-                model_type: Some("florence2_engine".into()),
-                ..req(&src)
-            },
-        )
-        .await
-        .unwrap_err();
-        assert!(err.to_string().contains("pinned"), "{err}");
+        let err = import_as(&db, &store, &src, "florence2_engine")
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains(".py"), "{err}");
         assert!(!store
             .join("vision/florence2-large/modeling_florence2.py")
             .exists());
@@ -1533,30 +1891,24 @@ mod tests {
     fn pinned_kind_files_are_allowed_only_as_catalogued_files_of_the_same_kind() {
         let pinned = crate::model::KNOWN_MODELS
             .iter()
-            .find(|m| m.kind == "florence2_engine" && m.file.ends_with(".py"))
-            .expect("the catalog pins Florence-2's remote code");
+            .find(|m| m.kind == "florence2_engine" && m.file == "config.json")
+            .expect("the catalog pins Florence-2's config");
         let florence = ModelKind::Florence2Engine;
         let qwen = ModelKind::QwenVlEngine;
         let unknown = "0".repeat(64);
 
         assert_eq!(
-            pinned_file_for(florence, "py", pinned.sha256).unwrap(),
+            pinned_file_for(florence, "json", pinned.sha256).unwrap(),
             Some(pinned.file)
         );
         assert_eq!(
-            pinned_file_for(florence, "PY", &pinned.sha256.to_ascii_uppercase()).unwrap(),
+            pinned_file_for(florence, "JSON", &pinned.sha256.to_ascii_uppercase()).unwrap(),
             Some(pinned.file)
         );
-        assert!(pinned_file_for(florence, "py", &unknown).is_err());
         assert!(pinned_file_for(florence, "json", &unknown).is_err());
+        assert!(pinned_file_for(florence, "txt", &unknown).is_err());
         // Another kind's pinned file is not this kind's.
-        // (Qwen never accepts `.py` at all -- `resolve_kind` refuses it
-        // before this gate -- so the cross-kind case is a pinned JSON.)
-        let florence_json = crate::model::KNOWN_MODELS
-            .iter()
-            .find(|m| m.kind == "florence2_engine" && m.file == "config.json")
-            .unwrap();
-        assert!(pinned_file_for(qwen, "json", florence_json.sha256).is_err());
+        assert!(pinned_file_for(qwen, "json", pinned.sha256).is_err());
         assert!(pinned_file_for(qwen, "json", &unknown).is_err());
         // Weights / tokenizer data are gated too: only catalog entries of
         // the kind are imported.

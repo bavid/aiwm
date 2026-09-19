@@ -658,28 +658,30 @@ pub const KNOWN_MODELS: &[KnownModel] = &[
         media: "training",
     },
     // --- Florence-2 large (prose captioner, Dataset tab) ---
-    // Ten co-located files read as one directory by
-    // `AutoModelForCausalLM.from_pretrained(<dir>, trust_remote_code=True)` --
-    // see `ModelKind::Florence2Engine`. The three `.py` files are remote code
-    // the sidecar executes, so every URL is pinned to one commit (never
-    // `main`) and each SHA-256/size below was computed from the file actually
-    // downloaded at that commit (the weights' hash also matches the Hub's LFS
-    // metadata).
+    // Eleven co-located files of the transformers-native conversion
+    // (`florence-community/Florence-2-large`), read as one directory by
+    // `Florence2ForConditionalGeneration` / `AutoProcessor.from_pretrained(<dir>)`
+    // -- built into transformers 5.x, no remote code, no `.py` file. Every URL is
+    // pinned to one commit (never `main`) and each SHA-256/size below was
+    // computed from the file actually downloaded at that commit (the weights'
+    // hash also matches the Hub's LFS metadata). License: MIT, per the model
+    // card at that commit.
     KnownModel {
         id: "florence2-large-model",
         name: "Florence-2 large — weights",
         kind: "florence2_engine",
         family: Some("florence2"),
-        publisher: "Microsoft",
-        repo: "microsoft/Florence-2-large",
+        publisher: "Microsoft (converted by florence-community)",
+        repo: "florence-community/Florence-2-large",
         file: "model.safetensors",
-        url: "https://huggingface.co/microsoft/Florence-2-large/resolve/21a599d414c4d928c9032694c424fb94458e3594/model.safetensors",
-        sha256: "4f38ce741c6b71188fe2b3419a55e11917a8a7b321ae2e63c61da0191b0ebad7",
-        size_bytes: 1_553_563_458,
+        url: "https://huggingface.co/florence-community/Florence-2-large/resolve/4271c66b88cdbc05735372ec13b2360108de5317/model.safetensors",
+        sha256: "7715423d6549bf1e71188bdd84f4ac960cc0597886af24a5ef7b66f128660685",
+        size_bytes: 1_553_541_016,
         license: "MIT",
-        note: "Florence-2-large weights (0.77B parameters, ~1.55 GB) -- the prose captioner \
-               the Dataset tab uses by default. Needs every other Florence-2 file below in \
-               the same folder. Pinned to commit 21a599d414c4d928c9032694c424fb94458e3594.",
+        note: "Florence-2-large weights (0.77B parameters, ~1.55 GB), the transformers-native \
+               conversion -- the prose captioner of the Dataset tab. Needs every other \
+               Florence-2 file below in the same folder. Pinned to commit \
+               4271c66b88cdbc05735372ec13b2360108de5317.",
         is_default: false,
         media: "training",
     },
@@ -688,88 +690,16 @@ pub const KNOWN_MODELS: &[KnownModel] = &[
         name: "Florence-2 large — model config",
         kind: "florence2_engine",
         family: Some("florence2"),
-        publisher: "Microsoft",
-        repo: "microsoft/Florence-2-large",
+        publisher: "Microsoft (converted by florence-community)",
+        repo: "florence-community/Florence-2-large",
         file: "config.json",
-        url: "https://huggingface.co/microsoft/Florence-2-large/resolve/21a599d414c4d928c9032694c424fb94458e3594/config.json",
-        sha256: "6f8a8f92a74ce18b5c1e5646b4a8222477dd1ac49f31b953e75d6fc3e0f8583a",
-        size_bytes: 2_445,
+        url: "https://huggingface.co/florence-community/Florence-2-large/resolve/4271c66b88cdbc05735372ec13b2360108de5317/config.json",
+        sha256: "8412483f687f2f71587328a38c6fa70a68d9488f28e90607be3c182641f60f2c",
+        size_bytes: 2_396,
         license: "MIT",
-        note: "Architecture config; its auto_map points AutoModelForCausalLM at the pinned \
-               modeling_florence2.py below. Pinned to commit \
-               21a599d414c4d928c9032694c424fb94458e3594.",
-        is_default: false,
-        media: "training",
-    },
-    KnownModel {
-        id: "florence2-large-configuration-florence2",
-        name: "Florence-2 large — remote code (config)",
-        kind: "florence2_engine",
-        family: Some("florence2"),
-        publisher: "Microsoft",
-        repo: "microsoft/Florence-2-large",
-        file: "configuration_florence2.py",
-        url: "https://huggingface.co/microsoft/Florence-2-large/resolve/21a599d414c4d928c9032694c424fb94458e3594/configuration_florence2.py",
-        sha256: "de2e45a975b3582de05d2f4d963a3e9f9a3d20dccf78d28e0052932a0be93bdf",
-        size_bytes: 15_119,
-        license: "MIT",
-        note: "Florence2Config -- Python the sidecar runs via trust_remote_code, so it is \
-               pinned by hash like the weights. Pinned to commit \
-               21a599d414c4d928c9032694c424fb94458e3594.",
-        is_default: false,
-        media: "training",
-    },
-    KnownModel {
-        id: "florence2-large-modeling-florence2",
-        name: "Florence-2 large — remote code (model)",
-        kind: "florence2_engine",
-        family: Some("florence2"),
-        publisher: "Microsoft",
-        repo: "microsoft/Florence-2-large",
-        file: "modeling_florence2.py",
-        url: "https://huggingface.co/microsoft/Florence-2-large/resolve/21a599d414c4d928c9032694c424fb94458e3594/modeling_florence2.py",
-        sha256: "5162bf465e61b6e29cc113a467630ec3cb56ed8e4d46eb6207157f10fb9b8a24",
-        size_bytes: 127_455,
-        license: "MIT",
-        note: "Florence2ForConditionalGeneration -- Python the sidecar runs via \
-               trust_remote_code, pinned by hash. Pinned to commit \
-               21a599d414c4d928c9032694c424fb94458e3594.",
-        is_default: false,
-        media: "training",
-    },
-    KnownModel {
-        id: "florence2-large-processing-florence2",
-        name: "Florence-2 large — remote code (processor)",
-        kind: "florence2_engine",
-        family: Some("florence2"),
-        publisher: "Microsoft",
-        repo: "microsoft/Florence-2-large",
-        file: "processing_florence2.py",
-        url: "https://huggingface.co/microsoft/Florence-2-large/resolve/21a599d414c4d928c9032694c424fb94458e3594/processing_florence2.py",
-        sha256: "c655782a9e4347965c735ea54cbc4e98fdbc02155ffd1ce2ecd61f42c45eda28",
-        size_bytes: 48_674,
-        license: "MIT",
-        note: "Florence2Processor (task prompts, post-processing) -- Python run via \
-               trust_remote_code, pinned by hash. Pinned to commit \
-               21a599d414c4d928c9032694c424fb94458e3594.",
-        is_default: false,
-        media: "training",
-    },
-    KnownModel {
-        id: "florence2-large-preprocessor-config",
-        name: "Florence-2 large — preprocessor config",
-        kind: "florence2_engine",
-        family: Some("florence2"),
-        publisher: "Microsoft",
-        repo: "microsoft/Florence-2-large",
-        file: "preprocessor_config.json",
-        url: "https://huggingface.co/microsoft/Florence-2-large/resolve/21a599d414c4d928c9032694c424fb94458e3594/preprocessor_config.json",
-        sha256: "2f5921bbc53c7cc04251e1027b45b1cec726276be6db23d1bb40641bfbe2cf29",
-        size_bytes: 806,
-        license: "MIT",
-        note: "Image preprocessing settings; its auto_map points AutoProcessor at \
-               processing_florence2.py. Pinned to commit \
-               21a599d414c4d928c9032694c424fb94458e3594.",
+        note: "Architecture config for transformers' built-in \
+               Florence2ForConditionalGeneration -- no remote code. Pinned to commit \
+               4271c66b88cdbc05735372ec13b2360108de5317.",
         is_default: false,
         media: "training",
     },
@@ -778,15 +708,49 @@ pub const KNOWN_MODELS: &[KnownModel] = &[
         name: "Florence-2 large — generation defaults",
         kind: "florence2_engine",
         family: Some("florence2"),
-        publisher: "Microsoft",
-        repo: "microsoft/Florence-2-large",
+        publisher: "Microsoft (converted by florence-community)",
+        repo: "florence-community/Florence-2-large",
         file: "generation_config.json",
-        url: "https://huggingface.co/microsoft/Florence-2-large/resolve/21a599d414c4d928c9032694c424fb94458e3594/generation_config.json",
-        sha256: "30e9865458ecc8ee931eeeb43f44f1d169c5ab95be39e0072142a7a6b8f31990",
-        size_bytes: 51,
+        url: "https://huggingface.co/florence-community/Florence-2-large/resolve/4271c66b88cdbc05735372ec13b2360108de5317/generation_config.json",
+        sha256: "0251459c49cc358ac033b5d4b8569e61ac22bde5d76be404b97a44cfb33fb12e",
+        size_bytes: 292,
         license: "MIT",
         note: "Shipped beam-search defaults. Pinned to commit \
-               21a599d414c4d928c9032694c424fb94458e3594.",
+               4271c66b88cdbc05735372ec13b2360108de5317.",
+        is_default: false,
+        media: "training",
+    },
+    KnownModel {
+        id: "florence2-large-preprocessor-config",
+        name: "Florence-2 large — preprocessor config",
+        kind: "florence2_engine",
+        family: Some("florence2"),
+        publisher: "Microsoft (converted by florence-community)",
+        repo: "florence-community/Florence-2-large",
+        file: "preprocessor_config.json",
+        url: "https://huggingface.co/florence-community/Florence-2-large/resolve/4271c66b88cdbc05735372ec13b2360108de5317/preprocessor_config.json",
+        sha256: "1396ec5a0a7adfe1c04fb777b09e8ba753be6dbb5868212ab3c3ef39d91fe031",
+        size_bytes: 603,
+        license: "MIT",
+        note: "Image preprocessing settings (768x768, CLIP normalisation). Pinned to commit \
+               4271c66b88cdbc05735372ec13b2360108de5317.",
+        is_default: false,
+        media: "training",
+    },
+    KnownModel {
+        id: "florence2-large-processor-config",
+        name: "Florence-2 large — processor config",
+        kind: "florence2_engine",
+        family: Some("florence2"),
+        publisher: "Microsoft (converted by florence-community)",
+        repo: "florence-community/Florence-2-large",
+        file: "processor_config.json",
+        url: "https://huggingface.co/florence-community/Florence-2-large/resolve/4271c66b88cdbc05735372ec13b2360108de5317/processor_config.json",
+        sha256: "cd0e3bf41a39b1276503fbd273bc03b9afc70d7a15ea681a92a1b4b77f858ee6",
+        size_bytes: 2_264,
+        license: "MIT",
+        note: "Florence2Processor settings: task prompts and post-processing. Pinned to commit \
+               4271c66b88cdbc05735372ec13b2360108de5317.",
         is_default: false,
         media: "training",
     },
@@ -795,15 +759,15 @@ pub const KNOWN_MODELS: &[KnownModel] = &[
         name: "Florence-2 large — tokenizer",
         kind: "florence2_engine",
         family: Some("florence2"),
-        publisher: "Microsoft",
-        repo: "microsoft/Florence-2-large",
+        publisher: "Microsoft (converted by florence-community)",
+        repo: "florence-community/Florence-2-large",
         file: "tokenizer.json",
-        url: "https://huggingface.co/microsoft/Florence-2-large/resolve/21a599d414c4d928c9032694c424fb94458e3594/tokenizer.json",
-        sha256: "847bbeab6174d66a88898f729d52fa8d355fafe1bea101cf960dd404581df70e",
-        size_bytes: 1_355_863,
+        url: "https://huggingface.co/florence-community/Florence-2-large/resolve/4271c66b88cdbc05735372ec13b2360108de5317/tokenizer.json",
+        sha256: "3ad7001f773409abe6bba33eac92662611a73d72f459bda2f00d2a221dd31ce4",
+        size_bytes: 3_748_144,
         license: "MIT",
         note: "The fast BART tokenizer the processor loads. Pinned to commit \
-               21a599d414c4d928c9032694c424fb94458e3594.",
+               4271c66b88cdbc05735372ec13b2360108de5317.",
         is_default: false,
         media: "training",
     },
@@ -812,15 +776,15 @@ pub const KNOWN_MODELS: &[KnownModel] = &[
         name: "Florence-2 large — tokenizer config",
         kind: "florence2_engine",
         family: Some("florence2"),
-        publisher: "Microsoft",
-        repo: "microsoft/Florence-2-large",
+        publisher: "Microsoft (converted by florence-community)",
+        repo: "florence-community/Florence-2-large",
         file: "tokenizer_config.json",
-        url: "https://huggingface.co/microsoft/Florence-2-large/resolve/21a599d414c4d928c9032694c424fb94458e3594/tokenizer_config.json",
-        sha256: "79ffcf43af8ebda99d165f61d243180da2e2639952e41e71e11611c18770489c",
-        size_bytes: 34,
+        url: "https://huggingface.co/florence-community/Florence-2-large/resolve/4271c66b88cdbc05735372ec13b2360108de5317/tokenizer_config.json",
+        sha256: "cb5f80bd9afa767bb1bb798ee5f0a79eae45239b8e72506166b4218175a16723",
+        size_bytes: 197_922,
         license: "MIT",
-        note: "Tokenizer settings (max length). Pinned to commit \
-               21a599d414c4d928c9032694c424fb94458e3594.",
+        note: "Tokenizer settings and the added task/location tokens. Pinned to commit \
+               4271c66b88cdbc05735372ec13b2360108de5317.",
         is_default: false,
         media: "training",
     },
@@ -829,14 +793,65 @@ pub const KNOWN_MODELS: &[KnownModel] = &[
         name: "Florence-2 large — vocabulary",
         kind: "florence2_engine",
         family: Some("florence2"),
-        publisher: "Microsoft",
-        repo: "microsoft/Florence-2-large",
+        publisher: "Microsoft (converted by florence-community)",
+        repo: "florence-community/Florence-2-large",
         file: "vocab.json",
-        url: "https://huggingface.co/microsoft/Florence-2-large/resolve/21a599d414c4d928c9032694c424fb94458e3594/vocab.json",
-        sha256: "394fdc63c71aabe0a9b97117f5d62fb5fcc4d59b2b3ea929a3929e6a53217b3c",
-        size_bytes: 1_099_884,
+        url: "https://huggingface.co/florence-community/Florence-2-large/resolve/4271c66b88cdbc05735372ec13b2360108de5317/vocab.json",
+        sha256: "ed19656ea1707df69134c4af35c8ceda2cc9860bf2c3495026153a133670ab5e",
+        size_bytes: 798_293,
         license: "MIT",
-        note: "BART vocabulary. Pinned to commit 21a599d414c4d928c9032694c424fb94458e3594.",
+        note: "BART vocabulary. Pinned to commit 4271c66b88cdbc05735372ec13b2360108de5317.",
+        is_default: false,
+        media: "training",
+    },
+    KnownModel {
+        id: "florence2-large-merges",
+        name: "Florence-2 large — BPE merges",
+        kind: "florence2_engine",
+        family: Some("florence2"),
+        publisher: "Microsoft (converted by florence-community)",
+        repo: "florence-community/Florence-2-large",
+        file: "merges.txt",
+        url: "https://huggingface.co/florence-community/Florence-2-large/resolve/4271c66b88cdbc05735372ec13b2360108de5317/merges.txt",
+        sha256: "1ce1664773c50f3e0cc8842619a93edc4624525b728b188a9e0be33b7726adc5",
+        size_bytes: 456_318,
+        license: "MIT",
+        note: "BART BPE merge rules. Pinned to commit \
+               4271c66b88cdbc05735372ec13b2360108de5317.",
+        is_default: false,
+        media: "training",
+    },
+    KnownModel {
+        id: "florence2-large-added-tokens",
+        name: "Florence-2 large — added tokens",
+        kind: "florence2_engine",
+        family: Some("florence2"),
+        publisher: "Microsoft (converted by florence-community)",
+        repo: "florence-community/Florence-2-large",
+        file: "added_tokens.json",
+        url: "https://huggingface.co/florence-community/Florence-2-large/resolve/4271c66b88cdbc05735372ec13b2360108de5317/added_tokens.json",
+        sha256: "1d75deda84dfa81fb6c09301f3fed00f9695059568bbb1403a6bf299cd84fc37",
+        size_bytes: 22_430,
+        license: "MIT",
+        note: "Florence-2's task and location tokens on top of BART's vocabulary. Pinned to \
+               commit 4271c66b88cdbc05735372ec13b2360108de5317.",
+        is_default: false,
+        media: "training",
+    },
+    KnownModel {
+        id: "florence2-large-special-tokens-map",
+        name: "Florence-2 large — special tokens map",
+        kind: "florence2_engine",
+        family: Some("florence2"),
+        publisher: "Microsoft (converted by florence-community)",
+        repo: "florence-community/Florence-2-large",
+        file: "special_tokens_map.json",
+        url: "https://huggingface.co/florence-community/Florence-2-large/resolve/4271c66b88cdbc05735372ec13b2360108de5317/special_tokens_map.json",
+        sha256: "72ff172dc769bc1551b1b4211628ce3271643bc60379e4da45d85a9be9332c39",
+        size_bytes: 146_627,
+        license: "MIT",
+        note: "The tokenizer's special-token roles. Pinned to commit \
+               4271c66b88cdbc05735372ec13b2360108de5317.",
         is_default: false,
         media: "training",
     },
@@ -1244,18 +1259,19 @@ pub const MODEL_STACKS: &[ModelStack] = &[
         member_ids: &[
             "florence2-large-model",
             "florence2-large-config",
-            "florence2-large-configuration-florence2",
-            "florence2-large-modeling-florence2",
-            "florence2-large-processing-florence2",
-            "florence2-large-preprocessor-config",
             "florence2-large-generation-config",
+            "florence2-large-preprocessor-config",
+            "florence2-large-processor-config",
             "florence2-large-tokenizer",
             "florence2-large-tokenizer-config",
             "florence2-large-vocab",
+            "florence2-large-merges",
+            "florence2-large-added-tokens",
+            "florence2-large-special-tokens-map",
         ],
-        note: "Sentence-style captions instead of tags. Ten files (~1.56 GB), pinned to one \
-               revision because three of them are Python the model runs on load. Needs ~2 GB \
-               VRAM.",
+        note: "Sentence-style captions instead of tags. Eleven files (~1.56 GB) of the \
+               transformers-native checkpoint, pinned to one revision; no remote code runs. \
+               Needs ~2.5 GB VRAM.",
         is_default: false,
     },
     ModelStack {
@@ -1280,7 +1296,7 @@ pub const MODEL_STACKS: &[ModelStack] = &[
         ],
         note: "Optional and large: re-captions a frame together with a later one when a \
                Florence-2 caption looks unsure, describing what changes between them. \
-               Fourteen files (~16.6 GB download); loaded 4-bit it needs ~6 GB VRAM.",
+               Fourteen files (~16.6 GB download); loaded 4-bit it needs ~9 GB VRAM.",
         is_default: false,
     },
 ];
@@ -1740,24 +1756,47 @@ mod tests {
         );
     }
 
+    /// The converted checkpoint `Florence2ForConditionalGeneration` +
+    /// `AutoProcessor` load natively (transformers 5.x) -- no remote code.
     #[test]
-    fn the_florence2_stack_bundles_weights_configs_tokenizer_and_remote_code() {
+    fn the_florence2_stack_is_the_native_checkpoint_without_any_python() {
         assert_directory_stack(
             "florence2-large",
             "florence2_engine",
             &[
+                "added_tokens.json",
                 "config.json",
-                "configuration_florence2.py",
                 "generation_config.json",
+                "merges.txt",
                 "model.safetensors",
-                "modeling_florence2.py",
                 "preprocessor_config.json",
-                "processing_florence2.py",
+                "processor_config.json",
+                "special_tokens_map.json",
                 "tokenizer.json",
                 "tokenizer_config.json",
                 "vocab.json",
             ],
         );
+        for m in KNOWN_MODELS.iter().filter(|m| m.kind == "florence2_engine") {
+            assert!(
+                !m.file.to_ascii_lowercase().ends_with(".py"),
+                "{}: no remote code in the Florence-2 stack",
+                m.id
+            );
+            assert_eq!(m.repo, "florence-community/Florence-2-large", "{}", m.id);
+            assert!(
+                m.url
+                    .contains("/resolve/4271c66b88cdbc05735372ec13b2360108de5317/"),
+                "{}: pinned to the converted checkpoint's commit",
+                m.id
+            );
+        }
+        let weights = member("florence2-large-model");
+        assert_eq!(
+            weights.sha256,
+            "7715423d6549bf1e71188bdd84f4ac960cc0597886af24a5ef7b66f128660685"
+        );
+        assert_eq!(weights.size_bytes, 1_553_541_016);
     }
 
     #[test]

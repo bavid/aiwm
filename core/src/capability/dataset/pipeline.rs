@@ -75,6 +75,17 @@ async fn discard_empty_dataset(db: &Database, dataset_id: &str) {
     }
 }
 
+/// A captioner with a known issue would only fail after the whole
+/// extraction — it is refused up front, with the reason.
+fn refuse_known_issue(captioner: Option<&captioner::Captioner>) -> Result<()> {
+    match captioner.and_then(|c| Some((c.name, c.known_issue?))) {
+        Some((name, issue)) => Err(dataset_err(format!(
+            "{name} cannot caption right now: {issue}"
+        ))),
+        None => Ok(()),
+    }
+}
+
 /// Run the whole pipeline for `req`, writing extracted frames under
 /// `work_dir/<job_id>/raw/` and persisting kept, captioned frames to the
 /// `dataset_frames` table. The vision runtime's model is already loaded by
@@ -107,13 +118,7 @@ pub async fn run(
     // the disk, so a missing model fails fast — but only when one was asked
     // for. Extraction, filtering and curation never need a model.
     let captioner = req.captioner.as_deref().and_then(captioner::find_captioner);
-    // A captioner with a known issue (Florence-2 on transformers 5.x) would
-    // only fail after the whole extraction — refuse it here, with the reason.
-    if let Some((name, issue)) = captioner.and_then(|c| Some((c.name, c.known_issue?))) {
-        return Err(dataset_err(format!(
-            "{name} cannot caption right now: {issue}"
-        )));
-    }
+    refuse_known_issue(captioner)?;
     let captioner_dir = match captioner {
         Some(c) => Some(caption::resolve_captioner_dir(db, store_root, c).await?),
         None => None,
@@ -551,11 +556,25 @@ mod tests {
             .unwrap_err();
         assert!(err.to_string().contains("WD EVA02 Tagger v3"), "{err}");
     }
-    /// A captioner with a known issue (Florence-2 on transformers 5.x) is
-    /// refused up front with the reason — not after minutes of extraction,
-    /// leaving an uncaptioned dataset behind.
+    /// A captioner with a known issue is refused up front with the reason —
+    /// not after minutes of extraction, leaving an uncaptioned dataset behind.
+    #[test]
+    fn a_captioner_with_a_known_issue_is_refused_with_its_reason() {
+        let flagged = captioner::Captioner {
+            known_issue: Some("broken on this runtime"),
+            ..*captioner::find_captioner("florence2").unwrap()
+        };
+        let err = refuse_known_issue(Some(&flagged)).unwrap_err().to_string();
+        assert!(err.contains("broken on this runtime"), "{err}");
+        assert!(refuse_known_issue(captioner::find_captioner("florence2")).is_ok());
+        assert!(refuse_known_issue(None).is_ok());
+    }
+
+    /// Plan 8: Florence-2 is no longer refused as a known issue -- a run
+    /// without its files fails on the missing install, still before any
+    /// dataset exists.
     #[tokio::test]
-    async fn run_refuses_a_captioner_with_a_known_issue_before_touching_the_disk() {
+    async fn run_with_florence2_uninstalled_fails_fast_on_the_install_not_a_known_issue() {
         let db = Database::connect_in_memory().await.unwrap();
         let vision = VisionAdapter::new();
         let tmp = tempfile::tempdir().unwrap();
@@ -568,8 +587,10 @@ mod tests {
 
         let err = run(&db, &vision, tmp.path(), tmp.path(), "job-1", req, rx)
             .await
-            .unwrap_err();
-        assert!(err.to_string().contains("fix is planned"), "{err}");
+            .unwrap_err()
+            .to_string();
+        assert!(!err.contains("cannot caption right now"), "{err}");
+        assert!(err.contains("Florence-2"), "{err}");
         assert!(db.datasets().list().await.unwrap().is_empty());
     }
 
