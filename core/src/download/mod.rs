@@ -404,16 +404,37 @@ impl DownloadManager {
             },
         )
         .await?;
-        self.db
-            .downloads()
-            .set_model_id(&d.id, &outcome.model.id)
-            .await?;
-        self.db
-            .downloads()
-            .set_state(&d.id, DownloadState::Done, None)
-            .await?;
+        self.finish_import(&d.id, &outcome.model.id).await?;
         let _ = tokio::fs::remove_dir_all(self.staging_root.join(&d.id)).await;
         tracing::info!(id = %d.id, model = %outcome.model.id, "download imported");
+        Ok(())
+    }
+
+    /// Mark an imported download done and hand the imported model every role
+    /// the download carries *now*. The import used the row as the worker read
+    /// it before the transfer; an enqueue merged meanwhile (see
+    /// [`Self::merge_into`]) may have added roles since. Runs under
+    /// `enqueue_lock`, so no merge can slip in between re-reading the roles
+    /// and the row turning `Done` (after which a new enqueue queues afresh).
+    /// Database work only — no file I/O while holding the lock.
+    async fn finish_import(&self, download_id: &str, model_id: &str) -> Result<()> {
+        let _guard = self.enqueue_lock.lock().await;
+        let downloads = self.db.downloads();
+        downloads.set_model_id(download_id, model_id).await?;
+        downloads
+            .set_state(download_id, DownloadState::Done, None)
+            .await?;
+        let wanted = downloads
+            .get(download_id)
+            .await?
+            .map(|d| d.roles)
+            .unwrap_or_default();
+        let have = self.db.models().roles(model_id).await?;
+        let missing: Vec<&String> = wanted.iter().filter(|r| !have.contains(r)).collect();
+        if !missing.is_empty() {
+            let all: Vec<String> = have.iter().chain(missing).cloned().collect();
+            self.db.models().set_roles(model_id, &all).await?;
+        }
         Ok(())
     }
 

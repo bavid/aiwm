@@ -323,6 +323,13 @@ async fn list_captioners(app: tauri::State<'_, Arc<App>>) -> Result<Vec<Captione
 }
 
 #[tauri::command]
+async fn escalation_status(
+    app: tauri::State<'_, Arc<App>>,
+) -> Result<aiwm_core::capability::dataset::EscalationStatus, String> {
+    to_ipc(handlers::escalation_status(&app).await)
+}
+
+#[tauri::command]
 async fn list_datasets(app: tauri::State<'_, Arc<App>>) -> Result<Vec<Dataset>, String> {
     to_ipc(handlers::list_datasets(&app).await)
 }
@@ -1366,6 +1373,7 @@ fn try_run() -> anyhow::Result<()> {
             update_dataset_frame,
             export_dataset,
             list_captioners,
+            escalation_status,
             list_datasets,
             get_dataset,
             update_dataset,

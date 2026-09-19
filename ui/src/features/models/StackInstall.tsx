@@ -111,6 +111,9 @@ export function StackInstall({
           {error}
         </p>
       )}
+      {loadError && progress && (
+        <p className="stackinstall__err">Could not read the download queue: {loadError}</p>
+      )}
     </div>
   );
 }

@@ -907,7 +907,20 @@ export interface Captioner {
   /** Whether frame-X-vs-X+N temporal escalation applies on top of it. */
   supports_escalation: boolean;
   required_files: string[];
+  /** `false` too when the files are all there but fail the load-time
+   *  integrity check — see `unusable`. */
   installed: boolean;
+  /** Why a complete set of files cannot be used (tampered, missing or extra
+   *  file in the pinned folder); `null` when installed or simply absent. */
+  unusable: string | null;
+}
+
+/** The Qwen2.5-VL escalation model (`GET /captioners/escalation`) — not a
+ *  captioner of its own, but the same "files there, yet unusable" case. */
+export interface EscalationStatus {
+  files_present: boolean;
+  usable: boolean;
+  reason: string | null;
 }
 
 /** A concept the dataset teaches, with its frame count and the inline warning
@@ -1029,6 +1042,7 @@ export const exportDataset = (jobId: string, destDir: string) =>
   invoke<ExportDatasetSummary>("export_dataset", { jobId, destDir });
 
 export const listCaptioners = () => invoke<Captioner[]>("list_captioners");
+export const escalationStatus = () => invoke<EscalationStatus>("escalation_status");
 
 export const listDatasets = () => invoke<Dataset[]>("list_datasets");
 

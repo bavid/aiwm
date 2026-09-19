@@ -761,3 +761,41 @@ async fn concurrent_enqueues_of_the_same_file_create_one_download() {
     }
     assert_eq!(m.list().await.unwrap().len(), 8);
 }
+
+/// A role merged into a download that is already transferring must reach the
+/// imported model â€” the worker read its row before the merge happened.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_role_merged_mid_transfer_reaches_the_imported_model() {
+    let tmp = tempfile::tempdir().unwrap();
+    let body = gguf_body();
+    let server = start_server(body.clone()).await;
+    server.slow_ms.store(20, Ordering::SeqCst);
+    let (m, db) = manager(tmp.path()).await;
+    let request = |roles: Vec<String>| EnqueueRequest {
+        url: format!("{}/model.gguf", server.base),
+        filename: "m.gguf".into(),
+        model_type: Some("chat".into()),
+        sha256: Some(sha256_hex(&body)),
+        size_bytes: Some(body.len() as u64),
+        roles,
+    };
+
+    let d = m.enqueue(request(vec!["chat".into()])).await.unwrap();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while m.get(&d.id).await.unwrap().unwrap().state != DownloadState::Running {
+        assert!(tokio::time::Instant::now() < deadline, "never started");
+        tokio::time::sleep(Duration::from_millis(15)).await;
+    }
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    let merged = m.enqueue(request(vec!["coding".into()])).await.unwrap();
+    assert_eq!(merged.id, d.id);
+    assert_eq!(merged.state, DownloadState::Running, "merged mid-transfer");
+
+    let done = wait_for(&m, &d.id, DownloadState::Done).await;
+    assert_eq!(done.state, DownloadState::Done, "{:?}", done.error_text);
+    let model_id = done.model_id.expect("imported");
+    let mut roles = db.models().roles(&model_id).await.unwrap();
+    roles.sort();
+    assert_eq!(roles, vec!["chat".to_string(), "coding".to_string()]);
+}

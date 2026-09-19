@@ -370,10 +370,20 @@ pub async fn export_dataset(
 
 /// `GET /captioners` — the captioner registry plus whether each one's files
 /// are in the model library; the "Beschreiben mit" dropdown filters on it.
+/// `GET /captioners` — the registry with install state. A captioner that
+/// loads from a pinned snapshot folder only counts as installed when that
+/// folder passes the load-time integrity check; otherwise `unusable` says
+/// why (the Models tab then offers a re-download).
 pub async fn list_captioners(
     app: &App,
 ) -> Result<Vec<crate::capability::dataset::CaptionerStatus>> {
-    crate::capability::dataset::captioner_statuses(&app.db).await
+    crate::capability::dataset::captioner_statuses_verified(&app.db, &app.config.store_path).await
+}
+
+/// `GET /captioners/escalation` — the Qwen2.5-VL escalation model's files and
+/// integrity state, for its card on the Models tab.
+pub async fn escalation_status(app: &App) -> Result<crate::capability::dataset::EscalationStatus> {
+    crate::capability::dataset::escalation_status(&app.db, &app.config.store_path).await
 }
 
 /// `GET /datasets` — every dataset, newest prep run included; a dataset

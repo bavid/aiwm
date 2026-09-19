@@ -9,7 +9,7 @@ use serde::Serialize;
 
 use super::compose::CaptionStyle;
 use crate::db::Database;
-use crate::model::WD_TAGGER_ROLE;
+use crate::model::{ModelKind, WD_TAGGER_ROLE};
 use crate::Result;
 
 pub const FLORENCE2_ID: &str = "florence2";
@@ -74,7 +74,26 @@ pub struct CaptionerStatus {
     /// Whether [`installed_captioner_dir`] found a directory satisfying
     /// this captioner — not merely "some row carries the role" (a lone
     /// `selected_tags.csv` import must not read as an installed tagger).
+    /// `false` as well when the files are all there but fail the load-time
+    /// integrity check — see `unusable`.
     pub installed: bool,
+    /// Why a complete set of files still cannot be used (the pinned snapshot
+    /// folder failed [`crate::model::verify_captioner_dir`]: a tampered,
+    /// missing or extra file). `None` when installed or simply not there.
+    pub unusable: Option<String>,
+}
+
+/// The Qwen2.5-VL escalation model's state for the Models tab — it is not a
+/// captioner of its own, but it has the same "files there, yet unusable"
+/// case.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct EscalationStatus {
+    /// Every required file sits in one directory of the library.
+    pub files_present: bool,
+    /// Files present and the pinned folder passes the integrity check.
+    pub usable: bool,
+    /// Why present files are not usable.
+    pub reason: Option<String>,
 }
 
 /// The directory that satisfies `c`: see [`complete_dir_for_role`].
@@ -121,9 +140,76 @@ pub async fn captioner_statuses(db: &Database) -> Result<Vec<CaptionerStatus>> {
         out.push(CaptionerStatus {
             captioner: *c,
             installed,
+            unusable: None,
         });
     }
     Ok(out)
+}
+
+/// The pinned snapshot kind whose files carry `role` — the kinds whose
+/// folder the load-time integrity check covers (Florence-2, Qwen2.5-VL).
+fn pinned_kind_for_role(role: &str) -> Option<ModelKind> {
+    [ModelKind::Florence2Engine, ModelKind::QwenVlEngine]
+        .into_iter()
+        .find(|k| k.default_role() == Some(role))
+}
+
+/// The load-time integrity verdict for a pinned kind's store folder:
+/// `None` when it passes, else the reason.
+async fn integrity_problem(store_root: &Path, kind: ModelKind) -> Option<String> {
+    crate::model::verify_captioner_dir_async(store_root, kind)
+        .await
+        .err()
+        .map(|e| e.to_string())
+}
+
+/// [`captioner_statuses`] with the load-time integrity check applied to every
+/// installed captioner that loads from a pinned snapshot folder, so the list
+/// never offers one the pipeline would refuse. Small (code/config) files are
+/// re-hashed per call; the weights' hash is cached by the check itself.
+pub async fn captioner_statuses_verified(
+    db: &Database,
+    store_root: &Path,
+) -> Result<Vec<CaptionerStatus>> {
+    let mut out = Vec::with_capacity(CAPTIONERS.len());
+    for status in captioner_statuses(db).await? {
+        let problem = match pinned_kind_for_role(status.captioner.role) {
+            Some(kind) if status.installed => integrity_problem(store_root, kind).await,
+            _ => None,
+        };
+        out.push(match problem {
+            Some(reason) => CaptionerStatus {
+                installed: false,
+                unusable: Some(reason),
+                ..status
+            },
+            None => status,
+        });
+    }
+    Ok(out)
+}
+
+/// The escalation model's state: are its files all in the library, and does
+/// its pinned folder pass the same load-time check the pipeline runs before
+/// loading it?
+pub async fn escalation_status(db: &Database, store_root: &Path) -> Result<EscalationStatus> {
+    let files_present = complete_dir_for_role(
+        db,
+        super::caption::QWEN_VL_ROLE,
+        super::caption::QWEN_VL_REQUIRED_FILES,
+    )
+    .await?
+    .is_some();
+    let reason = if files_present {
+        integrity_problem(store_root, ModelKind::QwenVlEngine).await
+    } else {
+        None
+    };
+    Ok(EscalationStatus {
+        files_present,
+        usable: files_present && reason.is_none(),
+        reason,
+    })
 }
 
 #[cfg(test)]
@@ -364,5 +450,93 @@ mod tests {
             sorted(super::super::caption::QWEN_VL_REQUIRED_FILES),
             stack_files("qwen2.5-vl-7b")
         );
+    }
+
+    /// The captioner list the UI shows must not call a pinned captioner
+    /// installed when its folder would fail the load-time check (here: the
+    /// store folder does not exist at all), and it says why.
+    #[tokio::test]
+    async fn a_complete_but_unverifiable_pinned_captioner_is_listed_as_unusable() {
+        let db = Database::connect_in_memory().await.unwrap();
+        let store = tempfile::tempdir().unwrap();
+        let florence = find_captioner(FLORENCE2_ID).unwrap();
+        for name in florence.required_files {
+            db.models()
+                .insert(model_row(
+                    &store
+                        .path()
+                        .join("vision/florence2-large")
+                        .join(name)
+                        .to_string_lossy(),
+                    florence.role,
+                ))
+                .await
+                .unwrap();
+        }
+        let wd = find_captioner(WD_TAGGER_ID).unwrap();
+        for name in wd.required_files {
+            db.models()
+                .insert(model_row(
+                    &store
+                        .path()
+                        .join("vision/wd-tagger")
+                        .join(name)
+                        .to_string_lossy(),
+                    wd.role,
+                ))
+                .await
+                .unwrap();
+        }
+
+        let s = captioner_statuses_verified(&db, store.path())
+            .await
+            .unwrap();
+        let by_id = |id: &str| s.iter().find(|x| x.captioner.id == id).unwrap().clone();
+
+        let fl = by_id(FLORENCE2_ID);
+        assert!(!fl.installed, "{fl:?}");
+        assert!(
+            fl.unusable
+                .as_deref()
+                .is_some_and(|r| r.contains("captioner folder check failed")),
+            "{fl:?}"
+        );
+        // Not a pinned snapshot kind: the tagger is judged by its files alone.
+        let tagger = by_id(WD_TAGGER_ID);
+        assert!(tagger.installed && tagger.unusable.is_none(), "{tagger:?}");
+    }
+
+    #[tokio::test]
+    async fn escalation_status_separates_missing_from_unusable() {
+        let db = Database::connect_in_memory().await.unwrap();
+        let store = tempfile::tempdir().unwrap();
+
+        let none = escalation_status(&db, store.path()).await.unwrap();
+        assert_eq!(
+            none,
+            EscalationStatus {
+                files_present: false,
+                usable: false,
+                reason: None
+            }
+        );
+
+        for name in super::super::caption::QWEN_VL_REQUIRED_FILES {
+            db.models()
+                .insert(model_row(
+                    &store
+                        .path()
+                        .join("vision/qwen2.5-vl-7b")
+                        .join(name)
+                        .to_string_lossy(),
+                    super::super::caption::QWEN_VL_ROLE,
+                ))
+                .await
+                .unwrap();
+        }
+        let present = escalation_status(&db, store.path()).await.unwrap();
+        assert!(present.files_present);
+        assert!(!present.usable, "{present:?}");
+        assert!(present.reason.is_some(), "{present:?}");
     }
 }

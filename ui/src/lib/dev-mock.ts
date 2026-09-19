@@ -11,7 +11,9 @@ import {
   OFFLINE_RESUME_REFUSAL,
   TRAINING_KNOWN_MOCK,
   TRAINING_STACKS_MOCK,
+  setTampered,
   trainingCaptioners,
+  trainingEscalation,
   trainingModelRow,
 } from "./dev-mock-training";
 
@@ -1859,6 +1861,12 @@ export function installDevMock(): void {
         // Installed only once every required file of a stack is in the
         // library -- flips when the last download of a stack finishes.
         return trainingCaptioners(MODELS);
+      case "escalation_status":
+        return trainingEscalation(MODELS);
+      case "dev_mock_set_tampered":
+        // Mock-only: make a pinned folder "fail" the integrity check.
+        setTampered(String(a.kind), Boolean(a.tampered));
+        return null;
       case "list_datasets":
         progressDatasetJobs();
         return DATASETS.map((d) => ({ ...d }));

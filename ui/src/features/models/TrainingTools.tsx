@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useId, useState } from "react";
-import { useCaptioners } from "../../lib/hooks";
+import { useCaptioners, useEscalationStatus } from "../../lib/hooks";
 import type { ModelStack } from "../../lib/ipc";
 import { FitBadge } from "./FitBadge";
 import { StackInstall, type Unusable } from "./StackInstall";
@@ -7,6 +7,9 @@ import { stackSizeLabel, type StackProgress } from "./stack-install";
 import { TRAINING_TOOLS, stackIdForCaptioner } from "./training-tools";
 import { useSettling } from "./useSettling";
 import { useStackInstaller } from "./useStackInstaller";
+
+/** The escalation model's stack — no captioner of its own. */
+const ESCALATION_STACK = "qwen2.5-vl-7b";
 
 /** The catalog's "Training & captioning" tab: the dataset captioners as
  *  one-click stacks, each with what it is for, where it runs, its size and
@@ -17,6 +20,7 @@ import { useStackInstaller } from "./useStackInstaller";
 export function TrainingTools({ stacks }: { stacks: readonly ModelStack[] }) {
   const [announcement, setAnnouncement] = useState("");
   const { data: captioners, refetch: refetchCaptioners } = useCaptioners();
+  const { data: escalation, refetch: refetchEscalation } = useEscalationStatus();
   const { ids: settling, settle, clear } = useSettling();
   const onInstalled = useCallback(
     (s: ModelStack) => {
@@ -24,27 +28,40 @@ export function TrainingTools({ stacks }: { stacks: readonly ModelStack[] }) {
       setAnnouncement(`${name} installed.`);
       settle(s.id);
       refetchCaptioners();
+      refetchEscalation();
     },
-    [settle, refetchCaptioners],
+    [settle, refetchCaptioners, refetchEscalation],
   );
   const installer = useStackInstaller(stacks, onInstalled);
 
-  // The registry confirmed a just-finished captioner: its settle window ends.
+  // The core confirmed a just-finished stack: its settle window ends.
   useEffect(() => {
     for (const c of captioners ?? []) {
       const stackId = stackIdForCaptioner(c.id);
       if (c.installed && stackId) clear(stackId);
     }
-  }, [captioners, clear]);
+    if (escalation?.usable) clear(ESCALATION_STACK);
+  }, [captioners, escalation, clear]);
 
-  /** Complete files the core still does not accept as a usable captioner
-   *  (after the settle window) — offer to fetch them again. */
+  /** Complete files the core does not accept as usable (after the settle
+   *  window) — say why and offer to fetch them again. The captioners report
+   *  it through the registry, the escalation model through its own status;
+   *  both come from the load-time integrity check. */
   const unusableFor = (s: ModelStack): Unusable | undefined => {
+    if (settling.has(s.id)) return undefined;
     const captionerId = TRAINING_TOOLS[s.id]?.captionerId;
     const captioner = captioners?.find((c) => c.id === captionerId);
-    if (!captioner || captioner.installed || settling.has(s.id)) return undefined;
+    const reason =
+      s.id === ESCALATION_STACK
+        ? escalation?.files_present && !escalation.usable
+          ? (escalation.reason ?? "")
+          : null
+        : captioner && !captioner.installed
+          ? (captioner.unusable ?? "")
+          : null;
+    if (reason === null) return undefined;
     return {
-      text: "Files present but not usable — the core rejected them. Fetch them again to restore the pinned files.",
+      text: `Files present but not usable${reason ? ` — ${reason}` : ""}. Fetch them again to restore the pinned files.`,
       actionLabel: `Re-download (${stackSizeLabel(s)})`,
     };
   };

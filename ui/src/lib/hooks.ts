@@ -19,6 +19,7 @@ import {
   listCharacterRelationships,
   listCharacters,
   listCaptioners,
+  escalationStatus,
   listConcepts,
   listDatasetFrames,
   listDatasetFramesForDataset,
@@ -60,6 +61,7 @@ import {
   type CharacterLogEntry,
   type CharacterRelationship,
   type Captioner,
+  type EscalationStatus,
   type CivitaiSearchParams,
   type Dataset,
   type DatasetConcept,
@@ -245,6 +247,10 @@ export const useDatasetFrames = (jobId: string | null) =>
 /** The captioner registry with its install state — the "Beschreiben mit"
  *  dropdown. Polled slowly: it only changes when a model is imported. */
 export const useCaptioners = () => usePolled<Captioner[]>("captioners", listCaptioners, 5000);
+
+/** The Qwen2.5-VL escalation model's files/integrity state (Models tab). */
+export const useEscalationStatus = () =>
+  usePolled<EscalationStatus>("escalation-status", escalationStatus, 5000);
 
 /** Every curation set, newest prep run included. */
 export const useDatasets = () => usePolled<Dataset[]>("datasets", listDatasets, 3000);

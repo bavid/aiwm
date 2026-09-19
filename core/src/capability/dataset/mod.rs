@@ -61,8 +61,9 @@ pub use caption::{
     FLORENCE2_VRAM_FALLBACK_MB, QWEN_VL_VRAM_FALLBACK_MB,
 };
 pub use captioner::{
-    captioner_statuses, find_captioner, installed_captioner_dir, Captioner, CaptionerStatus,
-    CAPTIONERS, FLORENCE2_ID, WD_TAGGER_ID,
+    captioner_statuses, captioner_statuses_verified, escalation_status, find_captioner,
+    installed_captioner_dir, Captioner, CaptionerStatus, EscalationStatus, CAPTIONERS,
+    FLORENCE2_ID, WD_TAGGER_ID,
 };
 pub use compose::{compose_caption, token_warning, CaptionOrder, CaptionStyle, ConceptPart};
 pub use export::{export_dataset, export_dataset_for_job, ExportRequest, ExportSummary};

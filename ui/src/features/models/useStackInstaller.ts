@@ -105,6 +105,13 @@ export function useStackInstaller(
     }
   }, [downloads, endStarting]);
 
+  // The queue could not be read: no snapshot will confirm a start, so end
+  // every "Starting…" and let the load error show instead.
+  useEffect(() => {
+    if (!downloadsError) return;
+    for (const id of [...startingRef.current]) endStarting(id);
+  }, [downloadsError, endStarting]);
+
   // Completion is observed, not assumed: only a transition seen by this
   // component counts, so a stack that was already installed on first load
   // never fires `onInstalled`.

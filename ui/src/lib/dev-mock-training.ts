@@ -143,6 +143,38 @@ const CAPTIONERS = [
   },
 ];
 
+/** Kinds whose pinned folder the mock pretends fails the load-time integrity
+ *  check (`dev_mock_set_tampered`, mock-only) — to see the "not usable" path. */
+const TAMPERED = new Set<string>();
+
+export function setTampered(kind: string, tampered: boolean): void {
+  if (tampered) TAMPERED.add(kind);
+  else TAMPERED.delete(kind);
+}
+
+const tamperReason = (kind: string) =>
+  `captioner folder check failed: ${KINDS[kind]?.dir ?? kind}\\config.json does not match the pinned catalog file (dev mock)`;
+
+/** Whether every required file of `kind` sits in one library directory. */
+function filesPresent(models: readonly AnyRecord[], kind: string): boolean {
+  const role = KINDS[kind].role;
+  const required = MEMBERS.filter((m) => m[1] === kind).map((m) => m[2]);
+  const rows = models.filter((m) => (m.roles as string[]).includes(role));
+  const dirs = [...new Set(rows.map((m) => dirOf(String(m.file_path))))];
+  return dirs.some((dir) =>
+    required.every((file) =>
+      rows.some((m) => dirOf(String(m.file_path)) === dir && baseOf(String(m.file_path)) === file),
+    ),
+  );
+}
+
+/** `escalation_status` for the Qwen2.5-VL stack. */
+export function trainingEscalation(models: readonly AnyRecord[]): AnyRecord {
+  const present = filesPresent(models, "qwen_vl_engine");
+  const bad = present && TAMPERED.has("qwen_vl_engine");
+  return { files_present: present, usable: present && !bad, reason: bad ? tamperReason("qwen_vl_engine") : null };
+}
+
 const dirOf = (path: string) => path.slice(0, path.lastIndexOf("\\"));
 const baseOf = (path: string) => path.slice(path.lastIndexOf("\\") + 1);
 
@@ -158,7 +190,13 @@ export function trainingCaptioners(models: readonly AnyRecord[]): AnyRecord[] {
         rows.some((m) => dirOf(String(m.file_path)) === dir && baseOf(String(m.file_path)) === file),
       ),
     );
-    return { ...c, required_files: required, installed };
+    const bad = installed && kind !== "wd_tagger" && TAMPERED.has(kind);
+    return {
+      ...c,
+      required_files: required,
+      installed: installed && !bad,
+      unusable: bad ? tamperReason(kind) : null,
+    };
   });
 }
 
