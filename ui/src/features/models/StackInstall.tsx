@@ -18,8 +18,16 @@ type Props = {
   showFiles?: boolean;
   /** The low-emphasis button, for a row inside a list. */
   quiet?: boolean;
+  /** Every file is present but the core does not accept the result: say so
+   *  and offer this action (via `onInstall`) instead of "Installed". */
+  unusable?: Unusable;
   onInstall: () => void;
 };
+
+export interface Unusable {
+  text: string;
+  actionLabel: string;
+}
 
 const PHASE_LABEL: Record<MemberPhase, string> = {
   installed: "Installed",
@@ -47,6 +55,7 @@ export function StackInstall({
   installLabel,
   showFiles = false,
   quiet = false,
+  unusable,
   onInstall,
 }: Props) {
   const rootRef = useRef<HTMLDivElement>(null);
@@ -62,6 +71,12 @@ export function StackInstall({
       rootRef.current?.focus({ preventScroll: true });
     }
   });
+
+  // A start that failed puts the button back with an error: the click's
+  // claim on focus is over.
+  useEffect(() => {
+    if (error) restoreFocus.current = false;
+  }, [error]);
 
   const activate = () => {
     restoreFocus.current = true;
@@ -86,6 +101,7 @@ export function StackInstall({
         loadError={loadError}
         installLabel={installLabel}
         showFiles={showFiles}
+        unusable={unusable}
         buttonRef={buttonRef}
         onActivate={activate}
         onButtonLeft={buttonLeft}
@@ -106,6 +122,7 @@ type BodyProps = {
   loadError: string | null;
   installLabel: string;
   showFiles: boolean;
+  unusable: Unusable | undefined;
   buttonRef: RefObject<HTMLButtonElement | null>;
   onActivate: () => void;
   onButtonLeft: (e: FocusEvent<HTMLButtonElement>) => void;
@@ -126,6 +143,7 @@ function StackInstallBody({
   loadError,
   installLabel,
   showFiles,
+  unusable,
   buttonRef,
   onActivate,
   onButtonLeft,
@@ -138,12 +156,26 @@ function StackInstallBody({
     );
   }
 
-  if (progress.phase === "installed") {
-    return <span className="badge badge--installed">Installed ✓</span>;
-  }
-
   if (isStarting || progress.phase === "installing") {
     return <StackProgressBar name={name} progress={progress} showFiles={showFiles} />;
+  }
+
+  if (progress.phase === "installed") {
+    if (!unusable) return <span className="badge badge--installed">Installed ✓</span>;
+    return (
+      <>
+        <p className="stackinstall__err">{unusable.text}</p>
+        <button
+          type="button"
+          className="stackinstall__go"
+          ref={buttonRef}
+          onClick={onActivate}
+          onBlur={onButtonLeft}
+        >
+          {unusable.actionLabel}
+        </button>
+      </>
+    );
   }
 
   const failed = progress.members.filter((m) => m.phase === "failed");

@@ -2495,7 +2495,19 @@ export function installDevMock(): void {
                 !["done", "failed"].includes(String(x.state)),
             )
           : undefined;
-        if (active) return { ...active };
+        if (active) {
+          // Same merge rules as `DownloadManager::merge_into`.
+          const wantType = body.model_type ?? null;
+          if ((active.model_type ?? null) !== wantType) {
+            throw new Error(
+              `configuration error: download: ${String(active.filename)} is already downloading as ${String(active.model_type ?? "an auto-detected type")} — cancel that download to fetch it as ${String(wantType ?? "an auto-detected type")}`,
+            );
+          }
+          const roles = (active.roles as string[]) ?? [];
+          active.roles = [...roles, ...((body.roles as string[]) ?? []).filter((r) => !roles.includes(r))];
+          if (active.state === "paused") active.state = "running";
+          return { ...active };
+        }
         const d: AnyRecord = {
           id: `dl-${seq++}`, url: String(body.url ?? ""),
           filename: String(body.filename ?? "model.gguf").split("/").pop(),

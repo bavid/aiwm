@@ -1,9 +1,11 @@
-import { useCallback, useId, useState } from "react";
+import { useCallback, useEffect, useId, useState } from "react";
+import { useCaptioners } from "../../lib/hooks";
 import type { ModelStack } from "../../lib/ipc";
 import { FitBadge } from "./FitBadge";
-import { StackInstall } from "./StackInstall";
+import { StackInstall, type Unusable } from "./StackInstall";
 import { stackSizeLabel, type StackProgress } from "./stack-install";
-import { TRAINING_TOOLS } from "./training-tools";
+import { TRAINING_TOOLS, stackIdForCaptioner } from "./training-tools";
+import { useSettling } from "./useSettling";
 import { useStackInstaller } from "./useStackInstaller";
 
 /** The catalog's "Training & captioning" tab: the dataset captioners as
@@ -14,11 +16,38 @@ import { useStackInstaller } from "./useStackInstaller";
  *  loaded 4-bit: ~6 GiB) — not by summing its file sizes. */
 export function TrainingTools({ stacks }: { stacks: readonly ModelStack[] }) {
   const [announcement, setAnnouncement] = useState("");
-  const onInstalled = useCallback((s: ModelStack) => {
-    const name = TRAINING_TOOLS[s.id]?.shortName ?? s.label;
-    setAnnouncement(`${name} installed.`);
-  }, []);
+  const { data: captioners, refetch: refetchCaptioners } = useCaptioners();
+  const { ids: settling, settle, clear } = useSettling();
+  const onInstalled = useCallback(
+    (s: ModelStack) => {
+      const name = TRAINING_TOOLS[s.id]?.shortName ?? s.label;
+      setAnnouncement(`${name} installed.`);
+      settle(s.id);
+      refetchCaptioners();
+    },
+    [settle, refetchCaptioners],
+  );
   const installer = useStackInstaller(stacks, onInstalled);
+
+  // The registry confirmed a just-finished captioner: its settle window ends.
+  useEffect(() => {
+    for (const c of captioners ?? []) {
+      const stackId = stackIdForCaptioner(c.id);
+      if (c.installed && stackId) clear(stackId);
+    }
+  }, [captioners, clear]);
+
+  /** Complete files the core still does not accept as a usable captioner
+   *  (after the settle window) — offer to fetch them again. */
+  const unusableFor = (s: ModelStack): Unusable | undefined => {
+    const captionerId = TRAINING_TOOLS[s.id]?.captionerId;
+    const captioner = captioners?.find((c) => c.id === captionerId);
+    if (!captioner || captioner.installed || settling.has(s.id)) return undefined;
+    return {
+      text: "Files present but not usable — the core rejected them. Fetch them again to restore the pinned files.",
+      actionLabel: `Re-download (${stackSizeLabel(s)})`,
+    };
+  };
 
   return (
     <>
@@ -31,7 +60,9 @@ export function TrainingTools({ stacks }: { stacks: readonly ModelStack[] }) {
             isStarting={installer.starting.has(s.id)}
             error={installer.errors[s.id] ?? null}
             loadError={installer.loadError}
+            unusable={unusableFor(s)}
             onInstall={() => void installer.install(s)}
+            onRedownload={() => void installer.redownload(s)}
           />
         ))}
       </div>
@@ -48,14 +79,18 @@ function TrainingToolCard({
   isStarting,
   error,
   loadError,
+  unusable,
   onInstall,
+  onRedownload,
 }: {
   stack: ModelStack;
   progress: StackProgress | undefined;
   isStarting: boolean;
   error: string | null;
   loadError: string | null;
+  unusable: Unusable | undefined;
   onInstall: () => void;
+  onRedownload: () => void;
 }) {
   const headingId = useId();
   const info = TRAINING_TOOLS[stack.id];
@@ -95,9 +130,10 @@ function TrainingToolCard({
         isStarting={isStarting}
         error={error}
         loadError={loadError}
+        unusable={unusable}
         installLabel={`Install ${shortName} (${size})`}
         showFiles
-        onInstall={onInstall}
+        onInstall={unusable && progress?.phase === "installed" ? onRedownload : onInstall}
       />
     </section>
   );

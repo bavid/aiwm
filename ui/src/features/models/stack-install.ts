@@ -76,9 +76,12 @@ function memberProgress(
     downloadId: null,
     error: null,
   };
-  if (models.some((m) => sameHash(m.sha256, member.sha256))) return installed;
-
   const d = downloadFor(member, downloads);
+  // An active download says more than the library row: a Re-download of a
+  // file that is already imported shows its real progress.
+  const active = d !== null && ACTIVE_STATES.has(d.state);
+  if (!active && models.some((m) => sameHash(m.sha256, member.sha256))) return installed;
+
   if (!d) return { member, phase: "missing", bytesDone: 0, downloadId: null, error: null };
   // `done` means verified *and* imported; the library poll just has not
   // caught up yet.
@@ -128,10 +131,6 @@ export function pendingMembers(p: StackProgress): MemberProgress[] {
     (m) => m.phase === "missing" || m.phase === "failed" || m.phase === "paused",
   );
 }
-
-/** Whether a snapshot shows the stack's click has taken effect: files are in
- *  flight, or it is already complete. */
-export const isUnderway = (p: StackProgress) => p.phase === "installing" || p.phase === "installed";
 
 /** A stack's download size, in the app-wide decimal unit ("1.3 GB"). */
 export const stackSizeLabel = (stack: ModelStack) => formatGB(stackBytes(stack));

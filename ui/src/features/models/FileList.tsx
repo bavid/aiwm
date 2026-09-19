@@ -1,9 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { enqueueDownload, type ModelType, type RegistryFile } from "../../lib/ipc";
+import { formatGB } from "../../lib/units";
 import { FitBadge } from "./FitBadge";
 import { countFitTiers, fitTierSummary, sortByFitTier } from "./fit-utils";
-import { formatGB } from "../../lib/units";
-
 
 /** How long "Copied ✓" / "Queued ✓" style feedback stays up. */
 const COPIED_MS = 1500;

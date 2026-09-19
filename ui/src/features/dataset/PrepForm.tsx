@@ -217,6 +217,7 @@ export function PrepForm({ isRunning, error, onStart, onMoreCaptioners }: Props)
             installer={install.installer}
             settling={install.settling}
             onInstall={install.startInstall}
+            onMoreCaptioners={onMoreCaptioners}
           />
         )}
 

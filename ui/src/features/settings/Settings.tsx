@@ -20,9 +20,9 @@ import {
 } from "../../lib/ipc";
 import { SectionNav, type NavSection } from "../../components/SectionNav";
 import { getTheme, setTheme, type Theme } from "../../lib/theme";
+import { formatGB } from "../../lib/units";
 import { BackupCard } from "./BackupCard";
 import "./settings.css";
-import { formatGB } from "../../lib/units";
 
 const SECTIONS: NavSection[] = [
   { id: "general", label: "General" },
@@ -32,7 +32,6 @@ const SECTIONS: NavSection[] = [
   { id: "network", label: "Network & API" },
   { id: "backup", label: "Backup" },
 ];
-
 
 const THEME_OPTIONS: { value: Theme; label: string }[] = [
   { value: "system", label: "System" },

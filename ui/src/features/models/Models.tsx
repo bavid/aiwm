@@ -22,6 +22,7 @@ import {
   type Model,
   type ModelType,
 } from "../../lib/ipc";
+import { formatGB, formatGiB } from "../../lib/units";
 import { Catalog, type CatalogTab } from "./Catalog";
 import { ColibriPanel } from "./ColibriPanel";
 import { Discover } from "./Discover";
@@ -29,7 +30,6 @@ import { Downloads } from "./Downloads";
 import { DeleteButton, StoragePanel } from "./StoragePanel";
 import { UpgradeChecks } from "./UpgradeChecks";
 import "./models.css";
-import { formatGB, formatGiB } from "../../lib/units";
 
 const ROLES = ["chat", "coding", "reasoning", "embedding"];
 

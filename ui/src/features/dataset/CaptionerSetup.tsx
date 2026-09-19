@@ -1,7 +1,7 @@
 import { useId } from "react";
 import type { Captioner, ModelStack } from "../../lib/ipc";
 import { formatGiB } from "../../lib/units";
-import { StackInstall } from "../models/StackInstall";
+import { StackInstall, type Unusable } from "../models/StackInstall";
 import { stackSizeLabel } from "../models/stack-install";
 import { RECOMMENDED_CAPTIONER_STACK, TRAINING_TOOLS, stackIdForCaptioner } from "../models/training-tools";
 import type { StackInstaller } from "../models/useStackInstaller";
@@ -15,11 +15,17 @@ type InstallProps = {
   settling: ReadonlySet<string>;
   /** Starts a stack's install — the form records that it was asked here. */
   onInstall: (stack: ModelStack) => void;
+  /** Opens the Models tab's Training & captioning section. */
+  onMoreCaptioners: () => void;
 };
 
 /** Every file of the stack is in the library, yet the core does not call the
- *  captioner usable (e.g. a file failed its load-time integrity check). */
-const NOT_USABLE = "Files present but not usable — reinstall on the Models tab.";
+ *  captioner usable (e.g. a file failed its load-time integrity check). The
+ *  Models card offers the Re-download; this leads there. */
+const NOT_USABLE: Unusable = {
+  text: "Files present but not usable — reinstall on the Models tab.",
+  actionLabel: "Open Models tab",
+};
 
 /** One stack's install control, or the "not usable" note when its files are
  *  all there but the registry (the source of truth) says no. */
@@ -31,6 +37,7 @@ function CaptionerInstall({
   installer,
   settling,
   onInstall,
+  onMoreCaptioners,
 }: {
   stack: ModelStack;
   name: string;
@@ -39,14 +46,12 @@ function CaptionerInstall({
   installer: StackInstaller;
   settling: ReadonlySet<string>;
   onInstall: (stack: ModelStack) => void;
+  onMoreCaptioners: () => void;
 }) {
   const progress = installer.progress.get(stack.id);
-  if (progress?.phase === "installed") {
-    return settling.has(stack.id) ? (
-      <p className="stackinstall__meta">Finishing install…</p>
-    ) : (
-      <p className="stackinstall__err">{NOT_USABLE}</p>
-    );
+  const complete = progress?.phase === "installed";
+  if (complete && settling.has(stack.id)) {
+    return <p className="stackinstall__meta">Finishing install…</p>;
   }
   return (
     <StackInstall
@@ -57,7 +62,8 @@ function CaptionerInstall({
       loadError={installer.loadError}
       installLabel={installLabel}
       quiet={quiet}
-      onInstall={() => onInstall(stack)}
+      unusable={NOT_USABLE}
+      onInstall={complete ? onMoreCaptioners : () => onInstall(stack)}
     />
   );
 }
@@ -70,7 +76,7 @@ export function CaptionerHint({
   settling,
   onInstall,
   onMoreCaptioners,
-}: InstallProps & { onMoreCaptioners: () => void }) {
+}: InstallProps) {
   const wd = stacks?.find((s) => s.id === RECOMMENDED_CAPTIONER_STACK) ?? null;
 
   return (
@@ -92,6 +98,7 @@ export function CaptionerHint({
             installer={installer}
             settling={settling}
             onInstall={onInstall}
+            onMoreCaptioners={onMoreCaptioners}
           />
         </>
       ) : (
@@ -121,6 +128,7 @@ export function CaptionerPicker({
   installer,
   settling,
   onInstall,
+  onMoreCaptioners,
 }: InstallProps & {
   captioners: readonly Captioner[];
   selectedId: string | null;
@@ -168,6 +176,7 @@ export function CaptionerPicker({
                 installer={installer}
                 settling={settling}
                 onInstall={onInstall}
+                onMoreCaptioners={onMoreCaptioners}
               />
             ) : (
               <span className="captioner-picker__meta">Import it on the Models tab.</span>

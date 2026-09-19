@@ -9,12 +9,11 @@ import {
   type ModelType,
   type RegistryDetails,
 } from "../../lib/ipc";
+import { formatGB, formatGiB } from "../../lib/units";
 import { FileList } from "./FileList";
 import { FitBadge } from "./FitBadge";
 import { weightFiles } from "./registry-files";
 import { TrainingTools } from "./TrainingTools";
-import { formatGB, formatGiB } from "../../lib/units";
-
 
 /** Readable names for the kinds whose raw id says little on its own; every
  *  other kind reads fine with its underscores turned into spaces. */

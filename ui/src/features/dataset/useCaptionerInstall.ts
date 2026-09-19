@@ -1,13 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { useModelStacks } from "../../lib/hooks";
 import type { Captioner, ModelStack } from "../../lib/ipc";
-import { TRAINING_TOOLS } from "../models/training-tools";
+import { TRAINING_TOOLS, stackIdForCaptioner } from "../models/training-tools";
+import { useSettling } from "../models/useSettling";
 import { useStackInstaller, type StackInstaller } from "../models/useStackInstaller";
-
-/** How long a just-finished stack may wait for the captioner registry to
- *  confirm it before a "not usable" verdict is shown (one registry poll plus
- *  slack). */
-const SETTLE_MS = 8000;
 
 type Options = {
   captioners: readonly Captioner[] | null;
@@ -32,10 +28,6 @@ export interface CaptionerInstall {
   startInstall: (stack: ModelStack) => void;
 }
 
-function withoutId(set: ReadonlySet<string>, id: string): ReadonlySet<string> {
-  return new Set([...set].filter((x) => x !== id));
-}
-
 /** The Dataset form's captioner installs. A finished install always
  *  refreshes the registry; it only *changes the form* (selects the captioner,
  *  turns auto-captioning on, announces it, moves focus to its radio) when
@@ -57,7 +49,7 @@ export function useCaptionerInstall({
   const askedHere = useRef<Set<string>>(new Set());
   const installedCount = useRef(0);
   const focusRadio = useRef<string | null>(null);
-  const [settling, setSettling] = useState<ReadonlySet<string>>(new Set());
+  const { ids: settling, settle, clear } = useSettling();
   const [notice, setNotice] = useState("");
 
   useEffect(() => {
@@ -70,8 +62,7 @@ export function useCaptionerInstall({
       const tool = TRAINING_TOOLS[s.id];
       const captionerId = tool?.captionerId;
       if (!captionerId) return;
-      setSettling((prev) => new Set(prev).add(s.id));
-      setTimeout(() => setSettling((prev) => withoutId(prev, s.id)), SETTLE_MS);
+      settle(s.id);
 
       const mine = askedHere.current.delete(s.id);
       if (!mine && installedCount.current > 0) return;
@@ -83,7 +74,7 @@ export function useCaptionerInstall({
         active === null || active === document.body || !!containerRef.current?.contains(active);
       focusRadio.current = workingHere ? captionerId : null;
     },
-    [refetchCaptioners, onChosen, containerRef],
+    [refetchCaptioners, onChosen, containerRef, settle],
   );
 
   const installer = useStackInstaller(watched, onStackInstalled);
@@ -93,8 +84,8 @@ export function useCaptionerInstall({
   useEffect(() => {
     for (const c of captioners ?? []) {
       if (!c.installed) continue;
-      const stackId = Object.keys(TRAINING_TOOLS).find((k) => TRAINING_TOOLS[k].captionerId === c.id);
-      if (stackId) setSettling((prev) => (prev.has(stackId) ? withoutId(prev, stackId) : prev));
+      const stackId = stackIdForCaptioner(c.id);
+      if (stackId) clear(stackId);
     }
     const want = focusRadio.current;
     if (!want) return;
@@ -107,12 +98,15 @@ export function useCaptionerInstall({
     if (active === null || active === document.body || containerRef.current?.contains(active)) {
       radio.focus();
     }
-  }, [captioners, containerRef]);
+  }, [captioners, containerRef, clear]);
 
   const startInstall = useCallback(
     (stack: ModelStack) => {
       askedHere.current.add(stack.id);
-      void installer.install(stack);
+      void installer.install(stack).then((started) => {
+        // A start that failed (offline, repeat click) asked for nothing.
+        if (!started) askedHere.current.delete(stack.id);
+      });
     },
     [installer],
   );

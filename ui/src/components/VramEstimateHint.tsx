@@ -1,4 +1,5 @@
 import type { GpuStatus } from "../lib/ipc";
+import { formatGiB } from "../lib/units";
 import "./vram-hint.css";
 
 /** A quick "will this fit?" hint for the currently-selected model, shown
@@ -17,20 +18,20 @@ export function VramEstimateHint({
   if (!vramEstimateMb || gpu?.state !== "available") return null;
 
   const freeMb = gpu.vram_free_mb;
-  const estGb = (vramEstimateMb / 1024).toFixed(1);
-  const freeGb = (freeMb / 1024).toFixed(1);
+  const est = formatGiB(vramEstimateMb);
+  const free = formatGiB(freeMb);
 
   let level: "ok" | "warn" | "crit";
   let text: string;
   if (vramEstimateMb <= freeMb * 0.9) {
     level = "ok";
-    text = `≈${estGb} GB VRAM · fits in ${freeGb} GB free`;
+    text = `≈${est} VRAM · fits in ${free} free`;
   } else if (vramEstimateMb <= freeMb) {
     level = "warn";
-    text = `≈${estGb} GB VRAM · tight against ${freeGb} GB free`;
+    text = `≈${est} VRAM · tight against ${free} free`;
   } else {
     level = "crit";
-    text = `≈${estGb} GB VRAM · needs more than ${freeGb} GB free right now — another model may be evicted`;
+    text = `≈${est} VRAM · needs more than ${free} free right now — another model may be evicted`;
   }
 
   return (

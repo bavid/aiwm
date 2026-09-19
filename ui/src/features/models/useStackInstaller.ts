@@ -3,9 +3,9 @@ import { humanize } from "../../lib/errors";
 import { useDownloads, useModels } from "../../lib/hooks";
 import { enqueueDownload, resumeDownload, type ModelStack } from "../../lib/ipc";
 import {
-  isUnderway,
   pendingMembers,
   stackProgress,
+  type MemberProgress,
   type StackPhase,
   type StackProgress,
 } from "./stack-install";
@@ -20,7 +20,12 @@ export interface StackInstaller {
   loadError: string | null;
   /** Stack ids whose Install click has not yet shown up in a queue snapshot. */
   starting: ReadonlySet<string>;
-  install: (stack: ModelStack) => Promise<void>;
+  /** Start what is missing (queue) or stopped (resume); `false` when the
+   *  start failed (the reason is in `errors`) or was a repeat click. */
+  install: (stack: ModelStack) => Promise<boolean>;
+  /** Fetch every file again, installed or not — for a stack whose files are
+   *  all present but that the core does not accept as usable. */
+  redownload: (stack: ModelStack) => Promise<boolean>;
 }
 
 const OFFLINE_REFUSAL = /offline mode is on/i;
@@ -62,6 +67,19 @@ export function useStackInstaller(
   const [errors, setErrors] = useState<Readonly<Record<string, string>>>({});
   const [starting, setStarting] = useState<ReadonlySet<string>>(new Set());
   const startingRef = useRef<Set<string>>(new Set());
+  /** Per starting stack, the download ids its click created or resumed and
+   *  the queue-snapshot count when the start resolved. */
+  const awaited = useRef<Map<string, { ids: ReadonlySet<string>; afterSnapshot: number }>>(
+    new Map(),
+  );
+  /** Counts queue snapshots (each poll result is a new array). */
+  const snapshots = useRef(0);
+
+  const endStarting = useCallback((id: string) => {
+    startingRef.current.delete(id);
+    awaited.current.delete(id);
+    setStarting((prev) => withoutId(prev, id));
+  }, []);
 
   const progress = useMemo(() => {
     const map = new Map<string, StackProgress>();
@@ -70,16 +88,22 @@ export function useStackInstaller(
     return map;
   }, [stacks, downloads, models]);
 
-  // A click stays "starting" until a snapshot shows it took effect.
+  // A click stays "starting" until the first queue snapshot fetched after the
+  // start resolved that contains every download it created or resumed —
+  // whatever their state, so a file that already failed shows its failure
+  // instead of "Starting…". A row can also be gone by then (cancelled,
+  // cleared from the history), so the second snapshot after the start ends
+  // it regardless.
   useEffect(() => {
-    for (const id of startingRef.current) {
-      const p = progress.get(id);
-      if (p && isUnderway(p)) {
-        startingRef.current.delete(id);
-        setStarting((prev) => withoutId(prev, id));
-      }
+    if (!downloads) return;
+    snapshots.current += 1;
+    const seen = new Set(downloads.map((d) => d.id));
+    for (const [stackId, { ids, afterSnapshot }] of awaited.current) {
+      const newer = snapshots.current - afterSnapshot;
+      if (newer < 1) continue;
+      if (newer >= 2 || [...ids].every((id) => seen.has(id))) endStarting(stackId);
     }
-  }, [progress]);
+  }, [downloads, endStarting]);
 
   // Completion is observed, not assumed: only a transition seen by this
   // component counts, so a stack that was already installed on first load
@@ -100,40 +124,70 @@ export function useStackInstaller(
     if (next.size > 0) lastPhase.current = next;
   }, [progress, stacks, onInstalled, refetchModels]);
 
-  const install = useCallback(
-    async (stack: ModelStack) => {
-      const p = progress.get(stack.id);
-      if (!p || startingRef.current.has(stack.id)) return;
+  const start = useCallback(
+    async (stack: ModelStack, members: readonly MemberProgress[]): Promise<boolean> => {
+      if (startingRef.current.has(stack.id)) return false;
       startingRef.current.add(stack.id);
       setErrors((prev) => without(prev, stack.id));
       setStarting((prev) => new Set(prev).add(stack.id));
+      const ids = new Set<string>();
       try {
-        for (const m of pendingMembers(p)) {
+        for (const m of members) {
           if ((m.phase === "failed" || m.phase === "paused") && m.downloadId) {
             await resumeDownload(m.downloadId);
+            ids.add(m.downloadId);
           } else {
             // The core returns the already-active download when another tab
             // queued this file first — that counts as "already downloading".
-            await enqueueDownload({
+            const d = await enqueueDownload({
               url: m.member.url,
               filename: m.member.file,
               model_type: m.member.kind,
               sha256: m.member.sha256,
               size_bytes: m.member.size_bytes,
             });
+            ids.add(d.id);
           }
         }
+        if (ids.size === 0) endStarting(stack.id);
+        else awaited.current.set(stack.id, { ids, afterSnapshot: snapshots.current });
+        return true;
       } catch (e) {
-        startingRef.current.delete(stack.id);
-        setStarting((prev) => withoutId(prev, stack.id));
+        endStarting(stack.id);
         setErrors((prev) => ({ ...prev, [stack.id]: installErrorText(e) }));
+        return false;
       } finally {
         refetchDownloads();
       }
     },
-    [progress, refetchDownloads],
+    [endStarting, refetchDownloads],
+  );
+
+  const install = useCallback(
+    async (stack: ModelStack) => {
+      const p = progress.get(stack.id);
+      return p ? start(stack, pendingMembers(p)) : false;
+    },
+    [progress, start],
+  );
+
+  const redownload = useCallback(
+    async (stack: ModelStack) => {
+      const p = progress.get(stack.id);
+      // Every file, as a fresh download (installed ones included).
+      const all = p?.members.map((m) => ({ ...m, phase: "missing" as const, downloadId: null }));
+      return all ? start(stack, all) : false;
+    },
+    [progress, start],
   );
 
   const loadError = downloadsError ?? modelsError;
-  return { progress, errors, loadError: loadError ? humanize(loadError) : null, starting, install };
+  return {
+    progress,
+    errors,
+    loadError: loadError ? humanize(loadError) : null,
+    starting,
+    install,
+    redownload,
+  };
 }
