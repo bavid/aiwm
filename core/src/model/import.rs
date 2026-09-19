@@ -137,9 +137,16 @@ pub async fn import_model(
     }
 
     let (src, dst, keep) = (source.clone(), dest.clone(), req.keep_original);
-    tokio::task::spawn_blocking(move || place_file(&src, &dst, keep))
-        .await
-        .map_err(|e| CoreError::Other(anyhow::anyhow!("copy worker panicked: {e}")))??;
+    let is_pinned = pinned_file.is_some();
+    tokio::task::spawn_blocking(move || {
+        if is_pinned {
+            // Same rule as the repair path: never write through a link.
+            remove_link_at(&dst)?;
+        }
+        place_file(&src, &dst, keep)
+    })
+    .await
+    .map_err(|e| CoreError::Other(anyhow::anyhow!("copy worker panicked: {e}")))??;
 
     let mut new = match &gguf {
         Some(g) => gguf_new_model(g, &name, &dest, sha256.clone(), size_bytes, req.roles),
@@ -192,8 +199,10 @@ async fn repair_pinned_copy(
 ) -> Result<Model> {
     let (src, dst, want) = (source.to_path_buf(), dest.to_path_buf(), sha256.to_string());
     tokio::task::spawn_blocking(move || -> Result<()> {
-        let intact =
-            dst.is_file() && sha256_file(&dst).is_ok_and(|h| h.eq_ignore_ascii_case(&want));
+        // `symlink_metadata`: a link to a correct file elsewhere is not an
+        // intact copy (the load-time check refuses links too).
+        let is_regular = std::fs::symlink_metadata(&dst).is_ok_and(|m| m.file_type().is_file());
+        let intact = is_regular && sha256_file(&dst).is_ok_and(|h| h.eq_ignore_ascii_case(&want));
         if intact {
             return Ok(());
         }
@@ -202,6 +211,7 @@ async fn repair_pinned_copy(
                 .map_err(|e| CoreError::Config(format!("create {}: {e}", parent.display())))?;
         }
         tracing::warn!(path = %dst.display(), "restoring a pinned captioner file");
+        remove_link_at(&dst)?;
         place_file(&src, &dst, keep_original)
     })
     .await
@@ -212,6 +222,31 @@ async fn repair_pinned_copy(
         return Ok(existing);
     }
     db.models().set_file_path(&existing.id, &dest_str).await
+}
+
+/// Remove a symlink or junction sitting where a pinned file is about to be
+/// restored -- the link itself, never its target -- so the restore can
+/// never write through it. A regular file is left for `place_file` to
+/// replace; a real directory is refused rather than deleted.
+fn remove_link_at(dst: &Path) -> Result<()> {
+    let Ok(meta) = std::fs::symlink_metadata(dst) else {
+        return Ok(()); // nothing there
+    };
+    let kind = meta.file_type();
+    if kind.is_file() {
+        return Ok(());
+    }
+    if !kind.is_symlink() {
+        return Err(CoreError::Config(format!(
+            "{} is a folder, not the pinned file -- remove it and reinstall the stack",
+            dst.display()
+        )));
+    }
+    // A directory link (junction / dir symlink) is removed with remove_dir,
+    // a file symlink with remove_file; neither touches the target.
+    std::fs::remove_dir(dst)
+        .or_else(|_| std::fs::remove_file(dst))
+        .map_err(|e| CoreError::Config(format!("remove link {}: {e}", dst.display())))
 }
 
 /// Extensions of a captioner snapshot directory that can steer code
@@ -1286,6 +1321,69 @@ mod tests {
             db.models().list().await.unwrap().len(),
             1,
             "no duplicate row"
+        );
+    }
+
+    /// A link planted where a pinned file belongs must be replaced, never
+    /// written through: the restore removes the junction itself and puts a
+    /// regular file there, leaving the link's target untouched.
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn the_restore_replaces_a_junction_at_the_destination_instead_of_writing_through_it() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = tmp.path().join("store");
+        let db = Database::connect_in_memory().await.unwrap();
+        let first = write_safetensors(
+            tmp.path(),
+            "tokenizer_config.json",
+            FLORENCE2_TOKENIZER_CONFIG,
+        );
+        import_as(&db, &store, &first, "florence2_engine")
+            .await
+            .unwrap();
+
+        let dest = store
+            .join("vision")
+            .join("florence2-large")
+            .join("tokenizer_config.json");
+        std::fs::remove_file(&dest).unwrap();
+        let outside = tmp.path().join("outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        let status = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(&dest)
+            .arg(&outside)
+            .stdout(std::process::Stdio::null())
+            .status()
+            .unwrap();
+        assert!(status.success(), "mklink /J failed");
+
+        // Copy mode (`keep_original`) -- the path a cross-volume move falls
+        // back to, where the write would otherwise follow the link.
+        let again = write_safetensors(
+            tmp.path(),
+            "tokenizer_config.json",
+            FLORENCE2_TOKENIZER_CONFIG,
+        );
+        import_model(
+            &db,
+            &store,
+            ImportRequest {
+                model_type: Some("florence2_engine".into()),
+                keep_original: true,
+                ..req(&again)
+            },
+        )
+        .await
+        .unwrap();
+
+        let meta = std::fs::symlink_metadata(&dest).unwrap();
+        assert!(meta.file_type().is_file(), "a regular file, not a link");
+        assert_eq!(std::fs::read(&dest).unwrap(), FLORENCE2_TOKENIZER_CONFIG);
+        assert_eq!(
+            std::fs::read_dir(&outside).unwrap().count(),
+            0,
+            "nothing written through the link"
         );
     }
 

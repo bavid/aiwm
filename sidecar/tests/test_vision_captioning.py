@@ -415,6 +415,23 @@ def test_florence2_clears_its_stale_remote_code_copies_before_the_first_load(
     assert (other / "x.py").exists(), "only Florence-2's own copies are removed"
 
 
+@pytest.mark.parametrize("root", ["C:/", "/", "C:\\"])
+def test_clearing_never_removes_the_whole_modules_tree_for_a_root_path(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, root: str
+):
+    # A drive/filesystem root has an empty folder name -- the "stale" path
+    # would be all of `transformers_modules`, so nothing may be deleted.
+    cache = tmp_path / "hf-modules"
+    keep = cache / "transformers_modules" / "some_model"
+    keep.mkdir(parents=True)
+    (keep / "x.py").write_text("\n")
+    _fake_ml_modules(monkeypatch, cache)
+
+    vision._clear_remote_code_cache(root)
+
+    assert (keep / "x.py").exists()
+
+
 def test_remote_code_cache_dir_follows_transformers_naming():
     assert vision._remote_code_cache_dir("C:/store/vision/florence2-large", "/c") == Path(
         "/c", "transformers_modules", "florence2_hyphen_large"

@@ -181,6 +181,10 @@ def _clear_remote_code_cache(model_dir: str) -> None:
 
     from transformers.dynamic_module_utils import HF_MODULES_CACHE
 
+    # A drive/filesystem root has no folder name: the path below would then
+    # be all of `transformers_modules` -- never delete that.
+    if not _sanitize_module_name(Path(model_dir).name):
+        return
     stale = _remote_code_cache_dir(model_dir, str(HF_MODULES_CACHE))
     if stale.exists():
         shutil.rmtree(stale)
