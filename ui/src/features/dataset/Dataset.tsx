@@ -58,9 +58,11 @@ type Props = {
   /** Hands the just-exported dataset to the Training tab (App owns the tab
    *  switch and the hand-over state). */
   onTrainLora: (datasetId: string) => void;
+  /** Opens the Models tab's "Training & captioning" catalog section. */
+  onOpenCaptioners: () => void;
 };
 
-export function DatasetStudio({ onTrainLora }: Props) {
+export function DatasetStudio({ onTrainLora, onOpenCaptioners }: Props) {
   const about = useAbout();
   const { data: jobs, refetch: refetchJobs } = useJobs({ limit: 50 });
   const { data: datasets, refetch: refetchDatasets } = useDatasets();
@@ -305,7 +307,12 @@ export function DatasetStudio({ onTrainLora }: Props) {
           tag/style, ready for any external LoRA trainer. This does not train anything itself.
         </p>
 
-        <PrepForm isRunning={isRunning} error={sendError} onStart={start} />
+        <PrepForm
+          isRunning={isRunning}
+          error={sendError}
+          onStart={start}
+          onMoreCaptioners={onOpenCaptioners}
+        />
 
         {deletedNotice && (
           <div className="dataset__deleted" role="status" ref={deletedNoticeRef} tabIndex={-1}>

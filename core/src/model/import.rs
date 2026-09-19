@@ -100,9 +100,23 @@ pub async fn import_model(
     .await
     .map_err(|e| CoreError::Other(anyhow::anyhow!("import worker panicked: {e}")))??;
 
+    let pinned_file = pinned_file_for(kind, &ext, &sha256)
+        .map_err(|e| CoreError::Config(format!("{}: {e}", source.display())))?;
+
     if let Some(existing) = db.models().find_by_sha256(&sha256).await? {
+        // A pinned captioner file is loaded from its catalog location, so a
+        // re-import ("reinstall the stack") must be able to repair a copy
+        // that was tampered with or deleted there -- not just report the
+        // row it matched.
+        let model = match pinned_file {
+            Some(file) => {
+                let dest = store_root.join(kind.store_subdir()).join(file);
+                repair_pinned_copy(db, existing, &source, &dest, &sha256, req.keep_original).await?
+            }
+            None => existing,
+        };
         return Ok(ImportOutcome {
-            model: existing,
+            model,
             already_present: true,
         });
     }
@@ -113,16 +127,26 @@ pub async fn import_model(
         .or_else(|| file_stem(&source))
         .unwrap_or_else(|| "model".to_string());
 
-    let dest = unique_destination(store_root, kind, &name, &sha256, &source);
+    let dest = match pinned_file {
+        Some(file) => store_root.join(kind.store_subdir()).join(file),
+        None => unique_destination(store_root, kind, &name, &sha256, &source),
+    };
     if let Some(parent) = dest.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|e| CoreError::Config(format!("create {}: {e}", parent.display())))?;
     }
 
     let (src, dst, keep) = (source.clone(), dest.clone(), req.keep_original);
-    tokio::task::spawn_blocking(move || place_file(&src, &dst, keep))
-        .await
-        .map_err(|e| CoreError::Other(anyhow::anyhow!("copy worker panicked: {e}")))??;
+    let is_pinned = pinned_file.is_some();
+    tokio::task::spawn_blocking(move || {
+        if is_pinned {
+            // Same rule as the repair path: never write through a link.
+            remove_link_at(&dst)?;
+        }
+        place_file(&src, &dst, keep)
+    })
+    .await
+    .map_err(|e| CoreError::Other(anyhow::anyhow!("copy worker panicked: {e}")))??;
 
     let mut new = match &gguf {
         Some(g) => gguf_new_model(g, &name, &dest, sha256.clone(), size_bytes, req.roles),
@@ -159,6 +183,115 @@ pub async fn import_model(
         model,
         already_present: false,
     })
+}
+
+/// Make sure the pinned file `existing` stands for really sits at `dest`
+/// with the verified content `sha256` (the just-hashed `source`): when the
+/// copy there is missing or no longer matches, `source` is placed there, and
+/// the row is re-pointed at `dest` if it recorded another path.
+async fn repair_pinned_copy(
+    db: &Database,
+    existing: Model,
+    source: &Path,
+    dest: &Path,
+    sha256: &str,
+    keep_original: bool,
+) -> Result<Model> {
+    let (src, dst, want) = (source.to_path_buf(), dest.to_path_buf(), sha256.to_string());
+    tokio::task::spawn_blocking(move || -> Result<()> {
+        // `symlink_metadata`: a link to a correct file elsewhere is not an
+        // intact copy (the load-time check refuses links too).
+        let is_regular = std::fs::symlink_metadata(&dst).is_ok_and(|m| m.file_type().is_file());
+        let intact = is_regular && sha256_file(&dst).is_ok_and(|h| h.eq_ignore_ascii_case(&want));
+        if intact {
+            return Ok(());
+        }
+        if let Some(parent) = dst.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| CoreError::Config(format!("create {}: {e}", parent.display())))?;
+        }
+        tracing::warn!(path = %dst.display(), "restoring a pinned captioner file");
+        remove_link_at(&dst)?;
+        place_file(&src, &dst, keep_original)
+    })
+    .await
+    .map_err(|e| CoreError::Other(anyhow::anyhow!("repair worker panicked: {e}")))??;
+
+    let dest_str = dest.to_string_lossy();
+    if existing.file_path == dest_str {
+        return Ok(existing);
+    }
+    db.models().set_file_path(&existing.id, &dest_str).await
+}
+
+/// Remove a symlink or junction sitting where a pinned file is about to be
+/// restored -- the link itself, never its target -- so the restore can
+/// never write through it. A regular file is left for `place_file` to
+/// replace; a real directory is refused rather than deleted.
+fn remove_link_at(dst: &Path) -> Result<()> {
+    let Ok(meta) = std::fs::symlink_metadata(dst) else {
+        return Ok(()); // nothing there
+    };
+    let kind = meta.file_type();
+    if kind.is_file() {
+        return Ok(());
+    }
+    if !kind.is_symlink() {
+        return Err(CoreError::Config(format!(
+            "{} is a folder, not the pinned file -- remove it and reinstall the stack",
+            dst.display()
+        )));
+    }
+    // A directory link (junction / dir symlink) is removed with remove_dir,
+    // a file symlink with remove_file; neither touches the target.
+    std::fs::remove_dir(dst)
+        .or_else(|_| std::fs::remove_file(dst))
+        .map_err(|e| CoreError::Config(format!("remove link {}: {e}", dst.display())))
+}
+
+/// Extensions of a captioner snapshot directory that can steer code
+/// execution: Florence-2's `.py` runs via `trust_remote_code=True`, and any
+/// `.json` config can carry an `auto_map` pointing `trust_remote_code` at an
+/// arbitrary Hub repo's Python. Qwen2.5-VL has no remote code, but its
+/// configs are gated the same way so no `auto_map` can ever be slipped in.
+fn is_code_bearing(kind: ModelKind, ext: &str) -> bool {
+    let ext = ext.to_ascii_lowercase();
+    match kind {
+        ModelKind::Florence2Engine => matches!(ext.as_str(), "py" | "json"),
+        ModelKind::QwenVlEngine => ext == "json",
+        _ => false,
+    }
+}
+
+/// For the Florence-2 / Qwen2.5-VL directory kinds: the catalog file name
+/// this content is pinned as (`Some`), so the destination is named after the
+/// catalog entry rather than whatever the source was called -- a pinned
+/// `processing_florence2.py` renamed to `modeling_florence2.py` can never
+/// overwrite the real sibling. **Any** file that is not a pinned catalog
+/// entry of this exact kind is refused -- code-bearing files because they
+/// could run unreviewed code, weights and tokenizer data because the folder
+/// is loaded as a whole and would only fail the load-time
+/// `model::integrity` check later. `None` for every other kind.
+fn pinned_file_for(kind: ModelKind, ext: &str, sha256: &str) -> Result<Option<&'static str>> {
+    if !matches!(kind, ModelKind::Florence2Engine | ModelKind::QwenVlEngine) {
+        return Ok(None);
+    }
+    let pinned = catalog::find_by_sha256(sha256)
+        .filter(|known| known.kind == kind.as_str())
+        .map(|known| known.file);
+    if pinned.is_none() {
+        let why = if is_code_bearing(kind, ext) {
+            "it could make the sidecar run unreviewed code via `trust_remote_code`"
+        } else {
+            "the snapshot folder may only hold the pinned files, or it will not load"
+        };
+        return Err(CoreError::Config(format!(
+            "this .{ext} file is not one of the pinned catalog files for a {} ({why}) — \
+             refusing to import it",
+            kind.as_str()
+        )));
+    }
+    Ok(pinned)
 }
 
 /// The requested (or inferred) kind, validated against the file's extension.
@@ -333,7 +466,7 @@ fn file_stem(path: &Path) -> Option<String> {
         .map(str::to_string)
 }
 
-fn sha256_file(path: &Path) -> Result<String> {
+pub(super) fn sha256_file(path: &Path) -> Result<String> {
     let mut file = std::fs::File::open(path)
         .map_err(|e| CoreError::Config(format!("open {}: {e}", path.display())))?;
     let mut hasher = Sha256::new();
@@ -361,8 +494,9 @@ fn sha256_file(path: &Path) -> Result<String> {
 /// (`<store>/image/checkpoints/<file>`) to match ComfyUI's own layout. A name
 /// clash is broken with an 8-char hash.
 ///
-/// Dia's two directory-shaped kinds, plus the WD tagger's `model.onnx` +
-/// `selected_tags.csv` pair, are the exception: they always keep their exact
+/// Dia's two directory-shaped kinds, the WD tagger's `model.onnx` +
+/// `selected_tags.csv` pair, and the Florence-2 / Qwen2.5-VL snapshot
+/// directories are the exception: they always keep their exact
 /// original filename with no hash-suffix, even on a "collision" (see
 /// [`unique_destination`]'s doc below for why that's actually safe).
 fn unique_destination(
@@ -406,7 +540,11 @@ fn unique_destination(
     // deliberately overwritten by `place_file`, not renamed around.
     if matches!(
         kind,
-        ModelKind::DiaEngine | ModelKind::DiaCodec | ModelKind::WdTagger
+        ModelKind::DiaEngine
+            | ModelKind::DiaCodec
+            | ModelKind::WdTagger
+            | ModelKind::Florence2Engine
+            | ModelKind::QwenVlEngine
     ) {
         return type_dir.join(&filename);
     }
@@ -1046,6 +1184,388 @@ mod tests {
             Path::new(&tags_out.model.file_path).parent(),
             Path::new(&model_out.model.file_path).parent(),
             "the model and its tag list must be siblings in the same directory"
+        );
+    }
+
+    /// Byte-exact copies of two tiny pinned Florence-2 files (the catalog
+    /// hashes them: `tokenizer_config.json` 34 B, `generation_config.json`
+    /// 51 B at commit 21a599d4) -- real pinned JSON without a network fetch.
+    const FLORENCE2_TOKENIZER_CONFIG: &[u8] = b"{\n    \"model_max_length\": 1024\n}\n\n";
+    const FLORENCE2_GENERATION_CONFIG: &[u8] =
+        b"{\n    \"num_beams\": 3,\n    \"early_stopping\": false\n}";
+
+    async fn import_as(
+        db: &Database,
+        store: &Path,
+        src: &Path,
+        kind: &str,
+    ) -> Result<ImportOutcome> {
+        import_model(
+            db,
+            store,
+            ImportRequest {
+                model_type: Some(kind.into()),
+                ..req(src)
+            },
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn florence2_engine_files_land_side_by_side_under_their_original_names() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = tmp.path().join("store");
+        let db = Database::connect_in_memory().await.unwrap();
+
+        let mut dirs = Vec::new();
+        // Two real pinned files: an uncatalogued one would be refused.
+        for (name, body) in [
+            ("tokenizer_config.json", FLORENCE2_TOKENIZER_CONFIG),
+            ("generation_config.json", FLORENCE2_GENERATION_CONFIG),
+        ] {
+            let src = write_safetensors(tmp.path(), name, body);
+            let out = import_as(&db, &store, &src, "florence2_engine")
+                .await
+                .unwrap();
+            assert_eq!(out.model.roles, ["vision_florence2"]);
+            assert!(out.model.runtimes.is_empty(), "sidecar-only kind");
+            let p = out.model.file_path.replace('\\', "/");
+            assert!(
+                p.ends_with(&format!("/vision/florence2-large/{name}")),
+                "{p}"
+            );
+            dirs.push(
+                Path::new(&out.model.file_path)
+                    .parent()
+                    .unwrap()
+                    .to_path_buf(),
+            );
+        }
+        assert_eq!(dirs[0], dirs[1], "one directory for `from_pretrained`");
+    }
+
+    /// `auto_map` in a config JSON can point `trust_remote_code` at any Hub
+    /// repo's Python -- so a Florence-2 JSON that is not a pinned catalog
+    /// file is as dangerous as unpinned `.py` and must be refused.
+    #[tokio::test]
+    async fn an_unpinned_florence2_config_json_is_refused() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = tmp.path().join("store");
+        let db = Database::connect_in_memory().await.unwrap();
+        let src = write_safetensors(
+            tmp.path(),
+            "config.json",
+            br#"{"auto_map": {"AutoModelForCausalLM": "evil/repo--modeling.X"}}"#,
+        );
+        let err = import_as(&db, &store, &src, "florence2_engine")
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("pinned"), "{err}");
+        assert!(!store.join("vision/florence2-large/config.json").exists());
+        assert!(db.models().list().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn an_unpinned_qwen_vl_json_is_refused() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = tmp.path().join("store");
+        let db = Database::connect_in_memory().await.unwrap();
+        let src = write_safetensors(tmp.path(), "tokenizer_config.json", b"{}");
+        let err = import_as(&db, &store, &src, "qwen_vl_engine")
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("pinned"), "{err}");
+        assert!(db.models().list().await.unwrap().is_empty());
+    }
+
+    /// "Reinstall the stack" must actually repair a pinned folder: a
+    /// re-download matches the existing row by SHA-256, and instead of a
+    /// bare `already_present` no-op it puts the verified bytes back where the
+    /// integrity check will look for them.
+    #[tokio::test]
+    async fn re_importing_a_pinned_file_restores_a_corrupted_or_deleted_copy() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = tmp.path().join("store");
+        let db = Database::connect_in_memory().await.unwrap();
+        let dest = store.join("vision/florence2-large/tokenizer_config.json");
+
+        let first = write_safetensors(
+            tmp.path(),
+            "tokenizer_config.json",
+            FLORENCE2_TOKENIZER_CONFIG,
+        );
+        let out = import_as(&db, &store, &first, "florence2_engine")
+            .await
+            .unwrap();
+        assert!(!out.already_present);
+
+        // Tampered in place, then re-downloaded.
+        std::fs::write(&dest, b"{\"auto_map\": {}}\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n").unwrap();
+        let again = write_safetensors(
+            tmp.path(),
+            "tokenizer_config.json",
+            FLORENCE2_TOKENIZER_CONFIG,
+        );
+        let out = import_as(&db, &store, &again, "florence2_engine")
+            .await
+            .unwrap();
+        assert!(out.already_present);
+        assert_eq!(std::fs::read(&dest).unwrap(), FLORENCE2_TOKENIZER_CONFIG);
+        assert_eq!(Path::new(&out.model.file_path), dest.as_path());
+
+        // Deleted, then re-downloaded.
+        std::fs::remove_file(&dest).unwrap();
+        let third = write_safetensors(
+            tmp.path(),
+            "tokenizer_config.json",
+            FLORENCE2_TOKENIZER_CONFIG,
+        );
+        import_as(&db, &store, &third, "florence2_engine")
+            .await
+            .unwrap();
+        assert_eq!(std::fs::read(&dest).unwrap(), FLORENCE2_TOKENIZER_CONFIG);
+        assert_eq!(
+            db.models().list().await.unwrap().len(),
+            1,
+            "no duplicate row"
+        );
+    }
+
+    /// A link planted where a pinned file belongs must be replaced, never
+    /// written through: the restore removes the junction itself and puts a
+    /// regular file there, leaving the link's target untouched.
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn the_restore_replaces_a_junction_at_the_destination_instead_of_writing_through_it() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = tmp.path().join("store");
+        let db = Database::connect_in_memory().await.unwrap();
+        let first = write_safetensors(
+            tmp.path(),
+            "tokenizer_config.json",
+            FLORENCE2_TOKENIZER_CONFIG,
+        );
+        import_as(&db, &store, &first, "florence2_engine")
+            .await
+            .unwrap();
+
+        let dest = store
+            .join("vision")
+            .join("florence2-large")
+            .join("tokenizer_config.json");
+        std::fs::remove_file(&dest).unwrap();
+        let outside = tmp.path().join("outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        let status = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(&dest)
+            .arg(&outside)
+            .stdout(std::process::Stdio::null())
+            .status()
+            .unwrap();
+        assert!(status.success(), "mklink /J failed");
+
+        // Copy mode (`keep_original`) -- the path a cross-volume move falls
+        // back to, where the write would otherwise follow the link.
+        let again = write_safetensors(
+            tmp.path(),
+            "tokenizer_config.json",
+            FLORENCE2_TOKENIZER_CONFIG,
+        );
+        import_model(
+            &db,
+            &store,
+            ImportRequest {
+                model_type: Some("florence2_engine".into()),
+                keep_original: true,
+                ..req(&again)
+            },
+        )
+        .await
+        .unwrap();
+
+        let meta = std::fs::symlink_metadata(&dest).unwrap();
+        assert!(meta.file_type().is_file(), "a regular file, not a link");
+        assert_eq!(std::fs::read(&dest).unwrap(), FLORENCE2_TOKENIZER_CONFIG);
+        assert_eq!(
+            std::fs::read_dir(&outside).unwrap().count(),
+            0,
+            "nothing written through the link"
+        );
+    }
+
+    /// The row's recorded path is corrected when the repair lands the file
+    /// somewhere else (e.g. the row was re-pointed by hand).
+    #[tokio::test]
+    async fn a_repaired_pinned_file_updates_the_rows_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = tmp.path().join("store");
+        let db = Database::connect_in_memory().await.unwrap();
+        let first = write_safetensors(
+            tmp.path(),
+            "tokenizer_config.json",
+            FLORENCE2_TOKENIZER_CONFIG,
+        );
+        let out = import_as(&db, &store, &first, "florence2_engine")
+            .await
+            .unwrap();
+        let elsewhere = tmp.path().join("elsewhere.json");
+        db.models()
+            .set_file_path(&out.model.id, &elsewhere.to_string_lossy())
+            .await
+            .unwrap();
+
+        let again = write_safetensors(
+            tmp.path(),
+            "tokenizer_config.json",
+            FLORENCE2_TOKENIZER_CONFIG,
+        );
+        let out = import_as(&db, &store, &again, "florence2_engine")
+            .await
+            .unwrap();
+        let dest = store.join("vision/florence2-large/tokenizer_config.json");
+        assert_eq!(Path::new(&out.model.file_path), dest.as_path());
+        let stored = db.models().get(&out.model.id).await.unwrap().unwrap();
+        assert_eq!(Path::new(&stored.file_path), dest.as_path());
+    }
+
+    /// A pinned file imported under another pinned file's name must land
+    /// under its *own* catalog name -- never overwrite the real sibling.
+    #[tokio::test]
+    async fn a_pinned_file_lands_under_its_catalog_name_not_the_source_name() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = tmp.path().join("store");
+        let db = Database::connect_in_memory().await.unwrap();
+
+        let real = write_safetensors(
+            tmp.path(),
+            "generation_config.json",
+            FLORENCE2_GENERATION_CONFIG,
+        );
+        import_as(&db, &store, &real, "florence2_engine")
+            .await
+            .unwrap();
+
+        let sub = tmp.path().join("renamed");
+        std::fs::create_dir_all(&sub).unwrap();
+        let renamed = write_safetensors(&sub, "generation_config.json", FLORENCE2_TOKENIZER_CONFIG);
+        let out = import_as(&db, &store, &renamed, "florence2_engine")
+            .await
+            .unwrap();
+        let p = out.model.file_path.replace('\\', "/");
+        assert!(
+            p.ends_with("/vision/florence2-large/tokenizer_config.json"),
+            "{p}"
+        );
+        assert_eq!(
+            std::fs::read(store.join("vision/florence2-large/generation_config.json")).unwrap(),
+            FLORENCE2_GENERATION_CONFIG,
+            "the real sibling is untouched"
+        );
+    }
+
+    /// Every file of a pinned snapshot kind must be a catalog entry of that
+    /// kind -- weights and tokenizer data included, not only code-bearing
+    /// files: the folder is loaded as a whole, and anything else in it only
+    /// fails later, at load time. (Side-by-side placement is shared with
+    /// Florence-2, covered above with real pinned files.)
+    #[tokio::test]
+    async fn uncatalogued_weights_or_tokenizer_files_of_a_pinned_kind_are_refused() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = tmp.path().join("store");
+        let db = Database::connect_in_memory().await.unwrap();
+
+        for (kind, name, body, subdir) in [
+            (
+                "qwen_vl_engine",
+                "merges.txt",
+                &b"#version: 0.2\n"[..],
+                "vision/qwen2.5-vl-7b",
+            ),
+            (
+                "qwen_vl_engine",
+                "model-00001-of-00005.safetensors",
+                &b"shard-bytes"[..],
+                "vision/qwen2.5-vl-7b",
+            ),
+            (
+                "florence2_engine",
+                "model.safetensors",
+                &b"not-a-real-header"[..],
+                "vision/florence2-large",
+            ),
+        ] {
+            let src = write_safetensors(tmp.path(), name, body);
+            let err = import_as(&db, &store, &src, kind).await.unwrap_err();
+            assert!(err.to_string().contains("pinned"), "{kind} {name}: {err}");
+            assert!(!store.join(subdir).join(name).exists(), "{kind} {name}");
+        }
+        assert!(db.models().list().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_remote_code_python_file_outside_the_catalog_is_refused() {
+        // Florence-2 runs its `.py` files via `trust_remote_code=True` --
+        // only the exact, pinned files the catalog lists may ever be placed
+        // where the sidecar would execute them.
+        let tmp = tempfile::tempdir().unwrap();
+        let store = tmp.path().join("store");
+        let db = Database::connect_in_memory().await.unwrap();
+        let src = write_safetensors(tmp.path(), "modeling_florence2.py", b"import os\n");
+        let err = import_model(
+            &db,
+            &store,
+            ImportRequest {
+                model_type: Some("florence2_engine".into()),
+                ..req(&src)
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(err.to_string().contains("pinned"), "{err}");
+        assert!(!store
+            .join("vision/florence2-large/modeling_florence2.py")
+            .exists());
+        assert!(db.models().list().await.unwrap().is_empty());
+    }
+
+    #[test]
+    fn pinned_kind_files_are_allowed_only_as_catalogued_files_of_the_same_kind() {
+        let pinned = crate::model::KNOWN_MODELS
+            .iter()
+            .find(|m| m.kind == "florence2_engine" && m.file.ends_with(".py"))
+            .expect("the catalog pins Florence-2's remote code");
+        let florence = ModelKind::Florence2Engine;
+        let qwen = ModelKind::QwenVlEngine;
+        let unknown = "0".repeat(64);
+
+        assert_eq!(
+            pinned_file_for(florence, "py", pinned.sha256).unwrap(),
+            Some(pinned.file)
+        );
+        assert_eq!(
+            pinned_file_for(florence, "PY", &pinned.sha256.to_ascii_uppercase()).unwrap(),
+            Some(pinned.file)
+        );
+        assert!(pinned_file_for(florence, "py", &unknown).is_err());
+        assert!(pinned_file_for(florence, "json", &unknown).is_err());
+        // Another kind's pinned file is not this kind's.
+        // (Qwen never accepts `.py` at all -- `resolve_kind` refuses it
+        // before this gate -- so the cross-kind case is a pinned JSON.)
+        let florence_json = crate::model::KNOWN_MODELS
+            .iter()
+            .find(|m| m.kind == "florence2_engine" && m.file == "config.json")
+            .unwrap();
+        assert!(pinned_file_for(qwen, "json", florence_json.sha256).is_err());
+        assert!(pinned_file_for(qwen, "json", &unknown).is_err());
+        // Weights / tokenizer data are gated too: only catalog entries of
+        // the kind are imported.
+        assert!(pinned_file_for(florence, "safetensors", &unknown).is_err());
+        assert!(pinned_file_for(qwen, "txt", &unknown).is_err());
+        // Other kinds are untouched by the gate.
+        assert_eq!(
+            pinned_file_for(ModelKind::DiaEngine, "json", &unknown).unwrap(),
+            None
         );
     }
 

@@ -1,12 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { SectionNav, type NavSection } from "../../components/SectionNav";
 import {
-  useAbout,
   useBenchmarks,
-  useFeaturedModels,
   useJobs,
   useModels,
-  useModelStacks,
   useModelTags,
   usePinnedModels,
 } from "../../lib/hooks";
@@ -16,26 +13,20 @@ import {
   importModel,
   isBenchmarkable,
   isJobActive,
-  registryModel,
   renameModel,
   setModelRoles,
   setModelTags,
   upgradeCheck,
   type Benchmark,
-  type FeaturedModel,
   type Job,
-  type KnownModel,
   type Model,
-  type ModelStack,
   type ModelType,
-  type RegistryDetails,
 } from "../../lib/ipc";
+import { formatGB, formatGiB } from "../../lib/units";
+import { Catalog, type CatalogTab } from "./Catalog";
 import { ColibriPanel } from "./ColibriPanel";
 import { Discover } from "./Discover";
-import { FileList } from "./FileList";
-import { FitBadge } from "./FitBadge";
 import { Downloads } from "./Downloads";
-import { weightFiles } from "./registry-files";
 import { DeleteButton, StoragePanel } from "./StoragePanel";
 import { UpgradeChecks } from "./UpgradeChecks";
 import "./models.css";
@@ -54,7 +45,28 @@ const MODEL_TYPES: { value: ModelType; label: string; ext: string }[] = [
   { value: "video", label: "Video model", ext: ".safetensors, .gguf" },
   { value: "voice_model", label: "Voice model (TTS)", ext: ".onnx" },
   { value: "voice_data", label: "Voice data (voice presets)", ext: ".bin" },
+  { value: "wd_tagger", label: "WD tagger (dataset captioner)", ext: ".onnx, .csv" },
+  {
+    value: "florence2_engine",
+    label: "Florence-2 file (dataset captioner)",
+    ext: "one file of the pinned snapshot",
+  },
+  {
+    value: "qwen_vl_engine",
+    label: "Qwen2.5-VL file (caption second opinion)",
+    ext: "one file of the pinned snapshot",
+  },
 ];
+
+/** A request from another tab to open a specific part of this one — today
+ *  only the Dataset tab's "More captioners…" link. */
+export type ModelsFocus = "training";
+
+type ModelsProps = {
+  focus: ModelsFocus | null;
+  /** Clears the hand-over so re-visiting the tab does not jump again. */
+  onFocusConsumed: () => void;
+};
 
 const MODEL_SECTIONS: NavSection[] = [
   { id: "library", label: "Library" },
@@ -76,8 +88,6 @@ function filenameFromUrl(url: string): string {
   }
 }
 
-const gb = (mb: number | null) => (mb == null ? "—" : `${(mb / 1024).toFixed(1)} GB`);
-const gbBytes = (b: number) => `${(b / 1024 ** 3).toFixed(2)} GB`;
 const params = (n: number | null) =>
   n == null ? "—" : n >= 1e9 ? `${(n / 1e9).toFixed(1)} B` : `${(n / 1e6).toFixed(0)} M`;
 const ctx = (n: number | null) => (n == null ? "—" : n >= 1024 ? `${Math.round(n / 1024)}K` : `${n}`);
@@ -90,18 +100,29 @@ function scoreTitle(b: Benchmark): string {
     b.gen_tps != null && `${b.gen_tps.toFixed(1)} tok/s generation`,
     b.prompt_tps != null && `${b.prompt_tps.toFixed(0)} tok/s prompt`,
     b.load_ms != null && `${(b.load_ms / 1000).toFixed(1)} s load`,
-    b.vram_peak_mb != null && `${(b.vram_peak_mb / 1024).toFixed(1)} GB VRAM peak`,
+    b.vram_peak_mb != null && `${formatGiB(b.vram_peak_mb)} VRAM peak`,
     `stability ${(b.stability_score * 100).toFixed(0)}%`,
   ].filter(Boolean);
   return `Heuristic score (speed + fit + stability — not a quality score)\n${bits.join(" · ")}`;
 }
 
-export function Models() {
+export function Models({ focus, onFocusConsumed }: ModelsProps) {
   const { data: models, error, refetch } = useModels();
   const [modelType, setModelType] = useState<ModelType>("chat");
   const [section, setSection] = useState<string>(MODEL_SECTIONS[0].id);
   const importRef = useRef<HTMLDivElement>(null);
   const [importFlash, setImportFlash] = useState(false);
+  const [catalogTab, setCatalogTab] = useState<CatalogTab>("image");
+  /** Bumped to make the catalog scroll into view and focus its active tab. */
+  const [catalogFocusRequest, setCatalogFocusRequest] = useState(0);
+
+  useEffect(() => {
+    if (focus !== "training") return;
+    setSection("add");
+    setCatalogTab("training");
+    setCatalogFocusRequest((n) => n + 1);
+    onFocusConsumed();
+  }, [focus, onFocusConsumed]);
 
   // "Set import type" (on a catalog/Discover row) changes a dropdown on the
   // Import form, which lives on the "Add models" page -- jump there, then
@@ -136,7 +157,12 @@ export function Models() {
 
           {section === "add" && (
             <>
-              <Catalog onUseType={useType} />
+              <Catalog
+                tab={catalogTab}
+                onTabChange={setCatalogTab}
+                focusRequest={catalogFocusRequest}
+                onUseType={useType}
+              />
               <div ref={importRef} className={importFlash ? "models__flash" : undefined}>
                 <ImportForm modelType={modelType} setModelType={setModelType} onImported={refetch} />
               </div>
@@ -264,13 +290,13 @@ function ModelLibrary({ models, error }: { models: Model[] | null; error: string
                   <td className="muted">{m.family ?? m.arch ?? "—"}</td>
                   <td>{m.quant ?? "—"}</td>
                   <td className="numeric">{params(m.param_count)}</td>
-                  <td className="numeric">{gb(m.size_bytes / (1024 * 1024))}</td>
+                  <td className="numeric">{formatGB(m.size_bytes)}</td>
                   <td className="numeric">{ctx(m.ctx_max)}</td>
                   <td
                     className="numeric"
                     title="Estimate at load — weights + KV cache / activations + runtime overhead"
                   >
-                    {gb(m.vram_estimate_mb)}
+                    {m.vram_estimate_mb == null ? "—" : formatGiB(m.vram_estimate_mb)}
                   </td>
                   <td>
                     <ScoreCell
@@ -655,350 +681,5 @@ function ImportForm({
       </form>
       {message && <p className={message.kind === "ok" ? "import__ok" : "import__err"}>{message.text}</p>}
     </section>
-  );
-}
-
-// Values match `KnownModel.media` / `FeaturedModel.role` exactly, so the
-// filters below are a plain equality check.
-type CatalogTab = "image" | "video" | "voice" | "chat" | "coding";
-/** These tabs come from the pinned-URL stack catalogue (`GET /models/stacks`);
- *  the rest (`chat`/`coding`) come from the dynamic Featured picks, which
- *  resolve their real file list live against Hugging Face. */
-const STACK_TABS: CatalogTab[] = ["image", "video", "voice"];
-const CATALOG_TABS: { value: CatalogTab; label: string; blurb: string }[] = [
-  {
-    value: "image",
-    label: "Image",
-    blurb: "A base checkpoint or diffusion model for the Image tab, plus the encoders/VAE it needs.",
-  },
-  {
-    value: "video",
-    label: "Video",
-    blurb: "A base model for the Video tab, plus its text encoder and VAE.",
-  },
-  {
-    value: "voice",
-    label: "Voice",
-    blurb: "The Story Studio narrator — a local text-to-speech model, plus its voice presets.",
-  },
-  {
-    value: "chat",
-    label: "Chat",
-    blurb: "A general assistant for the Chat tab.",
-  },
-  {
-    value: "coding",
-    label: "Code",
-    blurb: "Powers an agent session (OpenCode/Hermes) via the coding role.",
-  },
-];
-
-/** "What should I install, and for what?" — the curated image/video catalogue
- *  (6.x) plus the chat/coding recommendations, grouped into tabs, each
- *  fit-checked against the current VRAM budget and with one pick per group
- *  flagged "★ recommended for your hardware". */
-function Catalog({ onUseType }: { onUseType: (t: ModelType) => void }) {
-  const stacks = useModelStacks();
-  const featured = useFeaturedModels();
-  const about = useAbout();
-  const [tab, setTab] = useState<CatalogTab>("image");
-
-  const active = CATALOG_TABS.find((t) => t.value === tab)!;
-  const isStackTab = STACK_TABS.includes(tab);
-  const stackRows = stacks?.filter((s) => s.media === tab);
-  const featuredRows = featured?.filter((m) => m.role === tab);
-  const loading = isStackTab ? !stacks : !featured;
-
-  return (
-    <section className="card card--wide">
-      <header className="card__head">
-        <h2>Recommended models</h2>
-        <span className="card__sub">
-          {about
-            ? `fit-checked against your ~${(about.vram_budget_mb / 1024).toFixed(0)} GB VRAM budget`
-            : "what to install, and for what"}
-        </span>
-      </header>
-
-      <div className="catalog__tabs" role="tablist">
-        {CATALOG_TABS.map((t) => (
-          <button
-            key={t.value}
-            type="button"
-            role="tab"
-            aria-selected={tab === t.value}
-            className={`chip ${tab === t.value ? "chip--on" : ""}`}
-            onClick={() => setTab(t.value)}
-          >
-            {t.label}
-          </button>
-        ))}
-      </div>
-      <p className="muted">{active.blurb}</p>
-
-      {loading && <p className="muted">Loading…</p>}
-      {!loading && isStackTab && (stackRows?.length ?? 0) === 0 && (
-        <p className="muted">Nothing curated here yet.</p>
-      )}
-      {isStackTab && stackRows && stackRows.length > 0 && (
-        <div className="stacklist">
-          {stackRows.map((s) => (
-            <StackCard key={s.id} stack={s} onUseType={onUseType} />
-          ))}
-        </div>
-      )}
-      {!loading && !isStackTab && (featuredRows?.length ?? 0) === 0 && (
-        <p className="muted">Nothing curated here yet.</p>
-      )}
-      {!isStackTab && featuredRows && featuredRows.length > 0 && (
-        <ul className="known">
-          {featuredRows.map((m) => (
-            <FeaturedRow key={m.id} model={m} onUseType={onUseType} />
-          ))}
-        </ul>
-      )}
-    </section>
-  );
-}
-
-/** One catalogue file. The URL/SHA-256/size are already pinned (unlike a
- *  Featured pick), so "Download & import" needs no registry lookup — it
- *  queues straight away. `compact` drops the note/file-details line, for use
- *  inside a `StackCard`'s already-labelled member list. */
-function KnownRow({
-  model,
-  onUseType,
-  compact,
-}: {
-  model: KnownModel;
-  onUseType: (t: ModelType) => void;
-  compact?: boolean;
-}) {
-  const [copied, setCopied] = useState(false);
-  const [dl, setDl] = useState<"idle" | "queued" | "error">("idle");
-
-  const copyLink = async () => {
-    try {
-      await navigator.clipboard.writeText(model.url);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    } catch {
-      /* clipboard blocked — the link is still visible below */
-    }
-  };
-
-  const download = async () => {
-    setDl("idle");
-    try {
-      await enqueueDownload({
-        url: model.url,
-        filename: model.file,
-        model_type: model.kind,
-        sha256: model.sha256,
-        size_bytes: model.size_bytes,
-      });
-      setDl("queued");
-    } catch {
-      setDl("error");
-    }
-  };
-
-  return (
-    <li className="known__row">
-      <div className="known__main">
-        <div className="known__name">
-          {model.name}
-          {model.is_default && <span className="badge badge--pick">★ recommended</span>}
-        </div>
-        <span className="known__badges">
-          <span className="badge">{model.kind.replace("_", " ")}</span>
-          {model.family && <span className="badge">{model.family}</span>}
-          <FitBadge fit={model.fit} subject={model.name} />
-        </span>
-        {!compact && <span className="known__note">{model.note}</span>}
-        <span className="known__file numeric">
-          {model.file} · {gbBytes(model.size_bytes)} · {model.license}
-        </span>
-      </div>
-      <div className="known__actions">
-        <button type="button" onClick={download} disabled={dl === "queued"}>
-          {dl === "queued" ? "Queued ✓" : dl === "error" ? "Failed — retry" : "Download & import"}
-        </button>
-        <button type="button" onClick={() => onUseType(model.kind)}>
-          Set import type
-        </button>
-        <button type="button" onClick={copyLink}>
-          {copied ? "Copied ✓" : "Copy link"}
-        </button>
-      </div>
-    </li>
-  );
-}
-
-/** A base image/video model plus every companion file it needs (VAE, text
- *  encoder, …) — "Download entire stack" queues all of them in one go, so
- *  you don't have to know Flux needs four separate files or hunt them down
- *  one at a time. Every file is still individually downloadable below, for
- *  topping up just the one piece you're missing. */
-function StackCard({ stack, onUseType }: { stack: ModelStack; onUseType: (t: ModelType) => void }) {
-  const [busy, setBusy] = useState(false);
-  const [status, setStatus] = useState<"idle" | "queued" | "error">("idle");
-
-  const totalBytes = stack.members.reduce((sum, m) => sum + m.size_bytes, 0);
-  const fit = stack.fit;
-
-  const downloadAll = async () => {
-    setBusy(true);
-    setStatus("idle");
-    try {
-      for (const m of stack.members) {
-        await enqueueDownload({
-          url: m.url,
-          filename: m.file,
-          model_type: m.kind,
-          sha256: m.sha256,
-          size_bytes: m.size_bytes,
-        });
-      }
-      setStatus("queued");
-    } catch {
-      setStatus("error");
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <section className="stackcard">
-      <header className="stackcard__head">
-        <div className="known__name">
-          {stack.label}
-          {stack.is_default && <span className="badge badge--pick">★ recommended</span>}
-        </div>
-        <span className="known__badges">
-          <span className="badge">
-            {stack.members.length} file{stack.members.length > 1 ? "s" : ""}
-          </span>
-          <span className="badge numeric">{gbBytes(totalBytes)} total</span>
-          <FitBadge fit={fit} subject={stack.label} />
-        </span>
-        <span className="known__note">{stack.note}</span>
-      </header>
-
-      <ul className="known stackcard__members">
-        {stack.members.map((m) => (
-          <KnownRow key={m.id} model={m} onUseType={onUseType} compact />
-        ))}
-      </ul>
-
-      <div className="stackcard__actions">
-        <button type="button" onClick={downloadAll} disabled={busy || status === "queued"}>
-          {status === "queued"
-            ? `Queued all ${stack.members.length} ✓`
-            : status === "error"
-              ? "Some failed to queue — check below"
-              : busy
-                ? "Queuing…"
-                : `Download entire stack (${stack.members.length} file${stack.members.length > 1 ? "s" : ""})`}
-        </button>
-      </div>
-    </section>
-  );
-}
-
-/** A curated chat/coding pick — only a repo + preferred quant is pinned (see
- *  `core::model::FeaturedModel`), so "Show download options" resolves the
- *  real file list live (the same way Discover does) and lists **every**
- *  weight file Hugging Face offers, not just the recommended one — pick a
- *  smaller/bigger quant if you want. Each one-click download carries
- *  `model.import_roles`, so a coding pick actually gets the `coding` role. */
-function FeaturedRow({ model, onUseType }: { model: FeaturedModel; onUseType: (t: ModelType) => void }) {
-  const [open, setOpen] = useState(false);
-  const [details, setDetails] = useState<RegistryDetails | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
-
-  const toggle = async () => {
-    const next = !open;
-    setOpen(next);
-    if (next && !details && !loading) {
-      setLoading(true);
-      setErr(null);
-      try {
-        setDetails(await registryModel(model.repo));
-      } catch (e) {
-        setErr(e instanceof Error ? e.message : String(e));
-      } finally {
-        setLoading(false);
-      }
-    }
-  };
-
-  const hint = model.quant_hint.toUpperCase();
-  const gated = details ? details.gated !== "no" : false;
-
-  const copyRepoLink = async () => {
-    try {
-      await navigator.clipboard.writeText(`https://huggingface.co/${model.repo}`);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    } catch {
-      /* clipboard blocked — the link is still visible below */
-    }
-  };
-
-  return (
-    <li className="known__row">
-      <div className="known__main">
-        <div className="known__name">
-          {model.label}
-          {model.is_default && <span className="badge badge--pick">★ recommended</span>}
-        </div>
-        <span className="known__badges">
-          <span className="badge">{model.role}</span>
-          <FitBadge fit={model.fit} subject={model.label} />
-        </span>
-        <span className="known__note">{model.note}</span>
-        <span className="known__file numeric">
-          {model.quant_hint} · ~{(model.typical_vram_mb / 1024).toFixed(1)} GB VRAM (estimate) ·{" "}
-          {model.license}
-        </span>
-        <span className="known__note">
-          Imports with role{model.import_roles.length > 1 ? "s" : ""}:{" "}
-          <code>{model.import_roles.join(", ")}</code>
-        </span>
-
-        {open && (
-          <div className="discover__files">
-            {loading && <p className="muted">Looking up the real file list…</p>}
-            {err && <p className="import__err">{err}</p>}
-            {details && (
-              <FileList
-                files={weightFiles(details)}
-                gated={gated}
-                modelType="chat"
-                roles={model.import_roles}
-                isRecommended={(f) =>
-                  f.quant?.toUpperCase().includes(hint) ?? f.path.toUpperCase().includes(hint)
-                }
-                emptyNote="No weight files found right now — open the repo on Hugging Face."
-              />
-            )}
-          </div>
-        )}
-      </div>
-      <div className="known__actions">
-        <button type="button" onClick={toggle}>
-          {open ? "Hide" : "Show download options"}
-        </button>
-        <button type="button" onClick={() => onUseType("chat")}>
-          Set import type
-        </button>
-        <button type="button" onClick={copyRepoLink}>
-          {copied ? "Copied ✓" : "Copy repo link"}
-        </button>
-      </div>
-    </li>
   );
 }

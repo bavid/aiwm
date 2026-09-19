@@ -617,6 +617,10 @@ export const attachExternalEngine = (port: number, modelId: string, vramMb: numb
 /** Release the runtime slot without touching the external process. */
 export const detachEngine = (modelId: string) => invoke<void>("detach_engine", { id: modelId });
 
+/** `KnownModel.media` / `ModelStack.media` — the Models-tab catalog
+ *  category (`core::model::catalog`). */
+export type CatalogMedia = "image" | "video" | "voice" | "training";
+
 /** One entry of the curated image/video catalogue (`GET /models/known`),
  *  enriched with a fit verdict against the current VRAM budget. */
 export interface KnownModel {
@@ -634,8 +638,9 @@ export interface KnownModel {
   note: string;
   /** The curated "pick this one" model for its role. */
   is_default: boolean;
-  /** Which media type this entry belongs to. */
-  media: "image" | "video" | "voice";
+  /** Which media type / catalog category this entry belongs to —
+   *  `"training"` = the dataset captioners (Training & captioning). */
+  media: CatalogMedia;
   fit: FitVerdict;
 }
 
@@ -646,7 +651,7 @@ export interface KnownModel {
 export interface ModelStack {
   id: string;
   label: string;
-  media: "image" | "video" | "voice";
+  media: CatalogMedia;
   note: string;
   /** The curated "pick this one" stack for its media type. */
   is_default: boolean;
@@ -902,7 +907,24 @@ export interface Captioner {
   /** Whether frame-X-vs-X+N temporal escalation applies on top of it. */
   supports_escalation: boolean;
   required_files: string[];
+  /** `false` too when the files are all there but fail the load-time
+   *  integrity check — see `unusable`. */
   installed: boolean;
+  /** Why a complete set of files cannot be used (tampered, missing or extra
+   *  file in the pinned folder); `null` when installed or simply absent. */
+  unusable: string | null;
+  /** A known problem that keeps this captioner from working right now (in
+   *  words for the person picking one). While set, the UI offers neither
+   *  selection nor install — and the core refuses a run that asks for it. */
+  known_issue: string | null;
+}
+
+/** The Qwen2.5-VL escalation model (`GET /captioners/escalation`) — not a
+ *  captioner of its own, but the same "files there, yet unusable" case. */
+export interface EscalationStatus {
+  files_present: boolean;
+  usable: boolean;
+  reason: string | null;
 }
 
 /** A concept the dataset teaches, with its frame count and the inline warning
@@ -1024,6 +1046,7 @@ export const exportDataset = (jobId: string, destDir: string) =>
   invoke<ExportDatasetSummary>("export_dataset", { jobId, destDir });
 
 export const listCaptioners = () => invoke<Captioner[]>("list_captioners");
+export const escalationStatus = () => invoke<EscalationStatus>("escalation_status");
 
 export const listDatasets = () => invoke<Dataset[]>("list_datasets");
 
@@ -1239,7 +1262,13 @@ export type ModelType =
    *  unlike every other kind, importing one file at a time is expected —
    *  "Download entire stack" on the Models tab does that automatically. */
   | "dia_engine"
-  | "dia_codec";
+  | "dia_codec"
+  /** One file of the Florence-2 large / Qwen2.5-VL 7B captioner snapshot
+   *  directories (`core::model::ModelKind::Florence2Engine`/`QwenVlEngine`)
+   *  — same one-file-at-a-time, original-filename shape as Dia; installed
+   *  via "Download entire stack". */
+  | "florence2_engine"
+  | "qwen_vl_engine";
 
 export const importModel = (
   sourcePath: string,

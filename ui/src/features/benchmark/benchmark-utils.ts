@@ -12,6 +12,7 @@ import {
   type Job,
   type Model,
 } from "../../lib/ipc";
+import { formatGiB } from "../../lib/units";
 
 /** The newest `bench` job that has not finished, whoever started it — what the
  *  tab adopts when it is not already watching one. `null` when nothing is
@@ -216,7 +217,7 @@ export function formatLoad(loadMs: number | null): string {
 }
 
 export function formatVram(mb: number | null): string {
-  return mb == null ? DASH : `${(mb / 1024).toFixed(1)} GB`;
+  return mb == null ? DASH : formatGiB(mb);
 }
 
 /** `stability_score` is 0..1; people read consistency as a percentage. */

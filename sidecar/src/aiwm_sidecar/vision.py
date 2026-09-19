@@ -154,18 +154,64 @@ _florence2_cache: dict[str, _Florence2Engine] = {}
 _qwen_vl_cache: dict[tuple[str, str], _QwenVlEngine] = {}
 
 
+def _sanitize_module_name(name: str) -> str:
+    """Mirror of `transformers.dynamic_module_utils._sanitize_module_name`
+    (a private helper, so not imported): the folder name transformers gives
+    a local model's copied remote code."""
+    sanitized = name.replace(".", "_dot_").replace("-", "_hyphen_")
+    if sanitized and sanitized[0].isdigit():
+        sanitized = f"_{sanitized}"
+    return sanitized
+
+
+def _remote_code_cache_dir(model_dir: str, modules_cache: str) -> Path:
+    """Where transformers copies a *local* folder's `trust_remote_code`
+    Python before importing it: `<HF_MODULES_CACHE>/transformers_modules/
+    <sanitized folder name>/<source hash>/` (transformers 5.x)."""
+    name = _sanitize_module_name(Path(model_dir).name)
+    return Path(modules_cache, "transformers_modules", name)
+
+
+def _clear_remote_code_cache(model_dir: str) -> None:
+    """Delete every earlier copy of this folder's remote code from the
+    transformers modules cache (in the user profile, outside anything core
+    verifies) so the load below imports only a fresh copy of the pinned,
+    just-verified files -- never a stale or planted module left there."""
+    import shutil
+
+    from transformers.dynamic_module_utils import HF_MODULES_CACHE
+
+    # A drive/filesystem root has no folder name: the path below would then
+    # be all of `transformers_modules` -- never delete that.
+    if not _sanitize_module_name(Path(model_dir).name):
+        return
+    stale = _remote_code_cache_dir(model_dir, str(HF_MODULES_CACHE))
+    if stale.exists():
+        shutil.rmtree(stale)
+
+
 def _construct_florence2(model_dir: str) -> _Florence2Engine:
     import torch
     from transformers import AutoModelForCausalLM, AutoProcessor
 
+    _clear_remote_code_cache(model_dir)
+
     device = "cuda" if torch.cuda.is_available() else "cpu"
     dtype = torch.float16 if device == "cuda" else torch.float32
+    # `local_files_only=True`: core verified this exact folder against the
+    # pinned catalog (`model::integrity`) before sending the request -- an
+    # `auto_map` naming a Hub repo must never make `trust_remote_code` fetch
+    # unpinned Python (or anything else) from the network instead.
     model = (
-        AutoModelForCausalLM.from_pretrained(model_dir, trust_remote_code=True, dtype=dtype)
+        AutoModelForCausalLM.from_pretrained(
+            model_dir, trust_remote_code=True, dtype=dtype, local_files_only=True
+        )
         .to(device)
         .eval()
     )
-    processor = AutoProcessor.from_pretrained(model_dir, trust_remote_code=True)
+    processor = AutoProcessor.from_pretrained(
+        model_dir, trust_remote_code=True, local_files_only=True
+    )
     return _Florence2Engine(model, processor, device)
 
 
@@ -202,8 +248,10 @@ def _construct_qwen_vl(model_dir: str, quantization: str) -> _QwenVlEngine:
         dtype="auto" if quant_config is None else torch.float16,
         device_map="auto",
         quantization_config=quant_config,
+        local_files_only=True,
     )
-    processor = AutoProcessor.from_pretrained(model_dir)
+    # Same offline rule as Florence-2: only the verified local folder.
+    processor = AutoProcessor.from_pretrained(model_dir, local_files_only=True)
     return _QwenVlEngine(model, processor)
 
 

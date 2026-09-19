@@ -32,18 +32,20 @@ use std::path::Path;
 use serde_json::{json, Value};
 
 use crate::db::Database;
+use crate::model::ModelKind;
 use crate::runtime::VisionAdapter;
 use crate::Result;
 
-use super::captioner::{installed_captioner_dir, Captioner, FLORENCE2_ID};
+use super::captioner::{complete_dir_for_role, installed_captioner_dir, Captioner, FLORENCE2_ID};
 use super::dataset_err;
 
 /// Model-library roles a Florence-2 / Qwen2.5-VL checkpoint is imported
 /// under (Models tab \u{2192} Add models, same generic "point at a folder,
 /// assign a role" flow every other runtime already uses — see
 /// `capability::tts::resolve_dia_dirs` for the same shape with Dia).
-pub const FLORENCE2_ROLE: &str = "vision_florence2";
-pub const QWEN_VL_ROLE: &str = "vision_qwen2_5_vl";
+/// Defined next to their [`crate::model::ModelKind`]s so a catalog stack
+/// install and this resolver can never disagree on the string.
+pub use crate::model::{FLORENCE2_ROLE, QWEN_VL_ROLE};
 
 /// fp16 weights (~770M params \u{2248} 1.5 GB) plus activation/runtime
 /// overhead for the `large` Florence-2 checkpoint used by default.
@@ -54,6 +56,44 @@ pub const FLORENCE2_VRAM_FALLBACK_MB: u64 = 2048;
 /// for that reason; `quantization` stays a request-level knob (see
 /// `caption_frame_pair`'s `quantization` param) for a bigger card.
 pub const QWEN_VL_VRAM_FALLBACK_MB: u64 = 6144;
+
+/// Every file `Florence2ForConditionalGeneration` + `AutoProcessor` read
+/// from the snapshot directory (`vision.py::_construct_florence2`, both with
+/// `trust_remote_code`): weights, configs, the tokenizer, and the three
+/// remote-code modules -- exactly the pinned `florence2-large` stack.
+pub const FLORENCE2_REQUIRED_FILES: &[&str] = &[
+    "config.json",
+    "model.safetensors",
+    "configuration_florence2.py",
+    "modeling_florence2.py",
+    "processing_florence2.py",
+    "preprocessor_config.json",
+    "generation_config.json",
+    "tokenizer.json",
+    "tokenizer_config.json",
+    "vocab.json",
+];
+
+/// Every file `Qwen2_5_VLForConditionalGeneration` + `AutoProcessor` read
+/// (`vision.py::_construct_qwen_vl`): the sharded weights with their index,
+/// configs, chat template and tokenizer -- exactly the pinned
+/// `qwen2.5-vl-7b` stack.
+pub const QWEN_VL_REQUIRED_FILES: &[&str] = &[
+    "config.json",
+    "model.safetensors.index.json",
+    "model-00001-of-00005.safetensors",
+    "model-00002-of-00005.safetensors",
+    "model-00003-of-00005.safetensors",
+    "model-00004-of-00005.safetensors",
+    "model-00005-of-00005.safetensors",
+    "generation_config.json",
+    "preprocessor_config.json",
+    "chat_template.json",
+    "tokenizer.json",
+    "tokenizer_config.json",
+    "vocab.json",
+    "merges.txt",
+];
 
 pub const DEFAULT_ESCALATE: bool = true;
 pub const DEFAULT_ESCALATE_EVERY_NTH: u32 = 20;
@@ -78,13 +118,13 @@ fn vision_err(msg: impl std::fmt::Display) -> crate::CoreError {
     dataset_err(msg)
 }
 
-/// The shared "not imported" error both `resolve_model_dir` and
+/// The shared "not installed" error both `resolve_qwen_vl_dir` and
 /// `resolve_captioner_dir` report — same wording, same Models-tab pointer,
 /// just parameterized by what's missing and which role to assign it.
 fn not_imported_err(label: &str, role: &str) -> crate::CoreError {
     vision_err(format!(
-        "no {label} imported — import it on the Models tab (Add models \u{2192} point at its \
-         downloaded snapshot folder \u{2192} role \u{201c}{role}\u{201d})"
+        "no complete {label} installed — install it on the Models tab (Training & captioning), \
+         or import its downloaded snapshot folder with role \u{201c}{role}\u{201d}"
     ))
 }
 
@@ -120,21 +160,122 @@ pub fn is_low_confidence_caption(
     escalate_every_nth > 0 && (kept_index + 1) % escalate_every_nth as usize == 0
 }
 
-/// The imported Florence-2 / Qwen2.5-VL checkpoint's on-disk snapshot
-/// directory, resolved by role — mirrors
-/// `capability::tts::resolve_dia_component_dir`'s "any file in the role
-/// names the shared directory" shape.
-async fn resolve_model_dir(db: &Database, role: &str, label: &str) -> Result<std::path::PathBuf> {
-    let files = db.models().for_role(role).await?;
-    let first = files.first().ok_or_else(|| not_imported_err(label, role))?;
-    Path::new(&first.file_path)
-        .parent()
-        .map(Path::to_path_buf)
-        .ok_or_else(|| vision_err(format!("{label} file has no parent directory")))
+/// The imported Qwen2.5-VL snapshot directory: the one directory among the
+/// role's rows that holds every one of [`QWEN_VL_REQUIRED_FILES`] -- the
+/// same complete-directory rule captioners use, so a half-finished stack
+/// download is reported as missing rather than handed to the sidecar.
+///
+/// The directory handed to the sidecar is then **not** the rows' parent but
+/// the store's own `vision/qwen2.5-vl-7b`, after
+/// [`crate::model::verify_captioner_dir`] proved it holds exactly the pinned
+/// catalog files (no extra file, no subfolder, every SHA-256 matching).
+pub async fn resolve_qwen_vl_dir(db: &Database, store_root: &Path) -> Result<std::path::PathBuf> {
+    complete_dir_for_role(db, QWEN_VL_ROLE, QWEN_VL_REQUIRED_FILES)
+        .await?
+        .ok_or_else(|| not_imported_err("Qwen2.5-VL", QWEN_VL_ROLE))?;
+    verified_store_dir(store_root, ModelKind::QwenVlEngine).await
 }
 
-pub async fn resolve_qwen_vl_dir(db: &Database) -> Result<std::path::PathBuf> {
-    resolve_model_dir(db, QWEN_VL_ROLE, "Qwen2.5-VL").await
+/// Re-runs the pinned-folder integrity check for one captioner kind
+/// **immediately before the first model call of a run** (the call that
+/// makes the sidecar load the model) and reuses that verdict for the rest of
+/// the run: the sidecar keeps the loaded engine, so nothing is re-read from
+/// disk after that load. A failure is not cached — the next call re-checks.
+pub struct PinnedDirGate {
+    kind: ModelKind,
+    store_root: std::path::PathBuf,
+    verified: tokio::sync::OnceCell<std::path::PathBuf>,
+}
+
+impl PinnedDirGate {
+    pub fn new(store_root: &Path, kind: ModelKind) -> Self {
+        Self {
+            kind,
+            store_root: store_root.to_path_buf(),
+            verified: tokio::sync::OnceCell::new(),
+        }
+    }
+
+    /// The verified store folder to send to the sidecar.
+    pub async fn dir(&self) -> Result<std::path::PathBuf> {
+        self.verified
+            .get_or_try_init(|| verified_store_dir(&self.store_root, self.kind))
+            .await
+            .cloned()
+    }
+}
+
+/// Where a run stands with Qwen2.5-VL escalation.
+enum QwenGateState {
+    /// Not re-verified yet in this run.
+    Unchecked,
+    /// Re-verified right before the first escalation call.
+    Ready(std::path::PathBuf),
+    /// The re-check failed; escalation is off for the rest of the run.
+    Disabled,
+}
+
+/// Re-runs the pinned-folder integrity check for Qwen2.5-VL **immediately
+/// before the first escalation call of a run** — the call that makes the
+/// sidecar load Qwen lazily, possibly long after the run-start check in
+/// [`resolve_qwen_vl_dir`]. Later calls reuse the verdict: the sidecar keeps
+/// the loaded engine, so nothing is re-read from disk after that load.
+pub struct QwenGate {
+    store_root: std::path::PathBuf,
+    state: tokio::sync::Mutex<QwenGateState>,
+}
+
+impl QwenGate {
+    pub fn new(store_root: &Path) -> Self {
+        Self {
+            store_root: store_root.to_path_buf(),
+            state: tokio::sync::Mutex::new(QwenGateState::Unchecked),
+        }
+    }
+
+    /// The verified Qwen folder to send with `caption_frame_pair`, or `None`
+    /// when escalation is off: a failed re-check appends one warning event
+    /// to `job_id` and disables escalation for the rest of the run.
+    pub async fn dir_for_escalation(
+        &self,
+        db: &Database,
+        job_id: &str,
+    ) -> Result<Option<std::path::PathBuf>> {
+        let mut state = self.state.lock().await;
+        if let QwenGateState::Unchecked = *state {
+            *state = match verified_store_dir(&self.store_root, ModelKind::QwenVlEngine).await {
+                Ok(dir) => QwenGateState::Ready(dir),
+                Err(e) => {
+                    db.jobs()
+                        .append_event(
+                            job_id,
+                            crate::db::EventLevel::Warn,
+                            &format!("temporal-context escalation disabled \u{2014} {e}"),
+                        )
+                        .await?;
+                    QwenGateState::Disabled
+                }
+            };
+        }
+        Ok(match &*state {
+            QwenGateState::Ready(dir) => Some(dir.clone()),
+            QwenGateState::Unchecked | QwenGateState::Disabled => None,
+        })
+    }
+}
+
+/// The pinned snapshot kind a captioner loads from, when it has one — the
+/// captioners whose folder must pass the load-time integrity check.
+pub(super) fn pinned_kind_for(c: &Captioner) -> Option<ModelKind> {
+    (c.id == FLORENCE2_ID).then_some(ModelKind::Florence2Engine)
+}
+
+/// Load-time integrity check (`model::integrity`): the verified store
+/// subfolder, or a dataset error naming what is wrong with it.
+async fn verified_store_dir(store_root: &Path, kind: ModelKind) -> Result<std::path::PathBuf> {
+    crate::model::verify_captioner_dir_async(store_root, kind)
+        .await
+        .map_err(vision_err)
 }
 
 /// Directory holding the captioner's files, or the same "import it on the
@@ -143,13 +284,26 @@ pub async fn resolve_qwen_vl_dir(db: &Database) -> Result<std::path::PathBuf> {
 /// `model.onnx` + `selected_tags.csv`), so a half-imported tagger is
 /// reported as missing rather than resolved to a directory that will fail
 /// at caption time.
-pub async fn resolve_captioner_dir(db: &Database, c: &Captioner) -> Result<std::path::PathBuf> {
+///
+/// For a captioner with a pinned snapshot (Florence-2, which runs its
+/// folder's Python via `trust_remote_code`), the returned directory is the
+/// store's own subfolder after the load-time integrity check -- never the
+/// rows' parent, which any role assignment could point anywhere.
+pub async fn resolve_captioner_dir(
+    db: &Database,
+    store_root: &Path,
+    c: &Captioner,
+) -> Result<std::path::PathBuf> {
     // Registry display names follow "Name (style hint)" — the label is just
     // the name part.
     let label = c.name.split_once(" (").map_or(c.name, |(label, _)| label);
-    installed_captioner_dir(db, c)
+    let dir = installed_captioner_dir(db, c)
         .await?
-        .ok_or_else(|| not_imported_err(label, c.role))
+        .ok_or_else(|| not_imported_err(label, c.role))?;
+    match pinned_kind_for(c) {
+        Some(kind) => verified_store_dir(store_root, kind).await,
+        None => Ok(dir),
+    }
 }
 
 /// Which sidecar JSON-RPC method serves this captioner.
@@ -273,33 +427,246 @@ mod tests {
     #[tokio::test]
     async fn resolve_qwen_vl_dir_reports_a_clear_error_when_not_imported() {
         let db = empty_db().await;
-        let err = resolve_qwen_vl_dir(&db).await.unwrap_err();
+        let err = resolve_qwen_vl_dir(&db, Path::new("E:\\AI\\models"))
+            .await
+            .unwrap_err();
         assert!(err.to_string().contains("Qwen2.5-VL"), "{err}");
     }
 
-    /// Pins `resolve_model_dir`'s "any file in the role names the shared
-    /// directory" shape — the parent of the imported row, not the row itself.
+    fn qwen_row(name: &str) -> NewModel {
+        NewModel {
+            name: name.into(),
+            format: "safetensors".into(),
+            file_path: format!("E:\\AI\\models\\vision\\qwen2.5-vl-7b\\{name}"),
+            size_bytes: 1,
+            source: "manual".into(),
+            roles: vec![QWEN_VL_ROLE.into()],
+            ..NewModel::default()
+        }
+    }
+
+    /// Complete rows are not enough: the folder the sidecar will load is
+    /// the store's own `vision/qwen2.5-vl-7b`, and it must pass the pinned
+    /// integrity check (`model::integrity`) before escalation may use it.
     #[tokio::test]
-    async fn resolve_qwen_vl_dir_finds_the_snapshot_folder() {
+    async fn resolve_qwen_vl_dir_requires_the_verified_store_folder() {
+        let db = empty_db().await;
+        for name in QWEN_VL_REQUIRED_FILES {
+            db.models().insert(qwen_row(name)).await.unwrap();
+        }
+        let store = tempfile::tempdir().unwrap();
+
+        let err = resolve_qwen_vl_dir(&db, store.path()).await.unwrap_err();
+        let e = err.to_string();
+        assert!(e.contains("captioner folder check failed"), "{e}");
+        assert!(e.contains("not installed"), "{e}");
+    }
+
+    /// A stack download that has landed one shard must not be handed to
+    /// the sidecar as a loadable checkpoint.
+    #[tokio::test]
+    async fn resolve_qwen_vl_dir_rejects_a_partial_snapshot() {
         let db = empty_db().await;
         db.models()
-            .insert(NewModel {
-                name: "qwen2.5-vl-7b-instruct".into(),
-                format: "safetensors".into(),
-                file_path: "E:\\AI\\models\\vision\\qwen2.5-vl-7b\\model.safetensors".into(),
-                size_bytes: 1,
-                source: "manual".into(),
-                roles: vec![QWEN_VL_ROLE.into()],
-                ..NewModel::default()
-            })
+            .insert(qwen_row("model-00001-of-00005.safetensors"))
             .await
             .unwrap();
+        db.models().insert(qwen_row("config.json")).await.unwrap();
 
-        let dir = resolve_qwen_vl_dir(&db).await.unwrap();
-        assert_eq!(
-            dir.to_string_lossy().replace('\\', "/"),
-            "E:/AI/models/vision/qwen2.5-vl-7b"
+        let err = resolve_qwen_vl_dir(&db, Path::new("E:\\AI\\models"))
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("Qwen2.5-VL"), "{err}");
+    }
+
+    fn florence_row(dir: &Path, name: &str) -> NewModel {
+        NewModel {
+            name: name.into(),
+            format: "json".into(),
+            file_path: dir.join(name).to_string_lossy().into_owned(),
+            size_bytes: 1,
+            source: "manual".into(),
+            roles: vec![FLORENCE2_ROLE.into()],
+            ..NewModel::default()
+        }
+    }
+
+    /// Any row can carry the Florence-2 role (`PUT /models/{id}/roles`,
+    /// `register_directory_model`), so a folder whose rows look complete
+    /// is still refused when its content is not the pinned snapshot -- the
+    /// check that guards `trust_remote_code` runs at load time.
+    #[tokio::test]
+    async fn resolve_captioner_dir_refuses_a_florence2_folder_that_fails_the_integrity_check() {
+        use super::super::captioner::find_captioner;
+        let db = empty_db().await;
+        let store = tempfile::tempdir().unwrap();
+        let dir = store.path().join("vision").join("florence2-large");
+        std::fs::create_dir_all(&dir).unwrap();
+        for name in FLORENCE2_REQUIRED_FILES {
+            std::fs::write(dir.join(name), b"not the pinned bytes").unwrap();
+            db.models().insert(florence_row(&dir, name)).await.unwrap();
+        }
+        let florence = find_captioner(FLORENCE2_ID).unwrap();
+
+        let err = resolve_captioner_dir(&db, store.path(), florence)
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("captioner folder check failed"),
+            "{err}"
         );
+
+        // A registered folder outside the store is never the one loaded.
+        let elsewhere = tempfile::tempdir().unwrap();
+        let err = resolve_captioner_dir(&db, elsewhere.path(), florence)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("not installed"), "{err}");
+    }
+
+    async fn warn_events(db: &Database, job_id: &str) -> Vec<String> {
+        db.jobs()
+            .events(job_id)
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|e| e.level == crate::db::EventLevel::Warn)
+            .map(|e| e.message)
+            .collect()
+    }
+
+    /// Qwen loads lazily at the first escalation, possibly long after the
+    /// run-start check -- the gate re-verifies right then, and a failure
+    /// switches escalation off for the rest of the run with one warning
+    /// (not one per uncertain frame).
+    #[tokio::test]
+    async fn the_qwen_gate_disables_escalation_with_one_warning_when_the_recheck_fails() {
+        let db = empty_db().await;
+        let job_id = super::super::testutil::new_job(&db).await;
+        let store = tempfile::tempdir().unwrap();
+        let gate = QwenGate::new(store.path());
+
+        assert_eq!(gate.dir_for_escalation(&db, &job_id).await.unwrap(), None);
+        assert_eq!(gate.dir_for_escalation(&db, &job_id).await.unwrap(), None);
+
+        let warns = warn_events(&db, &job_id).await;
+        assert_eq!(warns.len(), 1, "{warns:?}");
+        assert!(warns[0].contains("escalation disabled"), "{warns:?}");
+        assert!(
+            warns[0].contains("captioner folder check failed"),
+            "{warns:?}"
+        );
+    }
+
+    /// Florence-2's gate: the folder is re-verified right before the first
+    /// `caption_frame` of a run; a failure is the run's error (captioning
+    /// was asked for, so there is nothing to fall back to).
+    #[tokio::test]
+    async fn the_florence2_gate_fails_the_first_caption_when_the_recheck_fails() {
+        let store = tempfile::tempdir().unwrap();
+        let gate = PinnedDirGate::new(store.path(), ModelKind::Florence2Engine);
+        let e = gate.dir().await.unwrap_err().to_string();
+        assert!(e.contains("captioner folder check failed"), "{e}");
+        assert!(e.contains("not installed"), "{e}");
+    }
+
+    /// Hard-links the real Florence-2 snapshot from
+    /// `AIWM_TEST_FLORENCE2_SNAPSHOT` into a temp store beside it.
+    #[tokio::test]
+    #[ignore = "needs the real pinned Florence-2 snapshot (AIWM_TEST_FLORENCE2_SNAPSHOT)"]
+    async fn the_florence2_gate_verifies_once_per_run_right_before_the_first_caption() {
+        let src = std::path::PathBuf::from(
+            std::env::var("AIWM_TEST_FLORENCE2_SNAPSHOT").expect("set the snapshot path"),
+        );
+        let store = tempfile::tempdir_in(src.parent().unwrap()).unwrap();
+        let dir = store.path().join("vision").join("florence2-large");
+        std::fs::create_dir_all(&dir).unwrap();
+        for name in FLORENCE2_REQUIRED_FILES {
+            std::fs::hard_link(src.join(name), dir.join(name)).unwrap();
+        }
+
+        let gate = PinnedDirGate::new(store.path(), ModelKind::Florence2Engine);
+        let expected = store.path().join("vision/florence2-large");
+        assert_eq!(gate.dir().await.unwrap(), expected);
+
+        // Tampered after the run's first caption: this run keeps the engine
+        // the sidecar already loaded; the next run's gate refuses the folder.
+        std::fs::write(dir.join("extra.py"), b"import os").unwrap();
+        assert_eq!(gate.dir().await.unwrap(), expected);
+        let next_run = PinnedDirGate::new(store.path(), ModelKind::Florence2Engine);
+        let e = next_run.dir().await.unwrap_err().to_string();
+        assert!(e.contains("extra.py"), "{e}");
+    }
+
+    /// Hard-links the real pinned Qwen2.5-VL files from
+    /// `AIWM_TEST_QWEN_VL_SNAPSHOT` into a temp store (same volume, no
+    /// 16 GB copy); the files themselves are never modified.
+    #[tokio::test]
+    #[ignore = "needs the real pinned Qwen2.5-VL snapshot (AIWM_TEST_QWEN_VL_SNAPSHOT)"]
+    async fn the_qwen_gate_rechecks_the_real_snapshot_before_the_lazy_load() {
+        let src = std::path::PathBuf::from(
+            std::env::var("AIWM_TEST_QWEN_VL_SNAPSHOT").expect("set the snapshot path"),
+        );
+        let db = empty_db().await;
+        let job_id = super::super::testutil::new_job(&db).await;
+        // Beside the snapshot (same volume, so hard links work).
+        let store = tempfile::tempdir_in(src.parent().unwrap()).unwrap();
+        let dir = store.path().join("vision").join("qwen2.5-vl-7b");
+        std::fs::create_dir_all(&dir).unwrap();
+        for name in QWEN_VL_REQUIRED_FILES {
+            std::fs::hard_link(src.join(name), dir.join(name)).unwrap();
+            db.models().insert(qwen_row(name)).await.unwrap();
+        }
+
+        // Run start: the folder verifies.
+        resolve_qwen_vl_dir(&db, store.path()).await.unwrap();
+        let gate = QwenGate::new(store.path());
+        assert_eq!(
+            gate.dir_for_escalation(&db, &job_id).await.unwrap(),
+            Some(store.path().join("vision/qwen2.5-vl-7b"))
+        );
+
+        // Something lands in the folder after the run-start check: a fresh
+        // gate (the next run's first escalation) refuses it by name.
+        std::fs::write(dir.join("sneaky.json"), b"{}").unwrap();
+        let later = QwenGate::new(store.path());
+        assert_eq!(later.dir_for_escalation(&db, &job_id).await.unwrap(), None);
+        let warns = warn_events(&db, &job_id).await;
+        assert!(warns.iter().any(|w| w.contains("sneaky.json")), "{warns:?}");
+    }
+
+    /// Real-bytes positive path: set `AIWM_TEST_FLORENCE2_SNAPSHOT` to a
+    /// folder holding the ten pinned Florence-2 files (the Plan 7 Task 1
+    /// download). Copies ~1.5 GB, hence ignored by default.
+    #[tokio::test]
+    #[ignore = "needs the real pinned Florence-2 snapshot (AIWM_TEST_FLORENCE2_SNAPSHOT)"]
+    async fn resolve_captioner_dir_accepts_the_real_pinned_florence2_snapshot() {
+        use super::super::captioner::find_captioner;
+        let src = std::path::PathBuf::from(
+            std::env::var("AIWM_TEST_FLORENCE2_SNAPSHOT").expect("set the snapshot path"),
+        );
+        let db = empty_db().await;
+        let store = tempfile::tempdir().unwrap();
+        let dir = store.path().join("vision").join("florence2-large");
+        std::fs::create_dir_all(&dir).unwrap();
+        for name in FLORENCE2_REQUIRED_FILES {
+            std::fs::copy(src.join(name), dir.join(name)).unwrap();
+            db.models().insert(florence_row(&dir, name)).await.unwrap();
+        }
+        let florence = find_captioner(FLORENCE2_ID).unwrap();
+
+        let got = resolve_captioner_dir(&db, store.path(), florence)
+            .await
+            .unwrap();
+        assert_eq!(got, store.path().join("vision/florence2-large"));
+
+        // A stray `__pycache__` (what running the remote code leaves behind
+        // if it were ever written here) is refused by name.
+        std::fs::create_dir(dir.join("__pycache__")).unwrap();
+        let err = resolve_captioner_dir(&db, store.path(), florence)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("__pycache__"), "{err}");
     }
 
     #[test]
@@ -333,14 +700,18 @@ mod tests {
                 .unwrap();
         }
         let c = find_captioner(WD_TAGGER_ID).unwrap();
-        let dir = resolve_captioner_dir(&db, c).await.unwrap();
+        let dir = resolve_captioner_dir(&db, Path::new("E:\\AI\\models"), c)
+            .await
+            .unwrap();
         assert!(dir
             .to_string_lossy()
             .replace('\\', "/")
             .ends_with("vision/wd-tagger"));
 
         let florence = find_captioner(FLORENCE2_ID).unwrap();
-        let err = resolve_captioner_dir(&db, florence).await.unwrap_err();
+        let err = resolve_captioner_dir(&db, Path::new("E:\\AI\\models"), florence)
+            .await
+            .unwrap_err();
         assert!(err.to_string().contains("Florence-2"), "{err}");
     }
 
@@ -361,7 +732,9 @@ mod tests {
             .await
             .unwrap();
         let c = find_captioner(WD_TAGGER_ID).unwrap();
-        let err = resolve_captioner_dir(&db, c).await.unwrap_err();
+        let err = resolve_captioner_dir(&db, Path::new("E:\\AI\\models"), c)
+            .await
+            .unwrap_err();
         assert!(err.to_string().contains("WD EVA02 Tagger v3"), "{err}");
     }
 

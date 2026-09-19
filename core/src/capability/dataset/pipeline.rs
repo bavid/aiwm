@@ -88,9 +88,16 @@ async fn discard_empty_dataset(db: &Database, dataset_id: &str) {
 /// stays visible through `prep_job_id`, and a partial dataset is safe to
 /// curate and export — but one that never received a single frame is deleted
 /// again rather than left as an empty shell.
+///
+/// `store_root` is the model store (`config.store_path`): Florence-2 and
+/// Qwen2.5-VL only ever load from its pinned `vision/…` subfolders, and only
+/// after the load-time integrity check (`model::integrity`) passed here —
+/// once per run, before the first `caption_frame` / `caption_frame_pair` is
+/// sent (the sidecar then keeps the loaded engine for the rest of the run).
 pub async fn run(
     db: &Database,
     vision: &VisionAdapter,
+    store_root: &Path,
     work_dir: &Path,
     job_id: &str,
     req: DatasetPrepRequest,
@@ -100,14 +107,21 @@ pub async fn run(
     // the disk, so a missing model fails fast — but only when one was asked
     // for. Extraction, filtering and curation never need a model.
     let captioner = req.captioner.as_deref().and_then(captioner::find_captioner);
+    // A captioner with a known issue (Florence-2 on transformers 5.x) would
+    // only fail after the whole extraction — refuse it here, with the reason.
+    if let Some((name, issue)) = captioner.and_then(|c| Some((c.name, c.known_issue?))) {
+        return Err(dataset_err(format!(
+            "{name} cannot caption right now: {issue}"
+        )));
+    }
     let captioner_dir = match captioner {
-        Some(c) => Some(caption::resolve_captioner_dir(db, c).await?),
+        Some(c) => Some(caption::resolve_captioner_dir(db, store_root, c).await?),
         None => None,
     };
 
     let escalate = req.escalate && captioner.is_some_and(|c| c.supports_escalation);
     let qwen_dir = if escalate {
-        match caption::resolve_qwen_vl_dir(db).await {
+        match caption::resolve_qwen_vl_dir(db, store_root).await {
             Ok(dir) => Some(dir),
             Err(e) => {
                 db.jobs()
@@ -124,6 +138,15 @@ pub async fn run(
         None
     };
     let escalate = escalate && qwen_dir.is_some();
+    // Qwen loads lazily in the sidecar at the first escalation, which can
+    // come long after the check above -- the gate re-verifies the folder
+    // right before that first call (once per run).
+    let qwen_gate = caption::QwenGate::new(store_root);
+    // Same for a pinned captioner (Florence-2): verified at run start above
+    // and again right before its first `caption_frame` of the run.
+    let captioner_gate = captioner
+        .and_then(caption::pinned_kind_for)
+        .map(|kind| caption::PinnedDirGate::new(store_root, kind));
 
     let items = ingest::walk_dataset_root(&req.root)?;
     if items.is_empty() {
@@ -272,7 +295,9 @@ pub async fn run(
                 vision,
                 captioner: c,
                 model_dir: dir,
-                qwen_dir: qwen_dir.as_deref(),
+                captioner_gate: captioner_gate.as_ref(),
+                qwen_gate: &qwen_gate,
+                job_id,
                 escalate,
                 req: &req,
             };
@@ -424,7 +449,14 @@ struct CaptionContext<'a> {
     vision: &'a VisionAdapter,
     captioner: &'a Captioner,
     model_dir: &'a Path,
-    qwen_dir: Option<&'a Path>,
+    /// Re-verifies the Qwen2.5-VL folder before the first escalation call
+    /// and hands out the verified directory (or `None` once disabled).
+    /// Set for a captioner with a pinned snapshot (Florence-2): re-verifies
+    /// its folder before the run's first caption call.
+    captioner_gate: Option<&'a caption::PinnedDirGate>,
+    qwen_gate: &'a caption::QwenGate,
+    /// For the gate's "escalation disabled" warning event.
+    job_id: &'a str,
     /// Already implies `captioner.supports_escalation`.
     escalate: bool,
     req: &'a DatasetPrepRequest,
@@ -440,7 +472,9 @@ async fn caption_group(
         vision,
         captioner: c,
         model_dir,
-        qwen_dir,
+        captioner_gate,
+        qwen_gate,
+        job_id,
         escalate,
         req,
     } = *ctx;
@@ -449,8 +483,14 @@ async fn caption_group(
             return Ok(());
         }
         let frame_path = Path::new(&record.frame_path);
+        // A pinned captioner (Florence-2) is re-verified right before its
+        // first call of the run -- the one that loads it in the sidecar.
+        let model_dir = match captioner_gate {
+            Some(gate) => gate.dir().await?,
+            None => model_dir.to_path_buf(),
+        };
         let (base_caption, mut engine) =
-            caption::caption_with(vision, c, model_dir, frame_path).await?;
+            caption::caption_with(vision, c, &model_dir, frame_path).await?;
         let mut final_caption = base_caption.clone();
 
         let is_video_frame = record.timestamp_secs.is_some();
@@ -466,10 +506,14 @@ async fn caption_group(
             } else {
                 None
             };
+            let qwen_dir = match neighbor_idx {
+                Some(_) => qwen_gate.dir_for_escalation(db, job_id).await?,
+                None => None,
+            };
             if let (Some(neighbor_idx), Some(qwen_dir)) = (neighbor_idx, qwen_dir) {
                 let neighbor_path = Path::new(&records[neighbor_idx].frame_path);
                 if let Ok(recap) =
-                    caption::caption_frame_pair(vision, qwen_dir, frame_path, neighbor_path).await
+                    caption::caption_frame_pair(vision, &qwen_dir, frame_path, neighbor_path).await
                 {
                     final_caption = recap;
                     engine = "qwen2.5-vl".to_string();
@@ -491,7 +535,27 @@ mod tests {
     use crate::capability::dataset::DEFAULT_PHASH_MAX_DISTANCE;
 
     #[tokio::test]
-    async fn run_reports_a_clear_error_when_florence2_is_not_imported() {
+    async fn run_reports_a_clear_error_when_the_captioner_is_not_imported() {
+        let db = Database::connect_in_memory().await.unwrap();
+        let vision = VisionAdapter::new();
+        let tmp = tempfile::tempdir().unwrap();
+        let req = DatasetPrepRequest::from_params(&serde_json::json!({
+            "root": tmp.path().to_string_lossy(),
+            "captioner": "wd-eva02-tagger-v3",
+        }))
+        .unwrap();
+        let (_tx, rx) = watch::channel(false);
+
+        let err = run(&db, &vision, tmp.path(), tmp.path(), "job-1", req, rx)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("WD EVA02 Tagger v3"), "{err}");
+    }
+    /// A captioner with a known issue (Florence-2 on transformers 5.x) is
+    /// refused up front with the reason — not after minutes of extraction,
+    /// leaving an uncaptioned dataset behind.
+    #[tokio::test]
+    async fn run_refuses_a_captioner_with_a_known_issue_before_touching_the_disk() {
         let db = Database::connect_in_memory().await.unwrap();
         let vision = VisionAdapter::new();
         let tmp = tempfile::tempdir().unwrap();
@@ -502,11 +566,13 @@ mod tests {
         .unwrap();
         let (_tx, rx) = watch::channel(false);
 
-        let err = run(&db, &vision, tmp.path(), "job-1", req, rx)
+        let err = run(&db, &vision, tmp.path(), tmp.path(), "job-1", req, rx)
             .await
             .unwrap_err();
-        assert!(err.to_string().contains("Florence-2"), "{err}");
+        assert!(err.to_string().contains("fix is planned"), "{err}");
+        assert!(db.datasets().list().await.unwrap().is_empty());
     }
+
     #[tokio::test]
     async fn run_without_a_captioner_creates_a_dataset_and_keeps_and_rejects_frames_with_reasons() {
         let db = Database::connect_in_memory().await.unwrap();
@@ -544,7 +610,7 @@ mod tests {
         .unwrap();
         let work = tempfile::tempdir().unwrap();
         let (_tx, rx) = watch::channel(false);
-        let outcome = run(&db, &vision, work.path(), &job.id, req, rx)
+        let outcome = run(&db, &vision, work.path(), work.path(), &job.id, req, rx)
             .await
             .unwrap();
         let DatasetPrepOutcome::Done(done) = outcome else {
@@ -589,7 +655,9 @@ mod tests {
                 .unwrap();
         let work = tempfile::tempdir().unwrap();
         let (_tx, rx) = watch::channel(false);
-        let outcome = run(&db, &vision, work.path(), &job, req, rx).await.unwrap();
+        let outcome = run(&db, &vision, work.path(), work.path(), &job, req, rx)
+            .await
+            .unwrap();
         let DatasetPrepOutcome::Done(done) = outcome else {
             panic!("expected Done")
         };
@@ -617,7 +685,7 @@ mod tests {
         .unwrap();
         let work = tempfile::tempdir().unwrap();
         let (_tx, rx) = watch::channel(false);
-        let err = run(&db, &vision, work.path(), &job, req, rx)
+        let err = run(&db, &vision, work.path(), work.path(), &job, req, rx)
             .await
             .unwrap_err()
             .to_string();
@@ -777,9 +845,17 @@ mod tests {
         }))
         .unwrap();
         let (_tx, rx) = watch::channel(false);
-        let err = run(&db, &vision, work.path(), &job, needs_model, rx)
-            .await
-            .unwrap_err();
+        let err = run(
+            &db,
+            &vision,
+            work.path(),
+            work.path(),
+            &job,
+            needs_model,
+            rx,
+        )
+        .await
+        .unwrap_err();
         assert!(err.to_string().contains("Florence-2"), "{err}");
         assert!(db.datasets().list().await.unwrap().is_empty());
 
@@ -788,7 +864,7 @@ mod tests {
         )
         .unwrap();
         let (_tx, rx) = watch::channel(false);
-        let err = run(&db, &vision, work.path(), &job, req, rx)
+        let err = run(&db, &vision, work.path(), work.path(), &job, req, rx)
             .await
             .unwrap_err();
         assert!(err.to_string().contains("dead-frame check"), "{err}");
@@ -819,7 +895,9 @@ mod tests {
             &serde_json::json!({ "root": root.path().to_string_lossy() }),
         )
         .unwrap();
-        let outcome = run(&db, &vision, work.path(), &job, req, rx).await.unwrap();
+        let outcome = run(&db, &vision, work.path(), work.path(), &job, req, rx)
+            .await
+            .unwrap();
         assert!(matches!(outcome, DatasetPrepOutcome::Cancelled));
         assert!(
             db.datasets().list().await.unwrap().is_empty(),

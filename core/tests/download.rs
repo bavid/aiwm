@@ -574,3 +574,228 @@ async fn clear_finished_is_a_noop_when_nothing_is_terminal() {
     assert_eq!(m.clear_finished().await.unwrap(), 0);
     assert_eq!(m.list().await.unwrap().len(), 1);
 }
+
+fn idle_manager(db: &Database, tmp: &std::path::Path) -> DownloadManager {
+    DownloadManager::new(
+        db.clone(),
+        tmp.join("store"),
+        tmp.join(".downloads"),
+        Arc::new(AtomicBool::new(false)),
+    )
+}
+
+fn req_with_sha(name: &str, sha256: &str) -> EnqueueRequest {
+    EnqueueRequest {
+        sha256: Some(sha256.into()),
+        ..req(name)
+    }
+}
+
+/// Two tabs (or two clicks) installing the same catalog file must not queue
+/// it twice: while a download of that SHA-256 is still active (queued,
+/// running or verifying), a second enqueue hands back that download as it is.
+/// (A paused one is resumed -- see the test below.)
+#[tokio::test]
+async fn an_enqueue_of_a_file_already_downloading_returns_the_active_download() {
+    let tmp = tempfile::tempdir().unwrap();
+    let db = Database::connect_in_memory().await.unwrap();
+    let m = idle_manager(&db, tmp.path());
+    let sha = "ab".repeat(32);
+
+    let first = m.enqueue(req_with_sha("model.onnx", &sha)).await.unwrap();
+    for state in [
+        DownloadState::Queued,
+        DownloadState::Running,
+        DownloadState::Verifying,
+    ] {
+        db.downloads()
+            .set_state(&first.id, state, None)
+            .await
+            .unwrap();
+        // Same file, hash in another case -- still the same file.
+        let again = m
+            .enqueue(req_with_sha("model.onnx", &sha.to_ascii_uppercase()))
+            .await
+            .unwrap();
+        assert_eq!(again.id, first.id, "{state:?}");
+        assert_eq!(again.state, state);
+    }
+    assert_eq!(m.list().await.unwrap().len(), 1, "queued exactly once");
+}
+
+/// A finished or failed earlier attempt is history, not an active download:
+/// asking again queues a fresh one.
+#[tokio::test]
+async fn a_finished_or_failed_download_of_the_same_file_does_not_block_a_new_one() {
+    let tmp = tempfile::tempdir().unwrap();
+    let db = Database::connect_in_memory().await.unwrap();
+    let m = idle_manager(&db, tmp.path());
+    let sha = "cd".repeat(32);
+
+    let done = m.enqueue(req_with_sha("a.onnx", &sha)).await.unwrap();
+    db.downloads()
+        .set_state(&done.id, DownloadState::Done, None)
+        .await
+        .unwrap();
+    let second = m.enqueue(req_with_sha("a.onnx", &sha)).await.unwrap();
+    assert_ne!(second.id, done.id);
+
+    db.downloads()
+        .set_state(&second.id, DownloadState::Failed, Some("boom"))
+        .await
+        .unwrap();
+    let third = m.enqueue(req_with_sha("a.onnx", &sha)).await.unwrap();
+    assert_ne!(third.id, second.id);
+    assert_eq!(m.list().await.unwrap().len(), 3);
+}
+
+/// Without a hash there is no way to tell two files apart -- nothing merges.
+#[tokio::test]
+async fn downloads_without_a_hash_are_never_merged() {
+    let tmp = tempfile::tempdir().unwrap();
+    let db = Database::connect_in_memory().await.unwrap();
+    let m = idle_manager(&db, tmp.path());
+
+    let a = m.enqueue(req("same.gguf")).await.unwrap();
+    let b = m.enqueue(req("same.gguf")).await.unwrap();
+    assert_ne!(a.id, b.id);
+}
+
+fn catalog_req(sha256: &str, model_type: &str, roles: &[&str]) -> EnqueueRequest {
+    EnqueueRequest {
+        model_type: Some(model_type.into()),
+        roles: roles.iter().map(|r| (*r).to_string()).collect(),
+        ..req_with_sha("model.onnx", sha256)
+    }
+}
+
+/// The second caller's intent is not dropped: roles it asks for are merged
+/// into the active download (existing order kept, no duplicates) and stored.
+#[tokio::test]
+async fn a_merged_enqueue_adds_the_callers_roles_to_the_active_download() {
+    let tmp = tempfile::tempdir().unwrap();
+    let db = Database::connect_in_memory().await.unwrap();
+    let m = idle_manager(&db, tmp.path());
+    let sha = "ef".repeat(32);
+
+    let first = m
+        .enqueue(catalog_req(&sha, "chat", &["chat"]))
+        .await
+        .unwrap();
+    let merged = m
+        .enqueue(catalog_req(&sha, "chat", &["coding", "chat"]))
+        .await
+        .unwrap();
+
+    assert_eq!(merged.id, first.id);
+    assert_eq!(merged.roles, vec!["chat".to_string(), "coding".to_string()]);
+    let stored = m.get(&first.id).await.unwrap().unwrap();
+    assert_eq!(stored.roles, merged.roles, "persisted, not just returned");
+}
+
+/// The same file requested as a different model type is a conflict, not a
+/// merge: the import would file it under one kind only.
+#[tokio::test]
+async fn a_merged_enqueue_with_a_different_model_type_is_refused() {
+    let tmp = tempfile::tempdir().unwrap();
+    let db = Database::connect_in_memory().await.unwrap();
+    let m = idle_manager(&db, tmp.path());
+    let sha = "12".repeat(32);
+
+    m.enqueue(catalog_req(&sha, "wd_tagger", &[]))
+        .await
+        .unwrap();
+    let err = m
+        .enqueue(catalog_req(&sha, "checkpoint", &[]))
+        .await
+        .unwrap_err();
+
+    assert!(
+        err.to_string().contains("already downloading as wd_tagger"),
+        "{err}"
+    );
+    assert_eq!(m.list().await.unwrap().len(), 1);
+}
+
+/// Asking again for a file whose download is paused is a request to get it:
+/// the paused download is resumed (back to the queue), not left paused.
+#[tokio::test]
+async fn a_merged_enqueue_resumes_a_paused_download() {
+    let tmp = tempfile::tempdir().unwrap();
+    let db = Database::connect_in_memory().await.unwrap();
+    let m = idle_manager(&db, tmp.path());
+    let sha = "34".repeat(32);
+
+    let first = m.enqueue(req_with_sha("a.onnx", &sha)).await.unwrap();
+    db.downloads()
+        .set_state(&first.id, DownloadState::Paused, None)
+        .await
+        .unwrap();
+
+    let again = m.enqueue(req_with_sha("a.onnx", &sha)).await.unwrap();
+
+    assert_eq!(again.id, first.id);
+    assert_eq!(again.state, DownloadState::Queued);
+    assert_eq!(
+        m.get(&first.id).await.unwrap().unwrap().state,
+        DownloadState::Queued
+    );
+}
+
+/// Two enqueues of one file racing each other (two tabs clicking in the same
+/// instant) still produce exactly one download.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_enqueues_of_the_same_file_create_one_download() {
+    let tmp = tempfile::tempdir().unwrap();
+    let db = Database::connect_in_memory().await.unwrap();
+    let m = idle_manager(&db, tmp.path());
+    let sha = "56".repeat(32);
+
+    for round in 0..8 {
+        let sha = format!("{}{round:02}", &sha[..62]);
+        let (a, b) = tokio::join!(
+            m.enqueue(req_with_sha("race.onnx", &sha)),
+            m.enqueue(req_with_sha("race.onnx", &sha)),
+        );
+        assert_eq!(a.unwrap().id, b.unwrap().id, "round {round}");
+    }
+    assert_eq!(m.list().await.unwrap().len(), 8);
+}
+
+/// A role merged into a download that is already transferring must reach the
+/// imported model â€” the worker read its row before the merge happened.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_role_merged_mid_transfer_reaches_the_imported_model() {
+    let tmp = tempfile::tempdir().unwrap();
+    let body = gguf_body();
+    let server = start_server(body.clone()).await;
+    server.slow_ms.store(20, Ordering::SeqCst);
+    let (m, db) = manager(tmp.path()).await;
+    let request = |roles: Vec<String>| EnqueueRequest {
+        url: format!("{}/model.gguf", server.base),
+        filename: "m.gguf".into(),
+        model_type: Some("chat".into()),
+        sha256: Some(sha256_hex(&body)),
+        size_bytes: Some(body.len() as u64),
+        roles,
+    };
+
+    let d = m.enqueue(request(vec!["chat".into()])).await.unwrap();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while m.get(&d.id).await.unwrap().unwrap().state != DownloadState::Running {
+        assert!(tokio::time::Instant::now() < deadline, "never started");
+        tokio::time::sleep(Duration::from_millis(15)).await;
+    }
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    let merged = m.enqueue(request(vec!["coding".into()])).await.unwrap();
+    assert_eq!(merged.id, d.id);
+    assert_eq!(merged.state, DownloadState::Running, "merged mid-transfer");
+
+    let done = wait_for(&m, &d.id, DownloadState::Done).await;
+    assert_eq!(done.state, DownloadState::Done, "{:?}", done.error_text);
+    let model_id = done.model_id.expect("imported");
+    let mut roles = db.models().roles(&model_id).await.unwrap();
+    roles.sort();
+    assert_eq!(roles, vec!["chat".to_string(), "coding".to_string()]);
+}

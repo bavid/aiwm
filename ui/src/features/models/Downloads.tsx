@@ -9,8 +9,8 @@ import {
   type DownloadState,
 } from "../../lib/ipc";
 import { useDownloads } from "../../lib/hooks";
+import { formatGB } from "../../lib/units";
 
-const gb = (n: number) => `${(n / 1024 ** 3).toFixed(2)} GB`;
 const pct = (d: Download) =>
   d.size_bytes && d.size_bytes > 0 ? Math.min(100, (d.bytes_done / d.size_bytes) * 100) : null;
 
@@ -90,7 +90,7 @@ function DownloadRow({ d, onRemoved }: { d: Download; onRemoved: () => void }) {
         <span className="dl__meta numeric">
           {STATE_LABEL[d.state]}
           {(d.state === "running" || d.state === "paused") &&
-            ` · ${gb(done)}${size ? ` / ${gb(size)}` : ""}`}
+            ` · ${formatGB(done, 2)}${size ? ` / ${formatGB(size, 2)}` : ""}`}
           {d.state === "failed" && d.error_text && ` · ${d.error_text}`}
           {d.retries > 0 && d.state !== "done" && ` · retry ${d.retries}`}
         </span>

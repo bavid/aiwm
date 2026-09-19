@@ -1722,8 +1722,9 @@ Noch offen aus Plan 6:
     — **dieser Teil offen**;
   - nie die Quellvideos anfassen; bereits exportierte/trainierte Frames nicht
     löschen, solange ein Trainingslauf sie braucht.
-- **Trainings-Werkzeuge im Discover-/Models-Tab statt manuellem Import** —
-  heute sagt der Dataset-Tab: "No captioner installed — import Florence-2 or
+- ✅ (umgesetzt 2026-09-19, Plan 7; Florence-2 lädt noch nicht — siehe Befund unten)
+  **Trainings-Werkzeuge im Discover-/Models-Tab statt manuellem Import** —
+  damals sagte der Dataset-Tab: "No captioner installed — import Florence-2 or
   the WD tagger on the Models tab. Without one, everything recurring in your
   frames flows into the trigger word." Der Nutzer will nicht manuell
   importieren. Stattdessen: eine eigene Kategorie "Training & Beschriftung"
@@ -1734,6 +1735,77 @@ Noch offen aus Plan 6:
   "Empfohlenen Captioner installieren"-Button. Knüpft an den offenen Punkt
   "kein `KNOWN_MODELS`-Katalogeintrag für Florence-2/Qwen2.5-VL" in
   Teilsystem 1 an.
+
+  **Umgesetzt (Plan 7 "Training & captioning tools"):** eigener Abschnitt
+  "Training & captioning" im Models-Tab (WD EVA02 Tagger v3 als "Recommended",
+  Florence-2 large, Qwen2.5-VL 7B als optionale Zweitmeinung) mit
+  Ein-Klick-Install über die normale Download-Warteschlange; im Dataset-Tab
+  ein "Install the recommended captioner"-Button samt Fortschritt und ein
+  Install-Button je nicht installiertem Captioner in der Auswahl
+  (Offline-Modus → klare Meldung). Alle Dateien auf feste Hub-Commits
+  gepinnt (`/resolve/<commit>/`: WD `b25b82a0…`, Florence-2 `21a599d4…`,
+  Qwen2.5-VL `cc594898…`) mit echten, selbst gehashten SHA-256/Größen;
+  verzeichnisförmige Modellarten `florence2_engine` / `qwen_vl_engine`
+  (Muster Dia), Rollen `vision_florence2` / `vision_qwen2_5_vl`.
+  Integritätsprüfung beim Laden (gepinnter Ordner: fehlende, fremde oder
+  veränderte Datei → Captioner "unusable" mit Grund), JSON-Dateien mitgepinnt,
+  Laden nur lokal (`local_files_only`, kein Nachladen von Remote-Code),
+  Aufräumen des Remote-Code-Caches; "Reinstall" repariert gepinnte Dateien;
+  keine doppelten Downloads (aktive Übertragung derselben Datei wird
+  zurückgegeben), Rollen werden beim Zusammenführen auch mitten in der
+  Übertragung übernommen.
+
+  Gemessen 2026-09-19 mit echtem `aiwm-cored` (Worktree-Build, Port 48160,
+  Offline aus), Installation exakt wie `useStackInstaller.ts` (ein
+  `POST /downloads` je Stack-Datei), Prep wie `PrepForm.tsx` (Frames-Modus,
+  Standardwerte) auf `D:\Data\Test` (ein Video `20250111-_1.mp4`), RTX 4080
+  SUPER, Grundlast 1.808–1.814 MiB VRAM:
+
+  | Schritt | Ergebnis |
+  |---|---|
+  | WD-Tagger installieren | 2 Dateien, 1.260.744.467 B, **30,1 s** (~40 MB/s), Hashes geprüft, `GET /captioners` → `installed: true` |
+  | Prep mit WD-Tagger | **393,9 s** Wandzeit (Extraktion 19,9 s, Filter 288,6 s, **Beschriftung 84,0 s** für 40 Frames ≈ 2,1 s/Frame auf der CPU inkl. Laden); 1.368 Frames, 40 behalten (1.328 Duplikat), **40/40 beschriftet**, keine Fehler-Events; VRAM-Spitze 1.814 MiB (= Grundlast, läuft rein auf der CPU) |
+  | Beschriftungen (Beispiel) | Danbooru-Tag-Listen, 23–31 Tags je Frame, z. B. "1girl, solo, underwear, crossed legs, panties, sitting, head out of frame, …, plant, indoors, chair, english text, web address, watermark, …" — Szene, Kleidung, Möbel und eingeblendeter Text werden erkannt |
+  | Dataset löschen | 1.368 Dateien, **1.173.444.536 B frei**, 0 übersprungen |
+  | Florence-2 installieren | 10 Dateien, 1.556.213.789 B, **40,2 s** (~37 MB/s), `installed: true`, Integritätsprüfung ok |
+  | Prep mit Florence-2 (ohne Eskalation) | **Job `failed` nach 313,4 s** (Frames/Filter liefen, 40 behalten, 0 beschriftet); VRAM-Spitze 1.814 MiB — das Modell wurde nie geladen. Dataset danach gelöscht (1.173.444.536 B frei) |
+  | Qwen2.5-VL importieren | 14 Dateien, 16.595.961.188 B über `POST /models` (`qwen_vl_engine`, Kopie aus dem Scratchpad), 11,6 s; `GET /captioners/escalation` → `files_present: true, usable: true` |
+  | Eskalations-Lauf | **nicht gefahren** — Eskalation setzt auf Florence-2 auf, das nicht lädt |
+  | Quellvideo | Größe 153.603.700 B, Änderungszeit und SHA-256 (`15F22FD0…9869BF28`) vorher = nachher |
+  | Daemon | per Ctrl-Break beendet ("shutdown complete"), kein `aiwm-*`/`ffmpeg`/Sidecar-Python übrig, VRAM wieder 1.812 MiB |
+
+  Offen / Befunde aus Plan 7:
+
+  - **[PRIO 1] Florence-2 lädt mit dem Sidecar nicht** (transformers 5.17.0,
+    torch 2.14.0+cu126). Job-Fehler wörtlich: `sidecar error: rpc error:
+    {"code":-32000,"message":"captioning failed: 'Florence2LanguageConfig'
+    object has no attribute 'forced_bos_token_id'"}`. Nachgestellt außerhalb
+    der App: Microsofts Remote-Code `configuration_florence2.py` (gepinnter
+    Commit `21a599d4…`, Zeile 265) liest `self.forced_bos_token_id` im
+    `__init__`; transformers 5.x legt dieses Generierungsattribut nicht mehr
+    auf `PretrainedConfig` an → `AttributeError` schon in
+    `AutoConfig.from_pretrained`. Der Install selbst ist korrekt, nur der
+    Remote-Code passt nicht zur transformers-Version. **Fix-Richtung** (nicht
+    in Plan 7 gebaut, bewusst kein Patch am gepinnten Remote-Code): auf die
+    native `Florence2ForConditionalGeneration` von transformers umstellen
+    (braucht die konvertierten Gewichte eines anderen Repos → neue gepinnte
+    Dateiliste + Hashes) oder transformers für diesen Pfad auf eine Version
+    vor 5 pinnen. Bis dahin: Florence-2 in der UI nicht als nutzbar anbieten
+    bzw. den Ladefehler als "unusable"-Grund zeigen. Nach dem Fix den
+    `#[ignore]`-Real-Bytes-Test mit `AIWM_TEST_FLORENCE2_SNAPSHOT`
+    (`caption.rs`) gegen den echten Snapshot fahren und einen Sidecar-Test
+    ergänzen, der die gepinnte Config wirklich lädt.
+  - **Qwen2.5-VL-Eskalation ungeprüft** (hängt am Florence-Befund);
+    importiert und laut Integritätsprüfung nutzbar, aber ob 4-Bit
+    (bitsandbytes) unter Windows lädt, ist offen.
+  - Ein fehlgeschlagener Captioning-Schritt lässt trotzdem ein Dataset mit
+    allen Frames (unbeschriftet) zurück — sinnvoll zum Weiterkuratieren, aber
+    die UI sollte "Beschriftung fehlgeschlagen, erneut beschriften" anbieten.
+  - `core/src/model/catalog.rs` hat ~1.855 Zeilen (über der 800er-Grenze):
+    aufteilen nach Medium (`catalog/image.rs`, `video.rs`, `voice.rs`,
+    `training.rs`) plus `stacks.rs`, Invarianten-Tests bleiben zentral.
+  - `eslint-plugin-jsx-a11y` für die neuen Install-Buttons/Hinweise weiter
+    offen (wie schon bei früheren Plänen notiert).
 - **Speicherort für Dataset- und Trainingsdaten frei wählbar (optional)** —
   User-Wunsch 2026-09-18: die App läuft auf einer 1-TB-SSD, ein
   Trainingsvorhaben erzeugt aber leicht ~100 GB (extrahierte Frames, Export,

@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 
 use sha2::{Digest, Sha256};
 use tokio::io::AsyncWriteExt as _;
-use tokio::sync::Notify;
+use tokio::sync::{Mutex, Notify};
 
 use crate::db::{Database, Download, DownloadState, NewDownload};
 use crate::model::{import_model, ImportRequest};
@@ -67,6 +67,9 @@ pub struct DownloadManager {
     staging_root: PathBuf,
     offline: Arc<AtomicBool>,
     wake: Notify,
+    /// Held across "is this file already downloading?" and the insert, so two
+    /// concurrent enqueues of one file cannot both see "no" and both insert.
+    enqueue_lock: Mutex<()>,
 }
 
 /// Why `transfer` stopped short of a finished file.
@@ -90,6 +93,7 @@ impl DownloadManager {
             staging_root,
             offline,
             wake: Notify::new(),
+            enqueue_lock: Mutex::new(()),
         }
     }
 
@@ -100,9 +104,22 @@ impl DownloadManager {
     /// Queue a download. Refused in offline mode, or when the store volume
     /// clearly cannot hold the file (Phase 6.8 — the size only counts once, on
     /// the store volume, since `import_model` moves it there).
+    ///
+    /// Idempotent per file: while a download with the same SHA-256 is still
+    /// active (queued, running, paused or verifying) the file is not queued a
+    /// second time — two tabs, or two quick clicks, installing the same
+    /// catalog stack must not fetch it twice. The request is merged into that
+    /// download instead (see [`Self::merge_into`]) and the caller gets it back
+    /// ("already downloading"). The check and the insert run under one lock,
+    /// so concurrent enqueues of a file cannot both insert. Without a hash
+    /// nothing is merged.
     pub async fn enqueue(&self, req: EnqueueRequest) -> Result<Download> {
         if self.is_offline() {
             return Err(err("offline mode is on — cannot download"));
+        }
+        let _guard = self.enqueue_lock.lock().await;
+        if let Some(active) = self.active_with_sha256(req.sha256.as_deref()).await? {
+            return self.merge_into(active, &req).await;
         }
         if let Some(size) = req.size_bytes {
             if let Some((free, _total)) = crate::cleanup::volume_free(&self.store_root) {
@@ -135,6 +152,67 @@ impl DownloadManager {
             .await?;
         self.wake.notify_one();
         Ok(d)
+    }
+
+    /// A second request for a file that is already downloading:
+    /// - a different `model_type` is refused ("already downloading as …") —
+    ///   the import files it under one kind only;
+    /// - the caller's `roles` are added to the download's (existing order
+    ///   kept, no duplicates), so its intent survives the merge;
+    /// - a **paused** download is resumed: asking for the file again is asking
+    ///   to get it. Queued / running / verifying ones are left as they are.
+    async fn merge_into(&self, active: Download, req: &EnqueueRequest) -> Result<Download> {
+        fn norm(t: Option<&str>) -> Option<&str> {
+            t.map(str::trim).filter(|t| !t.is_empty())
+        }
+        let (have, want) = (
+            norm(active.model_type.as_deref()),
+            norm(req.model_type.as_deref()),
+        );
+        if have != want {
+            return Err(err(format!(
+                "{} is already downloading as {} — cancel that download to fetch it as {}",
+                active.filename,
+                have.unwrap_or("an auto-detected type"),
+                want.unwrap_or("an auto-detected type"),
+            )));
+        }
+
+        let extra: Vec<&String> = req
+            .roles
+            .iter()
+            .filter(|r| !active.roles.contains(r))
+            .collect();
+        if !extra.is_empty() {
+            let roles: Vec<String> = active.roles.iter().chain(extra).cloned().collect();
+            self.db.downloads().set_roles(&active.id, &roles).await?;
+        }
+        if active.state == DownloadState::Paused {
+            self.db
+                .downloads()
+                .set_state(&active.id, DownloadState::Queued, None)
+                .await?;
+            self.wake.notify_one();
+        }
+        self.db
+            .downloads()
+            .get(&active.id)
+            .await?
+            .ok_or_else(|| err("the download vanished while merging"))
+    }
+
+    /// The newest not-yet-terminal download of the file with this SHA-256
+    /// (compared case-insensitively), if any.
+    async fn active_with_sha256(&self, sha256: Option<&str>) -> Result<Option<Download>> {
+        let Some(want) = sha256.map(str::trim).filter(|s| !s.is_empty()) else {
+            return Ok(None);
+        };
+        Ok(self.db.downloads().list().await?.into_iter().find(|d| {
+            !d.state.is_terminal()
+                && d.sha256
+                    .as_deref()
+                    .is_some_and(|have| have.trim().eq_ignore_ascii_case(want))
+        }))
     }
 
     pub async fn list(&self) -> Result<Vec<Download>> {
@@ -326,16 +404,37 @@ impl DownloadManager {
             },
         )
         .await?;
-        self.db
-            .downloads()
-            .set_model_id(&d.id, &outcome.model.id)
-            .await?;
-        self.db
-            .downloads()
-            .set_state(&d.id, DownloadState::Done, None)
-            .await?;
+        self.finish_import(&d.id, &outcome.model.id).await?;
         let _ = tokio::fs::remove_dir_all(self.staging_root.join(&d.id)).await;
         tracing::info!(id = %d.id, model = %outcome.model.id, "download imported");
+        Ok(())
+    }
+
+    /// Mark an imported download done and hand the imported model every role
+    /// the download carries *now*. The import used the row as the worker read
+    /// it before the transfer; an enqueue merged meanwhile (see
+    /// [`Self::merge_into`]) may have added roles since. Runs under
+    /// `enqueue_lock`, so no merge can slip in between re-reading the roles
+    /// and the row turning `Done` (after which a new enqueue queues afresh).
+    /// Database work only — no file I/O while holding the lock.
+    async fn finish_import(&self, download_id: &str, model_id: &str) -> Result<()> {
+        let _guard = self.enqueue_lock.lock().await;
+        let downloads = self.db.downloads();
+        downloads.set_model_id(download_id, model_id).await?;
+        downloads
+            .set_state(download_id, DownloadState::Done, None)
+            .await?;
+        let wanted = downloads
+            .get(download_id)
+            .await?
+            .map(|d| d.roles)
+            .unwrap_or_default();
+        let have = self.db.models().roles(model_id).await?;
+        let missing: Vec<&String> = wanted.iter().filter(|r| !have.contains(r)).collect();
+        if !missing.is_empty() {
+            let all: Vec<String> = have.iter().chain(missing).cloned().collect();
+            self.db.models().set_roles(model_id, &all).await?;
+        }
         Ok(())
     }
 

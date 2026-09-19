@@ -2,9 +2,9 @@ import { useMemo, useState } from "react";
 import { useAbout, useJobs, useModels, useRuntimes, useStorage, useTelemetry } from "../../lib/hooks";
 import { Meter } from "../../components/Meter";
 import { cancelJob, unloadModel, type Job, type JobState, type RuntimeStatus } from "../../lib/ipc";
+import { formatGiB, toGB, toGiB } from "../../lib/units";
 import "./dashboard.css";
 
-const GB = 1024;
 const CANCELLABLE: JobState[] = ["queued", "scheduled", "blocked", "preparing", "running"];
 const CAPABILITIES: { key: string; label: string; hint: string; tab?: string }[] = [
   { key: "chat", label: "Chat", hint: "ready", tab: "chat" },
@@ -13,8 +13,10 @@ const CAPABILITIES: { key: string; label: string; hint: string; tab?: string }[]
   { key: "code", label: "Coding", hint: "agents", tab: "agents" },
 ];
 
-const gb = (mb: number) => (mb / GB).toFixed(1);
-const gbFromBytes = (bytes: number) => (bytes / (GB * GB * 1024)).toFixed(1);
+// Memory (MiB from the core) reads as GiB; the store volume as decimal GB —
+// the app-wide convention in lib/units.
+const gib = (mib: number) => toGiB(mib);
+const gbFromBytes = (bytes: number) => toGB(bytes);
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const DAY_LABEL = new Intl.DateTimeFormat(undefined, { weekday: "short" });
@@ -84,15 +86,15 @@ export function Dashboard({ onNavigate }: { onNavigate: (tab: string) => void })
               label="VRAM"
               value={gpu.vram_used_mb}
               max={gpu.vram_total_mb}
-              unit="GB"
-              format={gb}
+              unit="GiB"
+              format={gib}
             />
             <div className="stat-row">
               <Stat label="Utilization" value={`${gpu.utilization_pct}%`} />
               <Stat label="Temperature" value={`${gpu.temperature_c}°C`} />
               <Stat
                 label="Budget"
-                value={about ? `${gb(about.vram_budget_mb)} GB` : "…"}
+                value={about ? formatGiB(about.vram_budget_mb) : "…"}
               />
             </div>
           </>
@@ -117,8 +119,8 @@ export function Dashboard({ onNavigate }: { onNavigate: (tab: string) => void })
               label="RAM"
               value={host.ram_used_mb}
               max={host.ram_total_mb}
-              unit="GB"
-              format={gb}
+              unit="GiB"
+              format={gib}
             />
             <div style={{ height: "var(--space-4)" }} />
             <Meter label="CPU" value={host.cpu_total_pct} max={100} format={(v) => `${v}%`} />
@@ -313,7 +315,7 @@ function ResidentList({
             <span className="resident-row__main muted">{rt.detail ?? "idle"}</span>
           )}
           <span className="resident-row__size numeric">
-            {rt.vram_used_mb > 0 ? `${gb(rt.vram_used_mb)} GB` : "—"}
+            {rt.vram_used_mb > 0 ? formatGiB(rt.vram_used_mb) : "—"}
           </span>
           {rt.loaded_models.map((m) => (
             <UnloadButton key={m.model_id} modelId={m.model_id} onUnloaded={onUnloaded} />

@@ -322,6 +322,138 @@ def test_caption_frame_pair_caches_the_loaded_engine_per_quantization(
     assert construct_calls == [(model_dir, "4bit")]
 
 
+# --- offline loading: every from_pretrained stays on the local folder --------
+
+
+class _Recorder:
+    """A fake `transformers` class whose `from_pretrained` records its call."""
+
+    def __init__(self, calls: list[tuple[str, str, dict[str, Any]]], name: str) -> None:
+        self._calls = calls
+        self._name = name
+
+    def from_pretrained(self, path: str, **kwargs: Any) -> Any:
+        self._calls.append((self._name, path, kwargs))
+        return self
+
+    # The model object's chained calls in `_construct_florence2`.
+    def to(self, _device: str) -> Any:
+        return self
+
+    def eval(self) -> Any:
+        return self
+
+
+def _fake_ml_modules(
+    monkeypatch: pytest.MonkeyPatch,
+    modules_cache: Path | None = None,
+) -> list[tuple[str, str, dict[str, Any]]]:
+    import sys
+    import types
+
+    calls: list[tuple[str, str, dict[str, Any]]] = []
+    dmu = types.ModuleType("transformers.dynamic_module_utils")
+    dmu.HF_MODULES_CACHE = str(modules_cache or Path("does-not-exist"))  # type: ignore[attr-defined]
+    dmu.TRANSFORMERS_DYNAMIC_MODULE_NAME = "transformers_modules"  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "transformers.dynamic_module_utils", dmu)
+    torch = types.ModuleType("torch")
+    torch.cuda = types.SimpleNamespace(is_available=lambda: False)  # type: ignore[attr-defined]
+    torch.float16 = "float16"  # type: ignore[attr-defined]
+    torch.float32 = "float32"  # type: ignore[attr-defined]
+    transformers = types.ModuleType("transformers")
+    for name in ("AutoModelForCausalLM", "AutoProcessor", "Qwen2_5_VLForConditionalGeneration"):
+        setattr(transformers, name, _Recorder(calls, name))
+    transformers.BitsAndBytesConfig = lambda **kw: ("bnb", kw)  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "torch", torch)
+    monkeypatch.setitem(sys.modules, "transformers", transformers)
+    return calls
+
+
+def test_florence2_loads_model_and_processor_from_local_files_only(
+    monkeypatch: pytest.MonkeyPatch, model_dir: str
+):
+    # `trust_remote_code=True` + an `auto_map` naming a Hub repo would
+    # otherwise fetch unpinned Python -- the folder core verified is the
+    # only source allowed.
+    calls = _fake_ml_modules(monkeypatch)
+    vision._construct_florence2(model_dir)
+    assert [c[0] for c in calls] == ["AutoModelForCausalLM", "AutoProcessor"]
+    for name, path, kwargs in calls:
+        assert path == model_dir, name
+        assert kwargs.get("local_files_only") is True, name
+        assert kwargs.get("trust_remote_code") is True, name
+
+
+def test_florence2_clears_its_stale_remote_code_copies_before_the_first_load(
+    monkeypatch: pytest.MonkeyPatch, model_dir: str, tmp_path: Path
+):
+    # transformers copies a local folder's remote code to
+    # <HF_MODULES_CACHE>/transformers_modules/<sanitized folder name>/<hash>/
+    # and imports it from there -- a stale or planted copy must be gone
+    # before the verified folder is loaded.
+    cache = tmp_path / "hf-modules"
+    ours = cache / "transformers_modules" / "florence_hyphen_2_hyphen_large"
+    (ours / "oldhash").mkdir(parents=True)
+    (ours / "oldhash" / "modeling_florence2.py").write_text("import os\n")
+    other = cache / "transformers_modules" / "some_other_model"
+    other.mkdir(parents=True)
+    (other / "x.py").write_text("\n")
+    calls = _fake_ml_modules(monkeypatch, cache)
+
+    seen_stale: list[bool] = []
+    real_from_pretrained = _Recorder.from_pretrained
+
+    def spy(self: _Recorder, path: str, **kwargs: Any) -> Any:
+        seen_stale.append(ours.exists())
+        return real_from_pretrained(self, path, **kwargs)
+
+    monkeypatch.setattr(_Recorder, "from_pretrained", spy)
+    vision._construct_florence2(model_dir)
+
+    assert len(calls) == 2
+    assert seen_stale == [False, False], "cleared before every from_pretrained"
+    assert (other / "x.py").exists(), "only Florence-2's own copies are removed"
+
+
+@pytest.mark.parametrize("root", ["C:/", "/", "C:\\"])
+def test_clearing_never_removes_the_whole_modules_tree_for_a_root_path(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, root: str
+):
+    # A drive/filesystem root has an empty folder name -- the "stale" path
+    # would be all of `transformers_modules`, so nothing may be deleted.
+    cache = tmp_path / "hf-modules"
+    keep = cache / "transformers_modules" / "some_model"
+    keep.mkdir(parents=True)
+    (keep / "x.py").write_text("\n")
+    _fake_ml_modules(monkeypatch, cache)
+
+    vision._clear_remote_code_cache(root)
+
+    assert (keep / "x.py").exists()
+
+
+def test_remote_code_cache_dir_follows_transformers_naming():
+    assert vision._remote_code_cache_dir("C:/store/vision/florence2-large", "/c") == Path(
+        "/c", "transformers_modules", "florence2_hyphen_large"
+    )
+    assert vision._remote_code_cache_dir("/m/2x.v1", "/c") == Path(
+        "/c", "transformers_modules", "_2x_dot_v1"
+    )
+
+
+@pytest.mark.parametrize("quantization", ["4bit", "8bit", "none"])
+def test_qwen_vl_loads_model_and_processor_from_local_files_only(
+    monkeypatch: pytest.MonkeyPatch, model_dir: str, quantization: str
+):
+    calls = _fake_ml_modules(monkeypatch)
+    vision._construct_qwen_vl(model_dir, quantization)
+    assert [c[0] for c in calls] == ["Qwen2_5_VLForConditionalGeneration", "AutoProcessor"]
+    for name, path, kwargs in calls:
+        assert path == model_dir, name
+        assert kwargs.get("local_files_only") is True, name
+        assert "trust_remote_code" not in kwargs, name
+
+
 # --- pure-function units, no engine/monkeypatching needed -------------------
 
 

@@ -128,6 +128,7 @@ pub fn router(app: Arc<App>) -> Router {
         )
         .route("/jobs/{id}/dataset-export", post(export_dataset))
         .route("/captioners", get(list_captioners))
+        .route("/captioners/escalation", get(escalation_status))
         .route("/datasets", get(list_datasets))
         .route(
             "/datasets/{id}",
@@ -928,6 +929,12 @@ async fn list_captioners(
     State(app): AppState,
 ) -> Result<Json<Vec<crate::capability::dataset::CaptionerStatus>>, ApiError> {
     Ok(Json(handlers::list_captioners(&app).await?))
+}
+
+async fn escalation_status(
+    State(app): AppState,
+) -> Result<Json<crate::capability::dataset::EscalationStatus>, ApiError> {
+    Ok(Json(handlers::escalation_status(&app).await?))
 }
 
 async fn list_datasets(State(app): AppState) -> Result<Json<Vec<crate::db::Dataset>>, ApiError> {

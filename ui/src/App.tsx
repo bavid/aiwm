@@ -7,7 +7,7 @@ import { DatasetStudio } from "./features/dataset/Dataset";
 import { Diagnostics } from "./features/diagnostics/Diagnostics";
 import { ImageStudio, type ImagePrefill } from "./features/image/Image";
 import { Jobs } from "./features/jobs/Jobs";
-import { Models } from "./features/models/Models";
+import { Models, type ModelsFocus } from "./features/models/Models";
 import { Settings } from "./features/settings/Settings";
 import { Stories } from "./features/stories/Stories";
 import { Training } from "./features/training/Training";
@@ -195,7 +195,7 @@ export default function App() {
   const { data: runtimes } = useRuntimes();
   const navigate = (t: string) => setTab(t as Tab);
 
-  // Two cross-tab hand-overs. Every tab stays mounted (see the comment on
+  // Cross-tab hand-overs. Every tab stays mounted (see the comment on
   // <main> below), so these are plain lifted state rather than router state:
   // the source tab sets one, switches tabs, and the target tab clears it once
   // it has taken the value.
@@ -204,7 +204,16 @@ export default function App() {
   /** Training tab -> Image tab: "test this LoRA with its trigger word". */
   const [imagePrefill, setImagePrefill] = useState<ImagePrefill | null>(null);
 
+  /** Dataset tab -> Models tab: "More captioners…" opens Training & captioning. */
+  const [modelsFocus, setModelsFocus] = useState<ModelsFocus | null>(null);
+
   const clearPendingTrainingDataset = useCallback(() => setPendingTrainingDataset(null), []);
+  const clearModelsFocus = useCallback(() => setModelsFocus(null), []);
+
+  const openCaptionerCatalog = useCallback(() => {
+    setModelsFocus("training");
+    setTab("models");
+  }, []);
   const clearImagePrefill = useCallback(() => setImagePrefill(null), []);
 
   const trainFromDataset = useCallback((datasetId: string) => {
@@ -305,7 +314,7 @@ export default function App() {
           <Stories />
         </div>
         <div hidden={tab !== "dataset"}>
-          <DatasetStudio onTrainLora={trainFromDataset} />
+          <DatasetStudio onTrainLora={trainFromDataset} onOpenCaptioners={openCaptionerCatalog} />
         </div>
         <div hidden={tab !== "training"}>
           <Training
@@ -321,7 +330,7 @@ export default function App() {
           <AgentsWorkbench />
         </div>
         <div hidden={tab !== "models"}>
-          <Models />
+          <Models focus={modelsFocus} onFocusConsumed={clearModelsFocus} />
         </div>
         <div hidden={tab !== "benchmark"}>
           <Benchmark onNavigate={navigate} />

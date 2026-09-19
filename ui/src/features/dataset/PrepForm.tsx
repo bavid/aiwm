@@ -1,7 +1,9 @@
-import { useId, useMemo, useState } from "react";
+import { useCallback, useId, useMemo, useRef, useState } from "react";
 import { useCaptioners } from "../../lib/hooks";
 import type { DatasetMode, DatasetPrepParams } from "../../lib/ipc";
 import { browseForDirectory } from "./browse";
+import { CaptionerHint, CaptionerPicker } from "./CaptionerSetup";
+import { useCaptionerInstall } from "./useCaptionerInstall";
 
 const DEFAULT_SAMPLE_FPS = 1.5;
 const DEFAULT_BLUR_THRESHOLD = 100;
@@ -17,14 +19,22 @@ type Props = {
   /** Why the last submit was rejected, shown under the button. */
   error: string | null;
   onStart: (params: DatasetPrepParams) => void;
+  /** Opens the Models tab's "Training & captioning" section. */
+  onMoreCaptioners: () => void;
 };
 
 /** The left-hand prep form: root folder, mode, sampling knobs, the captioning
  *  fieldset and the Start button. It owns the draft parameters and hands the
  *  finished {@link DatasetPrepParams} to the container, which submits them. */
-export function PrepForm({ isRunning, error, onStart }: Props) {
-  const { data: captioners } = useCaptioners();
-  const installed = useMemo(() => (captioners ?? []).filter((c) => c.installed), [captioners]);
+export function PrepForm({ isRunning, error, onStart, onMoreCaptioners }: Props) {
+  const { data: captioners, refetch: refetchCaptioners } = useCaptioners();
+  // Selectable = installed and without a known issue (Florence-2 on
+  // transformers 5.x would only fail after the whole extraction).
+  const installed = useMemo(
+    () => (captioners ?? []).filter((c) => c.installed && !c.known_issue),
+    [captioners],
+  );
+  const noneInstalled = captioners !== null && installed.length === 0;
 
   const [root, setRoot] = useState("");
   const [mode, setMode] = useState<DatasetMode>("frames");
@@ -49,8 +59,22 @@ export function PrepForm({ isRunning, error, onStart }: Props) {
   const captionOn = captionerId !== null;
   const chosenCaptioner = installed.find((c) => c.id === captionerId) ?? null;
 
+  // One-click captioner installs: see useCaptionerInstall for when a finished
+  // install may change this form.
+  const captioningRef = useRef<HTMLFieldSetElement>(null);
+  const choose = useCallback((captionerId: string) => {
+    setPickedCaptioner(captionerId);
+    setCaptionWanted(true);
+  }, []);
+  const install = useCaptionerInstall({
+    captioners,
+    refetchCaptioners,
+    onChosen: choose,
+    containerRef: captioningRef,
+  });
+
   const modeId = useId();
-  const captionerSelectId = useId();
+  const escalateNoteId = useId();
 
   const start = () => {
     const path = root.trim();
@@ -156,7 +180,7 @@ export function PrepForm({ isRunning, error, onStart }: Props) {
         )}
       </div>
 
-      <fieldset className="datasetform__captioning">
+      <fieldset className="datasetform__captioning" ref={captioningRef}>
         <legend>Auto-caption</legend>
         <label className="datasetform__check">
           <input
@@ -174,47 +198,57 @@ export function PrepForm({ isRunning, error, onStart }: Props) {
           </span>
         </label>
 
-        {installed.length === 0 && (
-          <p className="datasetform__hint">
-            No captioner installed — import Florence-2 or the WD tagger on the Models tab. Without
-            one, everything recurring in your frames flows into the trigger word.
-          </p>
+        {noneInstalled && (
+          <CaptionerHint
+            stacks={install.stacks}
+            installer={install.installer}
+            settling={install.settling}
+            onInstall={install.startInstall}
+            onMoreCaptioners={onMoreCaptioners}
+          />
         )}
 
-        {captionOn && (
-          <label
-            className="datasetform__field datasetform__field--inline"
-            htmlFor={captionerSelectId}
-          >
-            <span>Describe with</span>
-            <select
-              id={captionerSelectId}
-              value={captionerId ?? ""}
-              onChange={(e) => setPickedCaptioner(e.target.value)}
-            >
-              {installed.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.name} {c.style === "tags" ? "· tags" : "· prose"}
-                </option>
-              ))}
-            </select>
-          </label>
+        {/* The one announcement of a finished install; focus goes to the
+            newly selected radio, not to this text. */}
+        <p className="datasetform__installed" role="status">
+          {install.notice}
+        </p>
+
+        {captionOn && captioners && (
+          <CaptionerPicker
+            captioners={captioners}
+            selectedId={captionerId}
+            onSelect={setPickedCaptioner}
+            stacks={install.stacks}
+            installer={install.installer}
+            settling={install.settling}
+            onInstall={install.startInstall}
+            onMoreCaptioners={onMoreCaptioners}
+          />
         )}
 
-        {captionOn && chosenCaptioner?.supports_escalation && (
+        {captionOn && chosenCaptioner && (
           <>
             <label className="datasetform__check">
               <input
                 type="checkbox"
-                checked={escalate}
+                checked={escalate && chosenCaptioner.supports_escalation}
+                disabled={!chosenCaptioner.supports_escalation}
+                aria-describedby={chosenCaptioner.supports_escalation ? undefined : escalateNoteId}
                 onChange={(e) => setEscalate(e.target.checked)}
               />
               <span>
                 Escalate uncertain captions to Qwen2.5-VL with temporal context (frame vs. a later
                 frame)
+                {!chosenCaptioner.supports_escalation && (
+                  <em id={escalateNoteId}>
+                    Only a prose captioner can escalate — {chosenCaptioner.name} writes tags, so
+                    there is no uncertain sentence to re-check.
+                  </em>
+                )}
               </span>
             </label>
-            {escalate && (
+            {escalate && chosenCaptioner.supports_escalation && (
               <>
                 <label className="datasetform__field datasetform__field--inline">
                   <span>Escalate every Nth frame too</span>
