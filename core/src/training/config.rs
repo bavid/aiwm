@@ -125,6 +125,11 @@ pub struct RenderInput<'a> {
     pub prompts: &'a [String],
     pub data_kind: DatasetMode,
     pub overrides: Option<Hyperparams>,
+    /// The library LoRA file to continue from (`network.pretrained_lora_path`);
+    /// `None` starts from scratch and leaves the key out entirely. Preflight
+    /// has already checked that it exists and matches the family and rank —
+    /// ai-toolkit itself only prints and trains from scratch when it does not.
+    pub init_lora_path: Option<&'a Path>,
 }
 
 /// Apply per-run hyperparameter overrides on top of a profile's preset
@@ -187,6 +192,11 @@ struct NetworkBlock {
     kind: &'static str,
     linear: u32,
     linear_alpha: u32,
+    /// `toolkit/config_modules.py` `NetworkConfig.pretrained_lora_path`: the
+    /// adapter the new job's weights are initialised from. Only written when
+    /// continuing a LoRA, so a from-scratch config stays byte-identical.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pretrained_lora_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -269,12 +279,35 @@ struct MetaBlock {
     version: &'static str,
 }
 
-fn network_block(preset: &PresetValues) -> NetworkBlock {
-    NetworkBlock {
+/// The LoRA block. `linear_alpha` always equals the rank — and so, when
+/// continuing, equals the source LoRA's (AIWM trained it the same way), which
+/// matters because ai-toolkit does not recompute the alpha scale after
+/// loading `pretrained_lora_path` on SDXL.
+fn network_block(preset: &PresetValues, init_lora_path: Option<&Path>) -> Result<NetworkBlock> {
+    let pretrained_lora_path = init_lora_path
+        .map(|p| single_line_path(p, "pretrained LoRA path"))
+        .transpose()?;
+    Ok(NetworkBlock {
         kind: "lora",
         linear: preset.rank,
         linear_alpha: preset.rank,
+        pretrained_lora_path,
+    })
+}
+
+/// A path as one YAML line. See [`normalize_yaml_floats`]: it identifies the
+/// float keys by the text after a line's leading whitespace, which is only
+/// safe while every string field renders on a single line. The other paths
+/// here are built by AIWM itself; this one is read back from a library row,
+/// so the guarantee is checked rather than assumed.
+fn single_line_path(path: &Path, what: &str) -> Result<String> {
+    let text = path.to_string_lossy();
+    if text.contains(['\n', '\r']) {
+        return Err(training_err(format!(
+            "the {what} contains a line break and cannot be written to the config: {text:?}"
+        )));
     }
+    Ok(text.into_owned())
 }
 
 fn save_block(preset: &PresetValues) -> SaveBlock {
@@ -388,7 +421,7 @@ pub fn render_yaml(input: &RenderInput<'_>) -> Result<String> {
                 device: DEVICE,
                 trigger_word: (!input.trigger_word.is_empty())
                     .then(|| input.trigger_word.to_string()),
-                network: network_block(&input.preset),
+                network: network_block(&input.preset, input.init_lora_path)?,
                 save: save_block(&input.preset),
                 datasets: vec![dataset_block(input, is_clips)],
                 train: train_block(input),
@@ -511,6 +544,7 @@ mod tests {
             prompts,
             data_kind: DatasetMode::Frames,
             overrides: None,
+            init_lora_path: None,
         }
     }
 
@@ -622,6 +656,7 @@ meta:
             prompts: &prompts,
             data_kind: DatasetMode::Clips,
             overrides: None,
+            init_lora_path: None,
         };
 
         let yaml = render_yaml(&input).expect("render yaml");
@@ -700,6 +735,7 @@ meta:
             prompts: &prompts,
             data_kind: DatasetMode::Frames,
             overrides: None,
+            init_lora_path: None,
         };
 
         let yaml = render_yaml(&input).expect("render yaml");
@@ -755,6 +791,97 @@ meta:
         let yaml = render_yaml(&input).expect("render yaml");
 
         assert!(!yaml.contains("trigger_word"));
+    }
+
+    #[test]
+    fn pretrained_lora_path_is_absent_when_starting_from_scratch() {
+        let base_dir = Path::new(r"E:\Models\training\flux2-klein-4b");
+        let dataset_dir = Path::new(r"E:\Data\training\anime\export");
+        let work_dir = Path::new(r"E:\Data\training\runs\anime_style_v1");
+        let prompts = vec!["ghibli_xy portrait".to_string()];
+        let input = flux2_4b_input(
+            find_for_family("flux2-klein-4b").unwrap().fast,
+            base_dir,
+            dataset_dir,
+            work_dir,
+            "ghibli_xy",
+            &prompts,
+        );
+
+        let yaml = render_yaml(&input).expect("render yaml");
+
+        assert!(
+            !yaml.contains("pretrained_lora_path"),
+            "a from-scratch run must not carry the key at all:\n{yaml}"
+        );
+    }
+
+    #[test]
+    fn pretrained_lora_path_renders_a_windows_path_with_spaces_intact() {
+        let base_dir = Path::new(r"E:\Models\training\flux2-klein-4b");
+        let dataset_dir = Path::new(r"E:\Data\training\anime\export");
+        let work_dir = Path::new(r"E:\Data\training\runs\anime_style_v2");
+        let lora = Path::new(r"E:\AI\data\models\image\loras\Anime style v1_ab12cd34.safetensors");
+        let prompts = vec!["ghibli_xy portrait".to_string()];
+        let mut input = flux2_4b_input(
+            find_for_family("flux2-klein-4b").unwrap().fast,
+            base_dir,
+            dataset_dir,
+            work_dir,
+            "ghibli_xy",
+            &prompts,
+        );
+        input.init_lora_path = Some(lora);
+
+        let yaml = render_yaml(&input).expect("render yaml");
+
+        // Sits inside the `network:` block, right after the alpha, on one line.
+        assert!(
+            yaml.contains(
+                "    network:\n      type: lora\n      linear: 16\n      linear_alpha: 16\n      \
+                 pretrained_lora_path: "
+            ),
+            "the key must be in the network block:\n{yaml}"
+        );
+        // What ai-toolkit's YAML reader gets back is the path, byte for byte
+        // — backslashes not doubled or dropped, spaces kept.
+        let value: serde_yaml_ng::Value = serde_yaml_ng::from_str(&yaml).expect("parse yaml");
+        let network = &value["config"]["process"][0]["network"];
+        assert_eq!(
+            network["pretrained_lora_path"].as_str(),
+            Some(lora.to_string_lossy().as_ref())
+        );
+        // And the alpha still equals the rank: ai-toolkit does not rescale
+        // a loaded LoRA on SDXL, so the source's alpha must be reproduced.
+        assert_eq!(network["linear"], network["linear_alpha"]);
+    }
+
+    #[test]
+    fn pretrained_lora_path_with_a_line_break_is_refused() {
+        // `normalize_yaml_floats` relies on every string field being a single
+        // line; a path is the one string that comes from a database row, so
+        // the renderer guards the invariant itself rather than trusting it.
+        let base_dir = Path::new(r"E:\Models\training\flux2-klein-4b");
+        let dataset_dir = Path::new(r"E:\Data\training\anime\export");
+        let work_dir = Path::new(r"E:\Data\training\runs\anime_style_v2");
+        let lora = Path::new("E:\\loras\\odd\nlr: 5\n.safetensors");
+        let prompts = vec!["ghibli_xy portrait".to_string()];
+        let mut input = flux2_4b_input(
+            find_for_family("flux2-klein-4b").unwrap().fast,
+            base_dir,
+            dataset_dir,
+            work_dir,
+            "ghibli_xy",
+            &prompts,
+        );
+        input.init_lora_path = Some(lora);
+
+        let err = render_yaml(&input).expect_err("a multi-line path must be refused");
+
+        assert!(
+            err.to_string().contains("line break"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]

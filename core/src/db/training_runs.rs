@@ -167,6 +167,12 @@ pub struct TrainingRun {
     pub created_at: String,
     pub started_at: Option<String>,
     pub finished_at: Option<String>,
+    /// The library LoRA this run continued from (`0020`); `None` means it
+    /// started from scratch. Nulled by the database if that LoRA is deleted.
+    pub init_lora_model_id: Option<String>,
+    /// Images/clips the trainer was fed at start; `None` on rows older than
+    /// migration `0020`.
+    pub image_count: Option<i64>,
 }
 
 #[derive(Debug, Clone)]
@@ -181,6 +187,8 @@ pub struct NewTrainingRun {
     pub hyperparams_json: String,
     pub sample_prompts_json: String,
     pub work_dir: String,
+    pub init_lora_model_id: Option<String>,
+    pub image_count: Option<i64>,
 }
 
 #[derive(sqlx::FromRow)]
@@ -207,6 +215,8 @@ struct TrainingRunRow {
     created_at: String,
     started_at: Option<String>,
     finished_at: Option<String>,
+    init_lora_model_id: Option<String>,
+    image_count: Option<i64>,
 }
 
 impl TryFrom<TrainingRunRow> for TrainingRun {
@@ -243,6 +253,8 @@ impl TryFrom<TrainingRunRow> for TrainingRun {
             created_at: r.created_at,
             started_at: r.started_at,
             finished_at: r.finished_at,
+            init_lora_model_id: r.init_lora_model_id,
+            image_count: r.image_count,
         })
     }
 }
@@ -250,7 +262,7 @@ impl TryFrom<TrainingRunRow> for TrainingRun {
 const SELECT_COLS: &str = "id, name, profile_family, target_model_id, dataset_id, data_kind, \
      trigger_word, preset, hyperparams_json, sample_prompts_json, state, step, total_steps, \
      last_loss, last_checkpoint_at, pid, work_dir, result_model_id, error_text, created_at, \
-     started_at, finished_at";
+     started_at, finished_at, init_lora_model_id, image_count";
 
 #[derive(Debug)]
 pub struct TrainingRunRepo<'a> {
@@ -268,8 +280,8 @@ impl<'a> TrainingRunRepo<'a> {
             "INSERT INTO training_runs
                  (id, name, profile_family, target_model_id, dataset_id, data_kind,
                   trigger_word, preset, hyperparams_json, sample_prompts_json, state,
-                  work_dir, created_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)",
+                  work_dir, created_at, init_lora_model_id, image_count)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)",
         )
         .bind(&id)
         .bind(&run.name)
@@ -284,6 +296,8 @@ impl<'a> TrainingRunRepo<'a> {
         .bind(RunState::Preparing.as_str())
         .bind(&run.work_dir)
         .bind(now_rfc3339())
+        .bind(&run.init_lora_model_id)
+        .bind(run.image_count)
         .execute(self.pool)
         .await?;
         self.get(&id)
@@ -512,6 +526,8 @@ mod tests {
             hyperparams_json: "{}".into(),
             sample_prompts_json: "[\"ghibli_xy portrait\"]".into(),
             work_dir: "E:\\Data\\training\\run-1".into(),
+            init_lora_model_id: None,
+            image_count: None,
         }
     }
 
@@ -919,6 +935,81 @@ mod tests {
 
         let unchanged = db.training_runs().get(&run.id).await.unwrap().unwrap();
         assert_eq!(unchanged.state, RunState::Cancelled);
+    }
+
+    #[tokio::test]
+    async fn lineage_columns_round_trip_and_default_to_null() {
+        let db = Database::connect_in_memory().await.unwrap();
+        let source = db
+            .models()
+            .insert(NewModel {
+                name: "Anime style v1".into(),
+                format: "safetensors".into(),
+                file_path: "E:\\Models\\image\\loras\\anime-style-v1.safetensors".into(),
+                size_bytes: 128,
+                source: "training:run-1".into(),
+                roles: vec![],
+                ..NewModel::default()
+            })
+            .await
+            .unwrap();
+
+        let scratch = db.training_runs().create(sample_run()).await.unwrap();
+        assert_eq!(scratch.init_lora_model_id, None, "from scratch by default");
+        assert_eq!(scratch.image_count, None, "unknown until counted");
+
+        let continued = db
+            .training_runs()
+            .create(NewTrainingRun {
+                init_lora_model_id: Some(source.id.clone()),
+                image_count: Some(412),
+                ..sample_run()
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            continued.init_lora_model_id.as_deref(),
+            Some(source.id.as_str())
+        );
+        assert_eq!(continued.image_count, Some(412));
+
+        let listed = db.training_runs().list().await.unwrap();
+        let back = listed.iter().find(|r| r.id == continued.id).unwrap();
+        assert_eq!(back.image_count, Some(412));
+        assert_eq!(back.init_lora_model_id.as_deref(), Some(source.id.as_str()));
+    }
+
+    #[tokio::test]
+    async fn deleting_the_init_lora_keeps_the_run_with_a_null_link() {
+        let db = Database::connect_in_memory().await.unwrap();
+        let source = db
+            .models()
+            .insert(NewModel {
+                name: "Anime style v1".into(),
+                format: "safetensors".into(),
+                file_path: "E:\\Models\\image\\loras\\anime-style-v1.safetensors".into(),
+                size_bytes: 128,
+                source: "training:run-1".into(),
+                roles: vec![],
+                ..NewModel::default()
+            })
+            .await
+            .unwrap();
+        let run = db
+            .training_runs()
+            .create(NewTrainingRun {
+                init_lora_model_id: Some(source.id.clone()),
+                image_count: Some(7),
+                ..sample_run()
+            })
+            .await
+            .unwrap();
+
+        db.models().delete(&source.id).await.unwrap();
+
+        let got = db.training_runs().get(&run.id).await.unwrap().unwrap();
+        assert_eq!(got.init_lora_model_id, None, "ON DELETE SET NULL");
+        assert_eq!(got.image_count, Some(7), "the count is the run's own");
     }
 
     #[tokio::test]

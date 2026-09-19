@@ -268,6 +268,8 @@ mod tests {
             created_at: String::new(),
             started_at: None,
             finished_at: None,
+            init_lora_model_id: None,
+            image_count: None,
         }
     }
 

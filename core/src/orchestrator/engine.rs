@@ -2023,6 +2023,8 @@ mod tests {
                 hyperparams_json: "{}".into(),
                 sample_prompts_json: "[]".into(),
                 work_dir: run_folder.to_string_lossy().into_owned(),
+                init_lora_model_id: None,
+                image_count: None,
             })
             .await
             .unwrap();

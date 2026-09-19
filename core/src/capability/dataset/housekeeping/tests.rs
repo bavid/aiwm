@@ -266,6 +266,8 @@ impl Fx {
                 hyperparams_json: "{}".into(),
                 sample_prompts_json: "[]".into(),
                 work_dir: "unused".into(),
+                init_lora_model_id: None,
+                image_count: None,
             })
             .await
             .unwrap()

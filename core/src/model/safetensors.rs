@@ -36,8 +36,9 @@ fn st_err(msg: impl std::fmt::Display) -> CoreError {
     CoreError::Config(format!("safetensors: {msg}"))
 }
 
-/// Read and identify the `.safetensors` header at `path`.
-pub fn read_safetensors_info(path: &Path) -> Result<SafetensorsInfo> {
+/// The parsed JSON header at `path` — every tensor entry plus `__metadata__`
+/// — after the same bounds checks every reader here relies on.
+fn read_header(path: &Path) -> Result<serde_json::Map<String, Value>> {
     let mut file = File::open(path).map_err(|e| st_err(format!("open {}: {e}", path.display())))?;
 
     let file_len = file
@@ -59,14 +60,44 @@ pub fn read_safetensors_info(path: &Path) -> Result<SafetensorsInfo> {
         .map_err(|_| st_err("header is truncated"))?;
     let root: Value =
         serde_json::from_slice(&json).map_err(|e| st_err(format!("header is not JSON: {e}")))?;
-    let obj = root
-        .as_object()
-        .ok_or_else(|| st_err("header is not an object"))?;
+    match root {
+        Value::Object(obj) => Ok(obj),
+        _ => Err(st_err("header is not an object")),
+    }
+}
+
+/// The LoRA rank recorded in a `.safetensors` header: the first dimension of
+/// the first down projection — `lora_down.weight` in the kohya naming
+/// ai-toolkit writes for SDXL, `lora_A.weight` in the diffusers/PEFT naming it
+/// writes for FLUX — both of which are `[rank, in_features]`. `Ok(None)` when
+/// no tensor of at least two dimensions carries either name: the file is not
+/// a LoRA. Reading the header at all can still fail (missing or malformed
+/// file), which is an error rather than "no rank".
+pub fn lora_rank_from_header(path: &Path) -> Result<Option<u32>> {
+    let header = read_header(path)?;
+    let rank = header.iter().find_map(|(name, spec)| {
+        if name == "__metadata__" || !(name.contains("lora_down") || name.contains("lora_A")) {
+            return None;
+        }
+        let dims = spec.get("shape")?.as_array()?;
+        if dims.len() < 2 {
+            return None;
+        }
+        dims.first()?
+            .as_u64()
+            .and_then(|first| u32::try_from(first).ok())
+    });
+    Ok(rank)
+}
+
+/// Read and identify the `.safetensors` header at `path`.
+pub fn read_safetensors_info(path: &Path) -> Result<SafetensorsInfo> {
+    let obj = read_header(path)?;
 
     let mut info = SafetensorsInfo::default();
     let mut per_dtype: BTreeMap<String, u64> = BTreeMap::new();
 
-    for (name, spec) in obj {
+    for (name, spec) in &obj {
         if name == "__metadata__" {
             if let Some(meta) = spec.as_object() {
                 for (k, v) in meta {
@@ -170,6 +201,64 @@ mod tests {
             read_safetensors_info(&p).unwrap().precision.as_deref(),
             Some("FP8")
         );
+    }
+
+    #[test]
+    fn lora_rank_is_the_down_projections_first_dim() {
+        let dir = tempfile::tempdir().unwrap();
+        // The kohya naming ai-toolkit writes for SDXL: `lora_down` is
+        // `[rank, in]`, `lora_up` is `[out, rank]`. A 1-D alpha scalar and
+        // the metadata block must not be mistaken for a projection.
+        let header = serde_json::json!({
+            "__metadata__": { "ss_network_dim": "16" },
+            "lora_unet_down_blocks_0_attentions_0_proj_in.alpha": {
+                "dtype": "F16", "shape": [], "data_offsets": [0, 2]
+            },
+            "lora_unet_down_blocks_0_attentions_0_proj_in.lora_up.weight": {
+                "dtype": "F16", "shape": [320, 16], "data_offsets": [2, 10242]
+            },
+            "lora_unet_down_blocks_0_attentions_0_proj_in.lora_down.weight": {
+                "dtype": "F16", "shape": [16, 320], "data_offsets": [10242, 20482]
+            }
+        });
+        let p = write_st(dir.path(), "sdxl_lora.safetensors", &header, 20482);
+        assert_eq!(lora_rank_from_header(&p).unwrap(), Some(16));
+
+        // The diffusers/PEFT naming ai-toolkit writes for FLUX: `lora_A` is
+        // the down projection, again `[rank, in]`.
+        let header = serde_json::json!({
+            "transformer.single_transformer_blocks.0.attn.to_q.lora_B.weight": {
+                "dtype": "BF16", "shape": [3072, 32], "data_offsets": [0, 196608]
+            },
+            "transformer.single_transformer_blocks.0.attn.to_q.lora_A.weight": {
+                "dtype": "BF16", "shape": [32, 3072], "data_offsets": [196608, 393216]
+            }
+        });
+        let p = write_st(dir.path(), "flux_lora.safetensors", &header, 393216);
+        assert_eq!(lora_rank_from_header(&p).unwrap(), Some(32));
+    }
+
+    #[test]
+    fn a_file_without_lora_projections_has_no_rank() {
+        let dir = tempfile::tempdir().unwrap();
+        // A full checkpoint: weights, but nothing shaped like an adapter.
+        let header = serde_json::json!({
+            "double_blocks.0.img_attn.qkv.weight": {
+                "dtype": "BF16", "shape": [9216, 3072], "data_offsets": [0, 56_623_104]
+            }
+        });
+        let p = write_st(dir.path(), "base.safetensors", &header, 64);
+        assert_eq!(lora_rank_from_header(&p).unwrap(), None);
+
+        // A 1-D tensor with a LoRA-ish name is not a projection either.
+        let header = serde_json::json!({
+            "x.lora_down.bias": { "dtype": "F16", "shape": [16], "data_offsets": [0, 32] }
+        });
+        let p = write_st(dir.path(), "odd.safetensors", &header, 32);
+        assert_eq!(lora_rank_from_header(&p).unwrap(), None);
+
+        // And an unreadable file is an error, not "no rank".
+        assert!(lora_rank_from_header(&dir.path().join("missing.safetensors")).is_err());
     }
 
     #[test]

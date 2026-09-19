@@ -2275,11 +2275,17 @@ export interface TrainingRun {
   created_at: string;
   started_at: string | null;
   finished_at: string | null;
+  /** The library LoRA this run continued from; `null` = from scratch. */
+  init_lora_model_id: string | null;
+  /** Images/clips the trainer was fed at start; `null` on older runs. */
+  image_count: number | null;
 }
 
 /** A run plus the two things that live on disk rather than in the store. */
 export interface RunDetail {
   run: TrainingRun;
+  /** Library name of `run.init_lora_model_id`, when that LoRA still exists. */
+  init_lora_name: string | null;
   /** Opaque tokens for {@link trainingSampleUrl}, newest checkpoint first —
    *  deliberately not file paths. */
   latest_samples: string[];
@@ -2300,6 +2306,10 @@ export interface StartRunBody {
   /** "Store run in": the run gets `<data_dir>\<run_id>`. Omit for the
    *  default training folder (Settings → Data locations). */
   data_dir?: string;
+  /** "Start from": a library LoRA of the same family and rank to continue.
+   *  Omit for a fresh LoRA. The core refuses a missing file, another family,
+   *  another rank, a non-LoRA, or a LoRA whose own run is still going. */
+  init_lora_model_id?: string;
 }
 
 export const trainerStatus = () => invoke<TrainerStatus>("training_status");

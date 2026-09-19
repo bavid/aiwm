@@ -289,6 +289,8 @@ async fn an_active_training_run_is_a_400_naming_the_run() {
             hyperparams_json: "{}".into(),
             sample_prompts_json: "[]".into(),
             work_dir: "unused".into(),
+            init_lora_model_id: None,
+            image_count: None,
         })
         .await
         .unwrap();

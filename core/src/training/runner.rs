@@ -28,12 +28,13 @@
 //! from the on-disk state exactly like [`Runner::poll_once`] does, instead of
 //! reporting a pause that never happened.
 
+mod init_lora;
 mod preflight;
 mod settle;
 #[cfg(test)]
 mod tests;
 
-use preflight::Prepared;
+use preflight::{PreflightInput, Prepared};
 use settle::{with_state, PollState};
 
 use std::collections::BTreeMap;
@@ -98,6 +99,10 @@ pub struct StartRequest {
     /// `None` is the runner's own root ([`crate::AppPaths::training_dir`]).
     /// The caller has validated it (see [`crate::training::location`]).
     pub data_dir: Option<PathBuf>,
+    /// The library LoRA to continue from — `None` starts from scratch.
+    /// Preflight checks it ([`Runner::check_init_lora`]) before the row
+    /// exists; the rendered config then carries `pretrained_lora_path`.
+    pub init_lora_model_id: Option<String>,
 }
 
 pub use crate::cleanup::FreeSpaceProbe;
@@ -264,13 +269,15 @@ impl Runner {
             return Err(training_refusal("the training run needs a name"));
         }
         let prep = self
-            .preflight(
-                Some(req.target_model_id.as_str()),
-                Some(req.dataset_id.as_str()),
-                req.hyperparams,
-                req.sample_prompts.clone(),
-                req.data_dir.as_deref().unwrap_or(&self.data_dir),
-            )
+            .preflight(PreflightInput {
+                target_model_id: Some(req.target_model_id.as_str()),
+                dataset_id: Some(req.dataset_id.as_str()),
+                init_lora_model_id: req.init_lora_model_id.as_deref(),
+                preset: req.preset,
+                hyperparams: req.hyperparams,
+                prompts: req.sample_prompts.clone(),
+                folder: req.data_dir.as_deref().unwrap_or(&self.data_dir),
+            })
             .await?;
 
         let hyperparams_json = serde_json::to_string(&req.hyperparams)
@@ -294,6 +301,11 @@ impl Runner {
                 // The id only exists once the row does, so the derived work
                 // dir is recorded immediately afterwards.
                 work_dir: String::new(),
+                // Checked by preflight; the row is the lineage link.
+                init_lora_model_id: req.init_lora_model_id.clone(),
+                // What the trainer is fed, counted in the export folder just
+                // now — the history shows it as "images used".
+                image_count: i64::try_from(prep.media_count).ok(),
             })
             .await?;
         let work_dir = req
@@ -526,11 +538,15 @@ impl Runner {
             prompts: &prep.prompts,
             data_kind: prep.data_kind,
             overrides: Some(prep.hyperparams),
+            init_lora_path: prep.init_lora_path.as_deref(),
         })?;
         let config = config_path(&work_dir);
         tokio::fs::write(&config, yaml)
             .await
             .map_err(|e| training_err(format!("cannot write the training config: {e}")))?;
+        if let Some(lora) = &prep.init_lora_path {
+            tracing::info!(run = %run.id, lora = %lora.display(), "continuing from a library LoRA");
+        }
 
         let log = self.log_path(run);
         // Everything already in the log belongs to an earlier attempt: a stale

@@ -660,6 +660,8 @@ function mkTrainingRun(id: string, name: string, over: AnyRecord): AnyRecord {
     created_at: now(),
     started_at: null,
     finished_at: null,
+    init_lora_model_id: null,
+    image_count: 412,
     ...over,
   };
 }
@@ -2138,8 +2140,14 @@ export function installDevMock(): void {
         const id = `tr-${seq++}`;
         const dataDir = typeof body.data_dir === "string" ? body.data_dir.trim() : "";
         if (dataDir) checkRunDataDir(dataDir);
+        const initLora =
+          typeof body.init_lora_model_id === "string" ? body.init_lora_model_id.trim() : "";
+        if (initLora && !MODELS.some((m) => m.id === initLora)) {
+          throw new Error("the LoRA you chose to continue is no longer in the library");
+        }
         const run = mkTrainingRun(id, String(body.name ?? "Training run"), {
           ...(dataDir ? { work_dir: `${dataDir.replace(/[\\/]+$/, "")}\\${id}` } : {}),
+          init_lora_model_id: initLora || null,
           profile_family: "flux2-klein-4b",
           target_model_id: String(body.target_model_id ?? ""),
           dataset_id: String(body.dataset_id ?? ""),
@@ -2162,8 +2170,10 @@ export function installDevMock(): void {
         // No real bytes exist here, so the preview `<img>` tags 404 in the
         // dev preview -- same caveat as every `output_path` (see module doc).
         const samples = run.last_checkpoint_at ? ["0", "1"] : [];
+        const initLora = MODELS.find((m) => m.id === run.init_lora_model_id);
         return {
           run: { ...run },
+          init_lora_name: initLora ? String(initLora.name) : null,
           latest_samples: samples,
           log_tail: [
             `${String(run.name)}: dev-mock, no real trainer attached`,

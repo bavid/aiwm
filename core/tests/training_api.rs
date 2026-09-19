@@ -53,6 +53,8 @@ fn new_run() -> NewTrainingRun {
         hyperparams_json: "{}".into(),
         sample_prompts_json: "[\"ghibli_xy portrait\"]".into(),
         work_dir: "E:\\Data\\training\\does-not-exist".into(),
+        init_lora_model_id: None,
+        image_count: None,
     }
 }
 

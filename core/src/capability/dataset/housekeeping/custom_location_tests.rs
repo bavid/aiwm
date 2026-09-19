@@ -505,6 +505,8 @@ async fn run_in(fx: &Fx, folder: &Path) {
             hyperparams_json: "{}".into(),
             sample_prompts_json: "[]".into(),
             work_dir: folder.to_string_lossy().into_owned(),
+            init_lora_model_id: None,
+            image_count: None,
         })
         .await
         .unwrap();
