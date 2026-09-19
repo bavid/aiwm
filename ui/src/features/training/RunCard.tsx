@@ -6,10 +6,13 @@ import {
   deleteTrainingRun,
   pauseTrainingRun,
   resumeTrainingRun,
-  trainingSampleUrl,
+  type TrainingPresetValues,
   type TrainingRun,
   type TrainingRunState,
 } from "../../lib/ipc";
+import { formatDuration, formatWhen } from "./format";
+import { effectiveHyperparams, parseHyperparamsJson } from "./hyperparams";
+import { SampleStrip } from "./SampleStrip";
 
 /** What each lifecycle state reads as. `interrupted` is the one that asks a
  *  question rather than reporting a fact — the run is intact and resumable. */
@@ -44,17 +47,6 @@ const CANCELLABLE: TrainingRunState[] = [
 /** How long a run has to have been going before its step rate says anything. */
 const MIN_ETA_ELAPSED_SECS = 20;
 
-function formatDuration(seconds: number): string {
-  if (!Number.isFinite(seconds) || seconds <= 0) return "—";
-  const total = Math.round(seconds);
-  const h = Math.floor(total / 3600);
-  const m = Math.floor((total % 3600) / 60);
-  const s = total % 60;
-  if (h > 0) return `${h}h ${String(m).padStart(2, "0")}m`;
-  if (m > 0) return `${m}m ${String(s).padStart(2, "0")}s`;
-  return `${s}s`;
-}
-
 /** Steps done so far set the pace for the ones left. Deliberately naive: the
  *  trainer's own rate wanders, and a wrong-by-a-minute estimate still answers
  *  the only question being asked ("coffee, or overnight?"). */
@@ -69,11 +61,31 @@ function eta(run: TrainingRun): string | null {
   return formatDuration((elapsed / run.step) * (run.total_steps - run.step));
 }
 
+/** `rank 16 · lr 0.0001 · 1024px` from what the run actually trained with;
+ *  a value nobody knows is left out rather than shown as a dash. */
+function hyperparamLine(run: TrainingRun, preset: TrainingPresetValues | null): string {
+  const hp = effectiveHyperparams(parseHyperparamsJson(run.hyperparams_json), preset);
+  const parts = [
+    hp.rank !== null ? `rank ${hp.rank}` : null,
+    hp.lr !== null ? `lr ${hp.lr}` : null,
+    hp.resolution !== null ? `${hp.resolution}px` : null,
+  ];
+  return parts.filter((p) => p !== null).join(" · ");
+}
+
 type Props = {
   run: TrainingRun;
   profileLabel: string;
+  /** The run's preset as the profile defines it, for the values the run did
+   *  not override; `null` while profiles load. */
+  presetValues: TrainingPresetValues | null;
+  /** The dataset the run trained on; `null` when its row is gone. */
+  datasetName: string | null;
   /** Library name of the imported LoRA, once the run completed. */
   loraName: string | null;
+  /** Library name of the LoRA this run continued from, when it started from
+   *  one and that LoRA is still in the library. */
+  initLoraName: string | null;
   /** `AboutInfo.core_api_port` — where the sample images are served from. */
   corePort: number | null;
   onChanged: () => void;
@@ -85,7 +97,10 @@ type Props = {
 export function RunCard({
   run,
   profileLabel,
+  presetValues,
+  datasetName,
   loraName,
+  initLoraName,
   corePort,
   onChanged,
   onTestLora,
@@ -96,7 +111,6 @@ export function RunCard({
   const [purge, setPurge] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [brokenSamples, setBrokenSamples] = useState<ReadonlySet<number>>(() => new Set());
 
   const isLive = LIVE.includes(run.state);
   const { data: detail } = useTrainingRun(expanded || isLive ? run.id : null);
@@ -120,12 +134,21 @@ export function RunCard({
   // Bound once so the "Test now" handler closes over a narrowed `string`
   // instead of the nullable field.
   const resultModelId = run.result_model_id;
+  // The detail's name is authoritative once loaded; the list-derived one
+  // covers the collapsed card without a second poll.
+  const continuedFrom = detail?.init_lora_name ?? initLoraName;
+  const hyperparams = hyperparamLine(run, presetValues);
 
   return (
     <article className="card runcard">
       <header className="runcard__head">
         <h3>{run.name}</h3>
         <span className="runcard__profile">{profileLabel}</span>
+        {run.init_lora_model_id && (
+          <span className="runcard__lineage">
+            Continued from {continuedFrom ?? "a LoRA no longer in the library"}
+          </span>
+        )}
         <span className="runcard__chip" data-state={run.state}>
           {STATE_LABEL[run.state]}
         </span>
@@ -154,6 +177,28 @@ export function RunCard({
         )}
       </div>
 
+      <dl className="runcard__facts numeric">
+        <div>
+          <dt>Dataset</dt>
+          <dd>{datasetName ?? "—"}</dd>
+        </div>
+        <div>
+          <dt>Preset</dt>
+          <dd>
+            {run.preset}
+            {hyperparams && ` · ${hyperparams}`}
+          </dd>
+        </div>
+        <div>
+          <dt>Started</dt>
+          <dd>{formatWhen(run.started_at)}</dd>
+        </div>
+        <div>
+          <dt>Finished</dt>
+          <dd>{formatWhen(run.finished_at)}</dd>
+        </div>
+      </dl>
+
       {run.state === "finishing" && (
         <p className="muted">
           Training is done — importing its result into the model library. This cannot be cancelled;
@@ -163,27 +208,7 @@ export function RunCard({
 
       {run.error_text && <p className="runcard__err">{run.error_text}</p>}
 
-      {samples.length > 0 && (
-        <div className="runcard__samples">
-          {samples.map((token, i) =>
-            brokenSamples.has(i) || corePort === null ? (
-              <div key={token} className="runcard__sample runcard__sample--missing">
-                no preview yet
-              </div>
-            ) : (
-              <img
-                key={token}
-                className="runcard__sample"
-                src={trainingSampleUrl(corePort, run.id, i)}
-                alt={`Preview ${i + 1} of ${run.name}`}
-                width={120}
-                height={120}
-                onError={() => setBrokenSamples((cur) => new Set(cur).add(i))}
-              />
-            ),
-          )}
-        </div>
-      )}
+      <SampleStrip runId={run.id} runName={run.name} tokens={samples} corePort={corePort} />
 
       <div className="runcard__actions">
         <button

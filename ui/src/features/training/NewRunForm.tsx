@@ -2,6 +2,7 @@ import { useEffect, useId, useMemo, useState } from "react";
 import {
   startTrainingRun,
   type Dataset,
+  type LoraSummary,
   type TrainerStatus,
   type TrainingPreset,
   type TrainingPresetValues,
@@ -13,6 +14,7 @@ import { useAbout } from "../../lib/hooks";
 import { withDataDir } from "../../lib/storage-locations";
 import { tokenWarning } from "../dataset/tokens";
 import { FineTune } from "./FineTune";
+import { withInitLora } from "./hyperparams";
 import { Preflight } from "./Preflight";
 import { parseTune, type TuneDraft } from "./tune";
 
@@ -22,6 +24,12 @@ const NO_OVERRIDES: TuneDraft = { rank: "", lr: "", resolution: "", steps: "" };
 const MAX_PROMPTS = 3;
 /** The core refuses to start a run below this much free space on its drive (GiB). */
 const RUN_MIN_FREE_GIB = 20;
+
+/** Spec `2026-09-19-lora-lineage-design`, "Forgetting caveat": shown verbatim
+ *  whenever a run continues an existing LoRA. */
+const FORGETTING_NOTICE =
+  "Training only on the new dataset drifts towards it and partly overwrites what the earlier " +
+  "datasets taught. To keep earlier material, add some of it to this dataset.";
 
 const PRESETS: { id: TrainingPreset; label: string }[] = [
   { id: "fast", label: "Fast" },
@@ -41,6 +49,16 @@ type SamplePrompt = { id: string; text: string };
 let promptSeq = 0;
 const newPrompt = (text: string): SamplePrompt => ({ id: `p${++promptSeq}`, text });
 
+/** What the LoRA history's "Continue with another dataset" hands the form:
+ *  the LoRA to start from and what its last run used, so the curator only
+ *  has to pick the new dataset. */
+export type RunSeed = {
+  initLoraModelId: string;
+  /** The last run's target; `null` when it is no longer trainable here. */
+  targetModelId: string | null;
+  triggerWord: string;
+};
+
 /** Whether every *blocking* preflight item is green — the Start button's gate.
  *  Kept in step with what `Preflight` renders in red. */
 function preflightPasses(
@@ -53,12 +71,24 @@ function preflightPasses(
 const summarize = (p: TrainingPresetValues) =>
   `${p.steps} steps · rank ${p.rank} · ${p.resolution}px · lr ${p.lr}`;
 
+/** The rank the run will be submitted with while a LoRA is continued — its
+ *  own, as the core's preflight demands; blank fields elsewhere still mean
+ *  "use the preset". */
+function pinRank(draft: TuneDraft, rank: number | null): TuneDraft {
+  return rank === null ? draft : { ...draft, rank: String(rank) };
+}
+
 type Props = {
   profiles: TrainingProfile[];
   status: TrainerStatus | null;
   datasets: Dataset[];
+  /** Every library LoRA; the "Start from" picker offers the ones whose
+   *  family matches the chosen target model. */
+  loras: LoraSummary[];
   /** Handed over by the Dataset tab's "Train LoRA" button; `null` otherwise. */
   initialDatasetId: string | null;
+  /** Handed over by the LoRA history's "Continue" button; `null` otherwise. */
+  seed: RunSeed | null;
   onStatusChanged: () => void;
   onStarted: () => void;
   onClose: () => void;
@@ -70,16 +100,20 @@ export function NewRunForm({
   profiles,
   status,
   datasets,
+  loras,
   initialDatasetId,
+  seed,
   onStatusChanged,
   onStarted,
   onClose,
 }: Props) {
   const ids = {
     target: useId(),
+    startFrom: useId(),
     name: useId(),
     trigger: useId(),
     dataset: useId(),
+    notice: useId(),
   };
 
   /** Only exported datasets can be trained from — the trainer reads the
@@ -91,9 +125,10 @@ export function NewRunForm({
     [profiles],
   );
 
-  const [targetModelId, setTargetModelId] = useState("");
+  const [targetModelId, setTargetModelId] = useState(seed?.targetModelId ?? "");
+  const [initLoraId, setInitLoraId] = useState(seed?.initLoraModelId ?? "");
   const [name, setName] = useState("");
-  const [trigger, setTrigger] = useState("");
+  const [trigger, setTrigger] = useState(seed?.triggerWord ?? "");
   const [preset, setPreset] = useState<TrainingPreset>("balanced");
   const [tune, setTune] = useState<TuneDraft>(NO_OVERRIDES);
   const [prompts, setPrompts] = useState<SamplePrompt[]>(() => [newPrompt("")]);
@@ -128,10 +163,28 @@ export function NewRunForm({
     () => trainable.find((p) => p.trainable_models.some((m) => m.id === targetModelId)) ?? null,
     [trainable, targetModelId],
   );
+  const targetFamily =
+    profile?.trainable_models.find((m) => m.id === targetModelId)?.family ?? null;
+  /** LoRAs the core would accept as a starting point for this target: same
+   *  library family. Rank and file checks stay with the core. */
+  const continuable = useMemo(
+    () => loras.filter((l) => l.family !== null && l.family === targetFamily),
+    [loras, targetFamily],
+  );
+  /** The chosen LoRA's row, for its name and rank. Looked up in the whole
+   *  list: `pickTarget` already drops a LoRA of another family, and a row that
+   *  vanished (deleted meanwhile, or lists still loading) must stay visible as
+   *  the choice it is — the core refuses it with a message, never silently. */
+  const initLora = loras.find((l) => l.model_id === initLoraId) ?? null;
+  const isContinuing = initLoraId !== "";
+  const isListed = initLora !== null && continuable.includes(initLora);
+  const initLoraLabel = initLora?.name ?? "the chosen LoRA";
+  const lockedRank = initLora?.rank ?? null;
+
   const presetValues = profile?.presets[preset] ?? null;
   const triggerWarn = trigger === "" ? null : tokenWarning(trigger);
   const filledPrompts = prompts.map((p) => p.text.trim()).filter((p) => p !== "");
-  const parsedTune = useMemo(() => parseTune(tune), [tune]);
+  const parsedTune = useMemo(() => parseTune(pinRank(tune, lockedRank)), [tune, lockedRank]);
   const tuneOk = Object.keys(parsedTune.errors).length === 0;
 
   const ready =
@@ -148,22 +201,36 @@ export function NewRunForm({
     setPrompts((cur) => cur.map((p) => (p.id === id ? { ...p, text } : p)));
   };
 
+  const pickTarget = (modelId: string) => {
+    setTargetModelId(modelId);
+    // A LoRA of the old target's family cannot continue on the new one; drop
+    // it rather than let the core refuse later.
+    const family =
+      trainable.flatMap((p) => p.trainable_models).find((m) => m.id === modelId)?.family ?? null;
+    setInitLoraId((cur) =>
+      loras.some((l) => l.model_id === cur && l.family === family) ? cur : "",
+    );
+  };
+
   const submit = async () => {
     setBusy(true);
     setError(null);
     try {
       await startTrainingRun(
-        withDataDir(
-          {
-            name: name.trim(),
-            target_model_id: targetModelId,
-            dataset_id: datasetId,
-            trigger_word: trigger,
-            preset,
-            hyperparams: parsedTune.values,
-            sample_prompts: filledPrompts,
-          },
-          dataDir,
+        withInitLora(
+          withDataDir(
+            {
+              name: name.trim(),
+              target_model_id: targetModelId,
+              dataset_id: datasetId,
+              trigger_word: trigger,
+              preset,
+              hyperparams: parsedTune.values,
+              sample_prompts: filledPrompts,
+            },
+            dataDir,
+          ),
+          initLoraId || null,
         ),
       );
       onStarted();
@@ -183,7 +250,7 @@ export function NewRunForm({
       }}
     >
       <header className="runform__head">
-        <h3>New training run</h3>
+        <h3>{isContinuing ? `Continue “${initLoraLabel}”` : "New training run"}</h3>
         <button type="button" className="chip runform__close" onClick={onClose}>
           Close
         </button>
@@ -195,7 +262,7 @@ export function NewRunForm({
           <select
             id={ids.target}
             value={targetModelId}
-            onChange={(e) => setTargetModelId(e.target.value)}
+            onChange={(e) => pickTarget(e.target.value)}
           >
             <option value="">Pick a model…</option>
             {trainable.map((p) => (
@@ -207,6 +274,30 @@ export function NewRunForm({
                 ))}
               </optgroup>
             ))}
+          </select>
+        </label>
+
+        <label className="datasetform__field" htmlFor={ids.startFrom}>
+          <span>Start from</span>
+          <select
+            id={ids.startFrom}
+            value={initLoraId}
+            onChange={(e) => setInitLoraId(e.target.value)}
+            aria-describedby={isContinuing ? ids.notice : undefined}
+          >
+            <option value="">Fresh LoRA (default)</option>
+            {continuable.map((l) => (
+              <option key={l.model_id} value={l.model_id}>
+                {l.name}
+                {l.rank !== null ? ` — rank ${l.rank}` : ""}
+                {l.trained ? "" : " (imported)"}
+              </option>
+            ))}
+            {isContinuing && !isListed && (
+              <option value={initLoraId}>
+                {initLora ? initLora.name : "Chosen LoRA — no longer in the library"}
+              </option>
+            )}
           </select>
         </label>
 
@@ -229,7 +320,8 @@ export function NewRunForm({
             type="text"
             value={name}
             onChange={(e) => setName(e.target.value)}
-            placeholder="Kenji Character v1"
+            placeholder={initLora ? `${initLora.name} v2` : "Kenji Character v1"}
+            autoFocus={seed !== null}
           />
         </label>
 
@@ -249,8 +341,23 @@ export function NewRunForm({
       <p className="datasetform__hint">
         Models without a training profile are not shown.
         {exported.length === 0 && " No dataset has been exported yet — export one on the Dataset tab first."}
+        {targetFamily !== null &&
+          continuable.length === 0 &&
+          " No LoRA of this model's family is in the library yet, so every run starts fresh."}
       </p>
       {triggerWarn && <p className="dataset__warn">{triggerWarn}</p>}
+
+      {isContinuing && (
+        <div className="runform__notice" id={ids.notice}>
+          <strong>Continuing “{initLoraLabel}”</strong>
+          <p>{FORGETTING_NOTICE}</p>
+          <p>
+            The result is a new LoRA in the library; “{initLoraLabel}” itself stays as it is.
+            {lockedRank === null &&
+              " Its rank could not be read from the file, so the core checks it when the run starts."}
+          </p>
+        </div>
+      )}
 
       <fieldset className="runform__presets">
         <legend>Preset</legend>
@@ -276,6 +383,7 @@ export function NewRunForm({
         onChange={setTune}
         errors={parsedTune.errors}
         preset={presetValues}
+        lockedRank={lockedRank}
       />
 
       <fieldset className="runform__presets">
@@ -339,7 +447,7 @@ export function NewRunForm({
 
       <div className="runform__actions">
         <button type="submit" className="datasetform__go" disabled={!ready || busy}>
-          {busy ? "Starting…" : "Start training"}
+          {busy ? "Starting…" : isContinuing ? "Continue training" : "Start training"}
         </button>
         {!ready && !busy && (
           <span className="muted">Every blocking check above has to be green first.</span>
