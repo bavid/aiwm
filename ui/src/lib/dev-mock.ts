@@ -453,6 +453,19 @@ function refuseIfTraining(dataset: AnyRecord): void {
   }
 }
 
+const TERMINAL_JOB_STATES = ["completed", "failed", "cancelled"];
+
+/** Same refusal as the core's prep-job check in `refuse_if_busy`. */
+function refuseIfPrepRunning(dataset: AnyRecord): void {
+  const job = JOBS.find((j) => j.id === dataset.prep_job_id);
+  if (job && !TERMINAL_JOB_STATES.includes(String(job.state))) {
+    throw new Error(
+      `configuration error: dataset "${String(dataset.name)}" is still being prepared ` +
+        `(job ${String(job.id)} is ${String(job.state)}) — wait for it to finish or cancel it first`,
+    );
+  }
+}
+
 /** The mock's `GET /datasets/{id}/usage`: sizes from the frame rows. */
 function mockUsage(dataset: AnyRecord): AnyRecord {
   const frames = DATASET_FRAMES.filter((f) => f.dataset_id === dataset.id);
@@ -1574,7 +1587,9 @@ export function installDevMock(): void {
         // Same up-front refusal as the core: a relative root would resolve
         // against the process's working directory.
         const prepRoot = String(((body.params ?? {}) as AnyRecord).root ?? "");
-        if (jobType === "dataset_prep" && !/^([A-Za-z]:[\\/]|[\\/])/.test(prepRoot)) {
+        // Like the core on Windows: a drive letter or a UNC path; `\foo` and
+        // `/foo` are relative to the current drive, not absolute.
+        if (jobType === "dataset_prep" && !/^([A-Za-z]:[\\/]|\\\\)/.test(prepRoot)) {
           throw new Error(
             `configuration error: dataset root must be an absolute folder path, got ${JSON.stringify(prepRoot)}`,
           );
@@ -1863,6 +1878,7 @@ export function installDevMock(): void {
       case "delete_dataset": {
         const dataset = requireDataset(a.id);
         refuseIfTraining(dataset);
+        refuseIfPrepRunning(dataset);
         const usage = mockUsage(dataset);
         const frames = DATASET_FRAMES.filter((f) => f.dataset_id === a.id);
         const dropped = CONCEPTS.filter((c) => c.dataset_id === a.id).map((c) => c.id);
@@ -1901,6 +1917,7 @@ export function installDevMock(): void {
       case "delete_dataset_frames": {
         const dataset = requireDataset(a.datasetId);
         refuseIfTraining(dataset);
+        refuseIfPrepRunning(dataset);
         const body = (a.body ?? {}) as AnyRecord;
         const idList = (body.frame_ids as string[]) ?? [];
         checkFrameIds(idList);
@@ -1927,6 +1944,7 @@ export function installDevMock(): void {
           };
         }
         refuseIfTraining(dataset);
+        refuseIfPrepRunning(dataset);
         const gone = dropFrames(dataset, isMockDiscarded);
         return {
           dry_run: false,

@@ -38,7 +38,7 @@ faster keep/discard grid with rubber-band selection, select-all and drag & drop.
 ## API (new or changed)
 
 - `GET /datasets/{id}/usage` → `{ work_dir, work_bytes, work_files, export_dir, export_bytes, export_app_owned, discarded_frames, discarded_bytes }`
-- `DELETE /datasets/{id}` → now also removes files per the rules above; returns `{ freed_bytes }` (or keep 204 and a separate field — follow neighbours).
+- `DELETE /datasets/{id}` → now also removes files per the rules above; returns 200 with `{ frames, deleted_files, freed_bytes, skipped_files: [{path, reason}], export_dir_kept, dataset_deleted }` (as shipped; `dataset_deleted: false` keeps the dataset when a file could not be deleted). Unknown id → 404.
 - `POST /datasets/{id}/frames/bulk` `{ frame_ids, excluded: bool }` → sets `excluded` (and clears `rejection_reason` when keeping).
 - `POST /datasets/{id}/frames/delete` `{ frame_ids }` → deletes files + rows; returns `{ deleted, freed_bytes }`.
 - `POST /datasets/{id}/cleanup` `{ dry_run }` → `{ frames, bytes }`.
