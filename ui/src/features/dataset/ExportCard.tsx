@@ -1,6 +1,6 @@
 import { useId } from "react";
 import type { CaptionOrder } from "../../lib/ipc";
-import { browseForDirectory } from "../../lib/browse";
+import { useFolderPicker } from "../../lib/browse";
 
 export type ExportState =
   | { kind: "idle" }
@@ -39,6 +39,7 @@ export function ExportCard({
 }: Props) {
   const destDirId = useId();
   const orderId = useId();
+  const picker = useFolderPicker(onDestDirChange);
 
   return (
     <div className="card dataset__export">
@@ -56,12 +57,17 @@ export function ExportCard({
           <button
             type="button"
             className="chip"
-            onClick={() => browseForDirectory(onDestDirChange)}
+            onClick={picker.pick}
           >
             Browse…
           </button>
         </div>
       </label>
+      {picker.error && (
+        <p className="dataset__err" role="alert">
+          {picker.error}
+        </p>
+      )}
       <label className="datasetform__field datasetform__field--inline" htmlFor={orderId}>
         <span>Caption order</span>
         <select

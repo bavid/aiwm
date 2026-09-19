@@ -20,8 +20,8 @@ const MAX_TRIGGER = 30;
 /** Every fine-tuning field blank — the run uses the preset's own values. */
 const NO_OVERRIDES: TuneDraft = { rank: "", lr: "", resolution: "", steps: "" };
 const MAX_PROMPTS = 3;
-/** The core refuses to start a run below this much free space on its drive. */
-const RUN_MIN_FREE_GB = 20;
+/** The core refuses to start a run below this much free space on its drive (GiB). */
+const RUN_MIN_FREE_GIB = 20;
 
 const PRESETS: { id: TrainingPreset; label: string }[] = [
   { id: "fast", label: "Fast" },
@@ -325,12 +325,12 @@ export function NewRunForm({
         onChange={setDataDir}
         defaultDir={about?.training_dir ?? null}
         locationKey="training"
-        minFreeGB={RUN_MIN_FREE_GB}
+        minFreeGiB={RUN_MIN_FREE_GIB}
         help={
           <>
             Optional. Checkpoints, samples and logs go to <code>&lt;folder&gt;\&lt;run id&gt;</code> —
             pick a roomy drive for long runs. Resume and cleanup follow the run there. At least{" "}
-            {RUN_MIN_FREE_GB} GB free is needed to start.
+            {RUN_MIN_FREE_GIB} GiB free is needed to start.
           </>
         }
       />

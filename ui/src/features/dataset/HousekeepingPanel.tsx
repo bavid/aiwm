@@ -117,11 +117,12 @@ export function HousekeepingPanel({
   /** Where this dataset's frames live: recorded on the row since Plan 10,
    *  else as measured (older datasets). */
   const workDir = dataset.work_dir ?? usage?.work_dir ?? null;
+  /** Why "Open folder" failed — kept apart from the tools' result line. */
+  const [revealError, setRevealError] = useState<string | null>(null);
 
   const revealWorkDir = async () => {
     if (!workDir) return;
-    const failure = await openFolder(workDir);
-    if (failure) setResult({ kind: "error", text: failure });
+    setRevealError(await openFolder(workDir));
   };
 
   useLayoutEffect(() => {
@@ -268,6 +269,11 @@ export function HousekeepingPanel({
           >
             Open folder
           </button>
+          {revealError && (
+            <p className="dataset__err housekeeping__location-err" role="alert">
+              {revealError}
+            </p>
+          )}
         </div>
       )}
 

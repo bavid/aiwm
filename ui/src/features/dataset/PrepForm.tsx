@@ -2,7 +2,7 @@ import { useCallback, useId, useMemo, useRef, useState } from "react";
 import { StorageDirField } from "../../components/StorageDirField";
 import { useAbout, useCaptioners } from "../../lib/hooks";
 import type { DatasetMode, DatasetPrepParams } from "../../lib/ipc";
-import { browseForDirectory } from "../../lib/browse";
+import { useFolderPicker } from "../../lib/browse";
 import { withDataDir } from "../../lib/storage-locations";
 import { CaptionerHint, CaptionerPicker } from "./CaptionerSetup";
 import { useCaptionerInstall } from "./useCaptionerInstall";
@@ -14,8 +14,8 @@ const DEFAULT_ESCALATE_EVERY_NTH = 20;
 const DEFAULT_CONTEXT_OFFSET = 5;
 const DEFAULT_MAX_FRAMES_PER_CLIP = 40;
 const DEFAULT_MIN_CLIP_SECS = 2;
-/** The core refuses to start a prep run below this much free space. */
-const PREP_MIN_FREE_GB = 5;
+/** The core refuses to start a prep run below this much free space (GiB). */
+const PREP_MIN_FREE_GIB = 5;
 
 type Props = {
   /** A prep run is in flight — the Start button stays disabled until it ends. */
@@ -80,6 +80,7 @@ export function PrepForm({ isRunning, error, onStart, onMoreCaptioners }: Props)
     containerRef: captioningRef,
   });
 
+  const rootPicker = useFolderPicker(setRoot);
   const modeId = useId();
   const escalateNoteId = useId();
 
@@ -114,11 +115,16 @@ export function PrepForm({ isRunning, error, onStart, onMoreCaptioners }: Props)
             onChange={(e) => setRoot(e.target.value)}
             placeholder="E:\Data\MyArtStyle"
           />
-          <button type="button" className="chip" onClick={() => browseForDirectory(setRoot)}>
+          <button type="button" className="chip" onClick={rootPicker.pick}>
             Browse…
           </button>
         </div>
       </label>
+      {rootPicker.error && (
+        <p className="dataset__err" role="alert">
+          {rootPicker.error}
+        </p>
+      )}
 
       <label className="datasetform__field" htmlFor={modeId}>
         <span>Mode</span>
@@ -292,12 +298,12 @@ export function PrepForm({ isRunning, error, onStart, onMoreCaptioners }: Props)
         onChange={setDataDir}
         defaultDir={about?.datasets_dir ?? null}
         locationKey="datasets"
-        minFreeGB={PREP_MIN_FREE_GB}
+        minFreeGiB={PREP_MIN_FREE_GIB}
         help={
           <>
             Optional. Put a large dataset on another drive to keep this one free. Frames and
             previews go to <code>&lt;folder&gt;\&lt;job id&gt;</code>; your source media stay where
-            they are. The run needs at least {PREP_MIN_FREE_GB} GB free there.
+            they are. The run needs at least {PREP_MIN_FREE_GIB} GiB free there.
           </>
         }
       />

@@ -1,5 +1,5 @@
 import { useId, useState } from "react";
-import { browseForDirectory, openFolder } from "../../lib/browse";
+import { openFolder, useFolderPicker } from "../../lib/browse";
 import type { AboutInfo, PathsUpdate, StorageLocation } from "../../lib/ipc";
 import { useStorageLocations } from "../../lib/storage-locations";
 import { formatBytes } from "../../lib/units";
@@ -70,6 +70,12 @@ const ORDER = Object.keys(LOCATIONS);
 /** Share of a drive in use at which the bar turns amber / red. */
 const DRIVE_WARN_PCT = 70;
 const DRIVE_CRIT_PCT = 90;
+/** Words for a filling drive, so the state is never carried by colour alone. */
+const DRIVE_QUALIFIER: Record<"ok" | "warn" | "crit", string> = {
+  ok: "",
+  warn: " — running low",
+  crit: " — almost full",
+};
 
 type Props = {
   paths: PathsUpdate;
@@ -188,6 +194,7 @@ function LocationRow({
   onReveal,
 }: RowProps) {
   const inputId = useId();
+  const picker = useFolderPicker(onChange);
   const isPending = field !== null && draft.trim() !== saved.trim();
   // The model store has no blank "portable default" — it is always a path.
   const canReset = field !== null && field !== "store_path" && draft !== "";
@@ -247,7 +254,7 @@ function LocationRow({
             type="button"
             className="loc-btn"
             aria-label={`Choose… folder for ${label}`}
-            onClick={() => void browseForDirectory(onChange)}
+            onClick={picker.pick}
           >
             Choose…
           </button>
@@ -262,6 +269,11 @@ function LocationRow({
             </button>
           )}
         </div>
+      )}
+      {picker.error && (
+        <p className="settings__err" role="alert">
+          {picker.error}
+        </p>
       )}
       {isPending && (
         <p className="loc__pending" role="status">
@@ -305,7 +317,7 @@ function DriveBar({ measured }: { measured: StorageLocation | null }) {
   }
   const usedPct = Math.min(100, Math.max(0, ((total - free) / total) * 100));
   const load = usedPct >= DRIVE_CRIT_PCT ? "crit" : usedPct >= DRIVE_WARN_PCT ? "warn" : "ok";
-  const text = `${formatBytes(free)} free of ${formatBytes(total)}`;
+  const text = `${formatBytes(free)} free of ${formatBytes(total)}${DRIVE_QUALIFIER[load]}`;
   return (
     <div className="loc__drive">
       <div
@@ -323,7 +335,9 @@ function DriveBar({ measured }: { measured: StorageLocation | null }) {
           style={{ transform: `scaleX(${usedPct / 100})` }}
         />
       </div>
-      <span className="loc__drive-text numeric">{text}</span>
+      <span className="loc__drive-text numeric" data-load={load}>
+        {text}
+      </span>
     </div>
   );
 }

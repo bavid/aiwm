@@ -1,5 +1,4 @@
 import { useEffect, useState } from "react";
-import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { useAbout, useCivitaiStatus, useLocalApiStatus, useRegistryStatus } from "../../lib/hooks";
 import {
   cleanupOutputs,
@@ -21,6 +20,7 @@ import {
 import { SectionNav, type NavSection } from "../../components/SectionNav";
 import { getTheme, setTheme, type Theme } from "../../lib/theme";
 import { formatGB } from "../../lib/units";
+import { openFolder } from "../../lib/browse";
 import { BackupCard } from "./BackupCard";
 import { DataLocations, type PathField } from "./DataLocations";
 import "./settings.css";
@@ -109,6 +109,7 @@ export function Settings() {
   const [cleaning, setCleaning] = useState(false);
   const [cleanupResult, setCleanupResult] = useState<SweepResult | null>(null);
   const [cleanupError, setCleanupError] = useState<string | null>(null);
+  const [revealError, setRevealError] = useState<string | null>(null);
 
   useEffect(() => {
     getConfig()
@@ -262,13 +263,20 @@ export function Settings() {
                       <button
                         type="button"
                         className="set-reveal"
-                        onClick={() => revealItemInDir(about.outputs_dir).catch(() => {})}
+                        onClick={() =>
+                          void openFolder(about.outputs_dir).then(setRevealError)
+                        }
                       >
                         reveal
                       </button>
                     )}
                   </dd>
                 </dl>
+                {revealError && (
+                  <p className="settings__err" role="alert">
+                    {revealError}
+                  </p>
+                )}
                 <p className="muted">
                   Images and video clips are kept until you delete them — video files are
                   large and this folder grows fast. Set an age and/or size limit below to

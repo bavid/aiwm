@@ -1,17 +1,25 @@
 import { useId, type ReactNode } from "react";
-import { browseForDirectory } from "../lib/browse";
+import { useFolderPicker } from "../lib/browse";
 import {
   driveOf,
   driveSpace,
   useStorageLocations,
   type DriveSpace,
 } from "../lib/storage-locations";
-import { formatBytes } from "../lib/units";
 import "./storage-dir-field.css";
 
-/** The core's free-space minimums are counted in 1024³-byte gigabytes; the
- *  warning uses the same unit so it shows whenever the core would refuse. */
-const CORE_BYTES_PER_GB = 1024 ** 3;
+/** The core counts its free-space minimums (and words its refusal) in
+ *  1024³-byte gigabytes. This line judges *and* prints in that same unit,
+ *  labelled GiB, so the free figure, the minimum and the core's own refusal
+ *  never disagree — a decimal "5.3 GB free" beside "5 GB needed" could. */
+const BYTES_PER_GIB = 1024 ** 3;
+
+/** Bytes as binary gigabytes (terabytes from 1024 GiB): `412.3 GiB`. */
+function formatGiBytes(bytes: number): string {
+  const gib = bytes / BYTES_PER_GIB;
+  if (gib >= 1024) return `${(gib / 1024).toFixed(1)} TiB`;
+  return `${gib.toFixed(1)} GiB`;
+}
 
 type Props = {
   /** "Store frames in", "Store run in". */
@@ -23,8 +31,9 @@ type Props = {
   defaultDir: string | null;
   /** The storage location the default belongs to (`datasets` | `training`). */
   locationKey: string;
-  /** The core refuses to start below this much free space on the drive. */
-  minFreeGB: number;
+  /** The core refuses to start below this much free space on the drive, in
+   *  GiB (the core's own unit). */
+  minFreeGiB: number;
   /** Why and what happens — one or two short sentences. */
   help: ReactNode;
 };
@@ -35,10 +44,10 @@ function freeLine(
   value: string,
   defaultDir: string | null,
   locationKey: string,
-  minFreeGB: number,
+  minFreeGiB: number,
   state: ReturnType<typeof useStorageLocations>,
 ): FreeLine {
-  const need = `at least ${minFreeGB} GB needed`;
+  const need = `at least ${minFreeGiB} GiB needed`;
   const later: FreeLine = { text: `Free space is checked when you start — ${need}.`, tone: "muted" };
   if (state.isLoading && !state.data) return { text: "Checking free space…", tone: "muted" };
   if (!state.data) return later;
@@ -56,9 +65,9 @@ function freeLine(
   }
   if (!space) return later;
 
-  const total = space.total !== null ? ` of ${formatBytes(space.total)}` : "";
-  const text = `${formatBytes(space.free)} free${total} on ${space.drive}`;
-  if (space.free < minFreeGB * CORE_BYTES_PER_GB) {
+  const total = space.total !== null ? ` of ${formatGiBytes(space.total)}` : "";
+  const text = `${formatGiBytes(space.free)} free${total} on ${space.drive}`;
+  if (space.free < minFreeGiB * BYTES_PER_GIB) {
     return { text: `${text} — too little, ${need}.`, tone: "warn" };
   }
   return { text: `${text}.`, tone: "ok" };
@@ -73,14 +82,15 @@ export function StorageDirField({
   onChange,
   defaultDir,
   locationKey,
-  minFreeGB,
+  minFreeGiB,
   help,
 }: Props) {
   const inputId = useId();
   const freeId = useId();
   const helpId = useId();
   const locations = useStorageLocations();
-  const free = freeLine(value, defaultDir, locationKey, minFreeGB, locations);
+  const free = freeLine(value, defaultDir, locationKey, minFreeGiB, locations);
+  const picker = useFolderPicker(onChange);
   const isCustom = value.trim() !== "";
 
   return (
@@ -107,7 +117,7 @@ export function StorageDirField({
           type="button"
           className="storedir__btn"
           aria-label={`Choose a folder to ${label.toLowerCase()}`}
-          onClick={() => void browseForDirectory(onChange)}
+          onClick={picker.pick}
         >
           Choose…
         </button>
@@ -122,6 +132,11 @@ export function StorageDirField({
           </button>
         )}
       </div>
+      {picker.error && (
+        <p className="storedir__free" data-tone="warn" role="alert">
+          {picker.error}
+        </p>
+      )}
       <p id={freeId} className="storedir__free numeric" data-tone={free.tone} aria-live="polite">
         {free.text}
       </p>

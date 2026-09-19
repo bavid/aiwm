@@ -451,6 +451,16 @@
   text-align: right;
 }
 
+.loc__drive-text[data-load="warn"] {
+  color: var(--load-warn);
+  font-weight: 600;
+}
+
+.loc__drive-text[data-load="crit"] {
+  color: var(--load-crit);
+  font-weight: 600;
+}
+
 .loc__edit {
   display: grid;
   grid-template-columns: max-content minmax(0, 1fr) auto auto;
