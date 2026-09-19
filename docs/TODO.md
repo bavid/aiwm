@@ -1722,7 +1722,7 @@ Noch offen aus Plan 6:
     — **dieser Teil offen**;
   - nie die Quellvideos anfassen; bereits exportierte/trainierte Frames nicht
     löschen, solange ein Trainingslauf sie braucht.
-- ✅ (umgesetzt 2026-09-19, Plan 7; Florence-2 lädt noch nicht — siehe Befund unten)
+- ✅ (umgesetzt 2026-09-19, Plan 7; Florence-2 läuft seit Plan 8 nativ — siehe unten)
   **Trainings-Werkzeuge im Discover-/Models-Tab statt manuellem Import** —
   damals sagte der Dataset-Tab: "No captioner installed — import Florence-2 or
   the WD tagger on the Models tab. Without one, everything recurring in your
@@ -1770,34 +1770,95 @@ Noch offen aus Plan 6:
   | Florence-2 installieren | 10 Dateien, 1.556.213.789 B, **40,2 s** (~37 MB/s), `installed: true`, Integritätsprüfung ok |
   | Prep mit Florence-2 (ohne Eskalation) | **Job `failed` nach 313,4 s** (Frames/Filter liefen, 40 behalten, 0 beschriftet); VRAM-Spitze 1.814 MiB — das Modell wurde nie geladen. Dataset danach gelöscht (1.173.444.536 B frei) |
   | Qwen2.5-VL importieren | 14 Dateien, 16.595.961.188 B über `POST /models` (`qwen_vl_engine`, Kopie aus dem Scratchpad), 11,6 s; `GET /captioners/escalation` → `files_present: true, usable: true` |
-  | Eskalations-Lauf | **nicht gefahren** — Eskalation setzt auf Florence-2 auf, das nicht lädt |
+  | Eskalations-Lauf | **nicht gefahren** — Eskalation setzt auf Florence-2 auf, das nicht lädt (in Plan 8 nachgeholt, siehe unten) |
   | Quellvideo | Größe 153.603.700 B, Änderungszeit und SHA-256 (`15F22FD0…9869BF28`) vorher = nachher |
   | Daemon | per Ctrl-Break beendet ("shutdown complete"), kein `aiwm-*`/`ffmpeg`/Sidecar-Python übrig, VRAM wieder 1.812 MiB |
 
   Offen / Befunde aus Plan 7:
 
-  - **[PRIO 1] Florence-2 lädt mit dem Sidecar nicht** (transformers 5.17.0,
-    torch 2.14.0+cu126). Job-Fehler wörtlich: `sidecar error: rpc error:
-    {"code":-32000,"message":"captioning failed: 'Florence2LanguageConfig'
-    object has no attribute 'forced_bos_token_id'"}`. Nachgestellt außerhalb
-    der App: Microsofts Remote-Code `configuration_florence2.py` (gepinnter
-    Commit `21a599d4…`, Zeile 265) liest `self.forced_bos_token_id` im
-    `__init__`; transformers 5.x legt dieses Generierungsattribut nicht mehr
-    auf `PretrainedConfig` an → `AttributeError` schon in
-    `AutoConfig.from_pretrained`. Der Install selbst ist korrekt, nur der
-    Remote-Code passt nicht zur transformers-Version. **Fix-Richtung** (nicht
-    in Plan 7 gebaut, bewusst kein Patch am gepinnten Remote-Code): auf die
-    native `Florence2ForConditionalGeneration` von transformers umstellen
-    (braucht die konvertierten Gewichte eines anderen Repos → neue gepinnte
-    Dateiliste + Hashes) oder transformers für diesen Pfad auf eine Version
-    vor 5 pinnen. Bis dahin: Florence-2 in der UI nicht als nutzbar anbieten
-    bzw. den Ladefehler als "unusable"-Grund zeigen. Nach dem Fix den
-    `#[ignore]`-Real-Bytes-Test mit `AIWM_TEST_FLORENCE2_SNAPSHOT`
-    (`caption.rs`) gegen den echten Snapshot fahren und einen Sidecar-Test
-    ergänzen, der die gepinnte Config wirklich lädt.
-  - **Qwen2.5-VL-Eskalation ungeprüft** (hängt am Florence-Befund);
-    importiert und laut Integritätsprüfung nutzbar, aber ob 4-Bit
-    (bitsandbytes) unter Windows lädt, ist offen.
+  - ✅ (umgesetzt 2026-09-19, Plan 8 "Florence-2 on native transformers",
+    Spec `docs/superpowers/specs/2026-09-19-florence-native-design.md`)
+    **~~[PRIO 1] Florence-2 lädt mit dem Sidecar nicht~~** — Ursache war
+    Microsofts Remote-Code (`configuration_florence2.py` liest
+    `forced_bos_token_id`, das transformers 5.x nicht mehr anlegt; Job-Fehler
+    damals: `'Florence2LanguageConfig' object has no attribute
+    'forced_bos_token_id'`). **Umgesetzt:** der Stack `florence2-large`
+    (gleiche Stack-ID, Art, Rolle, Ordner `vision/florence2-large`) pinnt jetzt
+    die transformers-native Konvertierung `florence-community/Florence-2-large`
+    auf Commit `4271c66b88cdbc05735372ec13b2360108de5317` (Modellkarte an
+    diesem Commit: **MIT**, verweist auf Microsofts Lizenz) — 11 Dateien,
+    1.558.916.305 B, **keine `.py`-Datei**; jede SHA-256/Größe aus der selbst
+    heruntergeladenen Datei berechnet (Gewichte zusätzlich = Hub-LFS-SHA
+    `7715423d…`). Der Sidecar lädt mit `Florence2ForConditionalGeneration` +
+    `AutoProcessor`, beide `local_files_only=True`, **ohne**
+    `trust_remote_code`; das Aufräumen des Remote-Code-Caches ist entfallen.
+    `florence2_engine` nimmt nur noch `json`/`safetensors`/`txt` an.
+    **Migration alter Installationen:** jeder gepinnte Import (Install oder
+    Reparatur) bringt genau den Store-Ordner auf "nur Katalogdateien" zurück
+    (fremde Dateien weg, Links nur als Link entfernt, Unterordner und alles
+    außerhalb bleiben, umgeleiteter Ordner wird gar nicht angefasst) und
+    löscht die Bibliothekszeilen darunter, deren Inhalt keine aktuelle
+    Katalogdatei ist — **vor** dem Einfügen der neuen Zeile (`models.file_path`
+    ist UNIQUE; das hat erst der echte Lauf gezeigt, Fix `0e8e799`).
+    `known_issue` für Florence-2 entfernt; die generische Vorab-Ablehnung im
+    Pipeline-Start bleibt. Die beiden `#[ignore]`-Real-Bytes-Tests
+    (`AIWM_TEST_FLORENCE2_SNAPSHOT`) laufen gegen den neuen Snapshot grün.
+
+    Gemessen 2026-09-19 mit echtem `aiwm-cored` (Worktree-Build, Port 48160,
+    `E:\AI\data`, DB vorher gesichert), Download exakt wie
+    `useStackInstaller.ts` (ein `POST /downloads` je Stack-Datei), Prep wie
+    `PrepForm.tsx` (Frames-Modus, Standardwerte) auf `D:\Data\Test`, RTX 4080
+    SUPER, Grundlast 1.813–1.818 MiB, VRAM jede Sekunde per `nvidia-smi`:
+
+    | Schritt | Ergebnis |
+    |---|---|
+    | Re-Download über alte Microsoft-Dateien (1. Versuch) | 38,0 s; 7 Dateien ok, **4 `failed`**: `UNIQUE constraint failed: models.file_path` (`config.json`, `model.safetensors`, `generation_config.json`, `preprocessor_config.json` — gleiche Namen wie alte Zeilen). Der Prune lief erst nach dem Einfügen → Fix `0e8e799` (Regressionstest mit dem exakten Pfad-String des Importers) |
+    | Re-Download (2. Versuch, gefixt) | 11 Dateien, **36,3 s** (~43 MB/s), alle `done`; `GET /captioners` → Florence-2 `installed: true`, `unusable: null`; Ordner enthält genau die 11 Katalogdateien (die drei `.py` und alle 10 alten Zeilen entfernt), 11 Zeilen mit Katalog-SHA |
+    | Sidecar-Smoke direkt aus dem Store-Ordner | fp16/CUDA, Laden 1,7 s, eine Beschriftung 3,2 s, torch-Spitze 1.822 MiB; Ordner danach unverändert (11 Dateien) |
+    | Prep Florence-2, Eskalation aus (Lauf 1) | **332,6 s** (Extraktion 20,2 s, Filter 274,1 s, **Beschriftung 38,3 s** für 40 Frames inkl. Laden); 1.368 Frames, 40 behalten, **40/40 `florence2`**, keine Warnungen. VRAM hier nicht erfasst (der `nvidia-smi -l`-Sampler brach vor der Beschriftung ab) |
+    | Prep Florence-2, Eskalation aus (Lauf 2, Modell noch geladen) | 324,7 s, Beschriftung **31,2 s** (≈0,78 s/Frame), 40/40; **VRAM durchgehend 4.005 MiB** = Grundlast + **2.187 MiB** für das residente Florence-2 |
+    | Prep mit Eskalation (Standard: jeder 20. Frame) | 357,1 s, Beschriftung 62,3 s inkl. Laden beider Modelle; **1 Frame eskaliert** (`qwen2.5-vl`, der 20.; der 40. ist der letzte der Gruppe → kein Nachbar, übersprungen; keine Florence-Beschriftung war kurz/unsicher, 30–62 Wörter); **VRAM-Spitze 11.851 MiB** (Florence geladen → 3.987, Qwen 4-Bit geladen → 9.133, Generierung → 11.851); keine Fehler |
+    | Prep mit Eskalation, jeder 5. Frame | 348,9 s, Beschriftung 56,5 s (beide Modelle resident); **7 Frames eskaliert**, 33 `florence2`; VRAM-Spitze 11.851 MiB |
+    | Datasets | die 4 selbst erzeugten gelöscht (je 1.368 Dateien, 1.173.444.536 B frei, 0 übersprungen); die 2 älteren unberührt |
+    | Quellvideo | 153.603.700 B, Änderungszeit und SHA-256 (`15f22fd0…9869bf28`) vorher = nachher |
+    | Daemon | per Ctrl-C beendet ("shutdown complete"), kein `aiwm-*`/`ffmpeg`/Sidecar übrig, VRAM wieder 1.813 MiB |
+
+    Beschriftungen Florence-2 (Lauf 1, wörtlich, 5 von 40):
+    - t=0 s: "In this image we can see a woman is sitting on a chair. On the left side of the image there is a table. In the background there is wall. There is a door. Also there is curtain. And there are leaves. And something is written on the image."
+    - t=141,3 s: "In this image there is a woman sitting on a chair. She is wearing a bikini. There is a pipe in her hand. On the left side of the image there are some objects on the table. In the background there is wall and a door. There are leaves of a plant. At the bottom there is text."
+    - t=248,7 s: "In this image we can see a woman sitting on a chair. She is holding an object in her hand. On the left side of the image there is a table with a device on it. In the background there are curtains, wall and a door. At the bottom there is text."
+    - t=545,3 s: "In this image there is a woman sitting on a chair. She is holding a bottle in her hand. There is a pipe in her mouth. On the left side of the image there are some objects on the table. There are curtains. In the background there is wall and a plant. At the bottom of the images there is some text."
+    - t=880,0 s: "In this image we can see a woman sitting on a chair. She is holding some objects in her hands. On the left side of the image there is a mobile phone and some other objects on the table. In the background there is wall and a curtain. There is a plant. At the bottom of the Image there is text."
+
+    Eskalierte Beschriftungen Qwen2.5-VL (wörtlich, 3 von 7; Frame 20 ist in
+    beiden Eskalationsläufen identisch → deterministisch):
+    - Frame 5, t=98,0 s: "In the first image, a person is sitting on a chair with a breast pump attached to their chest, holding a bottle. In the second image, the person has adjusted the position of the breast pump slightly, and the bottle appears to be more securely attached."
+    - Frame 15, t=162,7 s: "In both frames, a person is seated on a chair with their legs crossed, wearing a black top and pink underwear. The individual has breast pumps attached to their chest, connected by tubes. There appears to be no significant change or movement between the two frames; the person remains in the same position throughout."
+    - Frame 20, t=234,7 s: "In the first image, the woman is seated on a chair with her arms raised, wearing a black top and pink underwear, and has a breast pump attached to her breasts. In the second image, she has lowered her arms slightly while still holding the breast pump."
+
+    Befunde:
+    - **Qwen2.5-VL 4-Bit (bitsandbytes NF4) lädt und läuft unter Windows** —
+      keine Fehler, keine Warnungen. Der Core schickt keine `quantization`,
+      der Sidecar-Standard `4bit` gilt; andere Modi sind in der Konfiguration
+      nicht freigegeben und wurden daher nicht probiert.
+    - **VRAM-Reservierung zu knapp:** gemessen Florence-2 ~2.187 MiB
+      (reserviert 2.048), Florence + Qwen zusammen **~10.035 MiB** über
+      Grundlast (reserviert 2.048 + 6.144 = 8.192) — Qwen allein ~7.864 MiB
+      statt 6.144. `QWEN_VL_VRAM_FALLBACK_MB` (und leicht
+      `FLORENCE2_VRAM_FALLBACK_MB`) auf die Messung anheben, sonst plant der
+      Scheduler neben der Eskalation zu viel ein.
+    - **Modelle bleiben nach dem Job geladen:** die Vision-Runtime hält
+      `dataset-vision-pipeline` resident (nach Florence-Läufen ~4,0 GB, nach
+      Eskalation ~11,8 GB belegt) bis zum Entladen/Beenden. Für die zweite
+      Prep ist das schneller (31 s statt 38 s), blockiert aber VRAM fürs
+      Training — Idle-Entladen oder Entladen nach der Prep prüfen.
+    - Eskalations-Standard (jeder 20. Frame) trifft bei 40 behaltenen Frames
+      genau einen Frame, weil der letzte Frame einer Gruppe keinen Nachbarn
+      hat und Florence-2 hier nie "unsicher" formuliert.
+    - Offen aus Plan 8: `timm`/`einops` braucht nur der alte Remote-Code —
+      aus `sidecar/pyproject.toml` streichen, sobald das Lock aufgefrischt
+      wird; ein Opt-in-Sidecar-Test, der den echten Snapshot lädt
+      (Smoke-Skript bisher nur manuell), fehlt noch.
   - Ein fehlgeschlagener Captioning-Schritt lässt trotzdem ein Dataset mit
     allen Frames (unbeschriftet) zurück — sinnvoll zum Weiterkuratieren, aber
     die UI sollte "Beschriftung fehlgeschlagen, erneut beschriften" anbieten.
