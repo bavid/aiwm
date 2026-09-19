@@ -285,6 +285,17 @@ impl<'a> DownloadRepo<'a> {
         Ok(row.0)
     }
 
+    /// Replace the roles stamped on the model once this download is imported.
+    pub async fn set_roles(&self, id: &str, roles: &[String]) -> Result<()> {
+        sqlx::query("UPDATE downloads SET roles = $1, updated_at = $2 WHERE id = $3")
+            .bind(join_roles(roles))
+            .bind(now_rfc3339())
+            .bind(id)
+            .execute(self.pool)
+            .await?;
+        Ok(())
+    }
+
     pub async fn set_model_id(&self, id: &str, model_id: &str) -> Result<()> {
         sqlx::query("UPDATE downloads SET model_id = $1, updated_at = $2 WHERE id = $3")
             .bind(model_id)

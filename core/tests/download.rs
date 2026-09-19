@@ -593,7 +593,8 @@ fn req_with_sha(name: &str, sha256: &str) -> EnqueueRequest {
 
 /// Two tabs (or two clicks) installing the same catalog file must not queue
 /// it twice: while a download of that SHA-256 is still active (queued,
-/// running, paused or verifying), a second enqueue hands back that download.
+/// running or verifying), a second enqueue hands back that download as it is.
+/// (A paused one is resumed -- see the test below.)
 #[tokio::test]
 async fn an_enqueue_of_a_file_already_downloading_returns_the_active_download() {
     let tmp = tempfile::tempdir().unwrap();
@@ -605,7 +606,6 @@ async fn an_enqueue_of_a_file_already_downloading_returns_the_active_download() 
     for state in [
         DownloadState::Queued,
         DownloadState::Running,
-        DownloadState::Paused,
         DownloadState::Verifying,
     ] {
         db.downloads()
@@ -659,4 +659,105 @@ async fn downloads_without_a_hash_are_never_merged() {
     let a = m.enqueue(req("same.gguf")).await.unwrap();
     let b = m.enqueue(req("same.gguf")).await.unwrap();
     assert_ne!(a.id, b.id);
+}
+
+fn catalog_req(sha256: &str, model_type: &str, roles: &[&str]) -> EnqueueRequest {
+    EnqueueRequest {
+        model_type: Some(model_type.into()),
+        roles: roles.iter().map(|r| (*r).to_string()).collect(),
+        ..req_with_sha("model.onnx", sha256)
+    }
+}
+
+/// The second caller's intent is not dropped: roles it asks for are merged
+/// into the active download (existing order kept, no duplicates) and stored.
+#[tokio::test]
+async fn a_merged_enqueue_adds_the_callers_roles_to_the_active_download() {
+    let tmp = tempfile::tempdir().unwrap();
+    let db = Database::connect_in_memory().await.unwrap();
+    let m = idle_manager(&db, tmp.path());
+    let sha = "ef".repeat(32);
+
+    let first = m
+        .enqueue(catalog_req(&sha, "chat", &["chat"]))
+        .await
+        .unwrap();
+    let merged = m
+        .enqueue(catalog_req(&sha, "chat", &["coding", "chat"]))
+        .await
+        .unwrap();
+
+    assert_eq!(merged.id, first.id);
+    assert_eq!(merged.roles, vec!["chat".to_string(), "coding".to_string()]);
+    let stored = m.get(&first.id).await.unwrap().unwrap();
+    assert_eq!(stored.roles, merged.roles, "persisted, not just returned");
+}
+
+/// The same file requested as a different model type is a conflict, not a
+/// merge: the import would file it under one kind only.
+#[tokio::test]
+async fn a_merged_enqueue_with_a_different_model_type_is_refused() {
+    let tmp = tempfile::tempdir().unwrap();
+    let db = Database::connect_in_memory().await.unwrap();
+    let m = idle_manager(&db, tmp.path());
+    let sha = "12".repeat(32);
+
+    m.enqueue(catalog_req(&sha, "wd_tagger", &[]))
+        .await
+        .unwrap();
+    let err = m
+        .enqueue(catalog_req(&sha, "checkpoint", &[]))
+        .await
+        .unwrap_err();
+
+    assert!(
+        err.to_string().contains("already downloading as wd_tagger"),
+        "{err}"
+    );
+    assert_eq!(m.list().await.unwrap().len(), 1);
+}
+
+/// Asking again for a file whose download is paused is a request to get it:
+/// the paused download is resumed (back to the queue), not left paused.
+#[tokio::test]
+async fn a_merged_enqueue_resumes_a_paused_download() {
+    let tmp = tempfile::tempdir().unwrap();
+    let db = Database::connect_in_memory().await.unwrap();
+    let m = idle_manager(&db, tmp.path());
+    let sha = "34".repeat(32);
+
+    let first = m.enqueue(req_with_sha("a.onnx", &sha)).await.unwrap();
+    db.downloads()
+        .set_state(&first.id, DownloadState::Paused, None)
+        .await
+        .unwrap();
+
+    let again = m.enqueue(req_with_sha("a.onnx", &sha)).await.unwrap();
+
+    assert_eq!(again.id, first.id);
+    assert_eq!(again.state, DownloadState::Queued);
+    assert_eq!(
+        m.get(&first.id).await.unwrap().unwrap().state,
+        DownloadState::Queued
+    );
+}
+
+/// Two enqueues of one file racing each other (two tabs clicking in the same
+/// instant) still produce exactly one download.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_enqueues_of_the_same_file_create_one_download() {
+    let tmp = tempfile::tempdir().unwrap();
+    let db = Database::connect_in_memory().await.unwrap();
+    let m = idle_manager(&db, tmp.path());
+    let sha = "56".repeat(32);
+
+    for round in 0..8 {
+        let sha = format!("{}{round:02}", &sha[..62]);
+        let (a, b) = tokio::join!(
+            m.enqueue(req_with_sha("race.onnx", &sha)),
+            m.enqueue(req_with_sha("race.onnx", &sha)),
+        );
+        assert_eq!(a.unwrap().id, b.unwrap().id, "round {round}");
+    }
+    assert_eq!(m.list().await.unwrap().len(), 8);
 }
