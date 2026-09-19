@@ -25,6 +25,7 @@ use crate::model::{lora_rank_from_header, ModelKind};
 use crate::training::config::{training_folder, Hyperparams};
 use crate::training::location::run_folder;
 use crate::training::progress::scan_work_dir;
+use crate::training::training_err;
 use crate::Result;
 
 /// The `models.source` prefix a run's import writes: `training:<run id>`.
@@ -234,21 +235,36 @@ fn rank_of(file_path: &str) -> Option<u32> {
     }
 }
 
+/// Run the file-reading half of a request on the blocking pool — a header
+/// per LoRA, a directory listing per run — so a library of many LoRAs never
+/// stalls the async runtime (the same split as `purge_run_folder`: rows are
+/// read `async`, files are read here). A pool task that does not finish is a
+/// fault, not a refusal.
+async fn blocking<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> Result<T> {
+    tokio::task::spawn_blocking(f)
+        .await
+        .map_err(|e| training_err(format!("the LoRA overview task did not finish: {e}")))
+}
+
 /// Every library LoRA, newest first.
 pub async fn list_loras(db: &Database, store_root: &Path) -> Result<Vec<LoraSummary>> {
     let library = Library::load(db).await?;
-    let mut loras: Vec<LoraSummary> = library
-        .models
-        .values()
-        .filter(|m| is_library_lora(store_root, &m.file_path))
-        .map(|m| library.summarize(m))
-        .collect();
-    loras.sort_by(|a, b| {
-        b.created_at
-            .cmp(&a.created_at)
-            .then_with(|| b.model_id.cmp(&a.model_id))
-    });
-    Ok(loras)
+    let store_root = store_root.to_path_buf();
+    blocking(move || {
+        let mut loras: Vec<LoraSummary> = library
+            .models
+            .values()
+            .filter(|m| is_library_lora(&store_root, &m.file_path))
+            .map(|m| library.summarize(m))
+            .collect();
+        loras.sort_by(|a, b| {
+            b.created_at
+                .cmp(&a.created_at)
+                .then_with(|| b.model_id.cmp(&a.model_id))
+        });
+        loras
+    })
+    .await
 }
 
 /// A LoRA's history, oldest run first. `None` when `model_id` is not a
@@ -265,36 +281,56 @@ pub async fn lineage(
         .models
         .get(model_id)
         .filter(|m| is_library_lora(store_root, &m.file_path))
+        .cloned()
     else {
         return Ok(None);
     };
-    let mut runs = Vec::new();
-    for run in library.chain(model_id) {
-        runs.push(describe_run(db, &library, training_root, run).await?);
+    // Rows first (async), then files (blocking): the chain's datasets and
+    // their prep jobs come from the store; the samples and the rank come
+    // from disk, so they go to the pool with an owned copy of the chain.
+    let chain: Vec<TrainingRun> = library.chain(model_id).into_iter().cloned().collect();
+    let mut datasets = Vec::with_capacity(chain.len());
+    for run in &chain {
+        datasets.push(dataset_of(db, run).await?);
     }
-    Ok(Some(LoraLineage {
-        lora: library.summarize(model),
-        runs,
-    }))
+    let training_root = training_root.to_path_buf();
+    blocking(move || {
+        let runs = chain
+            .iter()
+            .zip(datasets)
+            .map(|(run, dataset)| describe_run(&library, &training_root, run, dataset))
+            .collect();
+        Some(LoraLineage {
+            lora: library.summarize(&model),
+            runs,
+        })
+    })
+    .await
 }
 
-async fn describe_run(
-    db: &Database,
+/// The dataset `run` trained on, when its row is still there.
+async fn dataset_of(db: &Database, run: &TrainingRun) -> Result<Option<LineageDataset>> {
+    let Some(id) = run.dataset_id.as_deref() else {
+        return Ok(None);
+    };
+    match db.datasets().get(id).await? {
+        Some(ds) => Ok(Some(describe_dataset(db, ds).await?)),
+        None => Ok(None),
+    }
+}
+
+/// Everything the history shows for one run. Reads the run's sample folder,
+/// so it belongs on the blocking pool.
+fn describe_run(
     library: &Library,
     training_root: &Path,
     run: &TrainingRun,
-) -> Result<LineageRun> {
-    let dataset = match run.dataset_id.as_deref() {
-        Some(id) => match db.datasets().get(id).await? {
-            Some(ds) => Some(describe_dataset(db, ds).await?),
-            None => None,
-        },
-        None => None,
-    };
+    dataset: Option<LineageDataset>,
+) -> LineageRun {
     let samples = (0..latest_sample_paths(&run_folder(run, training_root), &run.name).len())
         .map(|i| i.to_string())
         .collect();
-    Ok(LineageRun {
+    LineageRun {
         run_id: run.id.clone(),
         name: run.name.clone(),
         state: run.state,
@@ -315,7 +351,7 @@ async fn describe_run(
         init_lora_model_id: run.init_lora_model_id.clone(),
         init_lora_name: library.model_name(run.init_lora_model_id.as_deref()),
         samples,
-    })
+    }
 }
 
 /// The dataset plus the captioner its prep job recorded in its params.
