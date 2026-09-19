@@ -97,7 +97,11 @@ export function DatasetStudio({ onTrainLora }: Props) {
   const { data: frames, refetch: refetchFrames } = useDatasetFramesForDataset(activeDatasetId);
   const { data: concepts, refetch: refetchConcepts } = useConcepts(activeDatasetId);
   const { data: conceptMap, refetch: refetchConceptMap } = useFrameConceptMap(activeDatasetId);
-  const { data: usage, refetch: refetchUsage } = useDatasetUsage(activeDatasetId);
+  const {
+    usage,
+    isLoading: isUsageLoading,
+    refresh: refreshUsage,
+  } = useDatasetUsage(activeDatasetId);
 
   const frameList = useMemo(() => frames ?? [], [frames]);
   const conceptList = useMemo(() => concepts ?? [], [concepts]);
@@ -141,11 +145,13 @@ export function DatasetStudio({ onTrainLora }: Props) {
     refetchConceptMap();
   }, [refetchConcepts, refetchConceptMap]);
 
-  /** After any write to the frames: their list and the disk use change. */
-  const refetchFrameData = useCallback(() => {
+  /** After a housekeeping action (dedup, cleanup, frame deletion): the frame
+   *  list and the disk use change. Moves only touch the list — the usage is
+   *  fetched on demand, since the core walks the folders for it. */
+  const refetchAfterHousekeeping = useCallback(() => {
     refetchFrames();
-    refetchUsage();
-  }, [refetchFrames, refetchUsage]);
+    refreshUsage();
+  }, [refetchFrames, refreshUsage]);
 
   const triggerId = useId();
 
@@ -221,7 +227,7 @@ export function DatasetStudio({ onTrainLora }: Props) {
       refetchJobs();
       refetchDatasets();
     } catch (e) {
-      setSendError(String(e));
+      setSendError(errorText(e));
     }
   };
 
@@ -271,7 +277,7 @@ export function DatasetStudio({ onTrainLora }: Props) {
       const summary = await exportDatasetById(activeDatasetId, destDir.trim(), captionOrder);
       setExportState({ kind: "done", exported: summary.exported, destDir: summary.dest_dir });
       refetchDatasets();
-      refetchUsage();
+      refreshUsage();
     } catch (e) {
       setExportState({ kind: "error", message: String(e) });
     }
@@ -394,8 +400,10 @@ export function DatasetStudio({ onTrainLora }: Props) {
             key={`housekeeping-${activeDataset.id}`}
             dataset={activeDataset}
             usage={usage}
+            isUsageLoading={isUsageLoading}
+            onRefreshUsage={refreshUsage}
             isRunning={isRunning}
-            onChanged={refetchFrameData}
+            onChanged={refetchAfterHousekeeping}
             onDeleted={onDatasetDeleted}
           />
         )}
@@ -451,7 +459,9 @@ export function DatasetStudio({ onTrainLora }: Props) {
 
         {/* Hidden, not unmounted, in the Learn view: the selection, card size,
             Discard filter and paging survive a Sort<->Learn round-trip. */}
-        {activeDatasetId && frameList.length > 0 && (
+        {/* Stays mounted when a delete empties the dataset, so its result
+            notice survives; the board shows its own empty state then. */}
+        {activeDatasetId && frames !== null && (
           <div hidden={view !== "grid"}>
             <CurationBoard
               key={`board-${activeDatasetId}`}
@@ -462,7 +472,8 @@ export function DatasetStudio({ onTrainLora }: Props) {
               imageUrlFor={imageUrlFor}
               tokensByFrameId={tokensByFrameId}
               concepts={conceptList}
-              onFramesChanged={refetchFrameData}
+              onFramesChanged={refetchFrames}
+              onFilesDeleted={refreshUsage}
               onConceptsChanged={refetchConceptData}
             />
           </div>

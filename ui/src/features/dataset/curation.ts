@@ -36,6 +36,10 @@ export function matchesDiscardFilter(frame: DatasetFrame, filter: string): boole
 export const framesLabel = (count: number): string =>
   `${count.toLocaleString()} ${count === 1 ? "frame" : "frames"}`;
 
+/** "1 file" / "12 files". */
+export const filesLabel = (count: number): string =>
+  `${count.toLocaleString()} ${count === 1 ? "file" : "files"}`;
+
 /** The message of a rejected IPC call, verbatim. The core's refusals (an
  *  active training run, …) are written for the curator, so they are shown as
  *  they are — without the `Error: ` prefix `String(error)` would add. */

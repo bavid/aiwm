@@ -458,8 +458,12 @@ function mockUsage(dataset: AnyRecord): AnyRecord {
   const frames = DATASET_FRAMES.filter((f) => f.dataset_id === dataset.id);
   const discarded = frames.filter(isMockDiscarded);
   const withFile = frames.filter((f) => mockFrameBytes(f) > 0);
+  // The mock's work folders are never shared, so a dataset with a prep job
+  // is always walkable; one without has no folder, only its own frames.
+  const hasWorkDir = dataset.prep_job_id != null;
   return {
-    work_dir: `E:\\AI\\data\\outputs\\datasets\\${String(dataset.prep_job_id ?? dataset.id)}`,
+    work_dir: hasWorkDir ? `E:\\AI\\data\\outputs\\datasets\\${String(dataset.prep_job_id)}` : null,
+    work_walkable: hasWorkDir,
     work_bytes: withFile.length * MOCK_FRAME_BYTES,
     work_files: withFile.length,
     export_dir: dataset.export_dir ?? null,
@@ -1567,6 +1571,14 @@ export function installDevMock(): void {
       case "submit_job": {
         const body = (a.body ?? {}) as AnyRecord;
         const jobType = String(body.job_type ?? "video");
+        // Same up-front refusal as the core: a relative root would resolve
+        // against the process's working directory.
+        const prepRoot = String(((body.params ?? {}) as AnyRecord).root ?? "");
+        if (jobType === "dataset_prep" && !/^([A-Za-z]:[\\/]|[\\/])/.test(prepRoot)) {
+          throw new Error(
+            `configuration error: dataset root must be an absolute folder path, got ${JSON.stringify(prepRoot)}`,
+          );
+        }
         // Auto's real per-role pick isn't mocked -- just default sanely per
         // job type instead of always falling back to a video model.
         const autoModel: Record<string, string> = {

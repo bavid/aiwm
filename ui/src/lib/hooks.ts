@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import {
   about,
@@ -258,15 +258,62 @@ export const useDatasetFramesForDataset = (datasetId: string | null) =>
     3000,
   );
 
-/** A dataset's disk use (work folder, export, discarded frames) for the
- *  delete and cleanup confirmations. Polled slowly — the core walks the
- *  folders for it; `null` disables polling. */
-export const useDatasetUsage = (datasetId: string | null) =>
-  usePolled<DatasetUsage | null>(
-    `dataset-usage:${datasetId ?? ""}`,
-    () => (datasetId ? datasetUsage(datasetId) : Promise.resolve(null)),
-    10000,
-  );
+type UsageState = {
+  datasetId: string | null;
+  usage: DatasetUsage | null;
+  error: string | null;
+  isLoading: boolean;
+};
+
+/** A dataset's disk use (work folder, export, discarded frames), fetched on
+ *  demand — never polled, since the core walks the folders for it. Loads
+ *  once per dataset; call `refresh` when a dialog opens or after an action.
+ *  While loading `usage` is `null`, and a result never outlives its dataset. */
+export function useDatasetUsage(datasetId: string | null) {
+  const [state, setState] = useState<UsageState>({
+    datasetId: null,
+    usage: null,
+    error: null,
+    isLoading: false,
+  });
+  // Only the newest request may land: a slow walk of an older dataset (or an
+  // earlier refresh) must not overwrite a newer answer.
+  const latest = useRef(0);
+
+  const refresh = useCallback(() => {
+    latest.current += 1;
+    const request = latest.current;
+    if (!datasetId) {
+      setState({ datasetId: null, usage: null, error: null, isLoading: false });
+      return;
+    }
+    setState({ datasetId, usage: null, error: null, isLoading: true });
+    datasetUsage(datasetId).then(
+      (usage) => {
+        if (latest.current === request) {
+          setState({ datasetId, usage, error: null, isLoading: false });
+        }
+      },
+      (e) => {
+        if (latest.current === request) {
+          setState({ datasetId, usage: null, error: String(e), isLoading: false });
+        }
+      },
+    );
+  }, [datasetId]);
+
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
+  const isCurrent = state.datasetId === datasetId;
+  return {
+    usage: isCurrent ? state.usage : null,
+    error: isCurrent ? state.error : null,
+    isLoading: isCurrent ? state.isLoading : datasetId !== null,
+    refresh,
+  };
+}
 
 /** A dataset's concepts with their frame counts; `null` disables polling. */
 export const useConcepts = (datasetId: string | null) =>

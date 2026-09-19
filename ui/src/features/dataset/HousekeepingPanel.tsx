@@ -13,17 +13,21 @@ import {
   type SkippedFile,
 } from "../../lib/ipc";
 import { ConfirmDialog } from "./ConfirmDialog";
-import { errorText, framesLabel } from "./curation";
+import { errorText, filesLabel, framesLabel } from "./curation";
 import { formatBytes } from "./format";
 import { SkippedFiles } from "./SkippedFiles";
 import "./housekeeping.css";
 
 type Props = {
   dataset: Dataset;
+  /** Fetched on demand by the parent; `null` while it loads. */
   usage: DatasetUsage | null;
+  isUsageLoading: boolean;
+  /** Measure the disk use again (the core walks the folders). */
+  onRefreshUsage: () => void;
   /** A prep run is still writing frames: nothing is deleted under it. */
   isRunning: boolean;
-  /** Refetch frames and usage after a dedup or cleanup. */
+  /** Refetch frames and usage after a dedup, cleanup or failed delete. */
   onChanged: () => void;
   /** The dataset is gone; the parent leaves it and shows the summary. */
   onDeleted: (summary: DatasetDeleteSummary) => void;
@@ -48,10 +52,47 @@ function dedupText(s: DedupSummary): string {
   );
 }
 
+const CALCULATING = "calculating…";
+
+/** What deleting the dataset does to its work folder, per the core's
+ *  `work_walkable`: the whole folder, or only this dataset's own frame
+ *  files when other data points into the folder. */
+function workFolderLine(usage: DatasetUsage | null) {
+  if (!usage) return `its files — size ${CALCULATING}`;
+  const size = `${formatBytes(usage.work_bytes)}, ${filesLabel(usage.work_files)}`;
+  if (usage.work_walkable && usage.work_dir) {
+    return (
+      <>
+        the work folder ({size})
+        <span className="confirm__path">{usage.work_dir}</span>
+      </>
+    );
+  }
+  return (
+    <>
+      this dataset's own frame files ({size})
+      {usage.work_dir && (
+        <>
+          ; the folder is kept because other data uses it
+          <span className="confirm__path">{usage.work_dir}</span>
+        </>
+      )}
+    </>
+  );
+}
+
 /** Dataset-wide housekeeping: disk use, duplicate search, cleanup of the
  *  discarded frames, and deleting the whole dataset. Every deletion is
  *  previewed and confirmed; the core's refusals are shown verbatim. */
-export function HousekeepingPanel({ dataset, usage, isRunning, onChanged, onDeleted }: Props) {
+export function HousekeepingPanel({
+  dataset,
+  usage,
+  isUsageLoading,
+  onRefreshUsage,
+  isRunning,
+  onChanged,
+  onDeleted,
+}: Props) {
   const [threshold, setThreshold] = useState(DEFAULT_DEDUP_THRESHOLD);
   const [busy, setBusy] = useState<"dedup" | "preview" | null>(null);
   const [result, setResult] = useState<Result | null>(null);
@@ -75,6 +116,7 @@ export function HousekeepingPanel({ dataset, usage, isRunning, onChanged, onDele
   const openDialog = (next: Dialog) => {
     setDialogError(null);
     setDialog(next);
+    onRefreshUsage();
   };
 
   const runDedup = async () => {
@@ -115,7 +157,7 @@ export function HousekeepingPanel({ dataset, usage, isRunning, onChanged, onDele
         setDialog(null);
         setResult({
           kind: "ok",
-          text: `Deleted ${framesLabel(s.frames)} (${s.deleted_files.toLocaleString()} files) — ${formatBytes(s.bytes)} freed.`,
+          text: `Deleted ${framesLabel(s.frames)} (${filesLabel(s.deleted_files)}) — ${formatBytes(s.bytes)} freed.`,
           skipped: s.skipped_files,
         });
         onChanged();
@@ -155,19 +197,30 @@ export function HousekeepingPanel({ dataset, usage, isRunning, onChanged, onDele
     <div className="card housekeeping">
       <h3 className="housekeeping__title">Housekeeping</h3>
 
-      <dl className="housekeeping__usage" aria-busy={usage === null}>
+      <div className="housekeeping__usage-head">
+        <span className="housekeeping__label">Disk use</span>
+        <button
+          type="button"
+          className="chip housekeeping__refresh"
+          disabled={isUsageLoading}
+          onClick={onRefreshUsage}
+        >
+          {isUsageLoading ? "Calculating…" : "Measure again"}
+        </button>
+      </div>
+      <dl className="housekeeping__usage" aria-busy={isUsageLoading}>
         <div>
-          <dt>Work folder</dt>
+          <dt>{usage && !usage.work_walkable ? "Own frame files" : "Work folder"}</dt>
           <dd title={usage?.work_dir ?? undefined}>
             {usage
-              ? `${formatBytes(usage.work_bytes)} · ${usage.work_files.toLocaleString()} files`
-              : "Measuring…"}
+              ? `${formatBytes(usage.work_bytes)} · ${filesLabel(usage.work_files)}`
+              : CALCULATING}
           </dd>
         </div>
         <div>
           <dt>Export</dt>
           <dd>
-            {usage ? exportLine : "…"}
+            {usage ? exportLine : CALCULATING}
             {usage?.export_dir && <span className="housekeeping__path">{usage.export_dir}</span>}
           </dd>
         </div>
@@ -176,7 +229,7 @@ export function HousekeepingPanel({ dataset, usage, isRunning, onChanged, onDele
           <dd>
             {usage
               ? `${framesLabel(usage.discarded_frames)} · ${formatBytes(usage.discarded_bytes)}`
-              : "…"}
+              : CALCULATING}
           </dd>
         </div>
       </dl>
@@ -299,13 +352,7 @@ export function HousekeepingPanel({ dataset, usage, isRunning, onChanged, onDele
         <p>This cannot be undone. Removed:</p>
         <ul>
           <li>the dataset with its frames, captions and concepts</li>
-          <li>
-            the work folder
-            {usage
-              ? ` — ${formatBytes(usage.work_bytes)} in ${usage.work_files.toLocaleString()} files`
-              : " — size calculating…"}
-            {usage?.work_dir && <span className="confirm__path">{usage.work_dir}</span>}
-          </li>
+          <li>{workFolderLine(usage)}</li>
           {usage?.export_dir && usage.export_app_owned && (
             <li>
               the export inside the app's folder — {formatBytes(usage.export_bytes)}

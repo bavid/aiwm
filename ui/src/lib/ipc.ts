@@ -1044,8 +1044,15 @@ export interface SkippedFile {
 
 /** `GET /datasets/{id}/usage` — measured by walking the folders. */
 export interface DatasetUsage {
-  /** The app-owned work folder; `null` when it no longer exists. */
+  /** The app-owned work folder; `null` when it no longer exists or the
+   *  dataset has no prep job. */
   work_dir: string | null;
+  /** `true`: deleting the dataset removes the whole work folder. `false`:
+   *  only this dataset's own frame files go, because other data points into
+   *  the folder (or there is none). */
+  work_walkable: boolean;
+  /** What deleting the dataset frees from the work folder — the whole folder
+   *  when `work_walkable`, else this dataset's own deletable frame files. */
   work_bytes: number;
   work_files: number;
   /** The last export destination, app-owned or not. */

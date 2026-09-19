@@ -25,6 +25,7 @@ import {
   COLUMN_LABEL,
   columnOf,
   errorText,
+  filesLabel,
   framesLabel,
   isColumnId,
   matchesDiscardFilter,
@@ -57,8 +58,10 @@ type Props = {
   imageUrlFor: (frame: DatasetFrame) => string;
   tokensByFrameId: Record<string, string[]>;
   concepts: DatasetConcept[];
-  /** Refetch frames (and the disk usage) after a write. */
+  /** Refetch the frame list after a write. */
   onFramesChanged: () => void;
+  /** Frame files were deleted: the disk usage changed too. */
+  onFilesDeleted: () => void;
   onConceptsChanged: () => void;
 };
 
@@ -94,6 +97,7 @@ export function CurationBoard({
   tokensByFrameId,
   concepts,
   onFramesChanged,
+  onFilesDeleted,
   onConceptsChanged,
 }: Props) {
   const { frames, beginMove, settleMove, rollbackMove } = useOptimisticFrames(polledFrames);
@@ -200,6 +204,15 @@ export function CurationBoard({
     const target = card ?? column?.querySelector<HTMLElement>('[role="grid"]') ?? board;
     target.focus({ preventScroll: true });
   });
+
+  // A delete that empties the dataset unmounts the card focus went to: land
+  // on the empty state instead of the page body.
+  const emptyRef = useRef<HTMLParagraphElement>(null);
+  const isEmpty = frames.length === 0;
+  useLayoutEffect(() => {
+    const active = document.activeElement;
+    if (isEmpty && (active === null || active === document.body)) emptyRef.current?.focus();
+  }, [isEmpty]);
 
   // --- writes -------------------------------------------------------------
   /** One optimistic batch per request-sized chunk, sent one after another; a
@@ -308,7 +321,7 @@ export function CurationBoard({
     let files = 0;
     let bytes = 0;
     const summaryText = () =>
-      `Deleted ${framesLabel(deleted)} and ${files.toLocaleString()} file(s) — ` +
+      `Deleted ${framesLabel(deleted)} and ${filesLabel(files)} — ` +
       `${formatBytes(bytes)} freed.`;
     try {
       for (const part of chunk(ids, MAX_FRAME_IDS)) {
@@ -340,6 +353,7 @@ export function CurationBoard({
       });
     } finally {
       onFramesChanged();
+      if (gone.length > 0) onFilesDeleted();
     }
   };
 
@@ -520,29 +534,31 @@ export function CurationBoard({
 
   return (
     <div className="curation" ref={boardRef} tabIndex={-1} onKeyDown={onKeyDown}>
-      <SelectionBar
-        selectedTotal={selectedTotal}
-        toKeep={selectedIn.discard.length}
-        toDiscard={selectedIn.keep.length}
-        isCompact={isCompact}
-        onKeep={() => void move(selectedIn.discard, "keep")}
-        onDiscard={() => void move(selectedIn.keep, "discard")}
-        canDelete={!isPrepRunning}
-        onDelete={requestDelete}
-        onClear={clear}
-        onCompactChange={setIsCompact}
-      >
-        {selectedTotal > 0 && (
-          <SelectionToolbar
-            concepts={concepts}
-            conceptId={assignConceptId}
-            onConceptIdChange={setAssignConceptId}
-            onAssign={() => void runAssign(true)}
-            onRemove={() => void runAssign(false)}
-            state={assignState}
-          />
-        )}
-      </SelectionBar>
+      {frames.length > 0 && (
+        <SelectionBar
+          selectedTotal={selectedTotal}
+          toKeep={selectedIn.discard.length}
+          toDiscard={selectedIn.keep.length}
+          isCompact={isCompact}
+          onKeep={() => void move(selectedIn.discard, "keep")}
+          onDiscard={() => void move(selectedIn.keep, "discard")}
+          canDelete={!isPrepRunning}
+          onDelete={requestDelete}
+          onClear={clear}
+          onCompactChange={setIsCompact}
+        >
+          {selectedTotal > 0 && (
+            <SelectionToolbar
+              concepts={concepts}
+              conceptId={assignConceptId}
+              onConceptIdChange={setAssignConceptId}
+              onAssign={() => void runAssign(true)}
+              onRemove={() => void runAssign(false)}
+              state={assignState}
+            />
+          )}
+        </SelectionBar>
+      )}
 
       {error && (
         <p className="dataset__err" role="alert">
@@ -556,37 +572,45 @@ export function CurationBoard({
         </div>
       )}
 
-      <div className="curation__columns">
-        {(["keep", "discard"] as const).map((column) => (
-          <CurationColumn
-            key={column}
-            column={column}
-            frames={columns[column]}
-            totalCount={column === "discard" ? discardAll.length : keep.length}
-            selected={selected}
-            selectedHere={selectedIn[column].length}
-            activeId={activeIds[column]}
-            visibleCount={visible[column]}
-            isCompact={isCompact}
-            isClipMode={isClipMode}
-            imageUrlFor={imageUrlFor}
-            tokensByFrameId={tokensByFrameId}
-            dropState={dropStateOf(column)}
-            dragCount={drag?.count ?? 0}
-            cardHandlers={cardHandlers}
-            columnHandlers={columnHandlers}
-            filters={
-              column === "discard" ? (
-                <RejectionChips
-                  frames={discardAll}
-                  active={discardShown === discardAll ? ALL_DISCARDED : discardFilter}
-                  onSelect={selectDiscardFilter}
-                />
-              ) : undefined
-            }
-          />
-        ))}
-      </div>
+      {frames.length === 0 ? (
+        <p className="curation__empty" ref={emptyRef} tabIndex={-1}>
+          {isPrepRunning
+            ? "No frames yet — the prep run is still working."
+            : "No frames left in this dataset."}
+        </p>
+      ) : (
+        <div className="curation__columns">
+          {(["keep", "discard"] as const).map((column) => (
+            <CurationColumn
+              key={column}
+              column={column}
+              frames={columns[column]}
+              totalCount={column === "discard" ? discardAll.length : keep.length}
+              selected={selected}
+              selectedHere={selectedIn[column].length}
+              activeId={activeIds[column]}
+              visibleCount={visible[column]}
+              isCompact={isCompact}
+              isClipMode={isClipMode}
+              imageUrlFor={imageUrlFor}
+              tokensByFrameId={tokensByFrameId}
+              dropState={dropStateOf(column)}
+              dragCount={drag?.count ?? 0}
+              cardHandlers={cardHandlers}
+              columnHandlers={columnHandlers}
+              filters={
+                column === "discard" ? (
+                  <RejectionChips
+                    frames={discardAll}
+                    active={discardShown === discardAll ? ALL_DISCARDED : discardFilter}
+                    onSelect={selectDiscardFilter}
+                  />
+                ) : undefined
+              }
+            />
+          ))}
+        </div>
+      )}
 
       <div ref={ghostRef} className="curation__ghost" aria-hidden="true" />
       <p className="visually-hidden" role="status" aria-live="polite">
