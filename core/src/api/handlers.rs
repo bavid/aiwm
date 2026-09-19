@@ -157,12 +157,15 @@ pub async fn submit_job(app: &App, body: SubmitJobDto) -> Result<Job> {
     // root folder): refuse it now with a 400 instead of queueing a job that
     // can only fail.
     if new.job_type == "dataset_prep" {
-        crate::capability::dataset::DatasetPrepRequest::from_params(&new.params).map_err(|e| {
-            match e {
+        crate::capability::dataset::DatasetPrepRequest::from_params(&new.params)
+            .and_then(|req| {
+                req.check_outside_store(&app.config.store_path)?;
+                Ok(req)
+            })
+            .map_err(|e| match e {
                 CoreError::Config(msg) => CoreError::Config(msg),
                 other => CoreError::Config(other.to_string()),
-            }
-        })?;
+            })?;
     }
     app.jobs.submit(new).await
 }
@@ -2526,6 +2529,7 @@ mod tests {
                 mode: crate::db::DatasetMode::Clips,
                 source_root: "E:\\Data\\Demo".into(),
                 prep_job_id: Some(job.id.clone()),
+                work_dir: None,
             })
             .await
             .unwrap();
@@ -3099,6 +3103,39 @@ mod tests {
         // which is what the UI's "resident models" panel depends on.
         let json = serde_json::to_value(&statuses[0]).unwrap();
         assert!(json.get("loaded_models").is_some());
+    }
+
+    /// Plan 10: a dataset prep asking to store its frames inside the model
+    /// store is refused with a 400 before a job is queued.
+    #[tokio::test]
+    async fn submit_job_refuses_a_dataset_prep_storing_frames_in_the_model_store() {
+        let tmp = tempfile::tempdir().unwrap();
+        let app = App::load(crate::AppPaths::rooted(tmp.path()))
+            .await
+            .unwrap();
+        let body = SubmitJobDto {
+            job_type: "dataset_prep".into(),
+            capability: None,
+            runtime_id: None,
+            model_id: None,
+            vram_needed_mb: 0,
+            agent_session: false,
+            session_id: None,
+            params: serde_json::json!({
+                "root": tmp.path().join("src").to_string_lossy(),
+                "data_dir": app.config.store_path.join("frames").to_string_lossy(),
+            }),
+        };
+        let err = submit_job(&app, body).await.unwrap_err();
+        assert!(matches!(err, CoreError::Config(_)), "{err}");
+        assert!(err.to_string().contains("model store"), "{err}");
+        assert!(app
+            .db
+            .jobs()
+            .list(&JobFilter::default())
+            .await
+            .unwrap()
+            .is_empty());
     }
 
     #[test]

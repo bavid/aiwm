@@ -51,6 +51,7 @@ mod extract;
 mod filter;
 pub mod housekeeping;
 mod ingest;
+pub mod location;
 mod pipeline;
 mod request;
 #[cfg(test)]

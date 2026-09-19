@@ -110,6 +110,7 @@ async fn dataset(db: &Database, export_dir: Option<&Path>) -> String {
             mode: DatasetMode::Frames,
             source_root: "E:\\pics".into(),
             prep_job_id: None,
+            work_dir: None,
         })
         .await
         .expect("create the dataset");

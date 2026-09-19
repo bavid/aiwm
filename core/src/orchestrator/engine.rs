@@ -138,6 +138,10 @@ pub struct JobEngine {
     /// independent of `outputs_dir` so a dataset override doesn't move
     /// generated media and vice versa.
     datasets_dir: PathBuf,
+    /// Free-space probe for the dataset-prep preflight
+    /// ([`dataset::location::prepare_work_root`]); a test seam, the real one
+    /// is [`crate::cleanup::volume_free`].
+    prep_free_space: crate::cleanup::FreeSpaceProbe,
     /// Latest system reading — a `bench` job samples the VRAM / RAM peak from it.
     telemetry: watch::Receiver<SystemTelemetry>,
     /// How `Auto` weighs speed vs heft (`[models]` config, 6.6).
@@ -170,6 +174,7 @@ impl JobEngine {
             vision_store: PathBuf::new(),
             outputs_dir,
             datasets_dir,
+            prep_free_space: crate::cleanup::volume_free,
             telemetry: frozen_telemetry(),
             auto_preference: crate::select::AutoPreference::default(),
             model_index: None,
@@ -224,6 +229,14 @@ impl JobEngine {
     pub fn with_vision(mut self, vision: Arc<VisionAdapter>, store_root: PathBuf) -> Self {
         self.vision = Some(vision);
         self.vision_store = store_root;
+        self
+    }
+
+    /// Replace the free-space probe of the dataset-prep preflight. Test seam
+    /// only — the real one reports the machine's actual volumes.
+    #[must_use]
+    pub fn with_prep_free_space_probe(mut self, probe: crate::cleanup::FreeSpaceProbe) -> Self {
+        self.prep_free_space = probe;
         self
     }
 
@@ -1290,7 +1303,16 @@ impl JobEngine {
                 )
             })?;
             let req = DatasetPrepRequest::from_params(&job.params)?;
-            let work_dir = self.datasets_dir.clone();
+            // Plan 10: the chosen folder, or the configured default. The
+            // store check repeats the HTTP one for jobs that did not come
+            // through it; the preflight refuses a nearly full drive before
+            // anything is extracted.
+            req.check_outside_store(&self.vision_store)?;
+            let work_dir = req
+                .data_dir
+                .clone()
+                .unwrap_or_else(|| self.datasets_dir.clone());
+            dataset::location::prepare_work_root(&work_dir, self.prep_free_space)?;
             match dataset::run(
                 &self.db,
                 &vision,
@@ -1708,7 +1730,10 @@ mod tests {
         .with_vision(
             Arc::new(crate::runtime::VisionAdapter::new()),
             store.path().to_path_buf(),
-        );
+        )
+        // Plenty of room: the real probe would make these tests depend on
+        // the test machine's free disk space.
+        .with_prep_free_space_probe(|_| Some((u64::MAX / 2, u64::MAX)));
         VisionFixture {
             engine,
             db,
@@ -1785,6 +1810,133 @@ mod tests {
         .await;
         let outcome = fx.engine.run_next().await.unwrap().unwrap();
         assert_eq!(outcome, JobOutcome::Completed { job_id: job.id });
+    }
+
+    /// Plan 10: a prep asking for its own `data_dir` gets its work folder
+    /// there — created if missing, recorded on the dataset row — and nothing
+    /// under the default datasets folder.
+    #[tokio::test]
+    async fn dataset_prep_stores_its_work_folder_in_the_chosen_data_dir() {
+        let fx = vision_fixture(16_384, Duration::ZERO).await;
+        let root = prep_root_with_one_image();
+        let chosen = tempfile::tempdir().unwrap();
+        let data_dir = chosen.path().join("my-frames");
+        let job = submit_prep(
+            &fx.engine,
+            serde_json::json!({
+                "root": root.path().to_string_lossy(),
+                "data_dir": data_dir.to_string_lossy(),
+            }),
+        )
+        .await;
+
+        let outcome = fx.engine.run_next().await.unwrap().unwrap();
+
+        assert_eq!(
+            outcome,
+            JobOutcome::Completed {
+                job_id: job.id.clone()
+            }
+        );
+        assert!(data_dir.is_dir(), "the chosen folder is created");
+        let datasets = fx.db.datasets().list().await.unwrap();
+        assert_eq!(
+            datasets[0].work_dir.as_deref(),
+            Some(data_dir.join(&job.id).to_string_lossy().as_ref())
+        );
+        assert!(
+            !fx.engine.datasets_dir.exists(),
+            "nothing is written under the default datasets folder"
+        );
+    }
+
+    #[tokio::test]
+    async fn dataset_prep_without_a_data_dir_records_the_default_work_folder() {
+        let fx = vision_fixture(16_384, Duration::ZERO).await;
+        let root = prep_root_with_one_image();
+        let job = submit_prep(
+            &fx.engine,
+            serde_json::json!({ "root": root.path().to_string_lossy() }),
+        )
+        .await;
+
+        fx.engine.run_next().await.unwrap().unwrap();
+
+        let datasets = fx.db.datasets().list().await.unwrap();
+        assert_eq!(
+            datasets[0].work_dir.as_deref(),
+            Some(
+                fx.engine
+                    .datasets_dir
+                    .join(&job.id)
+                    .to_string_lossy()
+                    .as_ref()
+            )
+        );
+    }
+
+    /// Less than 5 GB free on the chosen drive refuses the run before any
+    /// dataset exists, naming the drive and the free space.
+    #[tokio::test]
+    async fn dataset_prep_refuses_a_drive_with_too_little_free_space() {
+        let mut fx = vision_fixture(16_384, Duration::ZERO).await;
+        fx.engine = fx
+            .engine
+            .with_prep_free_space_probe(|_| Some((1024 * 1024 * 1024, 500 * 1024 * 1024 * 1024)));
+        let root = prep_root_with_one_image();
+        let chosen = tempfile::tempdir().unwrap();
+        let data_dir = chosen.path().join("my-frames");
+        let job = submit_prep(
+            &fx.engine,
+            serde_json::json!({
+                "root": root.path().to_string_lossy(),
+                "data_dir": data_dir.to_string_lossy(),
+            }),
+        )
+        .await;
+
+        let outcome = fx.engine.run_next().await.unwrap().unwrap();
+
+        assert!(matches!(outcome, JobOutcome::Failed { .. }), "{outcome:?}");
+        let stored = fx.db.jobs().get(&job.id).await.unwrap().unwrap();
+        let err = stored.error_text.unwrap_or_default();
+        assert!(err.contains("1.0 GB free"), "{err}");
+        assert!(
+            err.contains(&crate::cleanup::volume_label(&data_dir)),
+            "{err}"
+        );
+        assert!(fx.db.datasets().list().await.unwrap().is_empty());
+        assert!(!data_dir.exists(), "nothing is created on a refused drive");
+    }
+
+    /// A job that reached the engine without the HTTP check (an agent, an
+    /// older client) is still refused when it would write into the store.
+    #[tokio::test]
+    async fn dataset_prep_refuses_a_data_dir_inside_the_model_store() {
+        let fx = vision_fixture(16_384, Duration::ZERO).await;
+        let root = prep_root_with_one_image();
+        let data_dir = fx.engine.vision_store.join("frames");
+        let job = submit_prep(
+            &fx.engine,
+            serde_json::json!({
+                "root": root.path().to_string_lossy(),
+                "data_dir": data_dir.to_string_lossy(),
+            }),
+        )
+        .await;
+
+        let outcome = fx.engine.run_next().await.unwrap().unwrap();
+
+        assert!(matches!(outcome, JobOutcome::Failed { .. }), "{outcome:?}");
+        let stored = fx.db.jobs().get(&job.id).await.unwrap().unwrap();
+        assert!(
+            stored
+                .error_text
+                .unwrap_or_default()
+                .contains("model store"),
+            "the store refusal is the reason"
+        );
+        assert!(!data_dir.exists());
     }
 
     #[tokio::test]

@@ -923,6 +923,10 @@ export interface Dataset {
   prep_job_id: string | null;
   /** Where it was last exported to, for the "again, same folder" button. */
   export_dir: string | null;
+  /** The absolute work folder its frames were extracted into
+   *  (`<data_dir>/<prep_job_id>`); `null` for datasets prepared before the
+   *  location was recorded. */
+  work_dir: string | null;
   created_at: string;
 }
 

@@ -86,6 +86,18 @@ fn refuse_known_issue(captioner: Option<&captioner::Captioner>) -> Result<()> {
     }
 }
 
+/// The absolute work folder `<work_root>/<job_id>` recorded on the dataset
+/// row (Plan 10), so housekeeping reads it instead of deriving it.
+fn dataset_work_dir(work_root: &Path, job_id: &str) -> Result<String> {
+    let dir = std::path::absolute(work_root.join(job_id)).map_err(|e| {
+        dataset_err(format!(
+            "cannot resolve the work folder under {}: {e}",
+            work_root.display()
+        ))
+    })?;
+    Ok(dir.to_string_lossy().into_owned())
+}
+
 /// Run the whole pipeline for `req`, writing extracted frames under
 /// `work_dir/<job_id>/raw/` and persisting kept, captioned frames to the
 /// `dataset_frames` table. The vision runtime's model is already loaded by
@@ -172,6 +184,7 @@ pub async fn run(
             mode: req.mode,
             source_root: req.root.to_string_lossy().into_owned(),
             prep_job_id: Some(job_id.to_string()),
+            work_dir: Some(dataset_work_dir(work_dir, job_id)?),
         })
         .await?;
 
@@ -661,6 +674,36 @@ mod tests {
             "no captioner -> no captions"
         );
     }
+    /// Plan 10: every new dataset records its absolute work folder
+    /// `<work root>/<prep_job_id>` — the default location as much as a
+    /// chosen one — so housekeeping never has to derive it.
+    #[tokio::test]
+    async fn run_records_the_datasets_work_folder_on_its_row() {
+        let db = Database::connect_in_memory().await.unwrap();
+        let vision = VisionAdapter::new();
+        let job = new_job(&db).await;
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("Test");
+        std::fs::create_dir_all(&root).unwrap();
+        sharp_checkerboard(32, 0).save(root.join("a.png")).unwrap();
+        let req =
+            DatasetPrepRequest::from_params(&serde_json::json!({ "root": root.to_string_lossy() }))
+                .unwrap();
+        let work = tempfile::tempdir().unwrap();
+        let (_tx, rx) = watch::channel(false);
+        run(&db, &vision, work.path(), work.path(), &job, req, rx)
+            .await
+            .unwrap();
+
+        let datasets = db.datasets().list().await.unwrap();
+        let expected = work.path().join(&job);
+        assert_eq!(
+            datasets[0].work_dir.as_deref(),
+            Some(expected.to_string_lossy().as_ref())
+        );
+        assert!(Path::new(datasets[0].work_dir.as_deref().unwrap()).is_absolute());
+    }
+
     #[tokio::test]
     async fn run_accepts_images_placed_directly_in_the_root_under_the_root_name_tag() {
         let db = Database::connect_in_memory().await.unwrap();

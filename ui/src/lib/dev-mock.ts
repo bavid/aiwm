@@ -340,6 +340,8 @@ const SCENES: AnyRecord[] = [
 
 const DATASET_FRAMES: AnyRecord[] = [];
 const DATASETS: AnyRecord[] = [];
+/** The mock's default datasets folder (`AppPaths::datasets_dir`). */
+const MOCK_DATASETS_DIR = "E:\\AI\\data\\outputs\\datasets";
 const CONCEPTS: AnyRecord[] = [];
 /** `{ frame_id, concept_id }` pairs — the join table's mock stand-in. */
 const FRAME_CONCEPTS: { frame_id: string; concept_id: string }[] = [];
@@ -406,6 +408,10 @@ function datasetForJob(job: AnyRecord): AnyRecord {
   if (existing) return existing;
   const params = (job.params ?? {}) as AnyRecord;
   const root = String(params.root ?? "E:\\Data\\Demo");
+  const dataDir =
+    typeof params.data_dir === "string" && params.data_dir.trim() !== ""
+      ? params.data_dir.trim()
+      : MOCK_DATASETS_DIR;
   const dataset: AnyRecord = {
     id: `ds-${String(job.id)}`,
     name: root.split(/[\\/]/).filter(Boolean).pop() ?? "Dataset",
@@ -414,6 +420,7 @@ function datasetForJob(job: AnyRecord): AnyRecord {
     trigger_word: "",
     prep_job_id: job.id,
     export_dir: null,
+    work_dir: `${dataDir}\\${String(job.id)}`,
     created_at: now(),
   };
   DATASETS.push(dataset);
@@ -483,9 +490,15 @@ function mockUsage(dataset: AnyRecord): AnyRecord {
   const withFile = frames.filter((f) => mockFrameBytes(f) > 0);
   // The mock's work folders are never shared, so a dataset with a prep job
   // is always walkable; one without has no folder, only its own frames.
-  const hasWorkDir = dataset.prep_job_id != null;
+  const workDir =
+    typeof dataset.work_dir === "string"
+      ? dataset.work_dir
+      : dataset.prep_job_id != null
+        ? `${MOCK_DATASETS_DIR}\\${String(dataset.prep_job_id)}`
+        : null;
+  const hasWorkDir = workDir != null;
   return {
-    work_dir: hasWorkDir ? `E:\\AI\\data\\outputs\\datasets\\${String(dataset.prep_job_id)}` : null,
+    work_dir: workDir,
     work_walkable: hasWorkDir,
     work_bytes: withFile.length * MOCK_FRAME_BYTES,
     work_files: withFile.length,

@@ -2,7 +2,7 @@
 //! resolved exactly once with documented defaults and clamps, so no later
 //! stage has to re-validate or second-guess a number.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
@@ -10,9 +10,10 @@ use crate::db::DatasetMode;
 use crate::Result;
 
 use super::{
-    caption, captioner, dataset_err, filter, DEFAULT_BLUR_THRESHOLD, DEFAULT_CONTEXT_OFFSET,
-    DEFAULT_ESCALATE, DEFAULT_ESCALATE_EVERY_NTH, DEFAULT_PHASH_MAX_DISTANCE, DEFAULT_SAMPLE_FPS,
-    MAX_PHASH_DISTANCE, MAX_SAMPLE_FPS, MIN_SAMPLE_FPS,
+    caption, captioner, dataset_err, filter, location, DEFAULT_BLUR_THRESHOLD,
+    DEFAULT_CONTEXT_OFFSET, DEFAULT_ESCALATE, DEFAULT_ESCALATE_EVERY_NTH,
+    DEFAULT_PHASH_MAX_DISTANCE, DEFAULT_SAMPLE_FPS, MAX_PHASH_DISTANCE, MAX_SAMPLE_FPS,
+    MIN_SAMPLE_FPS,
 };
 
 const MAX_BLUR_THRESHOLD: f64 = filter::MAX_BLUR_THRESHOLD;
@@ -46,6 +47,11 @@ pub struct DatasetPrepRequest {
     pub escalate: bool,
     pub escalate_every_nth: u32,
     pub context_offset: usize,
+    /// Where the work folder `<data_dir>/<prep_job_id>` goes (JSON key
+    /// `data_dir`); `None` = the configured default datasets folder. Checked
+    /// against the source here and against the model store by
+    /// [`Self::check_outside_store`].
+    pub data_dir: Option<PathBuf>,
 }
 
 impl DatasetPrepRequest {
@@ -64,6 +70,19 @@ impl DatasetPrepRequest {
                 "dataset root must be an absolute folder path, got {root:?}"
             )));
         }
+
+        let data_dir = match params
+            .get("data_dir")
+            .and_then(Value::as_str)
+            .map(str::trim)
+        {
+            None | Some("") => None,
+            Some(dir) => {
+                let dir = PathBuf::from(dir);
+                location::check_data_dir(&dir, Path::new(root))?;
+                Some(dir)
+            }
+        };
 
         let mode = match params.get("mode").and_then(Value::as_str) {
             None => DatasetMode::Frames,
@@ -145,7 +164,17 @@ impl DatasetPrepRequest {
             escalate,
             escalate_every_nth,
             context_offset,
+            data_dir,
         })
+    }
+
+    /// Refuse a chosen [`Self::data_dir`] that is the model store `store` or
+    /// lies inside it. The default location is not checked here.
+    pub fn check_outside_store(&self, store: &Path) -> Result<()> {
+        match &self.data_dir {
+            Some(dir) => location::check_outside_store(dir, store),
+            None => Ok(()),
+        }
     }
 
     /// Write the resolved values back over the job's `params`, same reasoning
@@ -177,6 +206,12 @@ impl DatasetPrepRequest {
         obj.insert("escalate".into(), self.escalate.into());
         obj.insert("escalate_every_nth".into(), self.escalate_every_nth.into());
         obj.insert("context_offset".into(), self.context_offset.into());
+        obj.insert(
+            "data_dir".into(),
+            self.data_dir
+                .as_ref()
+                .map_or(Value::Null, |d| d.to_string_lossy().into_owned().into()),
+        );
     }
 
     /// The VRAM the scheduler should reserve for this job's whole captioning
@@ -335,5 +370,163 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.to_string().contains("mode"), "{err}");
+    }
+}
+
+#[cfg(test)]
+mod data_dir_tests {
+    use super::*;
+
+    fn with_data_dir(root: &Path, data_dir: &str) -> Result<DatasetPrepRequest> {
+        DatasetPrepRequest::from_params(&serde_json::json!({
+            "root": root.to_string_lossy(),
+            "data_dir": data_dir,
+        }))
+    }
+
+    fn config_err_containing(r: Result<DatasetPrepRequest>, needle: &str) {
+        let err = r.expect_err("the data_dir must be refused");
+        assert!(matches!(err, crate::CoreError::Config(_)), "{err}");
+        assert!(err.to_string().contains(needle), "{err}");
+    }
+
+    #[test]
+    fn absent_null_or_empty_data_dir_means_the_default_location() {
+        let tmp = tempfile::tempdir().unwrap();
+        for params in [
+            serde_json::json!({ "root": tmp.path().to_string_lossy() }),
+            serde_json::json!({ "root": tmp.path().to_string_lossy(), "data_dir": null }),
+            serde_json::json!({ "root": tmp.path().to_string_lossy(), "data_dir": "" }),
+            serde_json::json!({ "root": tmp.path().to_string_lossy(), "data_dir": "  " }),
+        ] {
+            let r = DatasetPrepRequest::from_params(&params).unwrap();
+            assert_eq!(r.data_dir, None, "{params}");
+        }
+    }
+
+    #[test]
+    fn an_absolute_data_dir_outside_the_source_is_accepted_and_round_trips() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        let frames = tmp.path().join("frames");
+        let r = with_data_dir(&src, &frames.to_string_lossy()).unwrap();
+        assert_eq!(r.data_dir.as_deref(), Some(frames.as_path()));
+
+        let mut params = serde_json::json!({ "root": src.to_string_lossy() });
+        r.apply_to(&mut params);
+        assert_eq!(params["data_dir"], frames.to_string_lossy().as_ref());
+        let again = DatasetPrepRequest::from_params(&params).unwrap();
+        assert_eq!(again, r);
+    }
+
+    #[test]
+    fn a_relative_data_dir_is_refused() {
+        let tmp = tempfile::tempdir().unwrap();
+        config_err_containing(with_data_dir(tmp.path(), "frames\\here"), "absolute");
+    }
+
+    #[test]
+    fn a_data_dir_equal_to_the_source_is_refused() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        config_err_containing(
+            with_data_dir(&src, &src.to_string_lossy()),
+            "inside the source folder",
+        );
+    }
+
+    #[test]
+    fn a_data_dir_inside_the_source_is_refused_even_spelled_differently() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("src");
+        std::fs::create_dir_all(src.join("sub")).unwrap();
+        config_err_containing(
+            with_data_dir(&src, &src.join("frames").to_string_lossy()),
+            "inside the source folder",
+        );
+        // A `..` detour that still lands inside the source.
+        let detour = src.join("sub").join("..").join("frames");
+        config_err_containing(
+            with_data_dir(&src, &detour.to_string_lossy()),
+            "inside the source folder",
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn the_comparison_ignores_case_on_windows() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("Source");
+        std::fs::create_dir_all(&src).unwrap();
+        let shouted = src.to_string_lossy().to_uppercase();
+        config_err_containing(
+            with_data_dir(&src, &format!("{shouted}\\FRAMES")),
+            "inside the source folder",
+        );
+    }
+
+    /// A junction pointing into the source folder: only the canonical
+    /// comparison sees through it.
+    #[cfg(windows)]
+    #[test]
+    fn a_data_dir_reaching_the_source_through_a_junction_is_refused() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        let link = tmp.path().join("link");
+        junction::create(&src, &link).unwrap();
+        config_err_containing(
+            with_data_dir(&src, &link.join("frames").to_string_lossy()),
+            "inside the source folder",
+        );
+    }
+
+    #[test]
+    fn a_data_dir_containing_the_source_is_refused() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("media").join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        config_err_containing(
+            with_data_dir(&src, &tmp.path().join("media").to_string_lossy()),
+            "lies inside",
+        );
+    }
+
+    #[test]
+    fn a_drive_root_is_refused_as_data_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let drive = tmp
+            .path()
+            .ancestors()
+            .last()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let src = tempfile::tempdir().unwrap();
+        config_err_containing(with_data_dir(src.path(), &drive), "whole drive");
+    }
+
+    #[test]
+    fn a_data_dir_inside_the_model_store_is_refused() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("src");
+        let store = tmp.path().join("models");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::create_dir_all(&store).unwrap();
+        let inside = with_data_dir(&src, &store.join("frames").to_string_lossy()).unwrap();
+        let err = inside.check_outside_store(&store).unwrap_err();
+        assert!(matches!(err, crate::CoreError::Config(_)), "{err}");
+        assert!(err.to_string().contains("model store"), "{err}");
+        let equal = with_data_dir(&src, &store.to_string_lossy()).unwrap();
+        assert!(equal.check_outside_store(&store).is_err());
+
+        let outside = with_data_dir(&src, &tmp.path().join("frames").to_string_lossy()).unwrap();
+        assert!(outside.check_outside_store(&store).is_ok());
+        let default =
+            DatasetPrepRequest::from_params(&serde_json::json!({ "root": src.to_string_lossy() }))
+                .unwrap();
+        assert!(default.check_outside_store(&store).is_ok());
     }
 }

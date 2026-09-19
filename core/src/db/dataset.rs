@@ -343,6 +343,7 @@ mod tests {
                 mode: crate::db::DatasetMode::Frames,
                 source_root: "x".into(),
                 prep_job_id: Some(job_id.clone()),
+                work_dir: None,
             })
             .await
             .unwrap();
@@ -571,6 +572,7 @@ mod tests {
                 mode: crate::db::DatasetMode::Frames,
                 source_root: "y".into(),
                 prep_job_id: None,
+                work_dir: None,
             })
             .await
             .unwrap();

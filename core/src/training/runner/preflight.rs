@@ -10,6 +10,7 @@
 use std::path::{Path, PathBuf};
 
 use super::{Runner, BYTES_PER_GB, MIN_FREE_DISK_BYTES};
+use crate::cleanup::volume_label;
 use crate::db::{DatasetMode, TrainingRun};
 use crate::runtime::training::RUNTIME_ID as TRAINING_RUNTIME_ID;
 use crate::scheduler::Scheduler;
@@ -274,17 +275,6 @@ impl Runner {
             volume_label(&self.data_dir),
             MIN_FREE_DISK_BYTES / BYTES_PER_GB
         )))
-    }
-}
-
-/// The volume a path lives on, for the disk message: `E:` on Windows, the
-/// whole path anywhere it has no drive prefix.
-pub(super) fn volume_label(path: &Path) -> String {
-    match path.components().next() {
-        Some(std::path::Component::Prefix(prefix)) => {
-            prefix.as_os_str().to_string_lossy().into_owned()
-        }
-        _ => path.display().to_string(),
     }
 }
 

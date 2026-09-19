@@ -312,6 +312,7 @@ async fn a_running_prep_job_blocks_every_deletion() {
             mode: crate::db::DatasetMode::Frames,
             source_root: fx.tmp.path().join("src").to_string_lossy().into_owned(),
             prep_job_id: Some(job.clone()),
+            work_dir: None,
         })
         .await
         .unwrap()

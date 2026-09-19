@@ -21,6 +21,7 @@ fn dataset(id: &str, prep_job_id: &str, source_root: &Path) -> Dataset {
         trigger_word: String::new(),
         prep_job_id: Some(prep_job_id.into()),
         export_dir: None,
+        work_dir: None,
         created_at: String::new(),
     }
 }

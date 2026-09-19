@@ -279,6 +279,7 @@ async fn seed_dataset(h: &Harness) -> String {
                 mode: DatasetMode::Frames,
                 source_root: h.paths.root().join("pics").to_string_lossy().into_owned(),
                 prep_job_id: None,
+                work_dir: None,
             })
             .await
             .expect("create the dataset");

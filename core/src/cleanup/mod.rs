@@ -128,6 +128,22 @@ pub fn unused_ids(models: &[Model], cutoff_iso: &str) -> Vec<String> {
         .collect()
 }
 
+/// `(free, total)` bytes on the volume a path lives on — the shape of
+/// [`volume_free`], behind a function pointer so a preflight disk check
+/// (training run, dataset prep) can be driven from a test.
+pub type FreeSpaceProbe = fn(&Path) -> Option<(u64, u64)>;
+
+/// The volume a path lives on, for disk messages: `E:` on Windows, the
+/// whole path anywhere it has no drive prefix.
+pub fn volume_label(path: &Path) -> String {
+    match path.components().next() {
+        Some(std::path::Component::Prefix(prefix)) => {
+            prefix.as_os_str().to_string_lossy().into_owned()
+        }
+        _ => path.display().to_string(),
+    }
+}
+
 /// `(free, total)` bytes on the volume that `path` lives on — the disk whose
 /// mount point is the longest prefix of `path`'s canonical form.
 pub fn volume_free(path: &Path) -> Option<(u64, u64)> {

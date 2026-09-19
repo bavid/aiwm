@@ -26,6 +26,7 @@ pub(super) async fn frames_dataset(db: &Database) -> (String, Dataset) {
             mode: DatasetMode::Frames,
             source_root: "E:\\Data\\Ghibli".into(),
             prep_job_id: Some(job_id.clone()),
+            work_dir: None,
         })
         .await
         .unwrap();

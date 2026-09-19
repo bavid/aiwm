@@ -96,10 +96,7 @@ pub struct StartRequest {
     pub sample_prompts: Vec<String>,
 }
 
-/// `(free, total)` bytes on the volume a path lives on — the shape of
-/// [`crate::cleanup::volume_free`], behind a function pointer so the
-/// preflight disk check can be driven from a test.
-pub type FreeSpaceProbe = fn(&Path) -> Option<(u64, u64)>;
+pub use crate::cleanup::FreeSpaceProbe;
 
 /// [`crate::training::bases::verify_base_dir`], behind a function pointer so
 /// the preflight base-weight check can be driven from a test. The real one

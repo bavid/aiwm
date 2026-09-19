@@ -687,6 +687,7 @@ mod tests {
                 mode: DatasetMode::Frames,
                 source_root: "E:\\Data\\Anime".into(),
                 prep_job_id: None,
+                work_dir: None,
             })
             .await
             .unwrap();
@@ -714,6 +715,7 @@ mod tests {
                     mode: DatasetMode::Frames,
                     source_root: "E:\\Data\\X".into(),
                     prep_job_id: None,
+                    work_dir: None,
                 })
                 .await
                 .unwrap();

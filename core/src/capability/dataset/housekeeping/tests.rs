@@ -62,6 +62,7 @@ pub(super) async fn fixture_with_mode(mode: DatasetMode) -> Fx {
             mode,
             source_root: src_dir.to_string_lossy().into_owned(),
             prep_job_id: Some(job_id.clone()),
+            work_dir: None,
         })
         .await
         .unwrap();
@@ -107,6 +108,7 @@ pub(super) async fn fixture_with_separate_datasets_root() -> Fx {
             mode: DatasetMode::Frames,
             source_root: src_dir.to_string_lossy().into_owned(),
             prep_job_id: Some(job_id.clone()),
+            work_dir: None,
         })
         .await
         .unwrap();
@@ -162,6 +164,7 @@ impl Fx {
                 mode: DatasetMode::Frames,
                 source_root: source_root.to_string_lossy().into_owned(),
                 prep_job_id,
+                work_dir: None,
             })
             .await
             .unwrap()

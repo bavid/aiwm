@@ -56,6 +56,7 @@ async fn fixture() -> Fx {
             mode: DatasetMode::Frames,
             source_root: tmp.path().join("src").to_string_lossy().into_owned(),
             prep_job_id: Some(job.id.clone()),
+            work_dir: None,
         })
         .await
         .unwrap();
@@ -374,6 +375,7 @@ async fn a_running_prep_job_is_a_400() {
             mode: DatasetMode::Frames,
             source_root: "E:\\Data\\Busy".into(),
             prep_job_id: Some(job.id),
+            work_dir: None,
         })
         .await
         .unwrap();
