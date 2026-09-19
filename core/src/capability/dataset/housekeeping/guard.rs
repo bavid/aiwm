@@ -14,15 +14,28 @@
 //!   dataset's files, so another dataset's training run cannot be affected
 //!   either;
 //! - no frame of this dataset that stays still shows it;
-//! - it lies strictly inside one of this dataset's roots: its work folder
-//!   `<outputs>/datasets/<prep_job_id>`, its export folder when that is a
-//!   dedicated folder inside the outputs folder, or — once the prep job is
-//!   gone — some `<outputs>/datasets/<X>` that nothing else claims.
+//! - it lies strictly inside one of this dataset's roots: its work folder,
+//!   its export folder when that is a dedicated folder inside the outputs
+//!   folder, or — for a row with neither prep job nor recorded work folder
+//!   ("loose") — some `<datasets root>/<X>` that nothing else claims.
 //!
-//! A folder is walked (every file in it considered) only for a dataset that
-//! still has its prep job, and only when nothing of another dataset and no
-//! source folder lies inside it; otherwise deletion goes file by file over
-//! the dataset's own frame rows.
+//! **Work folders.** A row with a recorded `work_dir` (Plan 10, every
+//! dataset prepared since migration 0019, possibly in a folder the user
+//! chose) owns exactly that folder, canonicalised — with or without its prep
+//! job. It is refused (treated as no work folder at all, so its files fall
+//! back to the per-file rules and are reported as skipped) when it is a
+//! drive root or a first-level folder, equals / holds / lies inside any
+//! dataset's source folder or another dataset's work folder (either kind),
+//! overlaps the model store, or holds the datasets root or the outputs
+//! folder. A row without `work_dir` keeps the derived
+//! `<datasets root>/<prep_job_id>`. Other datasets' recorded folders are
+//! protected like their derived ones; one that cannot be located stops every
+//! walk.
+//!
+//! A folder is walked (every file in it considered) only when it is this
+//! dataset's work folder and nothing of another dataset and no source folder
+//! lies inside it; otherwise deletion goes file by file over the dataset's
+//! own frame rows. Links and junctions are never followed.
 
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
@@ -31,8 +44,8 @@ use std::path::{Component, Path, PathBuf};
 use crate::db::{Dataset, DatasetFrame};
 
 use super::{
-    SkippedFile, SKIP_ERROR, SKIP_IN_USE, SKIP_NOT_A_FILE, SKIP_OTHER_DATASET, SKIP_OUTSIDE,
-    SKIP_SOURCE,
+    DataRoots, SkippedFile, SKIP_ERROR, SKIP_IN_USE, SKIP_NOT_A_FILE, SKIP_OTHER_DATASET,
+    SKIP_OUTSIDE, SKIP_SOURCE,
 };
 
 /// Everything the guard needs, read from the database before the blocking
@@ -56,12 +69,13 @@ pub(super) enum Verdict {
 pub(super) struct Guard {
     outputs: Option<PathBuf>,
     datasets_root: Option<PathBuf>,
-    /// Canonical `<outputs>/datasets/<prep_job_id>` when it exists.
+    /// This dataset's canonical work folder when it exists and passes the
+    /// rules (see the module docs).
     pub(super) work_dir: Option<PathBuf>,
     /// The work folder may be walked and removed as a whole.
     pub(super) walkable: bool,
-    /// No prep job: frames may be deleted inside an unclaimed
-    /// `<datasets_root>/<X>`.
+    /// No prep job and no recorded work folder: frames may be deleted
+    /// inside an unclaimed `<datasets_root>/<X>`.
     loose: bool,
     /// First components under `datasets_root` another dataset claims.
     claimed: HashSet<OsString>,
@@ -206,6 +220,93 @@ fn single_component(name: &str) -> Option<&str> {
     }
 }
 
+/// A recorded work folder needs at least this many ordinary path components
+/// (`E:\\frames\\<job>`): a drive root or a first-level folder is never one
+/// dataset's own.
+const MIN_WORK_FOLDER_DEPTH: usize = 2;
+
+/// The rules a recorded work folder `w` (canonical) must pass on its own:
+/// deep enough below its drive, not overlapping the model store, and not
+/// holding an app root (the datasets root, the outputs folder). The rules
+/// against source folders and other datasets' folders are in
+/// [`WorkFolders::resolve`].
+pub(super) fn unfit_work_folder(w: &Path, app_roots: &[&Path], models: Option<&Path>) -> bool {
+    let depth = w
+        .components()
+        .filter(|c| matches!(c, Component::Normal(_)))
+        .count();
+    depth < MIN_WORK_FOLDER_DEPTH
+        || models.is_some_and(|m| overlaps(m, w))
+        || app_roots.iter().any(|r| r.starts_with(w))
+}
+
+/// Every dataset's work folder: the recorded `work_dir` (Plan 10) when the
+/// row has one, else `<datasets_root>/<prep_job_id>`.
+struct WorkFolders {
+    /// This dataset's, when it exists and passes every rule.
+    own: Option<PathBuf>,
+    /// Other datasets' (canonical, existing) — recorded ones whether or not
+    /// they would pass the rules: protecting too much is safe.
+    others: Vec<PathBuf>,
+    /// Other datasets' recorded folders that may exist but cannot be
+    /// resolved (or were stored relative): nothing under them goes, and no
+    /// folder is walked.
+    unresolved: Vec<PathBuf>,
+}
+
+impl WorkFolders {
+    fn resolve(
+        snap: &Snapshot,
+        datasets_root: Option<&Path>,
+        outputs: Option<&Path>,
+        models: Option<&Path>,
+        source_dirs: &[PathBuf],
+    ) -> Self {
+        let derived = |d: &Dataset| -> Option<PathBuf> {
+            let root = datasets_root?;
+            let id = single_component(d.prep_job_id.as_deref()?)?;
+            let dir = std::fs::canonicalize(root.join(id)).ok()?;
+            (dir.is_dir() && strictly_inside(&dir, root)).then_some(dir)
+        };
+        let mut others = Vec::new();
+        let mut unresolved = Vec::new();
+        for d in &snap.others {
+            let Some(raw) = d.work_dir.as_deref() else {
+                others.extend(derived(d));
+                continue;
+            };
+            let path = Path::new(raw);
+            if !path.is_absolute() {
+                unresolved.push(path.to_path_buf());
+                continue;
+            }
+            match classify_folder(std::fs::canonicalize(path)) {
+                FolderState::Resolved(dir) => others.push(dir),
+                FolderState::Gone => {}
+                FolderState::Unresolvable => unresolved.push(path.to_path_buf()),
+            }
+        }
+        let own = match snap.dataset.work_dir.as_deref() {
+            None => derived(&snap.dataset),
+            Some(raw) => {
+                let app_roots: Vec<&Path> =
+                    [datasets_root, outputs].into_iter().flatten().collect();
+                canonical(raw).filter(|w| {
+                    w.is_dir()
+                        && !unfit_work_folder(w, &app_roots, models)
+                        && !source_dirs.iter().any(|d| overlaps(d, w))
+                        && !others.iter().any(|o| overlaps(o, w))
+                })
+            }
+        };
+        Self {
+            own,
+            others,
+            unresolved,
+        }
+    }
+}
+
 /// `inner` lies strictly inside `outer`.
 fn strictly_inside(inner: &Path, outer: &Path) -> bool {
     inner.starts_with(outer) && inner != outer
@@ -217,20 +318,15 @@ fn overlaps(a: &Path, b: &Path) -> bool {
 }
 
 impl Guard {
-    /// Everything except the in-use set; see [`Self::keeping`]. `outputs_dir`
-    /// is only used for "own export" detection (an export folder must sit
-    /// strictly inside it); the dataset work-folder root is `datasets_dir`
-    /// (`AppPaths::datasets_dir`, independently overridable — Plan 10), no
-    /// longer assumed to be `<outputs_dir>/datasets`.
-    pub(super) fn build(outputs_dir: &Path, datasets_dir: &Path, snap: &Snapshot) -> Self {
-        let outputs = std::fs::canonicalize(outputs_dir).ok();
-        let datasets_root = std::fs::canonicalize(datasets_dir).ok();
-        let work_of = |d: &Dataset| -> Option<PathBuf> {
-            let root = datasets_root.as_deref()?;
-            let id = single_component(d.prep_job_id.as_deref()?)?;
-            let dir = std::fs::canonicalize(root.join(id)).ok()?;
-            (dir.is_dir() && strictly_inside(&dir, root)).then_some(dir)
-        };
+    /// Everything except the in-use set; see [`Self::keeping`]. The outputs
+    /// folder decides "own export" (an export folder must sit strictly inside
+    /// it); the datasets root (`AppPaths::datasets_dir`, independently
+    /// overridable) is where older rows' work folders are derived; the model
+    /// store and both roots are never part of a recorded work folder.
+    pub(super) fn build(roots: &DataRoots, snap: &Snapshot) -> Self {
+        let outputs = std::fs::canonicalize(&roots.outputs).ok();
+        let datasets_root = std::fs::canonicalize(&roots.datasets).ok();
+        let models = std::fs::canonicalize(&roots.models).ok();
 
         let source_dirs: Vec<PathBuf> = canonical_all(
             std::iter::once(snap.dataset.source_root.as_str())
@@ -242,17 +338,23 @@ impl Guard {
             canonical_all(snap.others.iter().filter_map(|d| d.export_dir.as_deref()))
                 .into_iter()
                 .collect();
-        let foreign_dirs: Vec<PathBuf> = other_exports
-            .iter()
-            .cloned()
-            .chain(snap.others.iter().filter_map(work_of))
-            .collect();
-        let work_dir = work_of(&snap.dataset);
+        let works = WorkFolders::resolve(
+            snap,
+            datasets_root.as_deref(),
+            outputs.as_deref(),
+            models.as_deref(),
+            &source_dirs,
+        );
+        let foreign_dirs: Vec<PathBuf> =
+            other_exports.iter().cloned().chain(works.others).collect();
+        let work_dir = works.own;
         let export_dir = match (&outputs, &snap.dataset.export_dir) {
             (Some(o), Some(e)) => own_export(o, datasets_root.as_deref(), e, &other_exports),
             _ => None,
         };
-        let loose = snap.dataset.prep_job_id.is_none();
+        // A recorded work folder names the dataset's folder even without its
+        // prep job; only a legacy row without both is "loose".
+        let loose = snap.dataset.prep_job_id.is_none() && snap.dataset.work_dir.is_none();
 
         // The folders files may be deleted from. Without a prep job that is
         // any unclaimed `<datasets_root>/<X>` — and a foreign file's folder
@@ -279,6 +381,7 @@ impl Guard {
 
         let walkable = foreign.all_located
             && own.all_located
+            && works.unresolved.is_empty()
             && work_dir.as_deref().is_some_and(|w| {
                 !foreign.folders.iter().any(|f| f.starts_with(w))
                     && !own.folders.iter().any(|f| f.starts_with(w))
@@ -321,7 +424,11 @@ impl Guard {
                 .collect(),
             source_dirs,
             unresolved_own: own.unresolved,
-            unresolved_foreign: foreign.unresolved,
+            unresolved_foreign: foreign
+                .unresolved
+                .into_iter()
+                .chain(works.unresolved)
+                .collect(),
             foreign_files: foreign.near_roots,
             foreign_dirs,
             in_use: HashSet::new(),

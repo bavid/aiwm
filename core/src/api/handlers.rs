@@ -420,6 +420,15 @@ pub async fn update_dataset(
         .ok_or_else(|| CoreError::Config(format!("no such dataset {id}")))
 }
 
+/// The folders dataset housekeeping judges files against.
+fn dataset_roots(app: &App) -> crate::capability::dataset::DataRoots {
+    crate::capability::dataset::DataRoots {
+        outputs: app.paths.outputs_dir(),
+        datasets: app.paths.datasets_dir(),
+        models: app.config.store_path.clone(),
+    }
+}
+
 /// `DELETE /datasets/{id}` — drops the dataset, its frames and its concepts
 /// (SQLite cascade) *and* its files: the app-owned work folder and an export
 /// that lies inside the outputs folder. Source files and a user-chosen
@@ -431,8 +440,7 @@ pub async fn delete_dataset(
 ) -> Result<Option<crate::capability::dataset::DatasetDeleteSummary>> {
     crate::capability::dataset::housekeeping::delete_dataset_with_files(
         &app.db,
-        &app.paths.outputs_dir(),
-        &app.paths.datasets_dir(),
+        &dataset_roots(app),
         id,
     )
     .await
@@ -444,13 +452,7 @@ pub async fn dataset_usage(
     app: &App,
     id: &str,
 ) -> Result<Option<crate::capability::dataset::DatasetUsage>> {
-    crate::capability::dataset::housekeeping::usage(
-        &app.db,
-        &app.paths.outputs_dir(),
-        &app.paths.datasets_dir(),
-        id,
-    )
-    .await
+    crate::capability::dataset::housekeeping::usage(&app.db, &dataset_roots(app), id).await
 }
 
 /// `POST /datasets/{id}/frames/bulk` — move a whole selection to Keep or
@@ -483,8 +485,7 @@ pub async fn delete_dataset_frames(
 ) -> Result<Option<crate::capability::dataset::FramesDeleteSummary>> {
     crate::capability::dataset::housekeeping::delete_frames(
         &app.db,
-        &app.paths.outputs_dir(),
-        &app.paths.datasets_dir(),
+        &dataset_roots(app),
         id,
         &body.frame_ids,
     )
@@ -500,8 +501,7 @@ pub async fn cleanup_dataset(
 ) -> Result<Option<crate::capability::dataset::CleanupSummary>> {
     crate::capability::dataset::housekeeping::cleanup(
         &app.db,
-        &app.paths.outputs_dir(),
-        &app.paths.datasets_dir(),
+        &dataset_roots(app),
         id,
         body.dry_run,
     )

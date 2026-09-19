@@ -125,7 +125,15 @@ fn guard_build_timing() {
         ),
     ] {
         let t = std::time::Instant::now();
-        let guard = Guard::build(&outputs, &datasets_root, &snap).keeping(&staying);
+        let guard = Guard::build(
+            &super::DataRoots {
+                outputs: outputs.clone(),
+                datasets: datasets_root.clone(),
+                models: tmp.path().join("models"),
+            },
+            &snap,
+        )
+        .keeping(&staying);
         println!(
             "Guard::build, {label}: {:?} (walkable: {})",
             t.elapsed(),

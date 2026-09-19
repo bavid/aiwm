@@ -72,8 +72,8 @@ pub use extract::{DEFAULT_SAMPLE_FPS, MAX_SAMPLE_FPS, MIN_SAMPLE_FPS};
 pub use filter::RejectionReason;
 pub use filter::{DEFAULT_BLUR_THRESHOLD, DEFAULT_PHASH_MAX_DISTANCE, MAX_PHASH_DISTANCE};
 pub use housekeeping::{
-    CleanupSummary, DatasetDeleteSummary, DatasetUsage, DedupSummary, FramesDeleteSummary,
-    SkippedFile, DEFAULT_DEDUP_THRESHOLD, MAX_DEDUP_THRESHOLD,
+    CleanupSummary, DataRoots, DatasetDeleteSummary, DatasetUsage, DedupSummary,
+    FramesDeleteSummary, SkippedFile, DEFAULT_DEDUP_THRESHOLD, MAX_DEDUP_THRESHOLD,
 };
 pub use pipeline::{run, DatasetPrepDone, DatasetPrepOutcome};
 pub use request::{DatasetPrepRequest, DEFAULT_MIN_CLIP_SECS};
