@@ -37,7 +37,7 @@ Rules for every task: TDD with observed RED; no `unsafe`; no `unwrap/expect` in 
 
 - [x] Back up DB. Real daemon: pick an existing library LoRA + its family's base model + a dataset export (create a small one from the Plan 6 flow if needed); start a continue-run with the fast preset and the smallest step count the preset allows; verify YAML has `pretrained_lora_path`, trainer log shows it loading the file, result is a new library model, overview shows the 2-run lineage; record time/VRAM. If no suitable pair is installed, record exactly what is missing (no pretending). — see "Measured" below.
 - [x] `docs/TODO.md` ✅ entry with measurements; full gates; commit `docs(training): LoRA overview + continue training shipped, measured`.
-- [ ] Hand back: whole-branch review → controller gates → merge `--no-ff` → push.
+- [x] Hand back: whole-branch review (approved) → controller gates (1361 lib tests, UI clean) → merge `--no-ff` → push.
 
 ## Measured 2026-09-19
 
