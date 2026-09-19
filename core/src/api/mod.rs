@@ -512,6 +512,8 @@ mod tests {
             "outputs_path": "  E:\\media\\outputs  ",
             "runtimes_path": "",
             "cache_path": "E:\\fast\\cache",
+            "datasets_path": "",
+            "training_path": "",
         });
         let saved: serde_json::Value = http
             .put(format!("{base}/config"))
@@ -539,6 +541,7 @@ mod tests {
         let mut cleared = base_update;
         cleared["paths"] = serde_json::json!({
             "outputs_path": "", "runtimes_path": "", "cache_path": "",
+            "datasets_path": "", "training_path": "",
         });
         let saved: serde_json::Value = http
             .put(format!("{base}/config"))
@@ -1225,7 +1228,10 @@ mod tests {
             "llama": cfg["llama"],
             "comfyui": cfg["comfyui"],
             "models": cfg["models"],
-            "paths": { "outputs_path": "", "runtimes_path": "", "cache_path": "" },
+            "paths": {
+                "outputs_path": "", "runtimes_path": "", "cache_path": "",
+                "datasets_path": "", "training_path": "",
+            },
             "retention": { "max_age_days": 30, "max_total_mb": 0 },
         });
         let saved = http

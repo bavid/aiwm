@@ -1005,6 +1005,15 @@ async fn storage_report(
     to_ipc(handlers::storage_report(&app).await)
 }
 
+/// `GET /storage/locations`'s Tauri counterpart — every location the app
+/// writes to, its size on disk, and its volume's free/total space (Plan 10).
+#[tauri::command]
+async fn storage_locations(
+    app: tauri::State<'_, Arc<App>>,
+) -> Result<Vec<aiwm_core::StorageLocation>, String> {
+    to_ipc(handlers::storage_locations(&app).await)
+}
+
 /// `POST /outputs/cleanup`'s Tauri counterpart — apply the configured output
 /// retention policy right now (the Settings "Clean up now" button).
 #[tauri::command]
@@ -1280,6 +1289,7 @@ fn try_run() -> anyhow::Result<()> {
             benchmark_history,
             upgrade_check,
             storage_report,
+            storage_locations,
             cleanup_outputs,
             delete_model,
             unload_model,

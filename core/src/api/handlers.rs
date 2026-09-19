@@ -13,9 +13,9 @@ use super::dto::{
     DialogueLineDto, EnqueueDownloadDto, ExportDatasetDto, FeaturedModelDto, JobDetailDto,
     KnownModelDto, LaunchExternalDto, LocalApiStatusDto, LocationBodyDto, ModelStackDto,
     NewAgentDto, NewSessionDto, NewVoiceIdentityDto, NpcBodyDto, OpenAgentSessionDto,
-    PathsUpdateDto, PersonaBodyDto, ProfileDto, ProfilePresetsDto, RegisterColibriModelDto,
-    RegistryDetailsDto, RegistryFileDto, RegistrySearchDto, RunDetailDto, RuntimeStatusDto,
-    SceneBodyDto, SceneDetailDto, SetSessionPersonaDto, StartRunDto, StoryBodyDto, SubmitJobDto,
+    PersonaBodyDto, ProfileDto, ProfilePresetsDto, RegisterColibriModelDto, RegistryDetailsDto,
+    RegistryFileDto, RegistrySearchDto, RunDetailDto, RuntimeStatusDto, SceneBodyDto,
+    SceneDetailDto, SetSessionPersonaDto, StartRunDto, StoryBodyDto, SubmitJobDto,
     TrainableModelDto, TrainerStatusDto, UpdateDatasetDto, UpdateDatasetFrameDto,
 };
 use crate::compat::FitVerdict;
@@ -1180,6 +1180,14 @@ pub async fn storage_report(app: &App) -> Result<crate::cleanup::StorageReport> 
         &app.config.store_path,
         crate::cleanup::DEFAULT_STALE_DAYS,
     ))
+}
+
+/// `GET /storage/locations` — every folder the app writes to (outputs,
+/// datasets, training, the model store, runtimes, cache, downloads staging),
+/// each with its size on disk, free/total space on its volume, and whether
+/// it can be pointed elsewhere in Settings (Plan 10).
+pub async fn storage_locations(app: &App) -> Result<Vec<crate::cleanup::StorageLocation>> {
+    crate::cleanup::locations::report(&app.paths, &app.config.store_path).await
 }
 
 /// Delete one model — its file, its runtime links, and its DB rows. Refused
@@ -2490,6 +2498,7 @@ mod tests {
     use axum::{Json, Router};
 
     use super::*;
+    use crate::api::dto::PathsUpdateDto;
     use crate::registry::SearchSort;
     use crate::runtime::RuntimeAdapter;
 

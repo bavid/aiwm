@@ -68,6 +68,8 @@ const toForm = (c: AppConfig): Form => ({
     outputs_path: orEmpty(c.paths.outputs_path),
     runtimes_path: orEmpty(c.paths.runtimes_path),
     cache_path: orEmpty(c.paths.cache_path),
+    datasets_path: orEmpty(c.paths.datasets_path),
+    training_path: orEmpty(c.paths.training_path),
   },
   retention: { ...c.retention },
 });
@@ -89,6 +91,8 @@ const sameForm = (a: Form, b: Form): boolean =>
   a.paths.outputs_path === b.paths.outputs_path &&
   a.paths.runtimes_path === b.paths.runtimes_path &&
   a.paths.cache_path === b.paths.cache_path &&
+  a.paths.datasets_path === b.paths.datasets_path &&
+  a.paths.training_path === b.paths.training_path &&
   a.retention.max_age_days === b.retention.max_age_days &&
   a.retention.max_total_mb === b.retention.max_total_mb;
 
@@ -295,6 +299,32 @@ export function Settings() {
                     placeholder="leave blank for the default"
                     spellCheck={false}
                     onChange={(e) => patchPaths({ cache_path: e.target.value })}
+                  />
+                </label>
+                <label className="set-field">
+                  <span>
+                    Dataset work folders — frames and previews from dataset prep
+                    {about ? ` · currently ${about.datasets_dir}` : ""}
+                  </span>
+                  <input
+                    type="text"
+                    value={form.paths.datasets_path}
+                    placeholder="leave blank for the default"
+                    spellCheck={false}
+                    onChange={(e) => patchPaths({ datasets_path: e.target.value })}
+                  />
+                </label>
+                <label className="set-field">
+                  <span>
+                    Training runs — checkpoints and samples from LoRA training
+                    {about ? ` · currently ${about.training_dir}` : ""}
+                  </span>
+                  <input
+                    type="text"
+                    value={form.paths.training_path}
+                    placeholder="leave blank for the default"
+                    spellCheck={false}
+                    onChange={(e) => patchPaths({ training_path: e.target.value })}
                   />
                 </label>
               </section>

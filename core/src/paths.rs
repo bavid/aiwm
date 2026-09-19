@@ -5,10 +5,11 @@
 //! `E:\AI` and its config, database, logs, generated outputs, and managed
 //! runtime installs all stay on `E:`, no `%APPDATA%` involved. `AIWM_DATA_DIR`
 //! overrides the whole layout to one directory of your choosing (portable
-//! installs, tests). Three of the bulkier folders — outputs, runtimes, cache —
-//! can additionally be pointed elsewhere individually via `config.toml`'s
-//! `[paths]` table ([`AppPaths::with_outputs_override`] and friends, wired in
-//! `App::load` once the config is read). The model store is configured
+//! installs, tests). Five of the bulkier folders — outputs, runtimes, cache,
+//! dataset-prep work folders and training runs — can additionally be pointed
+//! elsewhere individually via `config.toml`'s `[paths]` table
+//! ([`AppPaths::with_outputs_override`] and friends, wired in `App::load`
+//! once the config is read). The model store is configured
 //! separately ([`crate::config::Config::store_path`]) and is created lazily on
 //! first use, not here.
 

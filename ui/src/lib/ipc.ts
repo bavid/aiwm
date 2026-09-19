@@ -16,6 +16,10 @@ export interface AboutInfo {
   runtimes_dir: string;
   /** Where the disposable registry cache lands. */
   cache_dir: string;
+  /** Where dataset-prep work folders land. */
+  datasets_dir: string;
+  /** Where training-run work folders land. */
+  training_dir: string;
   core_api_port: number;
   vram_budget_mb: number;
   offline_mode: boolean;
@@ -60,6 +64,8 @@ export interface PathsConfig {
   outputs_path: string | null;
   runtimes_path: string | null;
   cache_path: string | null;
+  datasets_path: string | null;
+  training_path: string | null;
 }
 
 /** The `paths` slice of a `ConfigUpdate` — plain strings; blank means "use
@@ -68,6 +74,8 @@ export interface PathsUpdate {
   outputs_path: string;
   runtimes_path: string;
   cache_path: string;
+  datasets_path: string;
+  training_path: string;
 }
 
 /** The `[retention]` table — automatic cleanup of `<outputs_dir>`. Either
@@ -535,6 +543,31 @@ export interface DeleteOutcome {
 }
 
 export const storageReport = () => invoke<StorageReport>("storage_report");
+
+/** One row of `GET /storage/locations` — a folder the app writes to,
+ *  measured on disk (Plan 10). */
+export interface StorageLocation {
+  /** Stable id: `outputs` | `datasets` | `training` | `models` | `runtimes`
+   *  | `cache` | `downloads`. */
+  key: string;
+  /** Short human label for the Settings UI. */
+  label: string;
+  path: string;
+  /** Whether this location can be pointed elsewhere in Settings. */
+  configurable: boolean;
+  exists: boolean;
+  bytes: number;
+  files: number;
+  /** Entries the walk could not read — never fatal. */
+  skipped: number;
+  volume_free_bytes: number | null;
+  volume_total_bytes: number | null;
+}
+
+/** Every location the app writes to, with its size and volume free space.
+ *  Computed on demand (a recursive walk) — call it when the Settings "Data
+ *  locations" card opens and on "Refresh", never on a timer. */
+export const storageLocations = () => invoke<StorageLocation[]>("storage_locations");
 
 /** What one output-retention sweep did (`POST /outputs/cleanup`). */
 export interface SweepResult {

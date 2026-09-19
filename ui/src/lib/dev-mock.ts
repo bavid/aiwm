@@ -1330,6 +1330,7 @@ const ABOUT: AnyRecord = {
   core_version: "0.0.1-dev", data_dir: "E:\\AI\\data", store_path: "E:\\AI\\models",
   outputs_dir: "E:\\AI\\data\\outputs", outputs_bytes: 4_812_300_000,
   runtimes_dir: "E:\\AI\\data\\runtimes", cache_dir: "E:\\AI\\data\\cache",
+  datasets_dir: "E:\\AI\\data\\outputs\\datasets", training_dir: "E:\\AI\\data\\training",
   core_api_port: 48096, vram_budget_mb: 14848, offline_mode: false,
 };
 
@@ -1342,7 +1343,10 @@ const CONFIG: AnyRecord = {
   },
   comfyui: { vram_mode: "auto", reserve_vram_mb: 0, extra_args: "" },
   models: { auto_preference: "balanced" },
-  paths: { outputs_path: null, runtimes_path: null, cache_path: null },
+  paths: {
+    outputs_path: null, runtimes_path: null, cache_path: null,
+    datasets_path: null, training_path: null,
+  },
   retention: { max_age_days: 0, max_total_mb: 0 },
 };
 
@@ -2217,6 +2221,24 @@ export function installDevMock(): void {
           unused: MODELS.filter((m) => !m.last_used_at).map((m) => m.id),
           stale_days: 45,
         };
+      }
+      case "storage_locations": {
+        const row = (
+          key: string, label: string, path: string, configurable: boolean,
+          bytes: number, files: number,
+        ): AnyRecord => ({
+          key, label, path, configurable, exists: true, bytes, files, skipped: 0,
+          volume_free_bytes: 1_496_000_000_000, volume_total_bytes: 2_000_000_000_000,
+        });
+        return [
+          row("outputs", "Generated media (outputs)", "E:\\AI\\data\\outputs", true, 4_812_300_000, 214),
+          row("datasets", "Dataset work folders", "E:\\AI\\data\\outputs\\datasets", true, 18_640_000_000, 9_212),
+          row("training", "Training runs", "E:\\AI\\data\\training", true, 96_400_000_000, 1_340),
+          row("models", "Model store", "E:\\AI\\models", true, 210_000_000_000, 18),
+          row("runtimes", "Managed runtime installs", "E:\\AI\\data\\runtimes", true, 14_200_000_000, 3_801),
+          row("cache", "Disposable cache", "E:\\AI\\data\\cache", true, 320_000_000, 640),
+          row("downloads", "Download staging", "E:\\AI\\data\\.downloads", false, 0, 0),
+        ];
       }
       case "delete_model": {
         const i = MODELS.findIndex((m) => m.id === a.id);
