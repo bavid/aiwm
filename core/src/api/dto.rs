@@ -65,12 +65,10 @@ pub struct PathsUpdateDto {
     pub outputs_path: String,
     pub runtimes_path: String,
     pub cache_path: String,
-    /// New in this slice; older clients that omit it leave the datasets
-    /// override untouched (falls back to the empty-string default via
-    /// `#[serde(default)]` on the containing `ConfigUpdate.paths`).
+    /// Required like the other paths: a `paths` object without it is rejected
+    /// rather than read as "clear the override". The UI always sends all five.
     pub datasets_path: String,
-    /// New in this slice; older clients that omit it leave the training
-    /// override untouched.
+    /// Required for the same reason as `datasets_path`.
     pub training_path: String,
 }
 
