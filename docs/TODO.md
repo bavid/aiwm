@@ -1632,7 +1632,58 @@ Frames sortieren, Training starten"). Heute gibt es pro Frame nur eine
 Exclude-Checkbox im Kuratier-Grid (`ui/src/features/dataset/Dataset.tsx`) —
 für hunderte bis tausende Frames aus Videos ist das zu langsam.
 
-- **Schnelles Sortieren im Kuratier-Grid: zwei Spalten + Drag & Drop** — links
+**Erledigt (Plan 6 "Dataset Curation", umgesetzt 2026-09-19):** Kuratier-Grid
+mit zwei Spalten "Behalten"/"Aussortiert" (Rubber-Band-Rahmen, "Alle
+auswählen" je Spalte, Strg/Shift-Klick, Drag & Drop, Tastatur `K`/`D`),
+echtes Löschen von Frames, Löschen ganzer Datasets samt Dateien (mit
+Belegungsanzeige vorher), Aufräum-Job mit Vorschau (`dry_run`) und
+dataset-weite Dublettensuche (`duplicate_global`, Schwelle 0–16, Standard 6).
+Sicherheitsregeln (im Core erzwungen, getestet): jede Löschung prüft den
+kanonisierten Pfad gegen den App-eigenen Arbeitsordner des Datasets
+(bzw. einen App-eigenen Export) — ein manipulierter `frame_path` in der DB
+löscht nichts außerhalb; **nie** Dateien anderer Datasets, **nie** Quellordner
+oder Quelldateien; ein Export-Ordner außerhalb der App bleibt stehen und wird
+gemeldet; abgelehnt, solange die Dataset-Vorbereitung läuft oder ein
+Trainingslauf auf dem Dataset aktiv ist; höchstens 10.000 Frame-IDs pro
+Anfrage (die UI teilt größere Auswahlen auf).
+
+Gemessen 2026-09-19 mit echtem `aiwm-cored` auf `D:\Data\Test` (ein Video
+`20250111-_1.mp4`, 153.603.700 B, Frames-Modus, Standardwerte, kein
+Captioner; Tag = Ordnername "Test"):
+
+| Schritt | Ergebnis |
+|---|---|
+| Vorbereitung (Job) | 298,6 s Wandzeit (Extraktion 19,6 s, Filter 275,7 s); **1.368 Frames** extrahiert, 1.368 Dateien / 1.173.444.536 B im Arbeitsordner |
+| Filter | **40 behalten**, 1.328 abgelehnt: Duplikat 1.328, Unschärfe 0, tote Frames 0, Szenenwechsel 0 |
+| Dublettensuche (Schwelle 6) | 1,2 s; 40 geprüft, 9 Gruppen, **24 markiert**, 0 unlesbar → 16 behalten |
+| Sammel-Verschieben | 5 Behalten → Aussortiert, 1 `duplicate_global` → Behalten (`rejection_reason` danach leer) → 12 behalten, 1.356 aussortiert |
+| Aufräumen `dry_run` | 1.356 Frames / 1.163.358.187 B angekündigt, 0 Dateien gelöscht (Platte weiter 1.368 Dateien) |
+| Aufräumen echt | 0,28 s; 1.356 Dateien gelöscht, **1.163.358.187 B frei**, 0 übersprungen; Platte 1.368 → 12 Dateien (10.086.349 B), `usage` stimmt überein |
+| 3 Frames löschen | 3 Zeilen + 3 Dateien, 2.561.739 B frei, 0 übersprungen |
+| Dataset löschen | 9 Frames, 9 Dateien, **7.524.610 B frei**, 0 übersprungen, kein Export; Arbeitsordner weg, Dataset nicht mehr in `GET /datasets` (404) |
+| Quellvideo | Größe, Änderungszeit und SHA-256 (`15F22FD0…9869BF28`) vorher = nachher |
+
+Noch offen aus Plan 6:
+
+- **Automatisches Aufräumen direkt nach der Extraktion** (Einstellung,
+  Standard aus) — nicht gebaut.
+- **Echtes Maus-Drag & Drop** ist im Dev-Preview nur mit synthetischen
+  Events geprüft, nicht mit einer echten Maus in der Desktop-App.
+- **Screenreader-Ausgabe** der neuen Spalten/Auswahl ungeprüft.
+- **Symlink-Test** des Pfadschutzes braucht den Windows-Entwicklermodus
+  (oder Admin-Rechte) — deshalb `#[ignore]`, läuft im normalen Testlauf nicht mit
+  (`housekeeping/safety_tests.rs`, `cargo test -- --ignored`).
+- **Filter-Stufe ist der Flaschenhals** (gemessen oben: ~200 ms pro Frame,
+  275,7 s von 298,6 s) — bei "100 Videos" spürbar; Parallelisierung prüfen.
+- **Befund beim Messlauf:** das bestehende Dataset "missveronika milkpreg"
+  hat 1.960 Frame-Zeilen, die auf
+  `E:\AI\data\outputs\datasets\01a0b38e-f3bb-7b61-b9b7-76c5f505ef8a\` zeigen —
+  dieser Ordner existierte schon **vor** dem Lauf nicht (`outputs\datasets`
+  wurde erst von diesem Lauf um 02:27:07 angelegt). Verwaiste Zeilen; das
+  Grid sollte fehlende Dateien kenntlich machen, das Aufräumen/Löschen sie
+  ohne Fehler entfernen können.
+
+- ✅ (umgesetzt 2026-09-19) **Schnelles Sortieren im Kuratier-Grid: zwei Spalten + Drag & Drop** — links
   "Behalten", rechts "Aussortiert" (unscharf / wird nicht genutzt).
   Mehrfachauswahl wie im Windows-Explorer: Rahmen mit der Maus aufziehen
   (Rubber-Band-Auswahl), Strg/Shift-Klick, **"Alle auswählen"**; die Auswahl
@@ -1640,17 +1691,17 @@ für hunderte bis tausende Frames aus Videos ist das zu langsam.
   Qualitätsfilter (`filter.rs`: Unschärfe/Duplikat) schon aussortiert hat,
   starten rechts, damit man sie mit einem Zug zurückholen kann. Tastatur-
   Äquivalent nötig (Auswahl + Taste zum Verschieben), nicht nur Maus.
-- **Frames wirklich löschen** — neben "aussortieren" (bleibt auf Platte, fließt
+- ✅ (umgesetzt 2026-09-19) **Frames wirklich löschen** — neben "aussortieren" (bleibt auf Platte, fließt
   nur nicht in den Export) eine Löschen-Option für ausgewählte Frames, mit
   Bestätigung. Klären: Löschen nur die extrahierten Frame-Dateien im
   Dataset-Ordner, **nie** die Quellvideos des Nutzers.
-- **Datasets löschen** — ein ganzes Dataset (DB-Zeilen, extrahierte Frames,
+- ✅ (umgesetzt 2026-09-19) **Datasets löschen** — ein ganzes Dataset (DB-Zeilen, extrahierte Frames,
   Export) aus dem Dataset-Tab entfernen, mit Bestätigung; Quellordner bleibt
   unangetastet. Laufende/abhängige Trainings-Runs vorher prüfen (ein Run, der
   den Export nutzt, darf nicht still kaputtgehen). (Vom Nutzer am 2026-09-18
   ein zweites Mal ausdrücklich gewünscht — hohe Priorität innerhalb dieses
   Blocks.) Anzeige vor dem Löschen: wie viel Platz frei wird.
-- **Aufräum-Job nach der Frame-Extraktion — "tonnenweise Duplikate"**
+- ✅ (umgesetzt 2026-09-19, außer "automatisch nach der Extraktion") **Aufräum-Job nach der Frame-Extraktion — "tonnenweise Duplikate"**
   (User-Beobachtung 2026-09-18). Heute (geprüft im Code): aussortierte Frames
   (Unschärfe, Duplikat, tote Frames, Szenenwechsel) bekommen nur einen
   `rejection_reason` und werden beim Export übersprungen
@@ -1660,14 +1711,15 @@ für hunderte bis tausende Frames aus Videos ist das zu langsam.
   dem zuletzt behaltenen Frame *derselben Quelle* — wiederkehrende Szenen
   später im Video oder dieselbe Szene in mehreren Videos bleiben als Dubletten
   stehen. Vorgesehen:
-  - ein **globaler Dubletten-Durchlauf** über das ganze Dataset (alle
+  - ✅ ein **globaler Dubletten-Durchlauf** über das ganze Dataset (alle
     Quellen, nicht nur aufeinanderfolgende Frames), Schwelle einstellbar,
     Ergebnis als Gruppen ("diese 40 Frames sind praktisch gleich — 1
     behalten"), den schärfsten/besten pro Gruppe vorschlagen;
     `select_diverse` (`filter.rs:230`) ist ein vorhandener Baustein;
-  - ein **Aufräum-Job**, der aussortierte/abgelehnte Frames nach Bestätigung
+  - ✅ ein **Aufräum-Job**, der aussortierte/abgelehnte Frames nach Bestätigung
     wirklich von der Platte löscht, mit Vorschau "N Frames, X GB werden frei";
-    optional automatisch direkt nach der Extraktion (Einstellung, Standard aus);
+    optional automatisch direkt nach der Extraktion (Einstellung, Standard aus)
+    — **dieser Teil offen**;
   - nie die Quellvideos anfassen; bereits exportierte/trainierte Frames nicht
     löschen, solange ein Trainingslauf sie braucht.
 - **Trainings-Werkzeuge im Discover-/Models-Tab statt manuellem Import** —
