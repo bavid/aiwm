@@ -1953,6 +1953,11 @@ Noch offen aus Plan 6:
   und das Download-Freiplatz-Gate. **Offen:** Präfix strippen (oder
   `std::path::absolute` statt `canonicalize`) plus Test; danach zeigt die
   Settings-Seite echten freien Platz.
+  → **Behoben** (Commit `fix(storage): free-space probe works on Windows …`,
+  2026-09-19): `volume_free` strippt den `\\?\`-/`\\?\UNC\`-Präfix und
+  vergleicht Mount-Points case-insensitiv (Test misst das Temp-Verzeichnis:
+  `Some((free, total))`, `total >= free > 0`); die Vorabprüfungen bleiben
+  fail-open, loggen aber jetzt auf `warn`; Meldungen sagen "GiB".
 - ✅ (umgesetzt 2026-09-19, Plan 10 — Settings → "Data locations" listet
   jetzt Outputs, Datasets, Training, Model-Store, Runtimes, Cache und
   Download-Staging mit Pfad, Größe, Dateizahl, "Ordner öffnen", "Wählen…" für

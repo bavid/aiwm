@@ -53,7 +53,7 @@ fn resolved(path: &Path) -> Option<PathBuf> {
 }
 
 /// [`lexical`] without the case folding (the disk is asked with it).
-fn lexical_plain(path: &Path) -> PathBuf {
+pub(crate) fn lexical_plain(path: &Path) -> PathBuf {
     let verbatim = matches!(
         path.components().next(),
         Some(Component::Prefix(p)) if p.kind().is_verbatim()
@@ -289,7 +289,7 @@ pub fn prepare_work_root(work_root: &Path, probe: FreeSpaceProbe) -> Result<()> 
     if let Some((free, _total)) = measured {
         if free < MIN_PREP_FREE_BYTES {
             return Err(CoreError::Config(format!(
-                "only {:.1} GB free on {}, at least {} GB needed to store the extracted frames \
+                "only {:.1} GiB free on {}, at least {} GiB needed to store the extracted frames \
                  \u{2014} choose a folder on another drive or free up space",
                 free as f64 / BYTES_PER_GB as f64,
                 volume_label(work_root),
@@ -297,9 +297,10 @@ pub fn prepare_work_root(work_root: &Path, probe: FreeSpaceProbe) -> Result<()> 
             )));
         }
     } else {
-        tracing::debug!(
+        tracing::warn!(
             path = %work_root.display(),
-            "could not determine free disk space for the dataset work folder"
+            "could not determine free disk space for the dataset work folder; \
+             starting without the free-space check"
         );
     }
     std::fs::create_dir_all(work_root).map_err(|e| {

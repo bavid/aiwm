@@ -7,7 +7,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::capability::dataset::location::{
-    dataset_conflict, is_volume_root, same_or_inside, work_folder_of,
+    dataset_conflict, is_volume_root, lexical_plain, same_or_inside, work_folder_of,
 };
 use crate::db::{Dataset, TrainingRun};
 use crate::{CoreError, Result};
@@ -126,7 +126,8 @@ const MIN_RUN_FOLDER_DEPTH: usize = 2;
 /// may have changed since. `dir` must:
 ///
 /// - be absolute and at least [`MIN_RUN_FOLDER_DEPTH`] folders below its
-///   drive;
+///   drive, counted on the lexically normalised path (`..` folded, as the
+///   overlap checks see it) so `C:\a\b\..\..\<id>` counts as one;
 /// - be named exactly after the run id (every run folder is
 ///   `<chosen or default folder>/<run_id>`);
 /// - exist as a real folder, not a link or junction (never followed);
@@ -153,7 +154,7 @@ pub fn check_purge_target(dir: &Path, run: &TrainingRun, ctx: &PurgeContext<'_>)
     if !dir.is_absolute() {
         return refuse("its path is not absolute".into());
     }
-    let depth = dir
+    let depth = lexical_plain(dir)
         .components()
         .filter(|c| matches!(c, std::path::Component::Normal(_)))
         .count();
@@ -359,6 +360,21 @@ mod tests {
         refused(l.check(Path::new("run-1")), "absolute");
         let drive = l.tmp.path().ancestors().last().unwrap();
         refused(l.check(&drive.join("run-1")), "too close to the drive root");
+    }
+
+    /// Depth is counted on the lexically normalised path: `..` folds away
+    /// the folders before it, so `<drive>\a\b\..\..\run-1` is one deep.
+    #[test]
+    fn depth_is_counted_after_folding_parent_components() {
+        let l = layout();
+        let drive = l.tmp.path().ancestors().last().unwrap();
+        let dotted = drive
+            .join("a")
+            .join("b")
+            .join("..")
+            .join("..")
+            .join("run-1");
+        refused(l.check(&dotted), "too close to the drive root");
     }
 
     #[test]

@@ -585,8 +585,11 @@ async fn preflight_blocks_when_the_disk_is_nearly_full() {
         .expect_err("a nearly full disk must stop the run before it starts");
 
     let msg = err.to_string();
-    assert!(msg.contains("20 GB"), "unexpected error: {msg}");
-    assert!(msg.contains("5 GB"), "the free figure must be named: {msg}");
+    assert!(msg.contains("20 GiB"), "unexpected error: {msg}");
+    assert!(
+        msg.contains("5 GiB"),
+        "the free figure must be named: {msg}"
+    );
 }
 
 #[tokio::test]
@@ -611,7 +614,7 @@ async fn preflight_passes_when_the_volume_is_unknown() {
         .await
         .expect_err("the fake interpreter cannot actually launch");
     assert!(
-        !err.to_string().contains("20 GB"),
+        !err.to_string().contains("20 GiB"),
         "an unknown volume must not block: {err}"
     );
 }

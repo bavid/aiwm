@@ -145,16 +145,70 @@ pub fn volume_label(path: &Path) -> String {
 }
 
 /// `(free, total)` bytes on the volume that `path` lives on — the disk whose
-/// mount point is the longest prefix of `path`'s canonical form.
+/// mount point is the longest prefix of `path`'s resolved form (links and
+/// junctions followed, so a junction into another drive reports that drive).
+///
+/// On Windows `canonicalize` returns a verbatim `\\?\C:\...` path, which
+/// never `starts_with` sysinfo's `C:\` mount point; the prefix is dropped
+/// and both sides are compared case-insensitively
+/// ([`volume_comparable`]). `None` only when no mount point matches at all
+/// (network paths, mounted folders sysinfo does not list).
 pub fn volume_free(path: &Path) -> Option<(u64, u64)> {
-    let target = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let resolved = match path.canonicalize() {
+        Ok(canonical) => strip_verbatim(&canonical),
+        Err(_) => std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf()),
+    };
+    let target = volume_comparable(&resolved);
     let disks = sysinfo::Disks::new_with_refreshed_list();
     disks
         .list()
         .iter()
-        .filter(|d| target.starts_with(d.mount_point()))
+        .filter(|d| target.starts_with(volume_comparable(d.mount_point())))
         .max_by_key(|d| d.mount_point().as_os_str().len())
         .map(|d| (d.available_space(), d.total_space()))
+}
+
+/// `path` without a Windows verbatim prefix: `\\?\E:\x` → `E:\x`,
+/// `\\?\UNC\server\share\x` → `\\server\share\x`. Any other path (a plain
+/// drive path, a `\\?\Volume{…}` one, anything on another OS) is returned
+/// as is.
+fn strip_verbatim(path: &Path) -> std::path::PathBuf {
+    use std::path::{Component, Prefix};
+    let mut components = path.components();
+    let Some(Component::Prefix(prefix)) = components.next() else {
+        return path.to_path_buf();
+    };
+    let plain: std::ffi::OsString = match prefix.kind() {
+        Prefix::VerbatimDisk(letter) => format!("{}:", char::from(letter)).into(),
+        Prefix::VerbatimUNC(server, share) => {
+            let mut s = std::ffi::OsString::from(r"\\");
+            s.push(server);
+            s.push(r"\");
+            s.push(share);
+            s
+        }
+        _ => return path.to_path_buf(),
+    };
+    let mut out = std::path::PathBuf::from(plain);
+    for c in components {
+        match c {
+            Component::RootDir => out.push(std::path::MAIN_SEPARATOR_STR),
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
+}
+
+/// A path in the form mount points are compared in: verbatim prefix
+/// dropped and, on Windows, case-folded. `Path::starts_with` is
+/// component-wise, so `E:` and `E:\` both prefix `E:\x`.
+fn volume_comparable(path: &Path) -> std::path::PathBuf {
+    let plain = strip_verbatim(path);
+    if cfg!(windows) {
+        std::path::PathBuf::from(plain.to_string_lossy().to_lowercase())
+    } else {
+        plain
+    }
 }
 
 /// Assemble the full report. `stale_days` sets the unused cutoff.
@@ -215,6 +269,8 @@ pub fn report(models: &[Model], store_root: &Path, stale_days: i64) -> StorageRe
 mod tests {
     use super::*;
     use crate::db::NewModel;
+    #[cfg(windows)]
+    use std::path::PathBuf;
 
     fn model(over: NewModel) -> Model {
         Model {
@@ -348,6 +404,54 @@ mod tests {
         assert_eq!(llm.bytes, 9_000);
         assert_eq!(llm.count, 2);
         assert_eq!(r.unused.len(), 3); // none ever used
+    }
+
+    /// The real bug: `canonicalize` yields a verbatim `\\?\C:\...` path on
+    /// Windows, which never `starts_with` sysinfo's `C:\` mount point, so
+    /// every probe came back `None` (and every free-space gate fail-opened).
+    #[cfg(windows)]
+    #[test]
+    fn volume_free_resolves_the_temp_dirs_volume_on_windows() {
+        let temp = std::env::temp_dir();
+        let (free, total) =
+            volume_free(&temp).expect("the temp dir lives on a mounted local volume");
+        eprintln!(
+            "volume_free({}) = free {free} / total {total}",
+            temp.display()
+        );
+        assert!(free > 0, "free must be positive, got {free}");
+        assert!(total >= free, "total {total} must be >= free {free}");
+    }
+
+    /// The prefix a Windows `canonicalize` adds is dropped; plain paths are
+    /// left alone (case included — folding is the comparison's job).
+    #[cfg(windows)]
+    #[test]
+    fn strip_verbatim_drops_only_the_verbatim_prefix() {
+        let cases = [
+            (r"\\?\E:\x", r"E:\x"),
+            (r"\\?\UNC\server\share\x", r"\\server\share\x"),
+            (r"E:\x", r"E:\x"),
+            (r"e:\x", r"e:\x"),
+        ];
+        for (input, want) in cases {
+            assert_eq!(
+                strip_verbatim(Path::new(input)),
+                PathBuf::from(want),
+                "strip_verbatim({input:?})"
+            );
+        }
+    }
+
+    /// Mount points compare case-insensitively on Windows, with or without a
+    /// trailing separator.
+    #[cfg(windows)]
+    #[test]
+    fn volume_comparable_folds_case_and_trailing_separators() {
+        let target = volume_comparable(Path::new(r"e:\AI\data"));
+        assert!(target.starts_with(volume_comparable(Path::new(r"E:\"))));
+        assert!(target.starts_with(volume_comparable(Path::new(r"E:"))));
+        assert!(!target.starts_with(volume_comparable(Path::new(r"D:\"))));
     }
 
     #[test]

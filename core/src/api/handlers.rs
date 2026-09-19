@@ -1020,18 +1020,13 @@ pub async fn delete_training_run(app: &App, id: &str, purge: bool) -> Result<()>
 /// before deleting, that it is this run's own folder and holds or sits in
 /// nothing else. A refusal is an error and nothing is deleted (the row
 /// stays too, so the user sees why). A folder that is already gone is fine.
+///
+/// The check (a `symlink_metadata` plus a `canonicalize` per dataset and
+/// run) and the deletion are blocking filesystem work, so they run on
+/// `spawn_blocking` as one unit — the folder is checked and removed in the
+/// same breath, on the same thread.
 async fn purge_run_folder(app: &App, run: &crate::db::TrainingRun) -> Result<()> {
     let dir = run_work_dir(app, run);
-    match tokio::fs::symlink_metadata(&dir).await {
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(e) => {
-            return Err(CoreError::Config(format!(
-                "cannot inspect the run folder {} before deleting it: {e}",
-                dir.display()
-            )))
-        }
-        Ok(_) => {}
-    }
     let datasets = app.db.datasets().list().await?;
     let others: Vec<crate::db::TrainingRun> = app
         .db
@@ -1041,22 +1036,41 @@ async fn purge_run_folder(app: &App, run: &crate::db::TrainingRun) -> Result<()>
         .into_iter()
         .filter(|r| r.id != run.id)
         .collect();
-    crate::training::location::check_purge_target(
-        &dir,
-        run,
-        &crate::training::location::PurgeContext {
-            store: &app.config.store_path,
-            outputs: &app.paths.outputs_dir(),
-            datasets_root: &app.paths.datasets_dir(),
-            training_root: &app.paths.training_dir(),
-            datasets: &datasets,
-            other_runs: &others,
-        },
-    )?;
-    if let Err(e) = tokio::fs::remove_dir_all(&dir).await {
-        tracing::warn!(run = %run.id, error = %e, "could not remove a run's work directory");
-    }
-    Ok(())
+    let run = run.clone();
+    let store = app.config.store_path.clone();
+    let outputs = app.paths.outputs_dir();
+    let datasets_root = app.paths.datasets_dir();
+    let training_root = app.paths.training_dir();
+    tokio::task::spawn_blocking(move || -> Result<()> {
+        match std::fs::symlink_metadata(&dir) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => {
+                return Err(CoreError::Config(format!(
+                    "cannot inspect the run folder {} before deleting it: {e}",
+                    dir.display()
+                )))
+            }
+            Ok(_) => {}
+        }
+        crate::training::location::check_purge_target(
+            &dir,
+            &run,
+            &crate::training::location::PurgeContext {
+                store: &store,
+                outputs: &outputs,
+                datasets_root: &datasets_root,
+                training_root: &training_root,
+                datasets: &datasets,
+                other_runs: &others,
+            },
+        )?;
+        if let Err(e) = std::fs::remove_dir_all(&dir) {
+            tracing::warn!(run = %run.id, error = %e, "could not remove a run's work directory");
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|e| CoreError::Config(format!("the purge task did not finish: {e}")))?
 }
 
 /// The file behind `GET /training/runs/{id}/samples/{n}` — the `n`-th of the

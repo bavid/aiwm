@@ -1894,7 +1894,7 @@ mod tests {
         );
     }
 
-    /// Less than 5 GB free on the chosen drive refuses the run before any
+    /// Less than 5 GiB free on the chosen drive refuses the run before any
     /// dataset exists, naming the drive and the free space.
     #[tokio::test]
     async fn dataset_prep_refuses_a_drive_with_too_little_free_space() {
@@ -1919,7 +1919,7 @@ mod tests {
         assert!(matches!(outcome, JobOutcome::Failed { .. }), "{outcome:?}");
         let stored = fx.db.jobs().get(&job.id).await.unwrap().unwrap();
         let err = stored.error_text.unwrap_or_default();
-        assert!(err.contains("1.0 GB free"), "{err}");
+        assert!(err.contains("1.0 GiB free"), "{err}");
         assert!(
             err.contains(&crate::cleanup::volume_label(&data_dir)),
             "{err}"

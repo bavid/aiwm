@@ -270,9 +270,10 @@ impl Runner {
             // probe misses network and mounted-folder paths, and a run the
             // user could have completed is worse than a disk-full failure
             // they can read straight off the trainer's log.
-            tracing::debug!(
+            tracing::warn!(
                 path = %folder.display(),
-                "could not determine free disk space for the training folder"
+                "could not determine free disk space for the training folder; \
+                 starting without the free-space check"
             );
             return Ok(());
         };
@@ -280,7 +281,7 @@ impl Runner {
             return Ok(());
         }
         Err(training_refusal(format!(
-            "only {} GB free on {}, at least {} GB needed for the checkpoints and \
+            "only {} GiB free on {}, at least {} GiB needed for the checkpoints and \
              preview images this run writes \u{2014} choose a folder on another drive or \
              free up space",
             free / BYTES_PER_GB,
