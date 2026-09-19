@@ -372,14 +372,16 @@ def test_florence2_loads_natively_from_local_files_only_without_remote_code(
     monkeypatch: pytest.MonkeyPatch, model_dir: str
 ):
     # transformers 5.x ships Florence-2 natively: the verified folder is the
-    # only source, and no Python from it (or the Hub) is ever executed.
+    # only source, and no Python from it (or the Hub) is ever executed --
+    # explicitly `False`, since the pinned preprocessor_config.json still
+    # carries an `auto_map`.
     calls = _fake_ml_modules(monkeypatch)
     vision._construct_florence2(model_dir)
     assert [c[0] for c in calls] == ["Florence2ForConditionalGeneration", "AutoProcessor"]
     for name, path, kwargs in calls:
         assert path == model_dir, name
         assert kwargs.get("local_files_only") is True, name
-        assert "trust_remote_code" not in kwargs, name
+        assert kwargs.get("trust_remote_code") is False, name
     assert calls[0][2].get("dtype") == "float32", "CPU fallback loads fp32"
 
 

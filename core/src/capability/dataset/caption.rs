@@ -47,15 +47,19 @@ use super::dataset_err;
 /// install and this resolver can never disagree on the string.
 pub use crate::model::{FLORENCE2_ROLE, QWEN_VL_ROLE};
 
-/// fp16 weights (~770M params \u{2248} 1.5 GB) plus activation/runtime
-/// overhead for the `large` Florence-2 checkpoint used by default.
-pub const FLORENCE2_VRAM_FALLBACK_MB: u64 = 2048;
+/// What the vision runtime reserves for the `large` Florence-2 checkpoint
+/// (fp16). Measured in Plan 8 (RTX 4080 SUPER, above the idle baseline):
+/// 2,187 MiB resident; rule: measured + 15 % margin, rounded up to the next
+/// 512 MiB.
+pub const FLORENCE2_VRAM_FALLBACK_MB: u64 = 2_560;
 /// Qwen2.5-VL-7B-Instruct loaded 4-bit (`bitsandbytes`) — the only way a 7B
 /// VLM comfortably shares a 16 GB card with everything else AIWM already
 /// puts on it. fp16 (~14 GB weights alone) is deliberately not the default
 /// for that reason; `quantization` stays a request-level knob (see
 /// `caption_frame_pair`'s `quantization` param) for a bigger card.
-pub const QWEN_VL_VRAM_FALLBACK_MB: u64 = 6144;
+/// Measured in Plan 8: 7,864 MiB incl. a two-image generation; same rule
+/// as Florence-2 (+15 %, next 512 MiB).
+pub const QWEN_VL_VRAM_FALLBACK_MB: u64 = 9_216;
 
 /// Every file `Florence2ForConditionalGeneration` + `AutoProcessor` read
 /// from the snapshot directory (`vision.py::_construct_florence2`, both
@@ -379,6 +383,23 @@ fn extract_caption(result: &Value) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Plan 8 measurement (RTX 4080 SUPER, VRAM above the idle baseline):
+    /// Florence-2 fp16 resident 2,187 MiB; Qwen2.5-VL 4-bit incl. a two-image
+    /// generation 7,864 MiB. Rule: measured + 15 % margin, rounded up to the
+    /// next 512 MiB.
+    #[test]
+    fn vram_reservations_follow_the_measured_need_plus_margin() {
+        fn reserve(measured_mb: u64) -> u64 {
+            (measured_mb * 115).div_ceil(100).div_ceil(512) * 512
+        }
+        assert_eq!(FLORENCE2_VRAM_FALLBACK_MB, reserve(2_187));
+        assert_eq!(QWEN_VL_VRAM_FALLBACK_MB, reserve(7_864));
+        assert_eq!(
+            (FLORENCE2_VRAM_FALLBACK_MB, QWEN_VL_VRAM_FALLBACK_MB),
+            (2_560, 9_216)
+        );
+    }
     use crate::db::NewModel;
 
     #[test]

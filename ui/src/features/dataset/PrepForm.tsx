@@ -28,8 +28,8 @@ type Props = {
  *  finished {@link DatasetPrepParams} to the container, which submits them. */
 export function PrepForm({ isRunning, error, onStart, onMoreCaptioners }: Props) {
   const { data: captioners, refetch: refetchCaptioners } = useCaptioners();
-  // Selectable = installed and without a known issue (Florence-2 on
-  // transformers 5.x would only fail after the whole extraction).
+  // Selectable = installed and without a known issue (a captioner that
+  // cannot run would only fail after the whole extraction).
   const installed = useMemo(
     () => (captioners ?? []).filter((c) => c.installed && !c.known_issue),
     [captioners],

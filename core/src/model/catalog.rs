@@ -1271,7 +1271,7 @@ pub const MODEL_STACKS: &[ModelStack] = &[
         ],
         note: "Sentence-style captions instead of tags. Eleven files (~1.56 GB) of the \
                transformers-native checkpoint, pinned to one revision; no remote code runs. \
-               Needs ~2 GB VRAM.",
+               Needs ~2.5 GB VRAM.",
         is_default: false,
     },
     ModelStack {
@@ -1296,7 +1296,7 @@ pub const MODEL_STACKS: &[ModelStack] = &[
         ],
         note: "Optional and large: re-captions a frame together with a later one when a \
                Florence-2 caption looks unsure, describing what changes between them. \
-               Fourteen files (~16.6 GB download); loaded 4-bit it needs ~6 GB VRAM.",
+               Fourteen files (~16.6 GB download); loaded 4-bit it needs ~9 GB VRAM.",
         is_default: false,
     },
 ];

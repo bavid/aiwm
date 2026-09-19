@@ -105,15 +105,15 @@ export const TRAINING_STACKS_MOCK: AnyRecord[] = [
   {
     id: "florence2-large", label: "Florence-2 large (prose captions)", media: "training",
     is_default: false, fit: { level: "green" },
-    note: "Sentence-style captions instead of tags. Eleven files (~1.56 GB) of the transformers-native checkpoint, pinned to one revision; no remote code runs. Needs ~2 GB VRAM.",
+    note: "Sentence-style captions instead of tags. Eleven files (~1.56 GB) of the transformers-native checkpoint, pinned to one revision; no remote code runs. Needs ~2.5 GB VRAM.",
     members: membersOf("florence2-large-"),
   },
   {
     id: "qwen2.5-vl-7b", label: "Qwen2.5-VL 7B Instruct (second opinion)", media: "training",
-    // `stack_fit` judges a captioner stack by its run-time VRAM (4-bit ~6 GiB),
+    // `stack_fit` judges a captioner stack by its run-time VRAM (4-bit ~9 GiB),
     // not by its 16.6 GB of files.
     is_default: false, fit: { level: "green" },
-    note: "Optional and large: re-captions a frame together with a later one when a Florence-2 caption looks unsure, describing what changes between them. Fourteen files (~16.6 GB download); loaded 4-bit it needs ~6 GB VRAM.",
+    note: "Optional and large: re-captions a frame together with a later one when a Florence-2 caption looks unsure, describing what changes between them. Fourteen files (~16.6 GB download); loaded 4-bit it needs ~9 GB VRAM.",
     members: membersOf("qwen2.5-vl-7b-"),
   },
 ];
@@ -142,7 +142,7 @@ const CAPTIONERS = [
   },
   {
     id: "florence2", name: "Florence-2 (prose)", style: "prose", role: "vision_florence2",
-    vram_mb: 2048, license: "MIT", supports_escalation: true, kind: "florence2_engine",
+    vram_mb: 2560, license: "MIT", supports_escalation: true, kind: "florence2_engine",
     known_issue: null,
   },
 ];

@@ -111,11 +111,10 @@ pub async fn import_model(
         let model = match pinned_file {
             Some(file) => {
                 let dest = store_root.join(kind.store_subdir()).join(file);
-                let model =
-                    repair_pinned_copy(db, existing, &source, &dest, &sha256, req.keep_original)
-                        .await?;
+                // First: a stale old-revision row may hold `dest`, which the
+                // repair re-points this row to (`models.file_path` is unique).
                 prune_pinned_folder(db, store_root, kind).await?;
-                model
+                repair_pinned_copy(db, existing, &source, &dest, &sha256, req.keep_original).await?
             }
             None => existing,
         };
@@ -1685,6 +1684,50 @@ mod tests {
         assert_eq!(Path::new(&out.model.file_path), dest.as_path());
         assert_eq!(std::fs::read(&dest).unwrap(), FLORENCE2_GENERATION_CONFIG);
         assert!(db.models().get(&old_row.id).await.unwrap().is_none());
+        assert_eq!(db.models().list().await.unwrap().len(), 1);
+    }
+
+    /// Repair branch, same UNIQUE hazard: the row already holding the new
+    /// hash points elsewhere, while a stale old-revision row holds the
+    /// destination path. Re-pointing the row must not collide with it.
+    #[tokio::test]
+    async fn a_repair_repoints_its_row_past_a_stale_row_holding_the_destination() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = tmp.path().join("store");
+        let db = Database::connect_in_memory().await.unwrap();
+        let first = write_safetensors(
+            tmp.path(),
+            "generation_config.json",
+            FLORENCE2_GENERATION_CONFIG,
+        );
+        let out = import_as(&db, &store, &first, "florence2_engine")
+            .await
+            .unwrap();
+        let elsewhere = tmp.path().join("elsewhere.json");
+        db.models()
+            .set_file_path(&out.model.id, &elsewhere.to_string_lossy())
+            .await
+            .unwrap();
+        // Exactly the importer's path string for the destination.
+        let dest = store
+            .join(ModelKind::Florence2Engine.store_subdir())
+            .join("generation_config.json");
+        let old_body = b"{\n    \"num_beams\": 3,\n    \"early_stopping\": false\n}";
+        std::fs::write(&dest, old_body).unwrap();
+        let stale = insert_stale_row(&db, &dest, old_body).await;
+
+        let again = write_safetensors(
+            tmp.path(),
+            "generation_config.json",
+            FLORENCE2_GENERATION_CONFIG,
+        );
+        let out = import_as(&db, &store, &again, "florence2_engine")
+            .await
+            .unwrap();
+        assert!(out.already_present);
+        assert_eq!(Path::new(&out.model.file_path), dest.as_path());
+        assert_eq!(std::fs::read(&dest).unwrap(), FLORENCE2_GENERATION_CONFIG);
+        assert!(db.models().get(&stale.id).await.unwrap().is_none());
         assert_eq!(db.models().list().await.unwrap().len(), 1);
     }
 

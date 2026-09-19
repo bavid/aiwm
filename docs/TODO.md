@@ -1841,12 +1841,15 @@ Noch offen aus Plan 6:
       keine Fehler, keine Warnungen. Der Core schickt keine `quantization`,
       der Sidecar-Standard `4bit` gilt; andere Modi sind in der Konfiguration
       nicht freigegeben und wurden daher nicht probiert.
-    - **VRAM-Reservierung zu knapp:** gemessen Florence-2 ~2.187 MiB
-      (reserviert 2.048), Florence + Qwen zusammen **~10.035 MiB** über
-      Grundlast (reserviert 2.048 + 6.144 = 8.192) — Qwen allein ~7.864 MiB
-      statt 6.144. `QWEN_VL_VRAM_FALLBACK_MB` (und leicht
-      `FLORENCE2_VRAM_FALLBACK_MB`) auf die Messung anheben, sonst plant der
-      Scheduler neben der Eskalation zu viel ein.
+    - ✅ **VRAM-Reservierung war zu knapp** (behoben im Review-Nachgang zu
+      Plan 8): gemessen Florence-2 ~2.187 MiB (reserviert war 2.048),
+      Florence + Qwen zusammen ~10.035 MiB über Grundlast (reserviert
+      2.048 + 6.144 = 8.192), Qwen allein ~7.864 MiB. Regel jetzt: Messung
+      + 15 % Reserve, auf die nächsten 512 MiB aufgerundet →
+      `FLORENCE2_VRAM_FALLBACK_MB` = **2.560**, `QWEN_VL_VRAM_FALLBACK_MB` =
+      **9.216** (zusammen 11.776; mit 1,8 GB Grundlast passt das auf 16 GB).
+      Captioner-Registry, `stack_fit`, UI-Texte und Dev-Mock ziehen mit; ein
+      Test pinnt die Werte an die Regel.
     - **Modelle bleiben nach dem Job geladen:** die Vision-Runtime hält
       `dataset-vision-pipeline` resident (nach Florence-Läufen ~4,0 GB, nach
       Eskalation ~11,8 GB belegt) bis zum Entladen/Beenden. Für die zweite

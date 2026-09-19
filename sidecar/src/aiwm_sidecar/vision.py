@@ -159,18 +159,21 @@ def _construct_florence2(model_dir: str) -> _Florence2Engine:
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     dtype = torch.float16 if device == "cuda" else torch.float32
-    # Built into transformers 5.x -- no `trust_remote_code`, so no Python
-    # from the folder (or the Hub) ever runs. `local_files_only=True`: core
-    # verified this exact folder against the pinned catalog
+    # Built into transformers 5.x -- `trust_remote_code=False` explicitly
+    # (the pinned preprocessor_config.json still carries an `auto_map`), so
+    # no Python from the folder (or the Hub) ever runs. `local_files_only`:
+    # core verified this exact folder against the pinned catalog
     # (`model::integrity`) before sending the request; nothing else is read.
     model = (
         Florence2ForConditionalGeneration.from_pretrained(
-            model_dir, dtype=dtype, local_files_only=True
+            model_dir, dtype=dtype, local_files_only=True, trust_remote_code=False
         )
         .to(device)
         .eval()
     )
-    processor = AutoProcessor.from_pretrained(model_dir, local_files_only=True)
+    processor = AutoProcessor.from_pretrained(
+        model_dir, local_files_only=True, trust_remote_code=False
+    )
     return _Florence2Engine(model, processor, device)
 
 
