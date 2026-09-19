@@ -100,6 +100,15 @@ pub async fn import_model(
     .await
     .map_err(|e| CoreError::Other(anyhow::anyhow!("import worker panicked: {e}")))??;
 
+    if !remote_code_allowed(kind, &ext, &sha256) {
+        return Err(CoreError::Config(format!(
+            "{} is remote code the sidecar would execute (`trust_remote_code`) and is not \
+             one of the pinned catalog files for a {} — refusing to import it",
+            source.display(),
+            kind.as_str()
+        )));
+    }
+
     if let Some(existing) = db.models().find_by_sha256(&sha256).await? {
         return Ok(ImportOutcome {
             model: existing,
@@ -159,6 +168,18 @@ pub async fn import_model(
         model,
         already_present: false,
     })
+}
+
+/// `false` for a `.py` file unless its SHA-256 is a pinned catalog entry of
+/// this exact kind. Florence-2's architecture ships as Python that the
+/// sidecar runs via `trust_remote_code=True`, so only the reviewed files of
+/// the pinned revision may ever land where it would be executed. Every
+/// other extension is data, not code, and passes.
+fn remote_code_allowed(kind: ModelKind, ext: &str, sha256: &str) -> bool {
+    if !ext.eq_ignore_ascii_case("py") {
+        return true;
+    }
+    catalog::find_by_sha256(sha256).is_some_and(|known| known.kind == kind.as_str())
 }
 
 /// The requested (or inferred) kind, validated against the file's extension.
@@ -361,8 +382,9 @@ fn sha256_file(path: &Path) -> Result<String> {
 /// (`<store>/image/checkpoints/<file>`) to match ComfyUI's own layout. A name
 /// clash is broken with an 8-char hash.
 ///
-/// Dia's two directory-shaped kinds, plus the WD tagger's `model.onnx` +
-/// `selected_tags.csv` pair, are the exception: they always keep their exact
+/// Dia's two directory-shaped kinds, the WD tagger's `model.onnx` +
+/// `selected_tags.csv` pair, and the Florence-2 / Qwen2.5-VL snapshot
+/// directories are the exception: they always keep their exact
 /// original filename with no hash-suffix, even on a "collision" (see
 /// [`unique_destination`]'s doc below for why that's actually safe).
 fn unique_destination(
@@ -406,7 +428,11 @@ fn unique_destination(
     // deliberately overwritten by `place_file`, not renamed around.
     if matches!(
         kind,
-        ModelKind::DiaEngine | ModelKind::DiaCodec | ModelKind::WdTagger
+        ModelKind::DiaEngine
+            | ModelKind::DiaCodec
+            | ModelKind::WdTagger
+            | ModelKind::Florence2Engine
+            | ModelKind::QwenVlEngine
     ) {
         return type_dir.join(&filename);
     }
@@ -1047,6 +1073,135 @@ mod tests {
             Path::new(&model_out.model.file_path).parent(),
             "the model and its tag list must be siblings in the same directory"
         );
+    }
+
+    #[tokio::test]
+    async fn florence2_engine_files_land_side_by_side_under_their_original_names() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = tmp.path().join("store");
+        let db = Database::connect_in_memory().await.unwrap();
+
+        let mut dirs = Vec::new();
+        for (name, body) in [
+            ("config.json", &b"{\"model_type\": \"florence2\"}"[..]),
+            ("model.safetensors", &b"not-a-real-header"[..]),
+        ] {
+            let src = write_safetensors(tmp.path(), name, body);
+            let out = import_model(
+                &db,
+                &store,
+                ImportRequest {
+                    model_type: Some("florence2_engine".into()),
+                    ..req(&src)
+                },
+            )
+            .await
+            .unwrap();
+            assert_eq!(out.model.roles, ["vision_florence2"]);
+            assert!(out.model.runtimes.is_empty(), "sidecar-only kind");
+            let p = out.model.file_path.replace('\\', "/");
+            assert!(
+                p.ends_with(&format!("/vision/florence2-large/{name}")),
+                "{p}"
+            );
+            dirs.push(
+                Path::new(&out.model.file_path)
+                    .parent()
+                    .unwrap()
+                    .to_path_buf(),
+            );
+        }
+        assert_eq!(dirs[0], dirs[1], "one directory for `from_pretrained`");
+    }
+
+    #[tokio::test]
+    async fn qwen_vl_engine_files_land_side_by_side_under_their_original_names() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = tmp.path().join("store");
+        let db = Database::connect_in_memory().await.unwrap();
+
+        let mut dirs = Vec::new();
+        for (name, body) in [
+            ("merges.txt", &b"#version: 0.2\n"[..]),
+            ("model-00001-of-00005.safetensors", &b"shard-bytes"[..]),
+        ] {
+            let src = write_safetensors(tmp.path(), name, body);
+            let out = import_model(
+                &db,
+                &store,
+                ImportRequest {
+                    model_type: Some("qwen_vl_engine".into()),
+                    ..req(&src)
+                },
+            )
+            .await
+            .unwrap();
+            assert_eq!(out.model.roles, ["vision_qwen2_5_vl"]);
+            let p = out.model.file_path.replace('\\', "/");
+            assert!(p.ends_with(&format!("/vision/qwen2.5-vl-7b/{name}")), "{p}");
+            dirs.push(
+                Path::new(&out.model.file_path)
+                    .parent()
+                    .unwrap()
+                    .to_path_buf(),
+            );
+        }
+        assert_eq!(dirs[0], dirs[1]);
+    }
+
+    #[tokio::test]
+    async fn a_remote_code_python_file_outside_the_catalog_is_refused() {
+        // Florence-2 runs its `.py` files via `trust_remote_code=True` --
+        // only the exact, pinned files the catalog lists may ever be placed
+        // where the sidecar would execute them.
+        let tmp = tempfile::tempdir().unwrap();
+        let store = tmp.path().join("store");
+        let db = Database::connect_in_memory().await.unwrap();
+        let src = write_safetensors(tmp.path(), "modeling_florence2.py", b"import os\n");
+        let err = import_model(
+            &db,
+            &store,
+            ImportRequest {
+                model_type: Some("florence2_engine".into()),
+                ..req(&src)
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(err.to_string().contains("remote code"), "{err}");
+        assert!(!store
+            .join("vision/florence2-large/modeling_florence2.py")
+            .exists());
+        assert!(db.models().list().await.unwrap().is_empty());
+    }
+
+    #[test]
+    fn remote_code_is_allowed_only_for_a_catalogued_file_of_the_same_kind() {
+        let pinned = crate::model::KNOWN_MODELS
+            .iter()
+            .find(|m| m.kind == "florence2_engine" && m.file.ends_with(".py"))
+            .expect("the catalog pins Florence-2's remote code");
+        assert!(remote_code_allowed(
+            ModelKind::Florence2Engine,
+            "py",
+            pinned.sha256
+        ));
+        assert!(remote_code_allowed(
+            ModelKind::Florence2Engine,
+            "py",
+            &pinned.sha256.to_ascii_uppercase()
+        ));
+        assert!(!remote_code_allowed(
+            ModelKind::Florence2Engine,
+            "py",
+            &"0".repeat(64)
+        ));
+        // Not a `.py` -- the gate does not apply.
+        assert!(remote_code_allowed(
+            ModelKind::Florence2Engine,
+            "json",
+            &"0".repeat(64)
+        ));
     }
 
     #[tokio::test]

@@ -13,6 +13,15 @@
 /// drift apart (the captioner resolves models by this exact string).
 pub const WD_TAGGER_ROLE: &str = "vision_wd_tagger";
 
+/// The model-library role [`ModelKind::Florence2Engine`] imports under —
+/// re-exported as `capability::dataset::caption::FLORENCE2_ROLE`, which
+/// resolves the captioner's directory by this exact string.
+pub const FLORENCE2_ROLE: &str = "vision_florence2";
+
+/// The model-library role [`ModelKind::QwenVlEngine`] imports under — the
+/// Qwen2.5-VL escalation model `capability::dataset::caption` resolves.
+pub const QWEN_VL_ROLE: &str = "vision_qwen2_5_vl";
+
 /// Every model kind the importer understands.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModelKind {
@@ -75,6 +84,18 @@ pub enum ModelKind {
     /// co-located, consumed by the Python sidecar (`vision.tag_frame`).
     /// Never a ComfyUI model.
     WdTagger,
+    /// One file of `microsoft/Florence-2-large` (weights, configs,
+    /// tokenizer and the `trust_remote_code` Python files) — the same
+    /// directory shape as [`DiaEngine`](Self::DiaEngine): the sidecar's
+    /// `AutoModelForCausalLM.from_pretrained(<dir>, trust_remote_code=True)`
+    /// reads co-located siblings by their original Hugging Face names, so
+    /// the destination is never hash-suffixed.
+    Florence2Engine,
+    /// One file of `Qwen/Qwen2.5-VL-7B-Instruct` (five weight shards plus
+    /// index, configs, tokenizer and chat template) — directory-shaped like
+    /// [`Florence2Engine`](Self::Florence2Engine), read by
+    /// `Qwen2_5_VLForConditionalGeneration.from_pretrained(<dir>)`.
+    QwenVlEngine,
 }
 
 impl ModelKind {
@@ -95,6 +116,8 @@ impl ModelKind {
             "clip_vision" | "clip_vision_model" => Self::ClipVision,
             "ip_adapter" | "ipadapter" => Self::IpAdapter,
             "wd_tagger" => Self::WdTagger,
+            "florence2_engine" => Self::Florence2Engine,
+            "qwen_vl_engine" => Self::QwenVlEngine,
             _ => return None,
         })
     }
@@ -127,6 +150,11 @@ impl ModelKind {
             // directory, for both the Dia engine and its DAC codec.
             Self::DiaEngine | Self::DiaCodec => ext == "json" || ext == "safetensors",
             Self::WdTagger => ext == "onnx" || ext == "csv",
+            // `.py` is Florence-2's remote code; `model::import` only lets a
+            // `.py` in when its SHA-256 is a pinned catalog entry.
+            Self::Florence2Engine => matches!(ext.as_str(), "json" | "safetensors" | "py"),
+            // `merges.txt` is half of Qwen2's BPE tokenizer.
+            Self::QwenVlEngine => matches!(ext.as_str(), "json" | "safetensors" | "txt"),
         }
     }
 
@@ -158,6 +186,8 @@ impl ModelKind {
             Self::ClipVision => Some("clip_vision"),
             Self::IpAdapter => Some("ip_adapter"),
             Self::WdTagger => Some(WD_TAGGER_ROLE),
+            Self::Florence2Engine => Some(FLORENCE2_ROLE),
+            Self::QwenVlEngine => Some(QWEN_VL_ROLE),
         }
     }
 
@@ -182,6 +212,8 @@ impl ModelKind {
             Self::ClipVision => "image/clip_vision",
             Self::IpAdapter => "image/ipadapter",
             Self::WdTagger => "vision/wd-tagger",
+            Self::Florence2Engine => "vision/florence2-large",
+            Self::QwenVlEngine => "vision/qwen2.5-vl-7b",
         }
     }
 
@@ -195,7 +227,9 @@ impl ModelKind {
             | Self::VoiceData
             | Self::DiaEngine
             | Self::DiaCodec
-            | Self::WdTagger => return None,
+            | Self::WdTagger
+            | Self::Florence2Engine
+            | Self::QwenVlEngine => return None,
             Self::Checkpoint => "checkpoints",
             Self::DiffusionModel | Self::VideoModel => "diffusion_models",
             Self::Vae => "vae",
@@ -222,6 +256,8 @@ impl ModelKind {
             Self::ClipVision => "clip_vision",
             Self::IpAdapter => "ip_adapter",
             Self::WdTagger => "wd_tagger",
+            Self::Florence2Engine => "florence2_engine",
+            Self::QwenVlEngine => "qwen_vl_engine",
         }
     }
 
@@ -438,6 +474,51 @@ mod tests {
         assert!(ModelKind::WdTagger.accepts_ext("csv"));
         assert!(!ModelKind::WdTagger.accepts_ext("safetensors"));
         assert!(!ModelKind::WdTagger.is_llm());
+    }
+
+    #[test]
+    fn captioner_engine_kinds_are_directory_shaped_sidecar_kinds_with_their_own_folders() {
+        assert_eq!(
+            ModelKind::from_hint("florence2_engine"),
+            Some(ModelKind::Florence2Engine)
+        );
+        assert_eq!(
+            ModelKind::from_hint("qwen_vl_engine"),
+            Some(ModelKind::QwenVlEngine)
+        );
+        assert_eq!(ModelKind::Florence2Engine.as_str(), "florence2_engine");
+        assert_eq!(ModelKind::QwenVlEngine.as_str(), "qwen_vl_engine");
+
+        assert_eq!(FLORENCE2_ROLE, "vision_florence2");
+        assert_eq!(QWEN_VL_ROLE, "vision_qwen2_5_vl");
+        assert_eq!(
+            ModelKind::Florence2Engine.default_role(),
+            Some(FLORENCE2_ROLE)
+        );
+        assert_eq!(ModelKind::QwenVlEngine.default_role(), Some(QWEN_VL_ROLE));
+
+        assert_eq!(
+            ModelKind::Florence2Engine.store_subdir(),
+            "vision/florence2-large"
+        );
+        assert_eq!(
+            ModelKind::QwenVlEngine.store_subdir(),
+            "vision/qwen2.5-vl-7b"
+        );
+        for k in [ModelKind::Florence2Engine, ModelKind::QwenVlEngine] {
+            assert_eq!(k.comfy_folder(), None);
+            assert!(!k.is_llm());
+            assert!(k.accepts_ext("json"));
+            assert!(k.accepts_ext("safetensors"));
+            assert!(!k.accepts_ext("bin"), "never the Pickle weights");
+            assert!(!k.accepts_ext("gguf"));
+        }
+        // Florence-2 ships its architecture as `trust_remote_code` Python
+        // files; Qwen2.5-VL's BPE tokenizer needs `merges.txt`.
+        assert!(ModelKind::Florence2Engine.accepts_ext("py"));
+        assert!(!ModelKind::Florence2Engine.accepts_ext("txt"));
+        assert!(ModelKind::QwenVlEngine.accepts_ext("txt"));
+        assert!(!ModelKind::QwenVlEngine.accepts_ext("py"));
     }
 
     #[test]

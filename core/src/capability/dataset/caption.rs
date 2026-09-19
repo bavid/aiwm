@@ -42,8 +42,9 @@ use super::dataset_err;
 /// under (Models tab \u{2192} Add models, same generic "point at a folder,
 /// assign a role" flow every other runtime already uses — see
 /// `capability::tts::resolve_dia_dirs` for the same shape with Dia).
-pub const FLORENCE2_ROLE: &str = "vision_florence2";
-pub const QWEN_VL_ROLE: &str = "vision_qwen2_5_vl";
+/// Defined next to their [`crate::model::ModelKind`]s so a catalog stack
+/// install and this resolver can never disagree on the string.
+pub use crate::model::{FLORENCE2_ROLE, QWEN_VL_ROLE};
 
 /// fp16 weights (~770M params \u{2248} 1.5 GB) plus activation/runtime
 /// overhead for the `large` Florence-2 checkpoint used by default.

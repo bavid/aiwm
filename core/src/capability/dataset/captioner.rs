@@ -250,6 +250,52 @@ mod tests {
         assert_eq!(dir, Path::new("E:\\AI\\models\\vision\\wd-tagger-a"));
     }
 
+    /// A catalog stack install lands every member via `import_model` with
+    /// its kind's default role in the kind's store folder -- detection must
+    /// find exactly those directories for both one-click captioner stacks.
+    #[tokio::test]
+    async fn an_imported_captioner_stack_is_detected_by_its_kinds_role_and_folder() {
+        use crate::model::{ModelKind, KNOWN_MODELS, MODEL_STACKS};
+
+        let db = Database::connect_in_memory().await.unwrap();
+        let store = Path::new("E:\\AI\\models");
+        for stack_id in ["wd-tagger", "florence2-large", "qwen2.5-vl-7b"] {
+            let stack = MODEL_STACKS.iter().find(|s| s.id == stack_id).unwrap();
+            for id in stack.member_ids {
+                let m = KNOWN_MODELS.iter().find(|m| &m.id == id).unwrap();
+                let kind = ModelKind::from_hint(m.kind).unwrap();
+                let path = store.join(kind.store_subdir()).join(m.file);
+                let role = kind.default_role().unwrap();
+                db.models()
+                    .insert(model_row(&path.to_string_lossy(), role))
+                    .await
+                    .unwrap();
+            }
+        }
+
+        let s = captioner_statuses(&db).await.unwrap();
+        assert!(s.iter().all(|x| x.installed), "{s:?}");
+        let wd = find_captioner(WD_TAGGER_ID).unwrap();
+        assert_eq!(
+            installed_captioner_dir(&db, wd).await.unwrap().unwrap(),
+            store.join("vision/wd-tagger")
+        );
+        let florence = find_captioner(FLORENCE2_ID).unwrap();
+        assert_eq!(
+            installed_captioner_dir(&db, florence)
+                .await
+                .unwrap()
+                .unwrap(),
+            store.join("vision/florence2-large")
+        );
+        assert_eq!(
+            super::super::caption::resolve_qwen_vl_dir(&db)
+                .await
+                .unwrap(),
+            store.join("vision/qwen2.5-vl-7b")
+        );
+    }
+
     #[tokio::test]
     async fn florence2_counts_as_installed_with_any_single_row_carrying_its_role() {
         let db = Database::connect_in_memory().await.unwrap();

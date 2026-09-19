@@ -37,7 +37,8 @@ pub struct KnownModel {
     /// entries; always `false` for required companions — VAE/text encoder —
     /// which aren't alternatives to each other).
     pub is_default: bool,
-    /// `"image"` or `"video"` — which stack this entry belongs to. Not
+    /// `"image"`, `"video"`, `"voice"` or `"training"` (dataset captioners)
+    /// — which stack / Models-tab category this entry belongs to. Not
     /// derivable from `kind`/`family` alone: a VAE/text-encoder companion has
     /// `family: None`, and both stacks have one.
     pub media: &'static str,
@@ -636,7 +637,7 @@ pub const KNOWN_MODELS: &[KnownModel] = &[
                tags included) for anime/illustration datasets. 0.3B parameters, runs on the \
                CPU via onnxruntime. Needs the tag list below in the same folder.",
         is_default: false,
-        media: "image",
+        media: "training",
     },
     KnownModel {
         id: "wd-eva02-large-tagger-v3-tags",
@@ -653,7 +654,437 @@ pub const KNOWN_MODELS: &[KnownModel] = &[
         note: "The tag vocabulary the tagger's outputs map onto. Required companion of the \
                model above.",
         is_default: false,
-        media: "image",
+        media: "training",
+    },
+    // --- Florence-2 large (prose captioner, Dataset tab) ---
+    // Ten co-located files read as one directory by
+    // `AutoModelForCausalLM.from_pretrained(<dir>, trust_remote_code=True)` --
+    // see `ModelKind::Florence2Engine`. The three `.py` files are remote code
+    // the sidecar executes, so every URL is pinned to one commit (never
+    // `main`) and each SHA-256/size below was computed from the file actually
+    // downloaded at that commit (the weights' hash also matches the Hub's LFS
+    // metadata).
+    KnownModel {
+        id: "florence2-large-model",
+        name: "Florence-2 large — weights",
+        kind: "florence2_engine",
+        family: Some("florence2"),
+        publisher: "Microsoft",
+        repo: "microsoft/Florence-2-large",
+        file: "model.safetensors",
+        url: "https://huggingface.co/microsoft/Florence-2-large/resolve/21a599d414c4d928c9032694c424fb94458e3594/model.safetensors",
+        sha256: "4f38ce741c6b71188fe2b3419a55e11917a8a7b321ae2e63c61da0191b0ebad7",
+        size_bytes: 1_553_563_458,
+        license: "MIT",
+        note: "Florence-2-large weights (0.77B parameters, ~1.55 GB) -- the prose captioner \
+               the Dataset tab uses by default. Needs every other Florence-2 file below in \
+               the same folder. Pinned to commit 21a599d414c4d928c9032694c424fb94458e3594.",
+        is_default: false,
+        media: "training",
+    },
+    KnownModel {
+        id: "florence2-large-config",
+        name: "Florence-2 large — model config",
+        kind: "florence2_engine",
+        family: Some("florence2"),
+        publisher: "Microsoft",
+        repo: "microsoft/Florence-2-large",
+        file: "config.json",
+        url: "https://huggingface.co/microsoft/Florence-2-large/resolve/21a599d414c4d928c9032694c424fb94458e3594/config.json",
+        sha256: "6f8a8f92a74ce18b5c1e5646b4a8222477dd1ac49f31b953e75d6fc3e0f8583a",
+        size_bytes: 2_445,
+        license: "MIT",
+        note: "Architecture config; its auto_map points AutoModelForCausalLM at the pinned \
+               modeling_florence2.py below. Pinned to commit \
+               21a599d414c4d928c9032694c424fb94458e3594.",
+        is_default: false,
+        media: "training",
+    },
+    KnownModel {
+        id: "florence2-large-configuration-florence2",
+        name: "Florence-2 large — remote code (config)",
+        kind: "florence2_engine",
+        family: Some("florence2"),
+        publisher: "Microsoft",
+        repo: "microsoft/Florence-2-large",
+        file: "configuration_florence2.py",
+        url: "https://huggingface.co/microsoft/Florence-2-large/resolve/21a599d414c4d928c9032694c424fb94458e3594/configuration_florence2.py",
+        sha256: "de2e45a975b3582de05d2f4d963a3e9f9a3d20dccf78d28e0052932a0be93bdf",
+        size_bytes: 15_119,
+        license: "MIT",
+        note: "Florence2Config -- Python the sidecar runs via trust_remote_code, so it is \
+               pinned by hash like the weights. Pinned to commit \
+               21a599d414c4d928c9032694c424fb94458e3594.",
+        is_default: false,
+        media: "training",
+    },
+    KnownModel {
+        id: "florence2-large-modeling-florence2",
+        name: "Florence-2 large — remote code (model)",
+        kind: "florence2_engine",
+        family: Some("florence2"),
+        publisher: "Microsoft",
+        repo: "microsoft/Florence-2-large",
+        file: "modeling_florence2.py",
+        url: "https://huggingface.co/microsoft/Florence-2-large/resolve/21a599d414c4d928c9032694c424fb94458e3594/modeling_florence2.py",
+        sha256: "5162bf465e61b6e29cc113a467630ec3cb56ed8e4d46eb6207157f10fb9b8a24",
+        size_bytes: 127_455,
+        license: "MIT",
+        note: "Florence2ForConditionalGeneration -- Python the sidecar runs via \
+               trust_remote_code, pinned by hash. Pinned to commit \
+               21a599d414c4d928c9032694c424fb94458e3594.",
+        is_default: false,
+        media: "training",
+    },
+    KnownModel {
+        id: "florence2-large-processing-florence2",
+        name: "Florence-2 large — remote code (processor)",
+        kind: "florence2_engine",
+        family: Some("florence2"),
+        publisher: "Microsoft",
+        repo: "microsoft/Florence-2-large",
+        file: "processing_florence2.py",
+        url: "https://huggingface.co/microsoft/Florence-2-large/resolve/21a599d414c4d928c9032694c424fb94458e3594/processing_florence2.py",
+        sha256: "c655782a9e4347965c735ea54cbc4e98fdbc02155ffd1ce2ecd61f42c45eda28",
+        size_bytes: 48_674,
+        license: "MIT",
+        note: "Florence2Processor (task prompts, post-processing) -- Python run via \
+               trust_remote_code, pinned by hash. Pinned to commit \
+               21a599d414c4d928c9032694c424fb94458e3594.",
+        is_default: false,
+        media: "training",
+    },
+    KnownModel {
+        id: "florence2-large-preprocessor-config",
+        name: "Florence-2 large — preprocessor config",
+        kind: "florence2_engine",
+        family: Some("florence2"),
+        publisher: "Microsoft",
+        repo: "microsoft/Florence-2-large",
+        file: "preprocessor_config.json",
+        url: "https://huggingface.co/microsoft/Florence-2-large/resolve/21a599d414c4d928c9032694c424fb94458e3594/preprocessor_config.json",
+        sha256: "2f5921bbc53c7cc04251e1027b45b1cec726276be6db23d1bb40641bfbe2cf29",
+        size_bytes: 806,
+        license: "MIT",
+        note: "Image preprocessing settings; its auto_map points AutoProcessor at \
+               processing_florence2.py. Pinned to commit \
+               21a599d414c4d928c9032694c424fb94458e3594.",
+        is_default: false,
+        media: "training",
+    },
+    KnownModel {
+        id: "florence2-large-generation-config",
+        name: "Florence-2 large — generation defaults",
+        kind: "florence2_engine",
+        family: Some("florence2"),
+        publisher: "Microsoft",
+        repo: "microsoft/Florence-2-large",
+        file: "generation_config.json",
+        url: "https://huggingface.co/microsoft/Florence-2-large/resolve/21a599d414c4d928c9032694c424fb94458e3594/generation_config.json",
+        sha256: "30e9865458ecc8ee931eeeb43f44f1d169c5ab95be39e0072142a7a6b8f31990",
+        size_bytes: 51,
+        license: "MIT",
+        note: "Shipped beam-search defaults. Pinned to commit \
+               21a599d414c4d928c9032694c424fb94458e3594.",
+        is_default: false,
+        media: "training",
+    },
+    KnownModel {
+        id: "florence2-large-tokenizer",
+        name: "Florence-2 large — tokenizer",
+        kind: "florence2_engine",
+        family: Some("florence2"),
+        publisher: "Microsoft",
+        repo: "microsoft/Florence-2-large",
+        file: "tokenizer.json",
+        url: "https://huggingface.co/microsoft/Florence-2-large/resolve/21a599d414c4d928c9032694c424fb94458e3594/tokenizer.json",
+        sha256: "847bbeab6174d66a88898f729d52fa8d355fafe1bea101cf960dd404581df70e",
+        size_bytes: 1_355_863,
+        license: "MIT",
+        note: "The fast BART tokenizer the processor loads. Pinned to commit \
+               21a599d414c4d928c9032694c424fb94458e3594.",
+        is_default: false,
+        media: "training",
+    },
+    KnownModel {
+        id: "florence2-large-tokenizer-config",
+        name: "Florence-2 large — tokenizer config",
+        kind: "florence2_engine",
+        family: Some("florence2"),
+        publisher: "Microsoft",
+        repo: "microsoft/Florence-2-large",
+        file: "tokenizer_config.json",
+        url: "https://huggingface.co/microsoft/Florence-2-large/resolve/21a599d414c4d928c9032694c424fb94458e3594/tokenizer_config.json",
+        sha256: "79ffcf43af8ebda99d165f61d243180da2e2639952e41e71e11611c18770489c",
+        size_bytes: 34,
+        license: "MIT",
+        note: "Tokenizer settings (max length). Pinned to commit \
+               21a599d414c4d928c9032694c424fb94458e3594.",
+        is_default: false,
+        media: "training",
+    },
+    KnownModel {
+        id: "florence2-large-vocab",
+        name: "Florence-2 large — vocabulary",
+        kind: "florence2_engine",
+        family: Some("florence2"),
+        publisher: "Microsoft",
+        repo: "microsoft/Florence-2-large",
+        file: "vocab.json",
+        url: "https://huggingface.co/microsoft/Florence-2-large/resolve/21a599d414c4d928c9032694c424fb94458e3594/vocab.json",
+        sha256: "394fdc63c71aabe0a9b97117f5d62fb5fcc4d59b2b3ea929a3929e6a53217b3c",
+        size_bytes: 1_099_884,
+        license: "MIT",
+        note: "BART vocabulary. Pinned to commit 21a599d414c4d928c9032694c424fb94458e3594.",
+        is_default: false,
+        media: "training",
+    },
+    // --- Qwen2.5-VL 7B Instruct (optional two-frame "second opinion") ---
+    // Fourteen co-located files for `Qwen2_5_VLForConditionalGeneration` /
+    // `AutoProcessor.from_pretrained(<dir>)` -- built into `transformers`, no
+    // remote code. Pinned to one commit; every SHA-256/size computed from the
+    // downloaded file (the five shards also match the Hub's LFS metadata).
+    KnownModel {
+        id: "qwen2.5-vl-7b-model-00001-of-00005",
+        name: "Qwen2.5-VL 7B Instruct — weights (shard 1 of 5)",
+        kind: "qwen_vl_engine",
+        family: Some("qwen2.5-vl"),
+        publisher: "Alibaba Cloud (Qwen)",
+        repo: "Qwen/Qwen2.5-VL-7B-Instruct",
+        file: "model-00001-of-00005.safetensors",
+        url: "https://huggingface.co/Qwen/Qwen2.5-VL-7B-Instruct/resolve/cc594898137f460bfe9f0759e9844b3ce807cfb5/model-00001-of-00005.safetensors",
+        sha256: "e97b877e47fde53a6c6e77aafb36e58e91ee9d95c4a3eeac6f1b5c0e6a1c986e",
+        size_bytes: 3_900_233_256,
+        license: "Apache-2.0",
+        note: "Qwen2.5-VL-7B-Instruct weights (bf16), ~3.9 GB -- the optional \
+               second-opinion captioner that compares two frames when a Florence-2 caption \
+               looks unsure. Needs all five shards and the index. Pinned to commit \
+               cc594898137f460bfe9f0759e9844b3ce807cfb5.",
+        is_default: false,
+        media: "training",
+    },
+    KnownModel {
+        id: "qwen2.5-vl-7b-model-00002-of-00005",
+        name: "Qwen2.5-VL 7B Instruct — weights (shard 2 of 5)",
+        kind: "qwen_vl_engine",
+        family: Some("qwen2.5-vl"),
+        publisher: "Alibaba Cloud (Qwen)",
+        repo: "Qwen/Qwen2.5-VL-7B-Instruct",
+        file: "model-00002-of-00005.safetensors",
+        url: "https://huggingface.co/Qwen/Qwen2.5-VL-7B-Instruct/resolve/cc594898137f460bfe9f0759e9844b3ce807cfb5/model-00002-of-00005.safetensors",
+        sha256: "a9a300a43b4724eee2abe7c18ceb26768d0ab011eb0cad19d9bfd2476a24d024",
+        size_bytes: 3_864_726_320,
+        license: "Apache-2.0",
+        note: "Qwen2.5-VL-7B-Instruct weights (bf16), ~3.9 GB. Needs all five shards and \
+               the index. Pinned to commit cc594898137f460bfe9f0759e9844b3ce807cfb5.",
+        is_default: false,
+        media: "training",
+    },
+    KnownModel {
+        id: "qwen2.5-vl-7b-model-00003-of-00005",
+        name: "Qwen2.5-VL 7B Instruct — weights (shard 3 of 5)",
+        kind: "qwen_vl_engine",
+        family: Some("qwen2.5-vl"),
+        publisher: "Alibaba Cloud (Qwen)",
+        repo: "Qwen/Qwen2.5-VL-7B-Instruct",
+        file: "model-00003-of-00005.safetensors",
+        url: "https://huggingface.co/Qwen/Qwen2.5-VL-7B-Instruct/resolve/cc594898137f460bfe9f0759e9844b3ce807cfb5/model-00003-of-00005.safetensors",
+        sha256: "111223d173e00bbee81cba1216fad28668df3476706b7fd26f4d5b50f8b3a507",
+        size_bytes: 3_864_726_424,
+        license: "Apache-2.0",
+        note: "Qwen2.5-VL-7B-Instruct weights (bf16), ~3.9 GB. Needs all five shards and \
+               the index. Pinned to commit cc594898137f460bfe9f0759e9844b3ce807cfb5.",
+        is_default: false,
+        media: "training",
+    },
+    KnownModel {
+        id: "qwen2.5-vl-7b-model-00004-of-00005",
+        name: "Qwen2.5-VL 7B Instruct — weights (shard 4 of 5)",
+        kind: "qwen_vl_engine",
+        family: Some("qwen2.5-vl"),
+        publisher: "Alibaba Cloud (Qwen)",
+        repo: "Qwen/Qwen2.5-VL-7B-Instruct",
+        file: "model-00004-of-00005.safetensors",
+        url: "https://huggingface.co/Qwen/Qwen2.5-VL-7B-Instruct/resolve/cc594898137f460bfe9f0759e9844b3ce807cfb5/model-00004-of-00005.safetensors",
+        sha256: "ef47f634fa57d46ee134edcc09f34085a47da1e16c12a2abe0d67118be6d72ed",
+        size_bytes: 3_864_733_680,
+        license: "Apache-2.0",
+        note: "Qwen2.5-VL-7B-Instruct weights (bf16), ~3.9 GB. Needs all five shards and \
+               the index. Pinned to commit cc594898137f460bfe9f0759e9844b3ce807cfb5.",
+        is_default: false,
+        media: "training",
+    },
+    KnownModel {
+        id: "qwen2.5-vl-7b-model-00005-of-00005",
+        name: "Qwen2.5-VL 7B Instruct — weights (shard 5 of 5)",
+        kind: "qwen_vl_engine",
+        family: Some("qwen2.5-vl"),
+        publisher: "Alibaba Cloud (Qwen)",
+        repo: "Qwen/Qwen2.5-VL-7B-Instruct",
+        file: "model-00005-of-00005.safetensors",
+        url: "https://huggingface.co/Qwen/Qwen2.5-VL-7B-Instruct/resolve/cc594898137f460bfe9f0759e9844b3ce807cfb5/model-00005-of-00005.safetensors",
+        sha256: "0c859795ad3a627a9b95bcb762e059d5b768a4a36fdd4affeff269d93fdecc67",
+        size_bytes: 1_089_994_880,
+        license: "Apache-2.0",
+        note: "Qwen2.5-VL-7B-Instruct weights (bf16), ~1.1 GB. Needs all five shards and \
+               the index. Pinned to commit cc594898137f460bfe9f0759e9844b3ce807cfb5.",
+        is_default: false,
+        media: "training",
+    },
+    KnownModel {
+        id: "qwen2.5-vl-7b-model-index",
+        name: "Qwen2.5-VL 7B Instruct — weights shard index",
+        kind: "qwen_vl_engine",
+        family: Some("qwen2.5-vl"),
+        publisher: "Alibaba Cloud (Qwen)",
+        repo: "Qwen/Qwen2.5-VL-7B-Instruct",
+        file: "model.safetensors.index.json",
+        url: "https://huggingface.co/Qwen/Qwen2.5-VL-7B-Instruct/resolve/cc594898137f460bfe9f0759e9844b3ce807cfb5/model.safetensors.index.json",
+        sha256: "73b333b0b16e5286ddba615d2caebcd495cf7e616f52eb217a81781393d79de9",
+        size_bytes: 57_619,
+        license: "Apache-2.0",
+        note: "Maps every tensor to the shard holding it -- required for from_pretrained to \
+               load the five shards as one model. Pinned to commit \
+               cc594898137f460bfe9f0759e9844b3ce807cfb5.",
+        is_default: false,
+        media: "training",
+    },
+    KnownModel {
+        id: "qwen2.5-vl-7b-config",
+        name: "Qwen2.5-VL 7B Instruct — model config",
+        kind: "qwen_vl_engine",
+        family: Some("qwen2.5-vl"),
+        publisher: "Alibaba Cloud (Qwen)",
+        repo: "Qwen/Qwen2.5-VL-7B-Instruct",
+        file: "config.json",
+        url: "https://huggingface.co/Qwen/Qwen2.5-VL-7B-Instruct/resolve/cc594898137f460bfe9f0759e9844b3ce807cfb5/config.json",
+        sha256: "77d9ec7321cc572e3579e2c84799c9cadaded63c49ce93b101733349fc330c43",
+        size_bytes: 1_374,
+        license: "Apache-2.0",
+        note: "Architecture config (Qwen2_5_VLForConditionalGeneration, built into \
+               transformers -- no remote code). Pinned to commit \
+               cc594898137f460bfe9f0759e9844b3ce807cfb5.",
+        is_default: false,
+        media: "training",
+    },
+    KnownModel {
+        id: "qwen2.5-vl-7b-generation-config",
+        name: "Qwen2.5-VL 7B Instruct — generation defaults",
+        kind: "qwen_vl_engine",
+        family: Some("qwen2.5-vl"),
+        publisher: "Alibaba Cloud (Qwen)",
+        repo: "Qwen/Qwen2.5-VL-7B-Instruct",
+        file: "generation_config.json",
+        url: "https://huggingface.co/Qwen/Qwen2.5-VL-7B-Instruct/resolve/cc594898137f460bfe9f0759e9844b3ce807cfb5/generation_config.json",
+        sha256: "0a3aea82869fe29f20dc95ccf3e2bcff380eca1f5ad6447a4a4b37110b08e43e",
+        size_bytes: 216,
+        license: "Apache-2.0",
+        note: "Shipped sampling defaults. Pinned to commit \
+               cc594898137f460bfe9f0759e9844b3ce807cfb5.",
+        is_default: false,
+        media: "training",
+    },
+    KnownModel {
+        id: "qwen2.5-vl-7b-preprocessor-config",
+        name: "Qwen2.5-VL 7B Instruct — preprocessor config",
+        kind: "qwen_vl_engine",
+        family: Some("qwen2.5-vl"),
+        publisher: "Alibaba Cloud (Qwen)",
+        repo: "Qwen/Qwen2.5-VL-7B-Instruct",
+        file: "preprocessor_config.json",
+        url: "https://huggingface.co/Qwen/Qwen2.5-VL-7B-Instruct/resolve/cc594898137f460bfe9f0759e9844b3ce807cfb5/preprocessor_config.json",
+        sha256: "f2058c716eef96ccaed1cc1e2d0c08306b62586d535b28d9d08e691b2fab7ca0",
+        size_bytes: 350,
+        license: "Apache-2.0",
+        note: "Image preprocessing settings AutoProcessor needs. Pinned to commit \
+               cc594898137f460bfe9f0759e9844b3ce807cfb5.",
+        is_default: false,
+        media: "training",
+    },
+    KnownModel {
+        id: "qwen2.5-vl-7b-chat-template",
+        name: "Qwen2.5-VL 7B Instruct — chat template",
+        kind: "qwen_vl_engine",
+        family: Some("qwen2.5-vl"),
+        publisher: "Alibaba Cloud (Qwen)",
+        repo: "Qwen/Qwen2.5-VL-7B-Instruct",
+        file: "chat_template.json",
+        url: "https://huggingface.co/Qwen/Qwen2.5-VL-7B-Instruct/resolve/cc594898137f460bfe9f0759e9844b3ce807cfb5/chat_template.json",
+        sha256: "ad60d90252ed0b0705ba14e2d0ad0fec0beac1ea955642b54059b36052d8bc96",
+        size_bytes: 1_050,
+        license: "Apache-2.0",
+        note: "The multi-image chat template the processor applies. Pinned to commit \
+               cc594898137f460bfe9f0759e9844b3ce807cfb5.",
+        is_default: false,
+        media: "training",
+    },
+    KnownModel {
+        id: "qwen2.5-vl-7b-tokenizer",
+        name: "Qwen2.5-VL 7B Instruct — tokenizer",
+        kind: "qwen_vl_engine",
+        family: Some("qwen2.5-vl"),
+        publisher: "Alibaba Cloud (Qwen)",
+        repo: "Qwen/Qwen2.5-VL-7B-Instruct",
+        file: "tokenizer.json",
+        url: "https://huggingface.co/Qwen/Qwen2.5-VL-7B-Instruct/resolve/cc594898137f460bfe9f0759e9844b3ce807cfb5/tokenizer.json",
+        sha256: "c0382117ea329cdf097041132f6d735924b697924d6f6fc3945713e96ce87539",
+        size_bytes: 7_031_645,
+        license: "Apache-2.0",
+        note: "The fast Qwen2 tokenizer. Pinned to commit \
+               cc594898137f460bfe9f0759e9844b3ce807cfb5.",
+        is_default: false,
+        media: "training",
+    },
+    KnownModel {
+        id: "qwen2.5-vl-7b-tokenizer-config",
+        name: "Qwen2.5-VL 7B Instruct — tokenizer config",
+        kind: "qwen_vl_engine",
+        family: Some("qwen2.5-vl"),
+        publisher: "Alibaba Cloud (Qwen)",
+        repo: "Qwen/Qwen2.5-VL-7B-Instruct",
+        file: "tokenizer_config.json",
+        url: "https://huggingface.co/Qwen/Qwen2.5-VL-7B-Instruct/resolve/cc594898137f460bfe9f0759e9844b3ce807cfb5/tokenizer_config.json",
+        sha256: "4abd3520120e266da84c0864fee064d1fb10806f02225911a47253dd38dc5f56",
+        size_bytes: 5_702,
+        license: "Apache-2.0",
+        note: "Tokenizer settings and special tokens. Pinned to commit \
+               cc594898137f460bfe9f0759e9844b3ce807cfb5.",
+        is_default: false,
+        media: "training",
+    },
+    KnownModel {
+        id: "qwen2.5-vl-7b-vocab",
+        name: "Qwen2.5-VL 7B Instruct — vocabulary",
+        kind: "qwen_vl_engine",
+        family: Some("qwen2.5-vl"),
+        publisher: "Alibaba Cloud (Qwen)",
+        repo: "Qwen/Qwen2.5-VL-7B-Instruct",
+        file: "vocab.json",
+        url: "https://huggingface.co/Qwen/Qwen2.5-VL-7B-Instruct/resolve/cc594898137f460bfe9f0759e9844b3ce807cfb5/vocab.json",
+        sha256: "ca10d7e9fb3ed18575dd1e277a2579c16d108e32f27439684afa0e10b1440910",
+        size_bytes: 2_776_833,
+        license: "Apache-2.0",
+        note: "Qwen2 BPE vocabulary. Pinned to commit \
+               cc594898137f460bfe9f0759e9844b3ce807cfb5.",
+        is_default: false,
+        media: "training",
+    },
+    KnownModel {
+        id: "qwen2.5-vl-7b-merges",
+        name: "Qwen2.5-VL 7B Instruct — BPE merges",
+        kind: "qwen_vl_engine",
+        family: Some("qwen2.5-vl"),
+        publisher: "Alibaba Cloud (Qwen)",
+        repo: "Qwen/Qwen2.5-VL-7B-Instruct",
+        file: "merges.txt",
+        url: "https://huggingface.co/Qwen/Qwen2.5-VL-7B-Instruct/resolve/cc594898137f460bfe9f0759e9844b3ce807cfb5/merges.txt",
+        sha256: "599bab54075088774b1733fde865d5bd747cbcc7a547c5bc12610e874e26f5e3",
+        size_bytes: 1_671_839,
+        license: "Apache-2.0",
+        note: "Qwen2 BPE merge rules. Pinned to commit \
+               cc594898137f460bfe9f0759e9844b3ce807cfb5.",
+        is_default: false,
+        media: "training",
     },
 ];
 
@@ -673,7 +1104,8 @@ pub fn find_by_sha256(sha256: &str) -> Option<&'static KnownModel> {
 pub struct ModelStack {
     pub id: &'static str,
     pub label: &'static str,
-    /// `"image"` or `"video"`.
+    /// `"image"`, `"video"`, `"voice"` or `"training"` — the Models-tab
+    /// catalog category the stack is listed under.
     pub media: &'static str,
     /// [`KnownModel::id`]s that make up one working setup — base model first,
     /// then companions (display order).
@@ -788,6 +1220,66 @@ pub const MODEL_STACKS: &[ModelStack] = &[
                (nine files) plus its separate audio codec, descript/dac_44khz (three files) \
                — both directories are required together, and imported locally so nothing \
                calls home for the codec at runtime. Slower than Kokoro; needs ~4.4-6 GB VRAM.",
+        is_default: false,
+    },
+    // --- Training & captioning tools (dataset captioners) ---
+    ModelStack {
+        id: "wd-tagger",
+        label: "WD EVA02-Large Tagger v3 (Danbooru tags)",
+        media: "training",
+        member_ids: &[
+            "wd-eva02-large-tagger-v3-model",
+            "wd-eva02-large-tagger-v3-tags",
+        ],
+        note: "The recommended dataset captioner: Danbooru-style tags for LoRA training \
+               captions. Runs on the CPU (onnxruntime), so it never competes with training \
+               for VRAM. Two files (~1.3 GB): the model and its tag list.",
+        is_default: true,
+    },
+    ModelStack {
+        id: "florence2-large",
+        label: "Florence-2 large (prose captions)",
+        media: "training",
+        member_ids: &[
+            "florence2-large-model",
+            "florence2-large-config",
+            "florence2-large-configuration-florence2",
+            "florence2-large-modeling-florence2",
+            "florence2-large-processing-florence2",
+            "florence2-large-preprocessor-config",
+            "florence2-large-generation-config",
+            "florence2-large-tokenizer",
+            "florence2-large-tokenizer-config",
+            "florence2-large-vocab",
+        ],
+        note: "Sentence-style captions instead of tags. Ten files (~1.56 GB), pinned to one \
+               revision because three of them are Python the model runs on load. Needs ~2 GB \
+               VRAM.",
+        is_default: false,
+    },
+    ModelStack {
+        id: "qwen2.5-vl-7b",
+        label: "Qwen2.5-VL 7B Instruct (second opinion)",
+        media: "training",
+        member_ids: &[
+            "qwen2.5-vl-7b-model-00001-of-00005",
+            "qwen2.5-vl-7b-model-00002-of-00005",
+            "qwen2.5-vl-7b-model-00003-of-00005",
+            "qwen2.5-vl-7b-model-00004-of-00005",
+            "qwen2.5-vl-7b-model-00005-of-00005",
+            "qwen2.5-vl-7b-model-index",
+            "qwen2.5-vl-7b-config",
+            "qwen2.5-vl-7b-generation-config",
+            "qwen2.5-vl-7b-preprocessor-config",
+            "qwen2.5-vl-7b-chat-template",
+            "qwen2.5-vl-7b-tokenizer",
+            "qwen2.5-vl-7b-tokenizer-config",
+            "qwen2.5-vl-7b-vocab",
+            "qwen2.5-vl-7b-merges",
+        ],
+        note: "Optional and large: re-captions a frame together with a later one when a \
+               Florence-2 caption looks unsure, describing what changes between them. \
+               Fourteen files (~16.6 GB download); loaded 4-bit it needs ~6 GB VRAM.",
         is_default: false,
     },
 ];
@@ -958,7 +1450,7 @@ mod tests {
             // The declared kind must parse back to a real ModelKind.
             assert!(ModelKind::from_hint(m.kind).is_some(), "{}: bad kind", m.id);
             assert!(
-                matches!(m.media, "image" | "video" | "voice"),
+                matches!(m.media, "image" | "video" | "voice" | "training"),
                 "{}: bad media",
                 m.id
             );
@@ -1009,7 +1501,14 @@ mod tests {
             .iter()
             .filter(|m| matches!(
                 m.kind,
-                "vae" | "text_encoder" | "voice_data" | "dia_engine" | "dia_codec"
+                "vae"
+                    | "text_encoder"
+                    | "voice_data"
+                    | "dia_engine"
+                    | "dia_codec"
+                    | "wd_tagger"
+                    | "florence2_engine"
+                    | "qwen_vl_engine"
             ))
             .all(|m| !m.is_default));
     }
@@ -1051,7 +1550,7 @@ mod tests {
 
     #[test]
     fn exactly_one_default_stack_per_media() {
-        for media in ["image", "video", "voice"] {
+        for media in ["image", "video", "voice", "training"] {
             let count = MODEL_STACKS
                 .iter()
                 .filter(|s| s.media == media && s.is_default)
@@ -1163,6 +1662,171 @@ mod tests {
                 "{}: note must not imply freeform emotion tags work",
                 m.id
             );
+        }
+    }
+
+    fn stack(id: &str) -> &'static ModelStack {
+        MODEL_STACKS
+            .iter()
+            .find(|s| s.id == id)
+            .unwrap_or_else(|| panic!("stack {id:?} missing"))
+    }
+
+    fn member(id: &str) -> &'static KnownModel {
+        KNOWN_MODELS.iter().find(|m| m.id == id).unwrap()
+    }
+
+    #[test]
+    fn sha256_values_are_unique_so_an_import_matches_exactly_one_entry() {
+        let mut shas: Vec<String> = KNOWN_MODELS
+            .iter()
+            .map(|m| m.sha256.to_ascii_lowercase())
+            .collect();
+        shas.sort_unstable();
+        shas.dedup();
+        assert_eq!(shas.len(), KNOWN_MODELS.len());
+    }
+
+    #[test]
+    fn the_training_category_holds_the_three_captioner_stacks_wd_tagger_first() {
+        let training: Vec<&str> = MODEL_STACKS
+            .iter()
+            .filter(|s| s.media == "training")
+            .map(|s| s.id)
+            .collect();
+        assert_eq!(training, ["wd-tagger", "florence2-large", "qwen2.5-vl-7b"]);
+        assert!(
+            stack("wd-tagger").is_default,
+            "the WD tagger is recommended"
+        );
+        assert!(!stack("florence2-large").is_default);
+        assert!(!stack("qwen2.5-vl-7b").is_default);
+    }
+
+    #[test]
+    fn the_wd_tagger_stack_is_the_two_existing_catalog_files() {
+        let s = stack("wd-tagger");
+        assert_eq!(
+            s.member_ids,
+            [
+                "wd-eva02-large-tagger-v3-model",
+                "wd-eva02-large-tagger-v3-tags"
+            ]
+        );
+        let files: Vec<&str> = s.member_ids.iter().map(|id| member(id).file).collect();
+        assert_eq!(files, ["model.onnx", "selected_tags.csv"]);
+    }
+
+    /// Every file of a directory-shaped captioner kind belongs to its one
+    /// stack (nothing half-listed), and the stack carries exactly the files
+    /// its `from_pretrained` loader reads.
+    fn assert_directory_stack(stack_id: &str, kind: &str, expected_files: &[&str]) {
+        let s = stack(stack_id);
+        let mut files: Vec<&str> = s.member_ids.iter().map(|id| member(id).file).collect();
+        files.sort_unstable();
+        let mut expected = expected_files.to_vec();
+        expected.sort_unstable();
+        assert_eq!(files, expected, "{stack_id}");
+        for id in s.member_ids {
+            assert_eq!(member(id).kind, kind, "{id}");
+            assert_eq!(member(id).media, "training", "{id}");
+        }
+        let total = KNOWN_MODELS.iter().filter(|m| m.kind == kind).count();
+        assert_eq!(
+            total,
+            s.member_ids.len(),
+            "{kind}: every file is in the stack"
+        );
+    }
+
+    #[test]
+    fn the_florence2_stack_bundles_weights_configs_tokenizer_and_remote_code() {
+        assert_directory_stack(
+            "florence2-large",
+            "florence2_engine",
+            &[
+                "config.json",
+                "configuration_florence2.py",
+                "generation_config.json",
+                "model.safetensors",
+                "modeling_florence2.py",
+                "preprocessor_config.json",
+                "processing_florence2.py",
+                "tokenizer.json",
+                "tokenizer_config.json",
+                "vocab.json",
+            ],
+        );
+    }
+
+    #[test]
+    fn the_qwen_vl_stack_bundles_all_five_shards_and_the_processor_files() {
+        assert_directory_stack(
+            "qwen2.5-vl-7b",
+            "qwen_vl_engine",
+            &[
+                "chat_template.json",
+                "config.json",
+                "generation_config.json",
+                "merges.txt",
+                "model-00001-of-00005.safetensors",
+                "model-00002-of-00005.safetensors",
+                "model-00003-of-00005.safetensors",
+                "model-00004-of-00005.safetensors",
+                "model-00005-of-00005.safetensors",
+                "model.safetensors.index.json",
+                "preprocessor_config.json",
+                "tokenizer.json",
+                "tokenizer_config.json",
+                "vocab.json",
+            ],
+        );
+    }
+
+    /// Remote code and weights must never change under us: every file of a
+    /// directory-shaped captioner is fetched from one pinned 40-hex commit,
+    /// never a moving branch like `main`.
+    #[test]
+    fn captioner_engine_urls_are_pinned_to_one_commit_per_repo() {
+        for kind in ["florence2_engine", "qwen_vl_engine"] {
+            let mut commits: Vec<&str> = Vec::new();
+            for m in KNOWN_MODELS.iter().filter(|m| m.kind == kind) {
+                let prefix = format!("https://huggingface.co/{}/resolve/", m.repo);
+                let rest = m
+                    .url
+                    .strip_prefix(&prefix)
+                    .unwrap_or_else(|| panic!("{}: unexpected url {}", m.id, m.url));
+                let (commit, file) = rest.split_once('/').unwrap();
+                assert_eq!(file, m.file, "{}", m.id);
+                assert_eq!(commit.len(), 40, "{}: not a commit: {commit}", m.id);
+                assert!(
+                    commit
+                        .chars()
+                        .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
+                    "{}: not a commit: {commit}",
+                    m.id
+                );
+                assert!(m.note.contains(commit), "{}: note names the commit", m.id);
+                commits.push(commit);
+            }
+            commits.dedup();
+            assert_eq!(
+                commits.len(),
+                1,
+                "{kind}: one revision for the whole directory"
+            );
+        }
+    }
+
+    #[test]
+    fn captioner_licenses_match_their_model_cards() {
+        for m in KNOWN_MODELS {
+            let expected = match m.kind {
+                "florence2_engine" => "MIT",
+                "qwen_vl_engine" | "wd_tagger" => "Apache-2.0",
+                _ => continue,
+            };
+            assert_eq!(m.license, expected, "{}", m.id);
         }
     }
 
