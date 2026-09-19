@@ -382,6 +382,28 @@ impl<'a> TrainingRunRepo<'a> {
             .collect())
     }
 
+    /// Runs continuing from the library LoRA `model_id` that are not
+    /// finished yet — every state that is not [`RunState::is_terminal`].
+    /// Deleting that LoRA would null the link (migration `0020`) and a later
+    /// resume would silently train from scratch, so the delete path refuses.
+    pub async fn list_active_for_init_lora(&self, model_id: &str) -> Result<Vec<TrainingRun>> {
+        let rows = sqlx::query_as::<_, TrainingRunRow>(sqlx::AssertSqlSafe(format!(
+            "SELECT {SELECT_COLS} FROM training_runs WHERE init_lora_model_id = $1
+             ORDER BY created_at DESC, id DESC"
+        )))
+        .bind(model_id)
+        .fetch_all(self.pool)
+        .await?;
+        let runs = rows
+            .into_iter()
+            .map(TrainingRun::try_from)
+            .collect::<Result<Vec<_>>>()?;
+        Ok(runs
+            .into_iter()
+            .filter(|r| !r.state.is_terminal())
+            .collect())
+    }
+
     /// Move a run to `next`, validating the transition first. Sets
     /// `started_at` the first time a run reaches `running`, and
     /// `finished_at` when it lands in a terminal state.
@@ -977,6 +999,85 @@ mod tests {
         let back = listed.iter().find(|r| r.id == continued.id).unwrap();
         assert_eq!(back.image_count, Some(412));
         assert_eq!(back.init_lora_model_id.as_deref(), Some(source.id.as_str()));
+    }
+
+    #[tokio::test]
+    async fn list_active_for_init_lora_finds_only_unsettled_runs_continuing_that_lora() {
+        let db = Database::connect_in_memory().await.unwrap();
+        let mut ids = Vec::new();
+        for name in ["Source A", "Source B"] {
+            let m = db
+                .models()
+                .insert(NewModel {
+                    name: name.into(),
+                    format: "safetensors".into(),
+                    file_path: format!("E:\\Models\\image\\loras\\{name}.safetensors"),
+                    size_bytes: 128,
+                    source: "manual".into(),
+                    roles: vec![],
+                    ..NewModel::default()
+                })
+                .await
+                .unwrap();
+            ids.push(m.id);
+        }
+        let continuing = |lora: &str| NewTrainingRun {
+            init_lora_model_id: Some(lora.to_string()),
+            ..sample_run()
+        };
+
+        let preparing = db
+            .training_runs()
+            .create(continuing(&ids[0]))
+            .await
+            .unwrap();
+        let paused = db
+            .training_runs()
+            .create(continuing(&ids[0]))
+            .await
+            .unwrap();
+        for next in [RunState::Running, RunState::Paused] {
+            db.training_runs()
+                .set_state(&paused.id, next)
+                .await
+                .unwrap();
+        }
+        let completed = db
+            .training_runs()
+            .create(continuing(&ids[0]))
+            .await
+            .unwrap();
+        for next in [RunState::Running, RunState::Finishing, RunState::Completed] {
+            db.training_runs()
+                .set_state(&completed.id, next)
+                .await
+                .unwrap();
+        }
+        // Another LoRA's run and a from-scratch run never count.
+        db.training_runs()
+            .create(continuing(&ids[1]))
+            .await
+            .unwrap();
+        db.training_runs().create(sample_run()).await.unwrap();
+
+        let mut active: Vec<String> = db
+            .training_runs()
+            .list_active_for_init_lora(&ids[0])
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|r| r.id)
+            .collect();
+        active.sort();
+        let mut expected = vec![preparing.id, paused.id];
+        expected.sort();
+        assert_eq!(active, expected);
+        assert!(db
+            .training_runs()
+            .list_active_for_init_lora("no-such-model")
+            .await
+            .unwrap()
+            .is_empty());
     }
 
     #[tokio::test]

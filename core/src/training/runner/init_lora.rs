@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 use super::settle::library_family;
 use super::Runner;
 use crate::db::Model;
-use crate::model::{lora_rank_from_header, ModelKind};
+use crate::model::{lora_alpha_from_header, lora_rank_from_header, ModelKind};
 use crate::training::profile::TrainingProfile;
 use crate::training::training_refusal;
 use crate::Result;
@@ -53,6 +53,7 @@ impl Runner {
         }
         check_family(&model, profile)?;
         check_rank(&model, &path, rank)?;
+        check_alpha(&model, &path, rank)?;
         self.check_source_run_settled(&model).await?;
         Ok(path)
     }
@@ -129,6 +130,38 @@ fn check_rank(model: &Model, path: &Path, rank: u32) -> Result<()> {
     }
 }
 
+/// How far a recorded alpha may sit from the rank and still count as equal
+/// — alphas are small integers stored as (half-)floats, so this only absorbs
+/// rounding, never a real difference.
+const ALPHA_TOLERANCE: f32 = 1e-3;
+
+/// A LoRA's recorded alpha must equal its rank, because that is what the
+/// rendered config says (`linear_alpha = rank`, `config::network_block`) and
+/// ai-toolkit does not rescale a loaded LoRA: a rank-32 / alpha-16 file
+/// would train on at twice its intended strength. A file that records no
+/// alpha (PEFT format) is loaded with alpha equal to the rank by definition.
+/// Refusing rather than pinning `linear_alpha` to a foreign alpha is the
+/// honest v1 — the rendered config stays one shape.
+fn check_alpha(model: &Model, path: &Path, rank: u32) -> Result<()> {
+    let alpha = lora_alpha_from_header(path).map_err(|e| {
+        training_refusal(format!(
+            "the alpha of \"{}\" could not be read ({e})",
+            model.name
+        ))
+    })?;
+    match alpha {
+        Some(alpha) if (alpha - rank as f32).abs() > ALPHA_TOLERANCE => {
+            Err(training_refusal(format!(
+                "\"{}\" was trained with alpha {alpha} at rank {rank}; the trainer would apply \
+                 it at the wrong strength — continuing is only supported for LoRAs with alpha \
+                 equal to rank",
+                model.name
+            )))
+        }
+        _ => Ok(()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::{Path, PathBuf};
@@ -166,6 +199,31 @@ mod tests {
         let mut bytes = (json.len() as u64).to_le_bytes().to_vec();
         bytes.extend_from_slice(&json);
         bytes.extend(std::iter::repeat_n(0u8, 16));
+        std::fs::create_dir_all(path.parent().expect("a parent")).expect("create the dir");
+        std::fs::write(path, bytes).expect("write the weights");
+    }
+
+    /// A kohya-style `.safetensors` (what ai-toolkit writes for SDXL): one
+    /// module's `lora_down`/`lora_up` pair of `rank` plus its `.alpha`
+    /// scalar, stored as F32 in the data section.
+    fn write_kohya_weights(path: &Path, rank: u32, alpha: f32) {
+        let module = "lora_unet_down_blocks_0_attentions_0_proj_in";
+        let header = serde_json::json!({
+            format!("{module}.lora_down.weight"): {
+                "dtype": "F16", "shape": [rank, 320], "data_offsets": [0, 8]
+            },
+            format!("{module}.lora_up.weight"): {
+                "dtype": "F16", "shape": [320, rank], "data_offsets": [8, 16]
+            },
+            format!("{module}.alpha"): {
+                "dtype": "F32", "shape": [], "data_offsets": [16, 20]
+            }
+        });
+        let json = serde_json::to_vec(&header).expect("encode the header");
+        let mut bytes = (json.len() as u64).to_le_bytes().to_vec();
+        bytes.extend_from_slice(&json);
+        bytes.extend(std::iter::repeat_n(0u8, 16));
+        bytes.extend_from_slice(&alpha.to_le_bytes());
         std::fs::create_dir_all(path.parent().expect("a parent")).expect("create the dir");
         std::fs::write(path, bytes).expect("write the weights");
     }
@@ -307,6 +365,46 @@ mod tests {
 
         assert!(msg.contains("rank 32"), "names the LoRA's rank: {msg}");
         assert!(msg.contains("16"), "names the requested rank: {msg}");
+    }
+
+    #[tokio::test]
+    async fn refuses_a_lora_whose_alpha_differs_from_its_rank() {
+        // ai-toolkit does not rescale a loaded LoRA: AIWM renders
+        // `linear_alpha = rank`, so a rank-16 / alpha-8 LoRA would be applied
+        // at twice its trained strength without a word.
+        let (fx, target, ds) = ready_fixture().await;
+        let path = lora_dir(&fx).join("alpha8.safetensors");
+        write_kohya_weights(&path, 16, 8.0);
+        let lora = lora_row(&fx, "Alpha 8", Some("flux2"), &path, "manual").await;
+
+        let msg = refused(&fx, &target, &ds, &lora).await;
+
+        assert!(msg.contains("alpha 8"), "names the LoRA's alpha: {msg}");
+        assert!(msg.contains("rank 16"), "names its rank: {msg}");
+        assert!(msg.contains("wrong strength"), "{msg}");
+    }
+
+    #[tokio::test]
+    async fn continues_a_kohya_lora_whose_alpha_equals_its_rank() {
+        let (fx, target, ds) = ready_fixture().await;
+        let path = lora_dir(&fx).join("alpha16.safetensors");
+        write_kohya_weights(&path, 16, 16.0);
+        let lora = lora_row(&fx, "Alpha 16", Some("flux2"), &path, "manual").await;
+        let runner = recording_runner(&fx);
+
+        // Past preflight: the only failure left is the fake interpreter.
+        let err = runner
+            .create_and_start(continue_from(&target, &ds, &lora))
+            .await
+            .expect_err("the fake interpreter cannot actually launch");
+
+        assert!(!err.to_string().contains("alpha"), "not a refusal: {err}");
+        let runs = fx.db.training_runs().list().await.expect("list runs");
+        assert_eq!(
+            runs.first().and_then(|r| r.init_lora_model_id.as_deref()),
+            Some(lora.as_str()),
+            "the run was created with its source"
+        );
     }
 
     #[tokio::test]
