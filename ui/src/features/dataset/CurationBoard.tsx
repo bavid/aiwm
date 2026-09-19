@@ -28,6 +28,7 @@ import {
   filesLabel,
   framesLabel,
   isColumnId,
+  withoutFinalStop,
   matchesDiscardFilter,
   otherColumn,
   type ColumnId,
@@ -242,12 +243,18 @@ export function CurationBoard({
             requested += summary.requested;
             updated += summary.updated;
           } catch (e) {
-            for (const rest of parts.slice(index)) rollbackMove(rest.batch);
+            const unmoved = parts.slice(index);
+            for (const rest of unmoved) rollbackMove(rest.batch);
+            // The frames that stayed put are selected again, ready to retry.
+            extend(
+              latest.current.selected,
+              unmoved.flatMap((rest) => rest.part),
+            );
             const before = updated > 0 ? ` ${framesLabel(updated)} were moved before it.` : "";
             // The alert below announces it; no second announcement.
             setError(
               `Could not move ${framesLabel(ids.length - requested)} to ${label}: ` +
-                `${errorText(e)}.${before}`,
+                `${withoutFinalStop(errorText(e))}.${before}`,
             );
             return;
           }
@@ -262,7 +269,17 @@ export function CurationBoard({
         onFramesChanged();
       }
     },
-    [datasetId, planRefocus, beginMove, settleMove, rollbackMove, remove, announce, onFramesChanged],
+    [
+      datasetId,
+      planRefocus,
+      beginMove,
+      settleMove,
+      rollbackMove,
+      remove,
+      extend,
+      announce,
+      onFramesChanged,
+    ],
   );
 
   /** A toolbar/keyboard move to `target` acts on the selection in the other
@@ -361,20 +378,32 @@ export function CurationBoard({
   const runAssign = async (attach: boolean) => {
     if (!assignConceptId || selectedTotal === 0) return;
     const ids = [...selected];
+    /** Frames of `ids` already sent in chunks that succeeded. */
+    let done = 0;
     try {
       if (attach) {
         let attached = 0;
         for (const part of chunk(ids, MAX_FRAME_IDS)) {
           attached += (await assignConcept(assignConceptId, part)).attached;
+          done += part.length;
         }
         setAssignState({ kind: "done", text: `${attached} of ${ids.length} assigned` });
       } else {
-        for (const part of chunk(ids, MAX_FRAME_IDS)) await unassignConcept(assignConceptId, part);
+        for (const part of chunk(ids, MAX_FRAME_IDS)) {
+          await unassignConcept(assignConceptId, part);
+          done += part.length;
+        }
         setAssignState({ kind: "done", text: `${ids.length} removed` });
       }
-      onConceptsChanged();
     } catch (e) {
-      setAssignState({ kind: "error", text: errorText(e) });
+      const before =
+        done > 0
+          ? ` — ${framesLabel(done)} of ${ids.length.toLocaleString()} were already ` +
+            `${attach ? "assigned" : "removed"}`
+          : "";
+      setAssignState({ kind: "error", text: `${withoutFinalStop(errorText(e))}${before}` });
+    } finally {
+      if (done > 0) onConceptsChanged();
     }
   };
 

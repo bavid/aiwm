@@ -47,6 +47,10 @@ export function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+/** `text` without a trailing full stop, so it can be followed by our own
+ *  sentence without ".." (the core's messages may or may not end in one). */
+export const withoutFinalStop = (text: string): string => text.replace(/\.\s*$/, "");
+
 const SKIP_REASON_LABEL: Record<string, string> = {
   outside_app_folders: "outside the app's folders — not the app's to delete",
   source_file: "a source file — never deleted",

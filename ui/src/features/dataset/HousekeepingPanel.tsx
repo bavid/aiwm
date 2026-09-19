@@ -23,6 +23,11 @@ type Props = {
   /** Fetched on demand by the parent; `null` while it loads. */
   usage: DatasetUsage | null;
   isUsageLoading: boolean;
+  /** Why measuring failed; shown instead of an endless "calculating…". */
+  usageError: string | null;
+  /** Discarded frames right now, from the live frame list — the usage is
+   *  only measured on demand, so its own count can lag behind a move. */
+  discardedCount: number;
   /** Measure the disk use again (the core walks the folders). */
   onRefreshUsage: () => void;
   /** A prep run is still writing frames: nothing is deleted under it. */
@@ -88,6 +93,8 @@ export function HousekeepingPanel({
   dataset,
   usage,
   isUsageLoading,
+  usageError,
+  discardedCount,
   onRefreshUsage,
   isRunning,
   onChanged,
@@ -187,6 +194,9 @@ export function HousekeepingPanel({
     }
   };
 
+  // Until a measurement lands: why it failed, or that it is under way.
+  const pending = usageError ? `could not measure: ${usageError}` : CALCULATING;
+
   const exportLine = !usage?.export_dir
     ? "Not exported yet"
     : usage.export_app_owned
@@ -214,22 +224,25 @@ export function HousekeepingPanel({
           <dd title={usage?.work_dir ?? undefined}>
             {usage
               ? `${formatBytes(usage.work_bytes)} · ${filesLabel(usage.work_files)}`
-              : CALCULATING}
+              : pending}
           </dd>
         </div>
         <div>
           <dt>Export</dt>
           <dd>
-            {usage ? exportLine : CALCULATING}
+            {usage ? exportLine : pending}
             {usage?.export_dir && <span className="housekeeping__path">{usage.export_dir}</span>}
           </dd>
         </div>
         <div>
           <dt>Discarded</dt>
           <dd>
-            {usage
-              ? `${framesLabel(usage.discarded_frames)} · ${formatBytes(usage.discarded_bytes)}`
-              : CALCULATING}
+            {framesLabel(discardedCount)}
+            <span className="housekeeping__path">
+              {usage
+                ? `${formatBytes(usage.discarded_bytes)} for ${framesLabel(usage.discarded_frames)} as measured`
+                : pending}
+            </span>
           </dd>
         </div>
       </dl>
@@ -274,7 +287,7 @@ export function HousekeepingPanel({
           <button
             type="button"
             className="chip"
-            disabled={isRunning || busy !== null || usage?.discarded_frames === 0}
+            disabled={isRunning || busy !== null || discardedCount === 0}
             onClick={() => void previewCleanup()}
           >
             {busy === "preview" ? "Measuring…" : "Clean up discarded…"}

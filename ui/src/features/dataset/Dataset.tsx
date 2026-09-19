@@ -100,10 +100,18 @@ export function DatasetStudio({ onTrainLora }: Props) {
   const {
     usage,
     isLoading: isUsageLoading,
+    error: usageError,
     refresh: refreshUsage,
   } = useDatasetUsage(activeDatasetId);
 
-  const frameList = useMemo(() => frames ?? [], [frames]);
+  // The polled list keeps the previous dataset's rows until the first fetch
+  // for the new one lands; never hand those to the board or the counts.
+  const activeFrames =
+    frames !== null &&
+    (frames.length === 0 || frames[0].dataset_id === activeDatasetId)
+      ? frames
+      : null;
+  const frameList = useMemo(() => activeFrames ?? [], [activeFrames]);
   const conceptList = useMemo(() => concepts ?? [], [concepts]);
   const keptCount = useMemo(() => frameList.filter((f) => !isDiscarded(f)).length, [frameList]);
 
@@ -401,6 +409,8 @@ export function DatasetStudio({ onTrainLora }: Props) {
             dataset={activeDataset}
             usage={usage}
             isUsageLoading={isUsageLoading}
+            usageError={usageError}
+            discardedCount={frameList.length - keptCount}
             onRefreshUsage={refreshUsage}
             isRunning={isRunning}
             onChanged={refetchAfterHousekeeping}
@@ -461,7 +471,7 @@ export function DatasetStudio({ onTrainLora }: Props) {
             Discard filter and paging survive a Sort<->Learn round-trip. */}
         {/* Stays mounted when a delete empties the dataset, so its result
             notice survives; the board shows its own empty state then. */}
-        {activeDatasetId && frames !== null && (
+        {activeDatasetId && activeFrames !== null && (
           <div hidden={view !== "grid"}>
             <CurationBoard
               key={`board-${activeDatasetId}`}
