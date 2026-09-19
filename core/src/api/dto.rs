@@ -24,6 +24,10 @@ pub struct AboutDto {
     pub runtimes_dir: String,
     /// Where the disposable registry cache lands.
     pub cache_dir: String,
+    /// Where dataset-prep work folders land.
+    pub datasets_dir: String,
+    /// Where training-run work folders land.
+    pub training_dir: String,
     pub core_api_port: u16,
     pub vram_budget_mb: u64,
     pub offline_mode: bool,
@@ -61,6 +65,11 @@ pub struct PathsUpdateDto {
     pub outputs_path: String,
     pub runtimes_path: String,
     pub cache_path: String,
+    /// Required like the other paths: a `paths` object without it is rejected
+    /// rather than read as "clear the override". The UI always sends all five.
+    pub datasets_path: String,
+    /// Required for the same reason as `datasets_path`.
+    pub training_path: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -431,6 +440,22 @@ pub struct StartRunDto {
     pub hyperparams: crate::training::config::Hyperparams,
     #[serde(default)]
     pub sample_prompts: Vec<String>,
+    /// "Store run in": the folder the run's own folder `<data_dir>/<run_id>`
+    /// is created in. Omitted or blank means the default training folder —
+    /// unlike the Settings paths, leaving it out is the normal case here.
+    #[serde(default)]
+    pub data_dir: Option<String>,
+}
+
+impl StartRunDto {
+    /// The chosen folder, `None` when omitted or blank.
+    pub fn chosen_data_dir(&self) -> Option<std::path::PathBuf> {
+        self.data_dir
+            .as_deref()
+            .map(str::trim)
+            .filter(|d| !d.is_empty())
+            .map(std::path::PathBuf::from)
+    }
 }
 
 /// `GET /training/runs/{id}` — the stored row plus the two things that live

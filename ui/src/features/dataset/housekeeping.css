@@ -120,6 +120,28 @@
   line-height: 1.5;
 }
 
+/* Where the dataset's frames live, with a way to open it. */
+.housekeeping__location {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-2);
+}
+
+.housekeeping__location-err {
+  flex-basis: 100%;
+  margin: 0;
+}
+
+.housekeeping__location-path {
+  flex: 1;
+  min-width: 0;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  overflow-wrap: anywhere;
+}
+
 .housekeeping__tool .chip {
   margin-top: var(--space-1);
 }

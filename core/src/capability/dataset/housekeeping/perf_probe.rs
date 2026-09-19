@@ -21,6 +21,7 @@ fn dataset(id: &str, prep_job_id: &str, source_root: &Path) -> Dataset {
         trigger_word: String::new(),
         prep_job_id: Some(prep_job_id.into()),
         export_dir: None,
+        work_dir: None,
         created_at: String::new(),
     }
 }
@@ -114,6 +115,7 @@ fn guard_build_timing() {
         frames,
         others,
         foreign_frames,
+        runs: Vec::new(),
     };
 
     for (label, staying) in [
@@ -124,7 +126,16 @@ fn guard_build_timing() {
         ),
     ] {
         let t = std::time::Instant::now();
-        let guard = Guard::build(&outputs, &snap).keeping(&staying);
+        let guard = Guard::build(
+            &super::DataRoots {
+                outputs: outputs.clone(),
+                datasets: datasets_root.clone(),
+                models: tmp.path().join("models"),
+                training: tmp.path().join("training"),
+            },
+            &snap,
+        )
+        .keeping(&staying);
         println!(
             "Guard::build, {label}: {:?} (walkable: {})",
             t.elapsed(),

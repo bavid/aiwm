@@ -20,6 +20,7 @@
 
 pub mod bases;
 pub mod config;
+pub mod location;
 pub mod process;
 pub mod profile;
 pub mod progress;

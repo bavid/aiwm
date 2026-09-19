@@ -46,6 +46,8 @@ pub fn about(app: &App) -> AboutDto {
         outputs_bytes: dir_file_bytes(&outputs_dir),
         runtimes_dir: app.paths.runtimes_dir().display().to_string(),
         cache_dir: app.paths.cache_dir().display().to_string(),
+        datasets_dir: app.paths.datasets_dir().display().to_string(),
+        training_dir: app.paths.training_dir().display().to_string(),
         core_api_port: app.config.core_api_port,
         vram_budget_mb: app.scheduler.budget_mb(),
         offline_mode: app.offline(),
@@ -96,6 +98,8 @@ pub async fn save_config(app: &App, update: ConfigUpdate) -> Result<Config> {
     cfg.paths.outputs_path = non_empty_path(&update.paths.outputs_path);
     cfg.paths.runtimes_path = non_empty_path(&update.paths.runtimes_path);
     cfg.paths.cache_path = non_empty_path(&update.paths.cache_path);
+    cfg.paths.datasets_path = non_empty_path(&update.paths.datasets_path);
+    cfg.paths.training_path = non_empty_path(&update.paths.training_path);
     cfg.retention = update.retention;
     cfg.save(&app.paths)?;
     app.set_offline(cfg.offline_mode);
@@ -153,12 +157,19 @@ pub async fn submit_job(app: &App, body: SubmitJobDto) -> Result<Job> {
     // root folder): refuse it now with a 400 instead of queueing a job that
     // can only fail.
     if new.job_type == "dataset_prep" {
-        crate::capability::dataset::DatasetPrepRequest::from_params(&new.params).map_err(|e| {
-            match e {
+        let datasets = app.db.datasets().list().await?;
+        let runs = app.db.training_runs().list().await?;
+        crate::capability::dataset::DatasetPrepRequest::from_params(&new.params)
+            .and_then(|req| {
+                req.check_outside_store(&app.config.store_path)?;
+                req.check_against_datasets(&datasets, &app.paths.datasets_dir())?;
+                req.check_against_runs(&runs, &app.paths.training_dir())?;
+                Ok(req)
+            })
+            .map_err(|e| match e {
                 CoreError::Config(msg) => CoreError::Config(msg),
                 other => CoreError::Config(other.to_string()),
-            }
-        })?;
+            })?;
     }
     app.jobs.submit(new).await
 }
@@ -413,6 +424,16 @@ pub async fn update_dataset(
         .ok_or_else(|| CoreError::Config(format!("no such dataset {id}")))
 }
 
+/// The folders dataset housekeeping judges files against.
+fn dataset_roots(app: &App) -> crate::capability::dataset::DataRoots {
+    crate::capability::dataset::DataRoots {
+        outputs: app.paths.outputs_dir(),
+        datasets: app.paths.datasets_dir(),
+        models: app.config.store_path.clone(),
+        training: app.paths.training_dir(),
+    }
+}
+
 /// `DELETE /datasets/{id}` — drops the dataset, its frames and its concepts
 /// (SQLite cascade) *and* its files: the app-owned work folder and an export
 /// that lies inside the outputs folder. Source files and a user-chosen
@@ -424,7 +445,7 @@ pub async fn delete_dataset(
 ) -> Result<Option<crate::capability::dataset::DatasetDeleteSummary>> {
     crate::capability::dataset::housekeeping::delete_dataset_with_files(
         &app.db,
-        &app.paths.outputs_dir(),
+        &dataset_roots(app),
         id,
     )
     .await
@@ -436,7 +457,7 @@ pub async fn dataset_usage(
     app: &App,
     id: &str,
 ) -> Result<Option<crate::capability::dataset::DatasetUsage>> {
-    crate::capability::dataset::housekeeping::usage(&app.db, &app.paths.outputs_dir(), id).await
+    crate::capability::dataset::housekeeping::usage(&app.db, &dataset_roots(app), id).await
 }
 
 /// `POST /datasets/{id}/frames/bulk` — move a whole selection to Keep or
@@ -469,7 +490,7 @@ pub async fn delete_dataset_frames(
 ) -> Result<Option<crate::capability::dataset::FramesDeleteSummary>> {
     crate::capability::dataset::housekeeping::delete_frames(
         &app.db,
-        &app.paths.outputs_dir(),
+        &dataset_roots(app),
         id,
         &body.frame_ids,
     )
@@ -485,7 +506,7 @@ pub async fn cleanup_dataset(
 ) -> Result<Option<crate::capability::dataset::CleanupSummary>> {
     crate::capability::dataset::housekeeping::cleanup(
         &app.db,
-        &app.paths.outputs_dir(),
+        &dataset_roots(app),
         id,
         body.dry_run,
     )
@@ -855,6 +876,21 @@ pub async fn start_training_run(app: &App, body: StartRunDto) -> Result<crate::d
     check_trainer_online(app)?;
     let trigger_word = check_trigger_word(&body.trigger_word)?;
     let sample_prompts = check_sample_prompts(&body.sample_prompts)?;
+    let data_dir = body.chosen_data_dir();
+    if let Some(dir) = &data_dir {
+        let datasets = app.db.datasets().list().await?;
+        let runs = app.db.training_runs().list().await?;
+        crate::training::location::check_run_data_dir(
+            dir,
+            &crate::training::location::RunLocationContext {
+                store: &app.config.store_path,
+                datasets: &datasets,
+                datasets_root: &app.paths.datasets_dir(),
+                runs: &runs,
+                training_root: &app.paths.training_dir(),
+            },
+        )?;
+    }
 
     app.training_runner
         .create_and_start(crate::training::runner::StartRequest {
@@ -865,20 +901,16 @@ pub async fn start_training_run(app: &App, body: StartRunDto) -> Result<crate::d
             preset: body.preset,
             hyperparams: body.hyperparams,
             sample_prompts,
+            data_dir,
         })
         .await
 }
 
-/// The directory a run's output actually lives in: the path recorded on the
-/// row (a run started before the data folder moved keeps its own), falling
-/// back to the runner's derived path for a row that never got one.
+/// The directory a run's output actually lives in — the runner's own
+/// [`crate::training::runner::Runner::run_dir`], so samples, the log tail,
+/// the detail view and purge follow exactly the folder the runner uses.
 fn run_work_dir(app: &App, run: &crate::db::TrainingRun) -> PathBuf {
-    let recorded = run.work_dir.trim();
-    if recorded.is_empty() {
-        app.training_runner.work_dir(&run.id)
-    } else {
-        PathBuf::from(recorded)
-    }
+    app.training_runner.run_dir(run)
 }
 
 /// The sample images ai-toolkit wrote alongside the latest checkpoint,
@@ -978,14 +1010,67 @@ pub async fn delete_training_run(app: &App, id: &str, purge: bool) -> Result<()>
         )));
     }
     if purge {
-        let dir = run_work_dir(app, &run);
-        if dir.is_dir() {
-            if let Err(e) = tokio::fs::remove_dir_all(&dir).await {
-                tracing::warn!(run = %run.id, error = %e, "could not remove a run's work directory");
-            }
-        }
+        purge_run_folder(app, &run).await?;
     }
     app.db.training_runs().delete(id).await
+}
+
+/// Remove a run's folder — only after
+/// [`crate::training::location::check_purge_target`] has re-checked, right
+/// before deleting, that it is this run's own folder and holds or sits in
+/// nothing else. A refusal is an error and nothing is deleted (the row
+/// stays too, so the user sees why). A folder that is already gone is fine.
+///
+/// The check (a `symlink_metadata` plus a `canonicalize` per dataset and
+/// run) and the deletion are blocking filesystem work, so they run on
+/// `spawn_blocking` as one unit — the folder is checked and removed in the
+/// same breath, on the same thread.
+async fn purge_run_folder(app: &App, run: &crate::db::TrainingRun) -> Result<()> {
+    let dir = run_work_dir(app, run);
+    let datasets = app.db.datasets().list().await?;
+    let others: Vec<crate::db::TrainingRun> = app
+        .db
+        .training_runs()
+        .list()
+        .await?
+        .into_iter()
+        .filter(|r| r.id != run.id)
+        .collect();
+    let run = run.clone();
+    let store = app.config.store_path.clone();
+    let outputs = app.paths.outputs_dir();
+    let datasets_root = app.paths.datasets_dir();
+    let training_root = app.paths.training_dir();
+    tokio::task::spawn_blocking(move || -> Result<()> {
+        match std::fs::symlink_metadata(&dir) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => {
+                return Err(CoreError::Config(format!(
+                    "cannot inspect the run folder {} before deleting it: {e}",
+                    dir.display()
+                )))
+            }
+            Ok(_) => {}
+        }
+        crate::training::location::check_purge_target(
+            &dir,
+            &run,
+            &crate::training::location::PurgeContext {
+                store: &store,
+                outputs: &outputs,
+                datasets_root: &datasets_root,
+                training_root: &training_root,
+                datasets: &datasets,
+                other_runs: &others,
+            },
+        )?;
+        if let Err(e) = std::fs::remove_dir_all(&dir) {
+            tracing::warn!(run = %run.id, error = %e, "could not remove a run's work directory");
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|e| CoreError::Config(format!("the purge task did not finish: {e}")))?
 }
 
 /// The file behind `GET /training/runs/{id}/samples/{n}` — the `n`-th of the
@@ -1167,6 +1252,14 @@ pub async fn storage_report(app: &App) -> Result<crate::cleanup::StorageReport> 
         &app.config.store_path,
         crate::cleanup::DEFAULT_STALE_DAYS,
     ))
+}
+
+/// `GET /storage/locations` — every folder the app writes to (outputs,
+/// datasets, training, the model store, runtimes, cache, downloads staging),
+/// each with its size on disk, free/total space on its volume, and whether
+/// it can be pointed elsewhere in Settings (Plan 10).
+pub async fn storage_locations(app: &App) -> Result<Vec<crate::cleanup::StorageLocation>> {
+    crate::cleanup::locations::report(&app.paths, &app.config.store_path).await
 }
 
 /// Delete one model — its file, its runtime links, and its DB rows. Refused
@@ -2477,6 +2570,7 @@ mod tests {
     use axum::{Json, Router};
 
     use super::*;
+    use crate::api::dto::PathsUpdateDto;
     use crate::registry::SearchSort;
     use crate::runtime::RuntimeAdapter;
 
@@ -2504,6 +2598,7 @@ mod tests {
                 mode: crate::db::DatasetMode::Clips,
                 source_root: "E:\\Data\\Demo".into(),
                 prep_job_id: Some(job.id.clone()),
+                work_dir: None,
             })
             .await
             .unwrap();
@@ -2805,6 +2900,75 @@ mod tests {
         assert_eq!(app.comfyui.health().await, crate::runtime::Health::Healthy);
     }
 
+    /// Plan 10: the two new `[paths]` fields round-trip through
+    /// `save_config` exactly like `outputs_path`/`runtimes_path`/`cache_path`
+    /// already do -- a blank field clears the override, a non-blank one sets
+    /// it.
+    #[tokio::test]
+    async fn save_config_persists_datasets_and_training_path_overrides() {
+        let tmp = tempfile::tempdir().unwrap();
+        let app = crate::App::load(crate::AppPaths::rooted(tmp.path()))
+            .await
+            .unwrap();
+        let datasets_path = tmp.path().join("elsewhere-datasets");
+        let training_path = tmp.path().join("elsewhere-training");
+
+        let update = ConfigUpdate {
+            store_path: app.config.store_path.display().to_string(),
+            offline_mode: false,
+            vram_budget_mb: app.config.vram_budget_mb,
+            llama: app.config.llama.clone(),
+            comfyui: app.config.comfyui.clone(),
+            models: app.config.models,
+            paths: PathsUpdateDto {
+                datasets_path: datasets_path.display().to_string(),
+                training_path: training_path.display().to_string(),
+                ..Default::default()
+            },
+            retention: Default::default(),
+        };
+
+        let saved = save_config(&app, update).await.unwrap();
+        assert_eq!(saved.paths.datasets_path.as_deref(), Some(&*datasets_path));
+        assert_eq!(saved.paths.training_path.as_deref(), Some(&*training_path));
+
+        // A blank field clears the override back to the portable default.
+        let clear = ConfigUpdate {
+            store_path: app.config.store_path.display().to_string(),
+            offline_mode: false,
+            vram_budget_mb: app.config.vram_budget_mb,
+            llama: app.config.llama.clone(),
+            comfyui: app.config.comfyui.clone(),
+            models: app.config.models,
+            paths: PathsUpdateDto::default(),
+            retention: Default::default(),
+        };
+        let saved = save_config(&app, clear).await.unwrap();
+        assert_eq!(saved.paths.datasets_path, None);
+        assert_eq!(saved.paths.training_path, None);
+    }
+
+    /// Plan 10: `about()` reports where dataset-prep and training-run work
+    /// folders land, alongside the existing outputs/runtimes/cache fields.
+    #[tokio::test]
+    async fn about_reports_the_datasets_and_training_dirs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let app = crate::App::load(crate::AppPaths::rooted(tmp.path()))
+            .await
+            .unwrap();
+
+        let dto = about(&app);
+
+        assert_eq!(
+            dto.datasets_dir,
+            app.paths.datasets_dir().display().to_string()
+        );
+        assert_eq!(
+            dto.training_dir,
+            app.paths.training_dir().display().to_string()
+        );
+    }
+
     fn stack_members(id: &str) -> Vec<&'static crate::model::KnownModel> {
         crate::model::MODEL_STACKS
             .iter()
@@ -3010,6 +3174,84 @@ mod tests {
         assert!(json.get("loaded_models").is_some());
     }
 
+    /// Plan 10: a dataset prep asking to store its frames inside the model
+    /// store is refused with a 400 before a job is queued.
+    #[tokio::test]
+    async fn submit_job_refuses_a_dataset_prep_storing_frames_in_the_model_store() {
+        let tmp = tempfile::tempdir().unwrap();
+        let app = App::load(crate::AppPaths::rooted(tmp.path()))
+            .await
+            .unwrap();
+        let body = SubmitJobDto {
+            job_type: "dataset_prep".into(),
+            capability: None,
+            runtime_id: None,
+            model_id: None,
+            vram_needed_mb: 0,
+            agent_session: false,
+            session_id: None,
+            params: serde_json::json!({
+                "root": tmp.path().join("src").to_string_lossy(),
+                "data_dir": app.config.store_path.join("frames").to_string_lossy(),
+            }),
+        };
+        let err = submit_job(&app, body).await.unwrap_err();
+        assert!(matches!(err, CoreError::Config(_)), "{err}");
+        assert!(err.to_string().contains("model store"), "{err}");
+        assert!(app
+            .db
+            .jobs()
+            .list(&JobFilter::default())
+            .await
+            .unwrap()
+            .is_empty());
+    }
+
+    /// A dataset prep storing its frames inside another dataset's source
+    /// folder is refused at submission, naming that dataset.
+    #[tokio::test]
+    async fn submit_job_refuses_a_data_dir_inside_another_datasets_source() {
+        let tmp = tempfile::tempdir().unwrap();
+        let app = App::load(crate::AppPaths::rooted(tmp.path()))
+            .await
+            .unwrap();
+        let other_src = tmp.path().join("other-src");
+        app.db
+            .datasets()
+            .create(crate::db::NewDataset {
+                name: "Neighbour".into(),
+                mode: crate::db::DatasetMode::Frames,
+                source_root: other_src.to_string_lossy().into_owned(),
+                prep_job_id: None,
+                work_dir: None,
+            })
+            .await
+            .unwrap();
+        let body = SubmitJobDto {
+            job_type: "dataset_prep".into(),
+            capability: None,
+            runtime_id: None,
+            model_id: None,
+            vram_needed_mb: 0,
+            agent_session: false,
+            session_id: None,
+            params: serde_json::json!({
+                "root": tmp.path().join("src").to_string_lossy(),
+                "data_dir": other_src.join("frames").to_string_lossy(),
+            }),
+        };
+        let err = submit_job(&app, body).await.unwrap_err();
+        assert!(matches!(err, CoreError::Config(_)), "{err}");
+        assert!(err.to_string().contains("Neighbour"), "{err}");
+        assert!(app
+            .db
+            .jobs()
+            .list(&JobFilter::default())
+            .await
+            .unwrap()
+            .is_empty());
+    }
+
     #[test]
     fn submit_job_dto_carries_the_session_id_through() {
         let body = SubmitJobDto {
@@ -3101,6 +3343,362 @@ mod tests {
             allow_commercial_use: vec![],
             model_kind_hint: None,
             base_model_family: None,
+        }
+    }
+
+    // --------------------------------------- per-run location (Plan 10)
+
+    fn start_body(data_dir: Option<&std::path::Path>) -> StartRunDto {
+        StartRunDto {
+            name: "lora".into(),
+            target_model_id: "m".into(),
+            dataset_id: "d".into(),
+            trigger_word: "tgr_xy".into(),
+            preset: crate::db::Preset::Fast,
+            hyperparams: crate::training::config::Hyperparams::default(),
+            sample_prompts: vec!["tgr_xy a cat".into()],
+            data_dir: data_dir.map(|d| d.to_string_lossy().into_owned()),
+        }
+    }
+
+    async fn loaded_app() -> (App, tempfile::TempDir) {
+        let tmp = tempfile::tempdir().unwrap();
+        let app = App::load(crate::AppPaths::rooted(tmp.path()))
+            .await
+            .unwrap();
+        (app, tmp)
+    }
+
+    fn new_run(work_dir: &std::path::Path) -> crate::db::NewTrainingRun {
+        crate::db::NewTrainingRun {
+            name: "Earlier".into(),
+            profile_family: "flux2-klein-4b".into(),
+            target_model_id: None,
+            dataset_id: None,
+            data_kind: crate::db::DatasetMode::Frames,
+            trigger_word: "tgr_xy".into(),
+            preset: crate::db::Preset::Fast,
+            hyperparams_json: "{}".into(),
+            sample_prompts_json: "[]".into(),
+            work_dir: work_dir.to_string_lossy().into_owned(),
+        }
+    }
+
+    /// `data_dir` refused before anything is created, with `needle` in the
+    /// message.
+    async fn assert_start_refused(app: &App, data_dir: &std::path::Path, needle: &str) {
+        let err = start_training_run(app, start_body(Some(data_dir)))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, CoreError::Config(_)), "{err}");
+        assert!(err.to_string().contains(needle), "{needle:?} in: {err}");
+        assert!(
+            !err.to_string().contains("not installed"),
+            "refused by the folder check, not the runner: {err}"
+        );
+    }
+
+    #[test]
+    fn a_blank_or_missing_data_dir_means_the_default_folder() {
+        let body: StartRunDto = serde_json::from_value(serde_json::json!({
+            "name": "l", "target_model_id": "m", "dataset_id": "d",
+            "trigger_word": "t", "preset": "fast"
+        }))
+        .unwrap();
+        assert_eq!(body.chosen_data_dir(), None);
+        let blank: StartRunDto = serde_json::from_value(serde_json::json!({
+            "name": "l", "target_model_id": "m", "dataset_id": "d",
+            "trigger_word": "t", "preset": "fast", "data_dir": "  "
+        }))
+        .unwrap();
+        assert_eq!(blank.chosen_data_dir(), None);
+        let set: StartRunDto = serde_json::from_value(serde_json::json!({
+            "name": "l", "target_model_id": "m", "dataset_id": "d",
+            "trigger_word": "t", "preset": "fast", "data_dir": " E:\\runs "
+        }))
+        .unwrap();
+        assert_eq!(set.chosen_data_dir(), Some(PathBuf::from("E:\\runs")));
+    }
+
+    #[tokio::test]
+    async fn start_run_refuses_a_relative_data_dir() {
+        let (app, _tmp) = loaded_app().await;
+        assert_start_refused(&app, std::path::Path::new("runs\\here"), "absolute").await;
+    }
+
+    #[tokio::test]
+    async fn start_run_refuses_a_whole_drive() {
+        let (app, tmp) = loaded_app().await;
+        let drive = tmp.path().ancestors().last().unwrap().to_path_buf();
+        assert_start_refused(&app, &drive, "whole drive").await;
+    }
+
+    #[tokio::test]
+    async fn start_run_refuses_a_data_dir_in_the_model_store() {
+        let (app, _tmp) = loaded_app().await;
+        let store = app.config.store_path.clone();
+        assert_start_refused(&app, &store, "model store").await;
+        assert_start_refused(&app, &store.join("runs"), "model store").await;
+    }
+
+    #[tokio::test]
+    async fn start_run_refuses_a_data_dir_overlapping_a_dataset() {
+        let (app, tmp) = loaded_app().await;
+        let media = tmp.path().join("media");
+        let source = media.join("src");
+        let job = app
+            .db
+            .jobs()
+            .insert(NewJob::new("dataset_prep"))
+            .await
+            .unwrap();
+        let work = tmp.path().join("frames").join(&job.id);
+        app.db
+            .datasets()
+            .create(crate::db::NewDataset {
+                name: "Neighbour".into(),
+                mode: crate::db::DatasetMode::Frames,
+                source_root: source.to_string_lossy().into_owned(),
+                prep_job_id: Some(job.id.clone()),
+                work_dir: Some(work.to_string_lossy().into_owned()),
+            })
+            .await
+            .unwrap();
+        // Inside, equal to, or holding the source; inside the work folder.
+        for dir in [
+            source.join("runs"),
+            source.clone(),
+            media,
+            work.join("runs"),
+        ] {
+            assert_start_refused(&app, &dir, "Neighbour").await;
+        }
+    }
+
+    #[tokio::test]
+    async fn start_run_refuses_a_data_dir_inside_another_runs_folder() {
+        let (app, tmp) = loaded_app().await;
+        let earlier = tmp.path().join("runs").join("earlier-run");
+        app.db
+            .training_runs()
+            .create(new_run(&earlier))
+            .await
+            .unwrap();
+        assert_start_refused(&app, &earlier, "Earlier").await;
+        assert_start_refused(&app, &earlier.join("nested"), "Earlier").await;
+    }
+
+    /// A folder that breaks no rule — holding other runs' folders is what
+    /// the default root does — reaches the runner, which then refuses for
+    /// its own reason (no trainer in a throwaway app).
+    #[tokio::test]
+    async fn start_run_accepts_a_folder_that_breaks_no_rule() {
+        let (app, tmp) = loaded_app().await;
+        let runs = tmp.path().join("runs");
+        app.db
+            .training_runs()
+            .create(new_run(&runs.join("earlier-run")))
+            .await
+            .unwrap();
+        let err = start_training_run(&app, start_body(Some(&runs)))
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("not installed"), "{err}");
+    }
+
+    /// Purge removes the folder recorded on the row — and nothing at the
+    /// derived default path, which may belong to nobody.
+    #[tokio::test]
+    async fn purging_a_run_deletes_its_stored_folder_only() {
+        let (app, tmp) = loaded_app().await;
+        let (run, stored) = cancelled_run_in(&app, &tmp.path().join("elsewhere")).await;
+        std::fs::write(stored.join("train.log"), b"log").unwrap();
+        let derived = app.training_runner.default_work_dir(&run.id);
+        std::fs::create_dir_all(&derived).unwrap();
+        std::fs::write(derived.join("keep.txt"), b"keep").unwrap();
+
+        delete_training_run(&app, &run.id, true).await.unwrap();
+
+        assert!(!stored.exists(), "the stored folder is purged");
+        assert!(
+            derived.join("keep.txt").exists(),
+            "the derived path is untouched"
+        );
+    }
+
+    /// A cancelled run whose recorded folder is `<parent>/<run id>`
+    /// (created).
+    async fn cancelled_run_in(
+        app: &App,
+        parent: &std::path::Path,
+    ) -> (crate::db::TrainingRun, PathBuf) {
+        let run = app
+            .db
+            .training_runs()
+            .create(new_run(std::path::Path::new("")))
+            .await
+            .unwrap();
+        let stored = parent.join(&run.id);
+        std::fs::create_dir_all(&stored).unwrap();
+        app.db
+            .training_runs()
+            .set_work_dir(&run.id, &stored.to_string_lossy())
+            .await
+            .unwrap();
+        app.db
+            .training_runs()
+            .set_state(&run.id, crate::db::RunState::Cancelled)
+            .await
+            .unwrap();
+        (reload_run(app, &run.id).await.unwrap(), stored)
+    }
+
+    /// A refused purge deletes nothing — neither the folder nor the row.
+    async fn assert_purge_refused(app: &App, run: &crate::db::TrainingRun, needle: &str) {
+        let err = delete_training_run(app, &run.id, true).await.unwrap_err();
+        assert!(matches!(err, CoreError::Config(_)), "{err}");
+        assert!(err.to_string().contains(needle), "{needle:?} in: {err}");
+        assert!(
+            app.db.training_runs().get(&run.id).await.unwrap().is_some(),
+            "the row stays so the user sees why"
+        );
+    }
+
+    /// The review's data-loss path: a dataset's frames ended up inside a
+    /// run's folder. Purging the run must not take them along.
+    #[tokio::test]
+    async fn purging_a_run_that_holds_a_datasets_frames_is_refused() {
+        let (app, tmp) = loaded_app().await;
+        let (run, stored) = cancelled_run_in(&app, &tmp.path().join("runs")).await;
+        let work = stored.join("frames").join("job-x");
+        let frame = work.join("f.png");
+        std::fs::create_dir_all(&work).unwrap();
+        std::fs::write(&frame, b"frame").unwrap();
+        app.db
+            .datasets()
+            .create(crate::db::NewDataset {
+                name: "Nested".into(),
+                mode: crate::db::DatasetMode::Frames,
+                source_root: tmp.path().join("src").to_string_lossy().into_owned(),
+                prep_job_id: None,
+                work_dir: Some(work.to_string_lossy().into_owned()),
+            })
+            .await
+            .unwrap();
+
+        assert_purge_refused(&app, &run, "Nested").await;
+        assert!(frame.exists(), "the dataset's frames survive");
+    }
+
+    /// A row pointing at a folder not named after the run (edited, or
+    /// corrupted) is never purged.
+    #[tokio::test]
+    async fn purging_a_folder_not_named_after_the_run_is_refused() {
+        let (app, tmp) = loaded_app().await;
+        let (run, _stored) = cancelled_run_in(&app, &tmp.path().join("runs")).await;
+        let foreign = tmp.path().join("someone-elses");
+        std::fs::create_dir_all(&foreign).unwrap();
+        std::fs::write(foreign.join("keep.txt"), b"keep").unwrap();
+        app.db
+            .training_runs()
+            .set_work_dir(&run.id, &foreign.to_string_lossy())
+            .await
+            .unwrap();
+        let run = reload_run(&app, &run.id).await.unwrap();
+
+        assert_purge_refused(&app, &run, "not named after the run").await;
+        assert!(foreign.join("keep.txt").exists());
+    }
+
+    /// A junction inside the run folder is removed as a link: the folder it
+    /// points at, and its files, stay.
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn purging_a_run_leaves_a_junction_target_alone() {
+        let (app, tmp) = loaded_app().await;
+        let (run, stored) = cancelled_run_in(&app, &tmp.path().join("runs")).await;
+        let target = tmp.path().join("precious");
+        std::fs::create_dir_all(&target).unwrap();
+        std::fs::write(target.join("keep.txt"), b"keep").unwrap();
+        let linked = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(stored.join("link"))
+            .arg(&target)
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        if !linked {
+            eprintln!("skipped: cannot create a junction here");
+            return;
+        }
+
+        delete_training_run(&app, &run.id, true).await.unwrap();
+
+        assert!(!stored.exists(), "the run folder is purged");
+        assert!(
+            target.join("keep.txt").exists(),
+            "the junction target survives"
+        );
+    }
+
+    /// Plan 10 fix: a dataset prep may not store its frames in a training
+    /// run's folder (recorded or derived) or inside it — purging the run
+    /// would delete them.
+    #[tokio::test]
+    async fn submit_job_refuses_a_data_dir_in_a_training_run_folder() {
+        let (app, tmp) = loaded_app().await;
+        let (_run, stored) = cancelled_run_in(&app, &tmp.path().join("runs")).await;
+        let legacy = app
+            .db
+            .training_runs()
+            .create(crate::db::NewTrainingRun {
+                name: "Legacy".into(),
+                ..new_run(std::path::Path::new(""))
+            })
+            .await
+            .unwrap();
+        let derived = app.paths.training_dir().join(&legacy.id);
+        for (dir, needle) in [
+            (stored.clone(), "Earlier"),
+            (stored.join("frames"), "Earlier"),
+            (derived.join("frames"), "Legacy"),
+        ] {
+            let err = submit_job(&app, prep_body(&tmp, &dir)).await.unwrap_err();
+            assert!(matches!(err, CoreError::Config(_)), "{err}");
+            assert!(err.to_string().contains(needle), "{needle:?} in: {err}");
+        }
+        assert!(app
+            .db
+            .jobs()
+            .list(&JobFilter::default())
+            .await
+            .unwrap()
+            .is_empty());
+    }
+
+    /// Holding run folders is fine: the prep's own folder
+    /// `<data_dir>/<job id>` is a sibling of theirs.
+    #[tokio::test]
+    async fn submit_job_accepts_a_data_dir_holding_run_folders() {
+        let (app, tmp) = loaded_app().await;
+        let runs = tmp.path().join("runs");
+        cancelled_run_in(&app, &runs).await;
+        submit_job(&app, prep_body(&tmp, &runs)).await.unwrap();
+    }
+
+    fn prep_body(tmp: &tempfile::TempDir, data_dir: &std::path::Path) -> SubmitJobDto {
+        SubmitJobDto {
+            job_type: "dataset_prep".into(),
+            capability: None,
+            runtime_id: None,
+            model_id: None,
+            vram_needed_mb: 0,
+            agent_session: false,
+            session_id: None,
+            params: serde_json::json!({
+                "root": tmp.path().join("src").to_string_lossy(),
+                "data_dir": data_dir.to_string_lossy(),
+            }),
         }
     }
 }

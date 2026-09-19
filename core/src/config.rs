@@ -223,6 +223,12 @@ pub struct PathsConfig {
     pub runtimes_path: Option<PathBuf>,
     /// Where the disposable registry cache lands instead of the default.
     pub cache_path: Option<PathBuf>,
+    /// Where dataset-prep work folders land instead of the default
+    /// (`<outputs_dir>/datasets`).
+    pub datasets_path: Option<PathBuf>,
+    /// Where training-run work folders land instead of the default
+    /// (`<root>/training`).
+    pub training_path: Option<PathBuf>,
 }
 
 /// Used when `vram_budget_mb` is `0` and no NVIDIA GPU is detected.
@@ -668,6 +674,8 @@ mod tests {
                 outputs_path: Some(PathBuf::from("E:\\media\\outputs")),
                 runtimes_path: Some(PathBuf::from("E:\\fast\\runtimes")),
                 cache_path: None,
+                datasets_path: Some(PathBuf::from("D:\\data\\datasets")),
+                training_path: Some(PathBuf::from("D:\\data\\training")),
             },
             ..Config::default()
         };
@@ -684,6 +692,14 @@ mod tests {
             Some(Path::new("E:\\fast\\runtimes"))
         );
         assert_eq!(reloaded.paths.cache_path, None);
+        assert_eq!(
+            reloaded.paths.datasets_path.as_deref(),
+            Some(Path::new("D:\\data\\datasets"))
+        );
+        assert_eq!(
+            reloaded.paths.training_path.as_deref(),
+            Some(Path::new("D:\\data\\training"))
+        );
     }
 
     #[test]

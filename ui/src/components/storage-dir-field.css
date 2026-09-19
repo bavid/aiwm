@@ -1,0 +1,127 @@
+/* The optional "Store frames in" / "Store run in" row of the dataset-prep
+   and new-run forms. Reads as a quiet sub-panel: it is optional, and the
+   default is right for most runs. */
+
+.storedir {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-2) var(--space-3) var(--space-3);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+  background: color-mix(in oklab, var(--surface-2) 55%, transparent);
+  transition: border-color var(--dur) var(--ease);
+}
+
+.storedir:focus-within {
+  border-color: color-mix(in oklab, var(--accent) 55%, var(--border));
+}
+
+.storedir__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.storedir__label {
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.storedir__badge {
+  padding: 0 var(--space-2);
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+.storedir__badge[data-custom="true"] {
+  background: color-mix(in oklab, var(--accent) 16%, var(--surface-2));
+  color: var(--accent);
+  font-weight: 600;
+}
+
+/* In a narrow form column the buttons wrap under the path instead of
+   squeezing it. */
+.storedir__row {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
+.storedir__row input {
+  flex: 1 1 14rem;
+  min-width: 0;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+
+.storedir__row input::placeholder {
+  color: color-mix(in oklab, var(--muted) 75%, transparent);
+}
+
+.storedir__row input:focus-visible,
+.storedir__btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.storedir__btn {
+  flex: none;
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: var(--text-sm);
+  cursor: pointer;
+  transition:
+    color var(--dur) var(--ease),
+    border-color var(--dur) var(--ease);
+}
+
+.storedir__btn:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.storedir__btn:active {
+  transform: translateY(1px);
+}
+
+.storedir__free {
+  margin: 0;
+  font-size: var(--text-xs);
+  color: var(--muted);
+}
+
+.storedir__free[data-tone="ok"] {
+  color: var(--load-ok);
+}
+
+.storedir__free[data-tone="warn"] {
+  color: var(--load-warn);
+  font-weight: 600;
+}
+
+.storedir__help {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+}
+
+.storedir__help code {
+  font-family: var(--font-mono);
+  font-size: 0.95em;
+}

@@ -1,5 +1,4 @@
 import { useEffect, useState } from "react";
-import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { useAbout, useCivitaiStatus, useLocalApiStatus, useRegistryStatus } from "../../lib/hooks";
 import {
   cleanupOutputs,
@@ -21,7 +20,9 @@ import {
 import { SectionNav, type NavSection } from "../../components/SectionNav";
 import { getTheme, setTheme, type Theme } from "../../lib/theme";
 import { formatGB } from "../../lib/units";
+import { openFolder } from "../../lib/browse";
 import { BackupCard } from "./BackupCard";
+import { DataLocations, type PathField } from "./DataLocations";
 import "./settings.css";
 
 const SECTIONS: NavSection[] = [
@@ -68,6 +69,8 @@ const toForm = (c: AppConfig): Form => ({
     outputs_path: orEmpty(c.paths.outputs_path),
     runtimes_path: orEmpty(c.paths.runtimes_path),
     cache_path: orEmpty(c.paths.cache_path),
+    datasets_path: orEmpty(c.paths.datasets_path),
+    training_path: orEmpty(c.paths.training_path),
   },
   retention: { ...c.retention },
 });
@@ -89,6 +92,8 @@ const sameForm = (a: Form, b: Form): boolean =>
   a.paths.outputs_path === b.paths.outputs_path &&
   a.paths.runtimes_path === b.paths.runtimes_path &&
   a.paths.cache_path === b.paths.cache_path &&
+  a.paths.datasets_path === b.paths.datasets_path &&
+  a.paths.training_path === b.paths.training_path &&
   a.retention.max_age_days === b.retention.max_age_days &&
   a.retention.max_total_mb === b.retention.max_total_mb;
 
@@ -104,6 +109,7 @@ export function Settings() {
   const [cleaning, setCleaning] = useState(false);
   const [cleanupResult, setCleanupResult] = useState<SweepResult | null>(null);
   const [cleanupError, setCleanupError] = useState<string | null>(null);
+  const [revealError, setRevealError] = useState<string | null>(null);
 
   useEffect(() => {
     getConfig()
@@ -143,6 +149,8 @@ export function Settings() {
     patch({ models: { ...form.models, ...next } });
   const patchPaths = (next: Partial<PathsUpdate>) =>
     patch({ paths: { ...form.paths, ...next } });
+  const changePath = (field: PathField, value: string) =>
+    field === "store_path" ? patch({ store_path: value }) : patchPaths({ [field]: value });
   const patchRetention = (next: Partial<RetentionConfig>) =>
     patch({ retention: { ...form.retention, ...next } });
 
@@ -231,73 +239,14 @@ export function Settings() {
 
           {section === "storage" && (
             <>
-              <section className="card set-group">
-                <header className="card__head">
-                  <h2>Model store</h2>
-                  <span className="card__sub">restart to apply</span>
-                </header>
-                <label className="set-field">
-                  <span>Canonical directory for imported models</span>
-                  <input
-                    type="text"
-                    value={form.store_path}
-                    spellCheck={false}
-                    onChange={(e) => patch({ store_path: e.target.value })}
-                  />
-                </label>
-              </section>
-
-              <section className="card set-group">
-                <header className="card__head">
-                  <h2>Data locations</h2>
-                  <span className="card__sub">restart to apply</span>
-                </header>
-                <p className="muted">
-                  By default AIWM is portable — everything lives next to the app, wherever
-                  that is (no <code>%APPDATA%</code>). Leave a field blank to use that
-                  default; set one to move just that folder elsewhere (e.g. a faster or
-                  roomier drive).
-                </p>
-                <label className="set-field">
-                  <span>
-                    Generated images / video — grows over time
-                    {about ? ` · currently ${about.outputs_dir}` : ""}
-                  </span>
-                  <input
-                    type="text"
-                    value={form.paths.outputs_path}
-                    placeholder="leave blank for the default"
-                    spellCheck={false}
-                    onChange={(e) => patchPaths({ outputs_path: e.target.value })}
-                  />
-                </label>
-                <label className="set-field">
-                  <span>
-                    Managed runtime installs (llama.cpp, ComfyUI) — several GB
-                    {about ? ` · currently ${about.runtimes_dir}` : ""}
-                  </span>
-                  <input
-                    type="text"
-                    value={form.paths.runtimes_path}
-                    placeholder="leave blank for the default"
-                    spellCheck={false}
-                    onChange={(e) => patchPaths({ runtimes_path: e.target.value })}
-                  />
-                </label>
-                <label className="set-field">
-                  <span>
-                    Registry cache — disposable, safe to delete
-                    {about ? ` · currently ${about.cache_dir}` : ""}
-                  </span>
-                  <input
-                    type="text"
-                    value={form.paths.cache_path}
-                    placeholder="leave blank for the default"
-                    spellCheck={false}
-                    onChange={(e) => patchPaths({ cache_path: e.target.value })}
-                  />
-                </label>
-              </section>
+              <DataLocations
+                paths={form.paths}
+                storePath={form.store_path}
+                savedPaths={loaded.paths}
+                savedStorePath={loaded.store_path}
+                about={about}
+                onChange={changePath}
+              />
 
               <section className="card set-group">
                 <header className="card__head">
@@ -314,13 +263,20 @@ export function Settings() {
                       <button
                         type="button"
                         className="set-reveal"
-                        onClick={() => revealItemInDir(about.outputs_dir).catch(() => {})}
+                        onClick={() =>
+                          void openFolder(about.outputs_dir).then(setRevealError)
+                        }
                       >
                         reveal
                       </button>
                     )}
                   </dd>
                 </dl>
+                {revealError && (
+                  <p className="settings__err" role="alert">
+                    {revealError}
+                  </p>
+                )}
                 <p className="muted">
                   Images and video clips are kept until you delete them — video files are
                   large and this folder grows fast. Set an age and/or size limit below to

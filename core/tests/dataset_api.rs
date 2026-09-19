@@ -31,6 +31,7 @@ async fn fixture() -> (ApiServer, tempfile::TempDir, String, Vec<String>) {
             mode: DatasetMode::Clips,
             source_root: "E:\\Data\\Demo".into(),
             prep_job_id: Some(job.id.clone()),
+            work_dir: None,
         })
         .await
         .unwrap();

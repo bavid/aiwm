@@ -204,6 +204,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/external-engines/attach", post(attach_external_engine))
         .route("/external-engines/detach", post(detach_engine))
         .route("/storage", get(storage_report))
+        .route("/storage/locations", get(storage_locations))
         .route("/outputs/cleanup", post(cleanup_outputs))
         .route("/models/{id}/benchmark", post(benchmark_model))
         .route("/models/{id}/benchmarks", get(model_benchmarks))
@@ -1123,6 +1124,12 @@ async fn storage_report(
     State(app): AppState,
 ) -> Result<Json<crate::cleanup::StorageReport>, ApiError> {
     Ok(Json(handlers::storage_report(&app).await?))
+}
+
+async fn storage_locations(
+    State(app): AppState,
+) -> Result<Json<Vec<crate::cleanup::StorageLocation>>, ApiError> {
+    Ok(Json(handlers::storage_locations(&app).await?))
 }
 
 async fn cleanup_outputs(

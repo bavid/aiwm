@@ -10,6 +10,8 @@
 use std::path::{Path, PathBuf};
 
 use super::{Runner, BYTES_PER_GB, MIN_FREE_DISK_BYTES};
+use crate::capability::dataset::location::nearest_existing;
+use crate::cleanup::volume_label;
 use crate::db::{DatasetMode, TrainingRun};
 use crate::runtime::training::RUNTIME_ID as TRAINING_RUNTIME_ID;
 use crate::scheduler::Scheduler;
@@ -34,12 +36,15 @@ pub(super) struct Prepared {
 impl Runner {
     /// Everything that must be true before a trainer process may be spawned.
     /// Every message is meant to be readable straight out of the UI.
+    /// `folder` is where the run writes: its own folder, or for a run not
+    /// created yet the folder its own one will be made in.
     pub(super) async fn preflight(
         &self,
         target_model_id: Option<&str>,
         dataset_id: Option<&str>,
         hyperparams: Hyperparams,
         prompts: Vec<String>,
+        folder: &Path,
     ) -> Result<Prepared> {
         if !self.adapter.is_installed() {
             return Err(training_refusal(
@@ -134,7 +139,7 @@ impl Runner {
         }
         hyperparams.validate()?;
 
-        self.check_disk()?;
+        self.check_disk(folder)?;
 
         self.release_gpu().await;
         let free = self.scheduler.free_mb();
@@ -171,6 +176,7 @@ impl Runner {
             run.dataset_id.as_deref(),
             hyperparams,
             prompts,
+            &self.run_dir(run),
         )
         .await
     }
@@ -252,39 +258,36 @@ impl Runner {
         }
     }
 
-    /// Warn (never block) when the work dir's volume is nearly full. Uses the
+    /// Refuse a run whose folder's drive has less than
+    /// [`MIN_FREE_DISK_BYTES`] free, measured on the nearest existing
+    /// ancestor of `folder` (a new run's folder does not exist yet). Uses the
     /// same `sysinfo`-based helper the storage report uses, so this needs no
     /// extra dependency and no `unsafe` Win32 call.
-    fn check_disk(&self) -> Result<()> {
-        let Some((free, _total)) = (self.free_space)(&self.data_dir) else {
+    fn check_disk(&self, folder: &Path) -> Result<()> {
+        let measured = nearest_existing(folder).unwrap_or(folder);
+        let Some((free, _total)) = (self.free_space)(measured) else {
             // A volume we cannot measure is not a volume we may refuse: the
             // probe misses network and mounted-folder paths, and a run the
             // user could have completed is worse than a disk-full failure
             // they can read straight off the trainer's log.
-            tracing::debug!("could not determine free disk space for the training folder");
+            tracing::warn!(
+                path = %folder.display(),
+                "could not determine free disk space for the training folder; \
+                 starting without the free-space check"
+            );
             return Ok(());
         };
         if free >= MIN_FREE_DISK_BYTES {
             return Ok(());
         }
         Err(training_refusal(format!(
-            "only {} GB free on {}, at least {} GB needed for the checkpoints and \
-             preview images this run writes",
+            "only {} GiB free on {}, at least {} GiB needed for the checkpoints and \
+             preview images this run writes \u{2014} choose a folder on another drive or \
+             free up space",
             free / BYTES_PER_GB,
-            volume_label(&self.data_dir),
+            volume_label(folder),
             MIN_FREE_DISK_BYTES / BYTES_PER_GB
         )))
-    }
-}
-
-/// The volume a path lives on, for the disk message: `E:` on Windows, the
-/// whole path anywhere it has no drive prefix.
-pub(super) fn volume_label(path: &Path) -> String {
-    match path.components().next() {
-        Some(std::path::Component::Prefix(prefix)) => {
-            prefix.as_os_str().to_string_lossy().into_owned()
-        }
-        _ => path.display().to_string(),
     }
 }
 

@@ -16,6 +16,12 @@ import {
   trainingEscalation,
   trainingModelRow,
 } from "./dev-mock-training";
+import {
+  checkPrepDataDir,
+  checkRunDataDir,
+  mockDialogOpen,
+  mockStorageLocations,
+} from "./dev-mock-storage";
 
 type AnyRecord = Record<string, unknown>;
 
@@ -340,6 +346,8 @@ const SCENES: AnyRecord[] = [
 
 const DATASET_FRAMES: AnyRecord[] = [];
 const DATASETS: AnyRecord[] = [];
+/** The mock's default datasets folder (`AppPaths::datasets_dir`). */
+const MOCK_DATASETS_DIR = "E:\\AI\\data\\outputs\\datasets";
 const CONCEPTS: AnyRecord[] = [];
 /** `{ frame_id, concept_id }` pairs — the join table's mock stand-in. */
 const FRAME_CONCEPTS: { frame_id: string; concept_id: string }[] = [];
@@ -406,6 +414,10 @@ function datasetForJob(job: AnyRecord): AnyRecord {
   if (existing) return existing;
   const params = (job.params ?? {}) as AnyRecord;
   const root = String(params.root ?? "E:\\Data\\Demo");
+  const dataDir =
+    typeof params.data_dir === "string" && params.data_dir.trim() !== ""
+      ? params.data_dir.trim()
+      : MOCK_DATASETS_DIR;
   const dataset: AnyRecord = {
     id: `ds-${String(job.id)}`,
     name: root.split(/[\\/]/).filter(Boolean).pop() ?? "Dataset",
@@ -414,6 +426,7 @@ function datasetForJob(job: AnyRecord): AnyRecord {
     trigger_word: "",
     prep_job_id: job.id,
     export_dir: null,
+    work_dir: `${dataDir}\\${String(job.id)}`,
     created_at: now(),
   };
   DATASETS.push(dataset);
@@ -483,9 +496,15 @@ function mockUsage(dataset: AnyRecord): AnyRecord {
   const withFile = frames.filter((f) => mockFrameBytes(f) > 0);
   // The mock's work folders are never shared, so a dataset with a prep job
   // is always walkable; one without has no folder, only its own frames.
-  const hasWorkDir = dataset.prep_job_id != null;
+  const workDir =
+    typeof dataset.work_dir === "string"
+      ? dataset.work_dir
+      : dataset.prep_job_id != null
+        ? `${MOCK_DATASETS_DIR}\\${String(dataset.prep_job_id)}`
+        : null;
+  const hasWorkDir = workDir != null;
   return {
-    work_dir: hasWorkDir ? `E:\\AI\\data\\outputs\\datasets\\${String(dataset.prep_job_id)}` : null,
+    work_dir: workDir,
     work_walkable: hasWorkDir,
     work_bytes: withFile.length * MOCK_FRAME_BYTES,
     work_files: withFile.length,
@@ -1330,6 +1349,7 @@ const ABOUT: AnyRecord = {
   core_version: "0.0.1-dev", data_dir: "E:\\AI\\data", store_path: "E:\\AI\\models",
   outputs_dir: "E:\\AI\\data\\outputs", outputs_bytes: 4_812_300_000,
   runtimes_dir: "E:\\AI\\data\\runtimes", cache_dir: "E:\\AI\\data\\cache",
+  datasets_dir: "E:\\AI\\data\\outputs\\datasets", training_dir: "E:\\AI\\data\\training",
   core_api_port: 48096, vram_budget_mb: 14848, offline_mode: false,
 };
 
@@ -1342,7 +1362,10 @@ const CONFIG: AnyRecord = {
   },
   comfyui: { vram_mode: "auto", reserve_vram_mb: 0, extra_args: "" },
   models: { auto_preference: "balanced" },
-  paths: { outputs_path: null, runtimes_path: null, cache_path: null },
+  paths: {
+    outputs_path: null, runtimes_path: null, cache_path: null,
+    datasets_path: null, training_path: null,
+  },
   retention: { max_age_days: 0, max_total_mb: 0 },
 };
 
@@ -1603,6 +1626,11 @@ export function installDevMock(): void {
           throw new Error(
             `configuration error: dataset root must be an absolute folder path, got ${JSON.stringify(prepRoot)}`,
           );
+        }
+        // "Store frames in": refused up front like the core, before a job exists.
+        const prepDataDir = String(((body.params ?? {}) as AnyRecord).data_dir ?? "").trim();
+        if (jobType === "dataset_prep" && prepDataDir !== "") {
+          checkPrepDataDir(prepDataDir, prepRoot);
         }
         // Auto's real per-role pick isn't mocked -- just default sanely per
         // job type instead of always falling back to a video model.
@@ -2107,7 +2135,11 @@ export function installDevMock(): void {
       case "start_training_run": {
         const body = (a.body ?? {}) as AnyRecord;
         const prompts = (body.sample_prompts as string[]) ?? [];
-        const run = mkTrainingRun(`tr-${seq++}`, String(body.name ?? "Training run"), {
+        const id = `tr-${seq++}`;
+        const dataDir = typeof body.data_dir === "string" ? body.data_dir.trim() : "";
+        if (dataDir) checkRunDataDir(dataDir);
+        const run = mkTrainingRun(id, String(body.name ?? "Training run"), {
+          ...(dataDir ? { work_dir: `${dataDir.replace(/[\\/]+$/, "")}\\${id}` } : {}),
           profile_family: "flux2-klein-4b",
           target_model_id: String(body.target_model_id ?? ""),
           dataset_id: String(body.dataset_id ?? ""),
@@ -2218,6 +2250,8 @@ export function installDevMock(): void {
           stale_days: 45,
         };
       }
+      case "storage_locations":
+        return mockStorageLocations();
       case "delete_model": {
         const i = MODELS.findIndex((m) => m.id === a.id);
         if (i < 0) throw new Error(`model ${a.id} is not in the library`);
@@ -2889,6 +2923,7 @@ export function installDevMock(): void {
       }
 
       default:
+        if (cmd === "plugin:dialog|open") return mockDialogOpen(a);
         if (cmd.startsWith("plugin:")) return null; // opener plugin etc. — no-op
         console.warn("dev-mock: unhandled command", cmd);
         return null;

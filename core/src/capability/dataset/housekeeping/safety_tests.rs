@@ -44,7 +44,7 @@ async fn deleting_a_dataset_built_in_place_from_another_datasets_frames_keeps_th
         fx.row_in(&b, &p, &p).await;
     }
 
-    let s = delete_dataset_with_files(&fx.db, &fx.outputs, &b)
+    let s = delete_dataset_with_files(&fx.db, &fx.roots(), &b)
         .await
         .unwrap()
         .unwrap();
@@ -72,7 +72,7 @@ async fn deleting_it_keeps_them_even_when_both_prep_jobs_are_gone() {
     let a = fx.db.datasets().get(&fx.dataset.id).await.unwrap().unwrap();
     assert_eq!(a.prep_job_id, None, "fixture: A's prep job is gone");
 
-    let s = delete_dataset_with_files(&fx.db, &fx.outputs, &b)
+    let s = delete_dataset_with_files(&fx.db, &fx.roots(), &b)
         .await
         .unwrap()
         .unwrap();
@@ -96,7 +96,7 @@ async fn without_a_prep_job_only_its_own_frame_files_go() {
     let c = fx.other_dataset(None, &src).await;
     fx.row_in(&c, &own, &src.join("v.mp4")).await;
 
-    let s = delete_dataset_with_files(&fx.db, &fx.outputs, &c)
+    let s = delete_dataset_with_files(&fx.db, &fx.roots(), &c)
         .await
         .unwrap()
         .unwrap();
@@ -123,7 +123,7 @@ async fn a_work_folder_another_dataset_points_into_is_not_walked() {
     let shared = fx.clip_dir.join("b1.png");
     fx.row_in(&c, &shared, &shared).await;
 
-    let s = delete_dataset_with_files(&fx.db, &fx.outputs, &fx.dataset.id)
+    let s = delete_dataset_with_files(&fx.db, &fx.roots(), &fx.dataset.id)
         .await
         .unwrap()
         .unwrap();
@@ -150,7 +150,7 @@ async fn without_a_prep_job_a_folder_another_dataset_uses_is_left_alone() {
     fx.row_in(&c, &c_own, &src.join("v.mp4")).await;
     fx.db.jobs().delete(&fx.job_id).await.unwrap();
 
-    let s = delete_dataset_with_files(&fx.db, &fx.outputs, &c)
+    let s = delete_dataset_with_files(&fx.db, &fx.roots(), &c)
         .await
         .unwrap()
         .unwrap();
@@ -175,13 +175,13 @@ async fn another_datasets_export_inside_this_work_folder_is_left_alone() {
         .unwrap();
     let id = fx.row(&exported, &fx.source, "", false).await;
 
-    let s = delete_frames(&fx.db, &fx.outputs, &fx.dataset.id, &[id])
+    let s = delete_frames(&fx.db, &fx.roots(), &fx.dataset.id, &[id])
         .await
         .unwrap()
         .unwrap();
     assert!(exported.exists());
     assert_eq!(s.skipped_files[0].reason, SKIP_OTHER_DATASET);
-    delete_dataset_with_files(&fx.db, &fx.outputs, &fx.dataset.id)
+    delete_dataset_with_files(&fx.db, &fx.roots(), &fx.dataset.id)
         .await
         .unwrap();
     assert!(exported.exists(), "the walk does not reach it either");
@@ -203,7 +203,7 @@ async fn an_export_another_dataset_uses_in_place_survives_deleting_its_owner() {
     let b = fx.other_dataset(None, &export).await;
     let b_frame = fx.row_in(&b, &e1, &e1).await;
 
-    delete_dataset_with_files(&fx.db, &fx.outputs, &fx.dataset.id)
+    delete_dataset_with_files(&fx.db, &fx.roots(), &fx.dataset.id)
         .await
         .unwrap()
         .unwrap();
@@ -234,13 +234,13 @@ async fn an_export_folder_shared_with_another_dataset_survives() {
             .await
             .unwrap();
     }
-    let u = usage(&fx.db, &fx.outputs, &fx.dataset.id)
+    let u = usage(&fx.db, &fx.roots(), &fx.dataset.id)
         .await
         .unwrap()
         .unwrap();
     assert!(!u.export_app_owned);
 
-    let s = delete_dataset_with_files(&fx.db, &fx.outputs, &fx.dataset.id)
+    let s = delete_dataset_with_files(&fx.db, &fx.roots(), &fx.dataset.id)
         .await
         .unwrap()
         .unwrap();
@@ -265,7 +265,7 @@ async fn an_export_inside_another_datasets_source_folder_survives() {
         .unwrap();
     fx.other_dataset(None, &export).await;
 
-    delete_dataset_with_files(&fx.db, &fx.outputs, &fx.dataset.id)
+    delete_dataset_with_files(&fx.db, &fx.roots(), &fx.dataset.id)
         .await
         .unwrap()
         .unwrap();
@@ -282,7 +282,7 @@ async fn deleting_frames_keeps_a_file_another_dataset_uses() {
     let b = fx.other_dataset(None, &fx.tmp.path().join("src")).await;
     fx.row_in(&b, &shared, &fx.source).await;
 
-    let s = cleanup(&fx.db, &fx.outputs, &fx.dataset.id, false)
+    let s = cleanup(&fx.db, &fx.roots(), &fx.dataset.id, false)
         .await
         .unwrap()
         .unwrap();
@@ -312,6 +312,7 @@ async fn a_running_prep_job_blocks_every_deletion() {
             mode: crate::db::DatasetMode::Frames,
             source_root: fx.tmp.path().join("src").to_string_lossy().into_owned(),
             prep_job_id: Some(job.clone()),
+            work_dir: None,
         })
         .await
         .unwrap()
@@ -324,26 +325,26 @@ async fn a_running_prep_job_blocks_every_deletion() {
         assert!(e.to_string().contains("still being prepared"), "{e}");
     };
     refused(
-        delete_dataset_with_files(&fx.db, &fx.outputs, &d)
+        delete_dataset_with_files(&fx.db, &fx.roots(), &d)
             .await
             .unwrap_err(),
     );
     refused(
-        delete_frames(&fx.db, &fx.outputs, &d, std::slice::from_ref(&row))
+        delete_frames(&fx.db, &fx.roots(), &d, std::slice::from_ref(&row))
             .await
             .unwrap_err(),
     );
-    refused(cleanup(&fx.db, &fx.outputs, &d, false).await.unwrap_err());
+    refused(cleanup(&fx.db, &fx.roots(), &d, false).await.unwrap_err());
     assert!(f.exists());
     // A preview and the usage figures stay available.
-    assert!(cleanup(&fx.db, &fx.outputs, &d, true).await.is_ok());
+    assert!(cleanup(&fx.db, &fx.roots(), &d, true).await.is_ok());
 
     fx.db
         .jobs()
         .set_state(&job, JobState::Cancelled, JobPatch::default())
         .await
         .unwrap();
-    let s = delete_dataset_with_files(&fx.db, &fx.outputs, &d)
+    let s = delete_dataset_with_files(&fx.db, &fx.roots(), &d)
         .await
         .unwrap()
         .unwrap();
@@ -369,13 +370,13 @@ async fn dot_dot_segments_cannot_leave_the_work_folder() {
     );
     let id = fx.row(&crafted, &fx.source, "", false).await;
 
-    let s = delete_frames(&fx.db, &fx.outputs, &fx.dataset.id, &[id])
+    let s = delete_frames(&fx.db, &fx.roots(), &fx.dataset.id, &[id])
         .await
         .unwrap()
         .unwrap();
     assert!(victim.exists());
     assert_eq!(s.skipped_files[0].reason, SKIP_OUTSIDE);
-    delete_dataset_with_files(&fx.db, &fx.outputs, &fx.dataset.id)
+    delete_dataset_with_files(&fx.db, &fx.roots(), &fx.dataset.id)
         .await
         .unwrap();
     assert!(victim.exists());
@@ -392,12 +393,12 @@ async fn a_junction_inside_the_work_folder_is_never_followed() {
     assert!(through.exists(), "fixture: the junction resolves");
     let id = fx.row(&through, &fx.source, "", false).await;
 
-    let s = delete_frames(&fx.db, &fx.outputs, &fx.dataset.id, &[id])
+    let s = delete_frames(&fx.db, &fx.roots(), &fx.dataset.id, &[id])
         .await
         .unwrap()
         .unwrap();
     assert_eq!(s.skipped_files[0].reason, SKIP_OUTSIDE);
-    delete_dataset_with_files(&fx.db, &fx.outputs, &fx.dataset.id)
+    delete_dataset_with_files(&fx.db, &fx.roots(), &fx.dataset.id)
         .await
         .unwrap();
     assert!(
@@ -421,10 +422,10 @@ async fn a_file_symlink_inside_the_work_folder_never_deletes_its_target() {
         panic!("cannot create a file symlink here (needs Developer Mode or admin): {e}");
     }
     let id = fx.row(&link, &fx.source, "", false).await;
-    delete_frames(&fx.db, &fx.outputs, &fx.dataset.id, &[id])
+    delete_frames(&fx.db, &fx.roots(), &fx.dataset.id, &[id])
         .await
         .unwrap();
-    delete_dataset_with_files(&fx.db, &fx.outputs, &fx.dataset.id)
+    delete_dataset_with_files(&fx.db, &fx.roots(), &fx.dataset.id)
         .await
         .unwrap();
     assert!(victim.exists());
@@ -440,12 +441,12 @@ async fn an_export_in_another_jobs_work_folder_is_not_app_owned() {
         .set_export_dir(&fx.dataset.id, &export.to_string_lossy())
         .await
         .unwrap();
-    let u = usage(&fx.db, &fx.outputs, &fx.dataset.id)
+    let u = usage(&fx.db, &fx.roots(), &fx.dataset.id)
         .await
         .unwrap()
         .unwrap();
     assert!(!u.export_app_owned);
-    delete_dataset_with_files(&fx.db, &fx.outputs, &fx.dataset.id)
+    delete_dataset_with_files(&fx.db, &fx.roots(), &fx.dataset.id)
         .await
         .unwrap();
     assert!(e1.exists());
@@ -461,12 +462,12 @@ async fn an_export_at_the_datasets_root_is_not_app_owned() {
         .set_export_dir(&fx.dataset.id, &export.to_string_lossy())
         .await
         .unwrap();
-    let u = usage(&fx.db, &fx.outputs, &fx.dataset.id)
+    let u = usage(&fx.db, &fx.roots(), &fx.dataset.id)
         .await
         .unwrap()
         .unwrap();
     assert!(!u.export_app_owned);
-    delete_dataset_with_files(&fx.db, &fx.outputs, &fx.dataset.id)
+    delete_dataset_with_files(&fx.db, &fx.roots(), &fx.dataset.id)
         .await
         .unwrap();
     assert!(e1.exists());
@@ -484,7 +485,7 @@ async fn a_first_level_export_folder_is_emptied_but_kept() {
         .set_export_dir(&fx.dataset.id, &export.to_string_lossy())
         .await
         .unwrap();
-    let s = delete_dataset_with_files(&fx.db, &fx.outputs, &fx.dataset.id)
+    let s = delete_dataset_with_files(&fx.db, &fx.roots(), &fx.dataset.id)
         .await
         .unwrap()
         .unwrap();
@@ -516,7 +517,7 @@ async fn a_file_that_cannot_be_deleted_keeps_its_row() {
 
     let s = delete_frames(
         &fx.db,
-        &fx.outputs,
+        &fx.roots(),
         &fx.dataset.id,
         std::slice::from_ref(&id),
     )
@@ -539,7 +540,7 @@ async fn in_use_compares_canonical_paths() {
     let other_spelling = fx.clip_dir.join("..").join("clip").join("same.png");
     fx.row(&other_spelling, &fx.source, "", false).await;
 
-    let s = delete_frames(&fx.db, &fx.outputs, &fx.dataset.id, &[a])
+    let s = delete_frames(&fx.db, &fx.roots(), &fx.dataset.id, &[a])
         .await
         .unwrap()
         .unwrap();
@@ -561,7 +562,7 @@ async fn a_failed_file_delete_keeps_the_dataset_row() {
     fx.frame("locked.png", 20, "", false).await;
     let handle = lock(&fx.clip_dir.join("locked.png"));
 
-    let s = delete_dataset_with_files(&fx.db, &fx.outputs, &fx.dataset.id)
+    let s = delete_dataset_with_files(&fx.db, &fx.roots(), &fx.dataset.id)
         .await
         .unwrap()
         .unwrap();
@@ -577,7 +578,7 @@ async fn a_failed_file_delete_keeps_the_dataset_row() {
         .is_some());
     assert_eq!(frame_rows(&fx, &fx.dataset.id).await, 2);
 
-    let again = delete_dataset_with_files(&fx.db, &fx.outputs, &fx.dataset.id)
+    let again = delete_dataset_with_files(&fx.db, &fx.roots(), &fx.dataset.id)
         .await
         .unwrap()
         .unwrap();
@@ -595,7 +596,7 @@ async fn a_failed_file_delete_keeps_the_dataset_row() {
 async fn more_than_ten_thousand_frame_ids_are_refused() {
     let fx = fixture().await;
     let ids: Vec<String> = (0..=MAX_FRAME_IDS).map(|i| i.to_string()).collect();
-    let err = delete_frames(&fx.db, &fx.outputs, &fx.dataset.id, &ids)
+    let err = delete_frames(&fx.db, &fx.roots(), &fx.dataset.id, &ids)
         .await
         .unwrap_err();
     assert!(matches!(err, CoreError::Config(_)), "{err}");
@@ -628,7 +629,7 @@ async fn own_sources_are_recognised_resolved_and_as_stored() {
     let elsewhere = write(&fx.tmp.path().join("pictures").join("img.png"), 5);
     let b = fx.row(&elsewhere, &elsewhere, "", false).await;
 
-    let s = delete_frames(&fx.db, &fx.outputs, &fx.dataset.id, &[a, b])
+    let s = delete_frames(&fx.db, &fx.roots(), &fx.dataset.id, &[a, b])
         .await
         .unwrap()
         .unwrap();
@@ -652,14 +653,14 @@ async fn a_foreign_frame_in_a_respelled_folder_inside_the_work_folder_is_kept() 
     let b = fx.other_dataset(None, &fx.tmp.path().join("src")).await;
     fx.row_in(&b, &respelled, &fx.source).await;
 
-    let s = delete_frames(&fx.db, &fx.outputs, &fx.dataset.id, &[mine])
+    let s = delete_frames(&fx.db, &fx.roots(), &fx.dataset.id, &[mine])
         .await
         .unwrap()
         .unwrap();
     assert!(shared.exists());
     assert_eq!(s.skipped_files[0].reason, SKIP_OTHER_DATASET, "{s:?}");
 
-    delete_dataset_with_files(&fx.db, &fx.outputs, &fx.dataset.id)
+    delete_dataset_with_files(&fx.db, &fx.roots(), &fx.dataset.id)
         .await
         .unwrap();
     assert!(shared.exists());
@@ -727,7 +728,7 @@ async fn a_relative_foreign_path_stops_the_walk() {
     fx.row_in(&b, Path::new("preview.png"), Path::new("clip.mp4"))
         .await;
 
-    let s = delete_dataset_with_files(&fx.db, &fx.outputs, &fx.dataset.id)
+    let s = delete_dataset_with_files(&fx.db, &fx.roots(), &fx.dataset.id)
         .await
         .unwrap()
         .unwrap();
@@ -742,7 +743,7 @@ async fn usage_reports_what_deleting_would_free_from_the_work_folder() {
     let fx = fixture().await;
     fx.frame("own.png", 100, "", false).await;
     write(&fx.work_root.join("preview.png"), 30);
-    let u = usage(&fx.db, &fx.outputs, &fx.dataset.id)
+    let u = usage(&fx.db, &fx.roots(), &fx.dataset.id)
         .await
         .unwrap()
         .unwrap();
@@ -753,7 +754,7 @@ async fn usage_reports_what_deleting_would_free_from_the_work_folder() {
     let b = fx.other_dataset(None, &fx.work_root).await;
     let shared = write(&fx.clip_dir.join("shared.png"), 7);
     fx.row_in(&b, &shared, &shared).await;
-    let u = usage(&fx.db, &fx.outputs, &fx.dataset.id)
+    let u = usage(&fx.db, &fx.roots(), &fx.dataset.id)
         .await
         .unwrap()
         .unwrap();
@@ -777,7 +778,7 @@ async fn usage_without_a_prep_job_counts_own_deletable_frames() {
     let c = fx.other_dataset(None, &src).await;
     fx.row_in(&c, &own, &src.join("v.mp4")).await;
 
-    let u = usage(&fx.db, &fx.outputs, &c).await.unwrap().unwrap();
+    let u = usage(&fx.db, &fx.roots(), &c).await.unwrap().unwrap();
     assert_eq!(u.work_dir, None);
     assert!(!u.work_walkable);
     assert_eq!((u.work_files, u.work_bytes), (1, 64));

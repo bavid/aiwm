@@ -110,6 +110,7 @@ async fn dataset(db: &Database, export_dir: Option<&Path>) -> String {
             mode: DatasetMode::Frames,
             source_root: "E:\\pics".into(),
             prep_job_id: None,
+            work_dir: None,
         })
         .await
         .expect("create the dataset");
@@ -134,6 +135,7 @@ fn start_request(target: &str, dataset_id: &str) -> StartRequest {
         preset: Preset::Fast,
         hyperparams: Hyperparams::default(),
         sample_prompts: vec!["tgr_xy a cat".into()],
+        data_dir: None,
     }
 }
 
@@ -157,9 +159,9 @@ async fn running_run(fx: &Fx, log: &str) -> TrainingRun {
         })
         .await
         .expect("create the run");
-    let work_dir = fx.runner.work_dir(&run.id);
+    let work_dir = fx.runner.default_work_dir(&run.id);
     std::fs::create_dir_all(&work_dir).expect("create the work dir");
-    std::fs::write(fx.runner.log_path(&run.id), log).expect("write the log");
+    std::fs::write(fx.runner.log_path(&run), log).expect("write the log");
     write_pid_file(&work_dir, DEAD_PID, TRAINER_IMAGE)
         .await
         .expect("write the pid file");
@@ -252,7 +254,7 @@ const COMPLETION_LOG: &str = "Saved checkpoint to out\n\nResult:\n - 1 completed
 
 /// Put the checkpoint a completed run is expected to have written on disk.
 fn write_checkpoint(fx: &Fx, run: &TrainingRun) -> PathBuf {
-    let out = training_folder(&fx.runner.work_dir(&run.id)).join(&run.name);
+    let out = training_folder(&fx.runner.default_work_dir(&run.id)).join(&run.name);
     std::fs::create_dir_all(&out).expect("create the output dir");
     let path = out.join(format!("{}_000000100.safetensors", run.name));
     std::fs::write(&path, b"not really a lora").expect("write the checkpoint");
@@ -399,7 +401,7 @@ async fn poll_completes_a_run_whose_bar_reached_its_total_without_any_marker() {
     let log = "testlora: 100%|##########| 600/600 [16:30<00:00,  1.65s/it, lr: 1.0e-04 \
                loss: 5.875e-01]\nSaved checkpoint to out\n";
     let run = running_run(&fx, log).await;
-    let out = training_folder(&fx.runner.work_dir(&run.id)).join(&run.name);
+    let out = training_folder(&fx.runner.default_work_dir(&run.id)).join(&run.name);
     std::fs::create_dir_all(&out).expect("create the output dir");
     let checkpoint = out.join(format!("{}.safetensors", run.name));
     std::fs::write(&checkpoint, b"not really a lora").expect("write the checkpoint");
@@ -427,7 +429,7 @@ async fn poll_does_not_complete_a_run_whose_bar_is_still_short_of_its_total() {
     let log = "testlora:  93%|#########3| 560/600 [15:24<00:44,  1.65s/it, lr: 1.0e-04 \
                loss: 5.3e-01]\n";
     let run = running_run(&fx, log).await;
-    let out = training_folder(&fx.runner.work_dir(&run.id)).join(&run.name);
+    let out = training_folder(&fx.runner.default_work_dir(&run.id)).join(&run.name);
     std::fs::create_dir_all(&out).expect("create the output dir");
     std::fs::write(
         out.join(format!("{}_000000400.safetensors", run.name)),
@@ -446,7 +448,7 @@ async fn poll_does_not_complete_a_run_whose_bar_is_still_short_of_its_total() {
 async fn poll_completes_and_imports_when_the_completion_marker_and_a_checkpoint_exist() {
     let fx = fixture().await;
     let run = running_run(&fx, "Result:\n - 1 completed job\n").await;
-    let out = training_folder(&fx.runner.work_dir(&run.id)).join(&run.name);
+    let out = training_folder(&fx.runner.default_work_dir(&run.id)).join(&run.name);
     std::fs::create_dir_all(&out).expect("create the output dir");
     let checkpoint = out.join(format!("{}_000000100.safetensors", run.name));
     std::fs::write(&checkpoint, b"not really a lora").expect("write the checkpoint");
@@ -583,8 +585,11 @@ async fn preflight_blocks_when_the_disk_is_nearly_full() {
         .expect_err("a nearly full disk must stop the run before it starts");
 
     let msg = err.to_string();
-    assert!(msg.contains("20 GB"), "unexpected error: {msg}");
-    assert!(msg.contains("5 GB"), "the free figure must be named: {msg}");
+    assert!(msg.contains("20 GiB"), "unexpected error: {msg}");
+    assert!(
+        msg.contains("5 GiB"),
+        "the free figure must be named: {msg}"
+    );
 }
 
 #[tokio::test]
@@ -609,7 +614,7 @@ async fn preflight_passes_when_the_volume_is_unknown() {
         .await
         .expect_err("the fake interpreter cannot actually launch");
     assert!(
-        !err.to_string().contains("20 GB"),
+        !err.to_string().contains("20 GiB"),
         "an unknown volume must not block: {err}"
     );
 }
@@ -697,7 +702,7 @@ async fn a_failed_adoption_kills_the_process_it_just_spawned() {
         })
         .await
         .expect("create the run");
-    let work_dir = runner.work_dir(&run.id);
+    let work_dir = runner.default_work_dir(&run.id);
     std::fs::create_dir_all(&work_dir).expect("create the work dir");
     // A directory where the PID file belongs: the first step after the
     // spawn now fails, with a real process already running.
@@ -815,7 +820,7 @@ async fn poll_leaves_a_run_it_has_no_evidence_about_alone() {
     // No recorded PID and no PID file: nothing on disk says this run died,
     // only that we cannot tell. (`running_run` writes both, so both go.)
     std::fs::remove_file(crate::training::process::pid_file(
-        &fx.runner.work_dir(&run.id),
+        &fx.runner.default_work_dir(&run.id),
     ))
     .expect("drop the pid file");
     fx.db
@@ -843,4 +848,340 @@ async fn recover_marks_dead_runs_interrupted() {
     let after = reload(&fx, &run.id).await;
     assert_eq!(after.state, RunState::Interrupted);
     assert_released(&fx);
+}
+
+// ------------------------------------------------- per-run location (Plan 10)
+
+/// Every path a [`record_probe`] was asked about, across tests — each test
+/// looks only for its own temp paths in it.
+static PROBED: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
+
+/// A free-space probe that records the path it was asked about and reports
+/// an unknown volume (which never blocks).
+fn record_probe(path: &Path) -> Option<(u64, u64)> {
+    PROBED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .push(path.to_path_buf());
+    None
+}
+
+fn probed(path: &Path) -> bool {
+    PROBED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .iter()
+        .any(|p| p == path)
+}
+
+/// The fixture's runner, but measuring the disk with [`record_probe`].
+fn recording_runner(fx: &Fx) -> Runner {
+    Runner::new(
+        fx.db.clone(),
+        fx.adapter.clone(),
+        fx.scheduler.clone(),
+        fx.runtimes.clone(),
+        fx.root.join("training"),
+        fx.root.join("store"),
+    )
+    .with_base_verifier(|_, _, _| Ok(()))
+    .with_free_space_probe(record_probe)
+}
+
+/// A live process that is not a trainer: `ping` runs as `PING.EXE`, so a
+/// PID file naming it reads as a live run. Killed on drop.
+struct LiveProcess(std::process::Child);
+
+impl LiveProcess {
+    fn spawn() -> Self {
+        let child = std::process::Command::new("ping")
+            .args(["-n", "120", "127.0.0.1"])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("spawn ping");
+        Self(child)
+    }
+
+    fn pid(&self) -> u32 {
+        self.0.id()
+    }
+}
+
+impl Drop for LiveProcess {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+/// A row whose recorded folder is `dir` — somewhere other than the runner's
+/// derived `<root>/training/<id>` — in `state`, with no recorded PID, `log`
+/// as its `train.log` and, if given, a PID file naming `(pid, image)`.
+async fn stored_run(
+    fx: &Fx,
+    dir: &Path,
+    log: &str,
+    pid_file: Option<(u32, &str)>,
+    state: RunState,
+    target_and_dataset: Option<(&str, &str)>,
+) -> TrainingRun {
+    let run = fx
+        .db
+        .training_runs()
+        .create(NewTrainingRun {
+            name: "testlora".into(),
+            profile_family: FAMILY.into(),
+            target_model_id: target_and_dataset.map(|(t, _)| t.to_string()),
+            dataset_id: target_and_dataset.map(|(_, d)| d.to_string()),
+            data_kind: DatasetMode::Frames,
+            trigger_word: "tgr_xy".into(),
+            preset: Preset::Fast,
+            hyperparams_json: "{}".into(),
+            sample_prompts_json: "[\"tgr_xy a cat\"]".into(),
+            work_dir: dir.to_string_lossy().into_owned(),
+        })
+        .await
+        .expect("create the run");
+    std::fs::create_dir_all(dir).expect("create the stored folder");
+    std::fs::write(dir.join(LOG_FILE), log).expect("write the log");
+    if let Some((pid, image)) = pid_file {
+        write_pid_file(dir, pid, image)
+            .await
+            .expect("write the pid file");
+    }
+    // A run only reaches `paused` through `running`.
+    let path: &[RunState] = if state == RunState::Paused {
+        &[RunState::Running, RunState::Paused]
+    } else {
+        &[state]
+    };
+    for next in path {
+        fx.db
+            .training_runs()
+            .set_state(&run.id, *next)
+            .await
+            .expect("set the state");
+    }
+    let run = reload(fx, &run.id).await;
+    assert_ne!(
+        fx.runner.default_work_dir(&run.id),
+        dir,
+        "the stored folder must differ from the derived one"
+    );
+    run
+}
+
+#[tokio::test]
+async fn a_run_started_with_a_data_dir_lives_in_that_folder() {
+    let (fx, target, ds) = ready_fixture().await;
+    let chosen = fx.root.join("chosen");
+    std::fs::create_dir_all(&chosen).expect("create the chosen folder");
+    let runner = recording_runner(&fx);
+
+    // The fake interpreter cannot launch, so the run fails at the spawn —
+    // after its config and log were written.
+    runner
+        .create_and_start(StartRequest {
+            data_dir: Some(chosen.clone()),
+            ..start_request(&target, &ds)
+        })
+        .await
+        .expect_err("the fake interpreter cannot actually launch");
+
+    let runs = fx.db.training_runs().list().await.expect("list runs");
+    let run = runs.first().expect("the run row exists");
+    let folder = chosen.join(&run.id);
+    assert_eq!(
+        Path::new(&run.work_dir),
+        folder,
+        "the chosen folder is recorded"
+    );
+    assert!(
+        config_path(&folder).is_file(),
+        "the config is written there"
+    );
+    assert!(folder.join(LOG_FILE).is_file(), "the log is written there");
+    assert!(
+        !runner.default_work_dir(&run.id).exists(),
+        "nothing lands in the default training folder"
+    );
+}
+
+#[tokio::test]
+async fn preflight_measures_the_drive_of_the_chosen_folder() {
+    let (fx, target, ds) = ready_fixture().await;
+    let chosen = fx.root.join("chosen-drive");
+    std::fs::create_dir_all(&chosen).expect("create the chosen folder");
+
+    recording_runner(&fx)
+        .create_and_start(StartRequest {
+            data_dir: Some(chosen.clone()),
+            ..start_request(&target, &ds)
+        })
+        .await
+        .expect_err("the fake interpreter cannot actually launch");
+
+    assert!(
+        probed(&chosen),
+        "the free space of the chosen folder's drive is measured"
+    );
+}
+
+#[tokio::test]
+async fn resume_relaunches_into_the_stored_folder() {
+    let (fx, target, ds) = ready_fixture().await;
+    let stored = fx.root.join("elsewhere").join("run-a");
+    let run = stored_run(
+        &fx,
+        &stored,
+        "",
+        None,
+        RunState::Paused,
+        Some((&target, &ds)),
+    )
+    .await;
+    let runner = recording_runner(&fx);
+
+    runner
+        .resume(&run.id)
+        .await
+        .expect_err("the fake interpreter cannot actually launch");
+
+    assert!(
+        config_path(&stored).is_file(),
+        "the config is rewritten there"
+    );
+    assert!(
+        !runner.default_work_dir(&run.id).exists(),
+        "a resume must not start over in the default folder"
+    );
+    assert!(probed(&stored), "the resume measures the run's own drive");
+}
+
+#[tokio::test]
+async fn poll_settles_a_run_from_its_stored_folder() {
+    let fx = fixture().await;
+    let stored = fx.root.join("elsewhere").join("run-b");
+    let run = stored_run(
+        &fx,
+        &stored,
+        COMPLETION_LOG,
+        Some((DEAD_PID, TRAINER_IMAGE)),
+        RunState::Running,
+        None,
+    )
+    .await;
+    let out = training_folder(&stored).join(&run.name);
+    std::fs::create_dir_all(&out).expect("create the output dir");
+    std::fs::write(
+        out.join(format!("{}_000000100.safetensors", run.name)),
+        b"not really a lora",
+    )
+    .expect("write the checkpoint");
+
+    fx.runner.poll_once().await.expect("poll");
+
+    let after = reload(&fx, &run.id).await;
+    assert_eq!(
+        after.state,
+        RunState::Completed,
+        "settled from the stored log"
+    );
+    assert!(
+        after.result_model_id.is_some(),
+        "the LoRA is imported from the stored folder"
+    );
+}
+
+#[tokio::test]
+async fn poll_leaves_a_live_run_in_its_stored_folder_alone() {
+    let fx = fixture().await;
+    let live = LiveProcess::spawn();
+    let stored = fx.root.join("elsewhere").join("run-c");
+    let run = stored_run(
+        &fx,
+        &stored,
+        "",
+        Some((live.pid(), "PING.EXE")),
+        RunState::Running,
+        None,
+    )
+    .await;
+
+    fx.runner.poll_once().await.expect("poll");
+
+    assert_eq!(
+        reload(&fx, &run.id).await.state,
+        RunState::Running,
+        "the PID file in the stored folder says the trainer is alive"
+    );
+}
+
+#[tokio::test]
+async fn recover_reattaches_to_a_live_run_in_its_stored_folder() {
+    let fx = fixture().await;
+    let live = LiveProcess::spawn();
+    let stored = fx.root.join("elsewhere").join("run-d");
+    let run = stored_run(
+        &fx,
+        &stored,
+        "",
+        Some((live.pid(), "PING.EXE")),
+        RunState::Running,
+        None,
+    )
+    .await;
+
+    fx.runner.recover().await.expect("recover");
+
+    assert_eq!(reload(&fx, &run.id).await.state, RunState::Running);
+    assert_eq!(fx.adapter.alive_run().as_deref(), Some(run.id.as_str()));
+}
+
+#[tokio::test]
+async fn pause_stops_the_process_named_in_the_stored_folder() {
+    let fx = fixture().await;
+    let live = LiveProcess::spawn();
+    let stored = fx.root.join("elsewhere").join("run-e");
+    let run = stored_run(
+        &fx,
+        &stored,
+        "",
+        Some((live.pid(), "PING.EXE")),
+        RunState::Running,
+        None,
+    )
+    .await;
+
+    fx.runner.pause(&run.id).await.expect("pause");
+
+    assert_eq!(
+        reload(&fx, &run.id).await.state,
+        RunState::Paused,
+        "a live trainer was found and stopped, not reported as vanished"
+    );
+}
+
+#[tokio::test]
+async fn recovery_reads_only_the_tail_of_the_stored_log() {
+    let fx = fixture().await;
+    let stored = fx.root.join("elsewhere").join("run-f");
+    // An old failure far above the recovery window: past history, not the
+    // fate of the attempt that just died.
+    let filler = "0%|          | 0/100 [00:00<?, ?it/s]\n".repeat(4096);
+    let log = format!("Error running job: long ago\n{filler}");
+    let run = stored_run(
+        &fx,
+        &stored,
+        &log,
+        Some((DEAD_PID, TRAINER_IMAGE)),
+        RunState::Running,
+        None,
+    )
+    .await;
+
+    fx.runner.recover().await.expect("recover");
+
+    assert_eq!(reload(&fx, &run.id).await.state, RunState::Interrupted);
 }

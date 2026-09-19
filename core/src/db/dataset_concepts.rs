@@ -219,6 +219,7 @@ mod tests {
                 mode: DatasetMode::Frames,
                 source_root: "x".into(),
                 prep_job_id: Some(job.id.clone()),
+                work_dir: None,
             })
             .await
             .unwrap();
@@ -399,6 +400,7 @@ mod tests {
                 mode: DatasetMode::Frames,
                 source_root: "y".into(),
                 prep_job_id: Some(job_b.id.clone()),
+                work_dir: None,
             })
             .await
             .unwrap();
@@ -467,6 +469,7 @@ mod tests {
                 mode: DatasetMode::Frames,
                 source_root: "y".into(),
                 prep_job_id: Some(job_b.id.clone()),
+                work_dir: None,
             })
             .await
             .unwrap();

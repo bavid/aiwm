@@ -111,6 +111,7 @@ async fn harness_with(with_model: bool, extra_args: &[&str]) -> Harness {
         llama,
         comfyui.clone(),
         outputs.clone(),
+        outputs.join("datasets"),
     ));
 
     Harness {

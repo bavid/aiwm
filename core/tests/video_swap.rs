@@ -122,6 +122,7 @@ async fn harness(budget_mb: u64) -> Harness {
         llama.clone(),
         comfyui.clone(),
         tmp.path().join("outputs"),
+        tmp.path().join("datasets"),
     ));
 
     Harness {

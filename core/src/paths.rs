@@ -5,10 +5,11 @@
 //! `E:\AI` and its config, database, logs, generated outputs, and managed
 //! runtime installs all stay on `E:`, no `%APPDATA%` involved. `AIWM_DATA_DIR`
 //! overrides the whole layout to one directory of your choosing (portable
-//! installs, tests). Three of the bulkier folders — outputs, runtimes, cache —
-//! can additionally be pointed elsewhere individually via `config.toml`'s
-//! `[paths]` table ([`AppPaths::with_outputs_override`] and friends, wired in
-//! `App::load` once the config is read). The model store is configured
+//! installs, tests). Five of the bulkier folders — outputs, runtimes, cache,
+//! dataset-prep work folders and training runs — can additionally be pointed
+//! elsewhere individually via `config.toml`'s `[paths]` table
+//! ([`AppPaths::with_outputs_override`] and friends, wired in `App::load`
+//! once the config is read). The model store is configured
 //! separately ([`crate::config::Config::store_path`]) and is created lazily on
 //! first use, not here.
 
@@ -35,6 +36,8 @@ pub struct AppPaths {
     outputs_override: Option<PathBuf>,
     runtimes_override: Option<PathBuf>,
     cache_override: Option<PathBuf>,
+    datasets_override: Option<PathBuf>,
+    training_override: Option<PathBuf>,
 }
 
 impl AppPaths {
@@ -76,6 +79,8 @@ impl AppPaths {
             outputs_override: None,
             runtimes_override: None,
             cache_override: None,
+            datasets_override: None,
+            training_override: None,
         }
     }
 
@@ -97,6 +102,21 @@ impl AppPaths {
     /// the default under `local_root`. `None` restores the default.
     pub fn with_cache_override(mut self, dir: Option<PathBuf>) -> Self {
         self.cache_override = dir;
+        self
+    }
+
+    /// Point [`datasets_dir`](Self::datasets_dir) at a specific directory
+    /// instead of the default under [`outputs_dir`](Self::outputs_dir).
+    /// `None` restores the default.
+    pub fn with_datasets_override(mut self, dir: Option<PathBuf>) -> Self {
+        self.datasets_override = dir;
+        self
+    }
+
+    /// Point [`training_dir`](Self::training_dir) at a specific directory
+    /// instead of the default under `root`. `None` restores the default.
+    pub fn with_training_override(mut self, dir: Option<PathBuf>) -> Self {
+        self.training_override = dir;
         self
     }
 
@@ -147,6 +167,25 @@ impl AppPaths {
         self.cache_override
             .clone()
             .unwrap_or_else(|| self.local_root.join("cache"))
+    }
+
+    /// Where dataset-prep work folders land: `<prep_job_id>/{raw|previews}/…`
+    /// underneath. Default follows [`outputs_dir`](Self::outputs_dir) (so an
+    /// outputs override moves it too, unchanged from today's behaviour)
+    /// unless overridden independently via `config.toml`'s `[paths]` table.
+    pub fn datasets_dir(&self) -> PathBuf {
+        self.datasets_override
+            .clone()
+            .unwrap_or_else(|| self.outputs_dir().join("datasets"))
+    }
+
+    /// Where training-run work folders land: `<run_id>/…` underneath.
+    /// Overridable via `config.toml`'s `[paths]` table; default is
+    /// `<root>/training` (today's location).
+    pub fn training_dir(&self) -> PathBuf {
+        self.training_override
+            .clone()
+            .unwrap_or_else(|| self.root.join("training"))
     }
 
     /// Where the download manager (6.4) stages in-flight files, one dir per
@@ -403,5 +442,57 @@ mod tests {
             .with_outputs_override(Some(PathBuf::from("/mnt/media")))
             .with_outputs_override(None);
         assert_eq!(p.outputs_dir(), Path::new("/data/aiwm/outputs"));
+    }
+
+    // --- datasets / training roots (Plan 10) ---------------------------------
+
+    #[test]
+    fn datasets_dir_defaults_under_outputs_dir() {
+        let p = AppPaths::rooted("/data/aiwm");
+        assert_eq!(p.datasets_dir(), Path::new("/data/aiwm/outputs/datasets"));
+    }
+
+    #[test]
+    fn datasets_dir_follows_an_outputs_override_when_unset_itself() {
+        let p = AppPaths::rooted("/data/aiwm")
+            .with_outputs_override(Some(PathBuf::from("/mnt/media/outputs")));
+        assert_eq!(p.datasets_dir(), Path::new("/mnt/media/outputs/datasets"));
+    }
+
+    #[test]
+    fn datasets_override_wins_over_the_outputs_derived_default() {
+        let p = AppPaths::rooted("/data/aiwm")
+            .with_outputs_override(Some(PathBuf::from("/mnt/media/outputs")))
+            .with_datasets_override(Some(PathBuf::from("/mnt/fast/datasets")));
+        assert_eq!(p.datasets_dir(), Path::new("/mnt/fast/datasets"));
+    }
+
+    #[test]
+    fn a_none_datasets_override_restores_the_derived_default() {
+        let p = AppPaths::rooted("/data/aiwm")
+            .with_datasets_override(Some(PathBuf::from("/mnt/fast/datasets")))
+            .with_datasets_override(None);
+        assert_eq!(p.datasets_dir(), Path::new("/data/aiwm/outputs/datasets"));
+    }
+
+    #[test]
+    fn training_dir_defaults_under_root() {
+        let p = AppPaths::rooted("/data/aiwm");
+        assert_eq!(p.training_dir(), Path::new("/data/aiwm/training"));
+    }
+
+    #[test]
+    fn training_override_wins_over_the_default() {
+        let p = AppPaths::rooted("/data/aiwm")
+            .with_training_override(Some(PathBuf::from("/mnt/fast/training")));
+        assert_eq!(p.training_dir(), Path::new("/mnt/fast/training"));
+    }
+
+    #[test]
+    fn a_none_training_override_restores_the_default() {
+        let p = AppPaths::rooted("/data/aiwm")
+            .with_training_override(Some(PathBuf::from("/mnt/fast/training")))
+            .with_training_override(None);
+        assert_eq!(p.training_dir(), Path::new("/data/aiwm/training"));
     }
 }

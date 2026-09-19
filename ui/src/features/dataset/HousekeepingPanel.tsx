@@ -12,6 +12,7 @@ import {
   type DedupSummary,
   type SkippedFile,
 } from "../../lib/ipc";
+import { openFolder } from "../../lib/browse";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { errorText, filesLabel, framesLabel } from "./curation";
 import { formatBytes } from "./format";
@@ -113,6 +114,16 @@ export function HousekeepingPanel({
   const thresholdId = useId();
   const thresholdHelpId = useId();
   const isClips = dataset.mode === "clips";
+  /** Where this dataset's frames live: recorded on the row since Plan 10,
+   *  else as measured (older datasets). */
+  const workDir = dataset.work_dir ?? usage?.work_dir ?? null;
+  /** Why "Open folder" failed — kept apart from the tools' result line. */
+  const [revealError, setRevealError] = useState<string | null>(null);
+
+  const revealWorkDir = async () => {
+    if (!workDir) return;
+    setRevealError(await openFolder(workDir));
+  };
 
   useLayoutEffect(() => {
     if (!focusResult.current || dialog) return;
@@ -246,6 +257,25 @@ export function HousekeepingPanel({
           </dd>
         </div>
       </dl>
+
+      {workDir && (
+        <div className="housekeeping__location">
+          <span className="housekeeping__label">Stored in</span>
+          <code className="housekeeping__location-path">{workDir}</code>
+          <button
+            type="button"
+            className="chip housekeeping__refresh"
+            onClick={() => void revealWorkDir()}
+          >
+            Open folder
+          </button>
+          {revealError && (
+            <p className="dataset__err housekeeping__location-err" role="alert">
+              {revealError}
+            </p>
+          )}
+        </div>
+      )}
 
       <div className="housekeeping__tools">
         <div className="housekeeping__tool">

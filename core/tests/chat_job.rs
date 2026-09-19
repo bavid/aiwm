@@ -106,6 +106,7 @@ async fn harness_with(with_model: bool, extra_args: &[&str]) -> Harness {
         llama,
         comfyui,
         tmp.path().join("outputs"),
+        tmp.path().join("datasets"),
     ));
 
     Harness {

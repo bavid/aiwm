@@ -41,6 +41,10 @@ pub struct Dataset {
     pub trigger_word: String,
     pub prep_job_id: Option<String>,
     pub export_dir: Option<String>,
+    /// The absolute work folder (`<data_dir>/<prep_job_id>`) the prep run
+    /// wrote into; `None` on rows from before migration 0019, whose folder
+    /// is derived from the datasets root.
+    pub work_dir: Option<String>,
     pub created_at: String,
 }
 
@@ -50,6 +54,8 @@ pub struct NewDataset {
     pub mode: DatasetMode,
     pub source_root: String,
     pub prep_job_id: Option<String>,
+    /// See [`Dataset::work_dir`].
+    pub work_dir: Option<String>,
 }
 
 #[derive(sqlx::FromRow)]
@@ -61,6 +67,7 @@ struct DatasetRow {
     trigger_word: String,
     prep_job_id: Option<String>,
     export_dir: Option<String>,
+    work_dir: Option<String>,
     created_at: String,
 }
 
@@ -78,13 +85,14 @@ impl TryFrom<DatasetRow> for Dataset {
             trigger_word: r.trigger_word,
             prep_job_id: r.prep_job_id,
             export_dir: r.export_dir,
+            work_dir: r.work_dir,
             created_at: r.created_at,
         })
     }
 }
 
 const SELECT_COLS: &str =
-    "id, name, mode, source_root, trigger_word, prep_job_id, export_dir, created_at";
+    "id, name, mode, source_root, trigger_word, prep_job_id, export_dir, work_dir, created_at";
 
 #[derive(Debug)]
 pub struct DatasetRepo<'a> {
@@ -99,14 +107,16 @@ impl<'a> DatasetRepo<'a> {
     pub async fn create(&self, d: NewDataset) -> Result<Dataset> {
         let id = Uuid::now_v7().to_string();
         sqlx::query(
-            "INSERT INTO datasets (id, name, mode, source_root, prep_job_id, created_at) \
-             VALUES ($1, $2, $3, $4, $5, $6)",
+            "INSERT INTO datasets \
+             (id, name, mode, source_root, prep_job_id, work_dir, created_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7)",
         )
         .bind(&id)
         .bind(&d.name)
         .bind(d.mode.as_str())
         .bind(&d.source_root)
         .bind(&d.prep_job_id)
+        .bind(&d.work_dir)
         .bind(now_rfc3339())
         .execute(self.pool)
         .await?;
@@ -180,6 +190,7 @@ mod tests {
                 mode: DatasetMode::Frames,
                 source_root: "E:\\Data\\Anime".into(),
                 prep_job_id: Some(job.id.clone()),
+                work_dir: None,
             })
             .await
             .unwrap();
@@ -200,6 +211,7 @@ mod tests {
                 mode: DatasetMode::Frames,
                 source_root: "x".into(),
                 prep_job_id: None,
+                work_dir: None,
             })
             .await
             .unwrap();
@@ -210,6 +222,7 @@ mod tests {
                 mode: DatasetMode::Clips,
                 source_root: "y".into(),
                 prep_job_id: None,
+                work_dir: None,
             })
             .await
             .unwrap();
@@ -245,6 +258,7 @@ mod tests {
                 mode: DatasetMode::Frames,
                 source_root: "x".into(),
                 prep_job_id: Some(job.id.clone()),
+                work_dir: None,
             })
             .await
             .unwrap();
@@ -263,6 +277,7 @@ mod tests {
                 mode: DatasetMode::Frames,
                 source_root: "x".into(),
                 prep_job_id: None,
+                work_dir: None,
             })
             .await
             .unwrap();
@@ -287,6 +302,7 @@ mod tests {
                 mode: DatasetMode::Frames,
                 source_root: "x".into(),
                 prep_job_id: Some(job.id.clone()),
+                work_dir: None,
             })
             .await
             .unwrap();
@@ -326,6 +342,7 @@ mod tests {
                 mode: DatasetMode::Frames,
                 source_root: "x".into(),
                 prep_job_id: None,
+                work_dir: None,
             })
             .await
             .unwrap();

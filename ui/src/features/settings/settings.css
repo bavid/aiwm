@@ -294,3 +294,256 @@
   opacity: 0.45;
   cursor: not-allowed;
 }
+
+/* --- data locations --------------------------------------------------- */
+
+.loc-intro {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-4);
+  margin-bottom: var(--space-3);
+}
+
+.loc-intro p {
+  flex: 1;
+  margin: 0;
+  line-height: 1.5;
+}
+
+.loc-list {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border-top: 1px solid var(--border-soft);
+}
+
+.loc-list[aria-busy="true"] .loc__size {
+  animation: loc-pulse 1.2s var(--ease) infinite alternate;
+}
+
+@keyframes loc-pulse {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0.45;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .loc-list[aria-busy="true"] .loc__size {
+    animation: none;
+  }
+}
+
+.loc {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3) 0 var(--space-3) var(--space-3);
+  border-bottom: 1px solid var(--border-soft);
+}
+
+/* A left rule marks a location whose unsaved folder change is pending. */
+.loc::before {
+  content: "";
+  position: absolute;
+  inset: var(--space-3) auto var(--space-3) 0;
+  width: 2px;
+  border-radius: 2px;
+  background: transparent;
+  transition: background var(--dur) var(--ease);
+}
+
+.loc[data-pending="true"]::before {
+  background: var(--accent);
+}
+
+.loc__head,
+.loc__sub {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-4);
+}
+
+.loc__label {
+  margin: 0;
+  font-size: var(--text-md);
+  font-weight: 600;
+}
+
+.loc__size {
+  font-family: var(--font-mono);
+  font-size: var(--text-md);
+  font-weight: 600;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.loc__what {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+
+.loc__files {
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  text-align: right;
+  white-space: nowrap;
+}
+
+.loc__where {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.loc__path {
+  flex: 1;
+  min-width: 0;
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  overflow-wrap: anywhere;
+}
+
+.loc__drive {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) max-content;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.loc__drive-track {
+  height: 4px;
+  border-radius: 999px;
+  background: var(--track);
+  overflow: hidden;
+}
+
+.loc__drive-fill {
+  height: 100%;
+  transform-origin: left;
+  background: var(--load-ok);
+  transition: transform var(--dur) var(--ease);
+}
+
+.loc__drive-fill[data-load="warn"] {
+  background: var(--load-warn);
+}
+
+.loc__drive-fill[data-load="crit"] {
+  background: var(--load-crit);
+}
+
+.loc__drive-text {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  text-align: right;
+}
+
+.loc__drive-text[data-load="warn"] {
+  color: var(--load-warn);
+  font-weight: 600;
+}
+
+.loc__drive-text[data-load="crit"] {
+  color: var(--load-crit);
+  font-weight: 600;
+}
+
+.loc__edit {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.loc__edit-label {
+  color: var(--muted);
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.loc__edit input {
+  min-width: 0;
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+
+.loc__edit input:focus-visible,
+.loc-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.loc__pending {
+  margin: 0;
+  color: var(--accent);
+  font-size: var(--text-xs);
+  overflow-wrap: anywhere;
+}
+
+.loc-btn {
+  flex: none;
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    color var(--dur) var(--ease),
+    border-color var(--dur) var(--ease),
+    background var(--dur) var(--ease);
+}
+
+.loc-btn:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.loc-btn:active:not(:disabled) {
+  background: color-mix(in oklab, var(--accent) 10%, transparent);
+}
+
+.loc-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.loc-btn--refresh {
+  font-weight: 600;
+  color: var(--text);
+}
+
+@media (max-width: 640px) {
+  .loc-intro {
+    flex-direction: column;
+  }
+
+  .loc__edit {
+    grid-template-columns: minmax(0, 1fr) auto auto;
+  }
+
+  .loc__edit-label {
+    grid-column: 1 / -1;
+  }
+}

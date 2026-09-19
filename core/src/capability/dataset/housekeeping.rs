@@ -59,6 +59,23 @@ pub const SKIP_NOT_A_FILE: &str = "not_a_file";
 pub const SKIP_ERROR: &str = "error";
 pub const SKIP_OTHER_DATASET: &str = "used_by_other_dataset";
 
+/// The app folders housekeeping judges a dataset's files against.
+#[derive(Debug, Clone)]
+pub struct DataRoots {
+    /// Generated media (`AppPaths::outputs_dir`): an export strictly inside
+    /// it is the app's.
+    pub outputs: PathBuf,
+    /// The default datasets root (`AppPaths::datasets_dir`): work folders of
+    /// rows without a recorded `work_dir` are derived under it.
+    pub datasets: PathBuf,
+    /// The model store (`config.store_path`): never part of a work folder.
+    pub models: PathBuf,
+    /// The default training root (`AppPaths::training_dir`): the folder of a
+    /// training run row without a recorded `work_dir` is derived under it.
+    /// Run folders are never walked or deleted into (see `guard.rs`).
+    pub training: PathBuf,
+}
+
 /// A file a deletion left alone, and why (one of the `SKIP_*` constants;
 /// `"error: …"` when deleting it failed).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -70,8 +87,10 @@ pub struct SkippedFile {
 /// `GET /datasets/{id}/usage` — sizes measured by walking the folders.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct DatasetUsage {
-    /// The app-owned work folder `<outputs>/datasets/<prep_job_id>`, `None`
-    /// when it does not exist (any more) or the prep job is gone.
+    /// The app-owned work folder — the row's recorded `work_dir`, or
+    /// `<datasets root>/<prep_job_id>` for older rows — `None` when it does
+    /// not exist (any more), an older row's prep job is gone, or the guard
+    /// refused it (see `guard`).
     pub work_dir: Option<String>,
     /// `true` when deleting the dataset removes the whole work folder (no
     /// other dataset and no source folder points into it).
@@ -166,18 +185,18 @@ pub fn check_frame_ids(ids: &[String]) -> Result<()> {
 /// How much disk `dataset_id` uses. `None` for an unknown dataset.
 pub async fn usage(
     db: &Database,
-    outputs_dir: &Path,
+    roots: &DataRoots,
     dataset_id: &str,
 ) -> Result<Option<DatasetUsage>> {
     let Some(snap) = snapshot(db, dataset_id).await? else {
         return Ok(None);
     };
-    let outputs_dir = outputs_dir.to_path_buf();
+    let roots = roots.clone();
     blocking(move || {
         let (discarded, staying): (Vec<&DatasetFrame>, Vec<&DatasetFrame>) =
             snap.frames.iter().partition(|f| is_discarded(f));
         let discarded_frames = discarded.len() as u64;
-        let guard = Guard::build(&outputs_dir, &snap);
+        let guard = Guard::build(&roots, &snap);
         let walkable = guard.walkable;
         let work_dir = guard.work_dir.as_deref().map(display);
         // What deleting the dataset frees from its work folder: the walk
@@ -223,7 +242,7 @@ pub async fn usage(
 /// unknown dataset.
 pub async fn delete_dataset_with_files(
     db: &Database,
-    outputs_dir: &Path,
+    roots: &DataRoots,
     dataset_id: &str,
 ) -> Result<Option<DatasetDeleteSummary>> {
     let Some(snap) = snapshot(db, dataset_id).await? else {
@@ -232,9 +251,9 @@ pub async fn delete_dataset_with_files(
     refuse_if_busy(db, &snap.dataset).await?;
     let dataset = snap.dataset.clone();
     let frame_count = snap.frames.len() as u64;
-    let outputs = outputs_dir.to_path_buf();
+    let roots = roots.clone();
     let (tally, export_kept) = blocking(move || {
-        let guard = Guard::build(&outputs, &snap);
+        let guard = Guard::build(&roots, &snap);
         let mut tally = Tally::default();
         if let Some(work) = guard.work_dir.as_deref().filter(|_| guard.walkable) {
             for file in walk_files(work) {
@@ -291,7 +310,7 @@ pub async fn delete_dataset_with_files(
 /// a row whose file is not the app's to delete goes, the file stays.
 pub async fn delete_frames(
     db: &Database,
-    outputs_dir: &Path,
+    roots: &DataRoots,
     dataset_id: &str,
     frame_ids: &[String],
 ) -> Result<Option<FramesDeleteSummary>> {
@@ -307,7 +326,7 @@ pub async fn delete_frames(
         .filter(|f| wanted.contains(f.id.as_str()))
         .map(|f| f.id.clone())
         .collect();
-    let s = remove_frames(db, outputs_dir, snap, targets).await?;
+    let s = remove_frames(db, roots, snap, targets).await?;
     tracing::info!(
         dataset = %dataset_id,
         frames = s.deleted,
@@ -323,12 +342,12 @@ pub async fn delete_frames(
 /// run only measures. Kept frames are never touched.
 pub async fn cleanup(
     db: &Database,
-    outputs_dir: &Path,
+    roots: &DataRoots,
     dataset_id: &str,
     dry_run: bool,
 ) -> Result<Option<CleanupSummary>> {
     if dry_run {
-        let usage = usage(db, outputs_dir, dataset_id).await?;
+        let usage = usage(db, roots, dataset_id).await?;
         return Ok(usage.map(|u| CleanupSummary {
             dry_run: true,
             frames: u.discarded_frames,
@@ -347,7 +366,7 @@ pub async fn cleanup(
         .filter(|f| is_discarded(f))
         .map(|f| f.id.clone())
         .collect();
-    let s = remove_frames(db, outputs_dir, snap, targets).await?;
+    let s = remove_frames(db, roots, snap, targets).await?;
     tracing::info!(
         dataset = %dataset_id,
         frames = s.deleted,
@@ -458,11 +477,13 @@ async fn snapshot(db: &Database, dataset_id: &str) -> Result<Option<Snapshot>> {
         .dataset_frames()
         .list_paths_outside_dataset(dataset_id)
         .await?;
+    let runs = db.training_runs().list().await?;
     Ok(Some(Snapshot {
         dataset,
         frames,
         others,
         foreign_frames,
+        runs,
     }))
 }
 
@@ -500,12 +521,12 @@ async fn refuse_if_busy(db: &Database, dataset: &Dataset) -> Result<()> {
 /// Files of the frames in `targets`, then their rows.
 async fn remove_frames(
     db: &Database,
-    outputs_dir: &Path,
+    roots: &DataRoots,
     snap: Snapshot,
     targets: HashSet<String>,
 ) -> Result<FramesDeleteSummary> {
     let dataset_id = snap.dataset.id.clone();
-    let outputs = outputs_dir.to_path_buf();
+    let roots = roots.clone();
     let (tally, row_ids) = blocking(move || {
         let staying: Vec<&str> = snap
             .frames
@@ -513,7 +534,7 @@ async fn remove_frames(
             .filter(|f| !targets.contains(&f.id))
             .map(|f| f.frame_path.as_str())
             .collect();
-        let guard = Guard::build(&outputs, &snap).keeping(&staying);
+        let guard = Guard::build(&roots, &snap).keeping(&staying);
         let mut tally = Tally::default();
         let mut row_ids = Vec::with_capacity(targets.len());
         for f in snap.frames.iter().filter(|f| targets.contains(&f.id)) {
@@ -682,6 +703,8 @@ fn display(p: &Path) -> String {
     }
 }
 
+#[cfg(test)]
+mod custom_location_tests;
 #[cfg(test)]
 mod dedup_tests;
 #[cfg(test)]
