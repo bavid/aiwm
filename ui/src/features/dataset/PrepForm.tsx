@@ -1,7 +1,9 @@
 import { useCallback, useId, useMemo, useRef, useState } from "react";
-import { useCaptioners } from "../../lib/hooks";
+import { StorageDirField } from "../../components/StorageDirField";
+import { useAbout, useCaptioners } from "../../lib/hooks";
 import type { DatasetMode, DatasetPrepParams } from "../../lib/ipc";
-import { browseForDirectory } from "./browse";
+import { browseForDirectory } from "../../lib/browse";
+import { withDataDir } from "../../lib/storage-locations";
 import { CaptionerHint, CaptionerPicker } from "./CaptionerSetup";
 import { useCaptionerInstall } from "./useCaptionerInstall";
 
@@ -12,6 +14,8 @@ const DEFAULT_ESCALATE_EVERY_NTH = 20;
 const DEFAULT_CONTEXT_OFFSET = 5;
 const DEFAULT_MAX_FRAMES_PER_CLIP = 40;
 const DEFAULT_MIN_CLIP_SECS = 2;
+/** The core refuses to start a prep run below this much free space. */
+const PREP_MIN_FREE_GB = 5;
 
 type Props = {
   /** A prep run is in flight — the Start button stays disabled until it ends. */
@@ -28,6 +32,7 @@ type Props = {
  *  finished {@link DatasetPrepParams} to the container, which submits them. */
 export function PrepForm({ isRunning, error, onStart, onMoreCaptioners }: Props) {
   const { data: captioners, refetch: refetchCaptioners } = useCaptioners();
+  const about = useAbout();
   // Selectable = installed and without a known issue (a captioner that
   // cannot run would only fail after the whole extraction).
   const installed = useMemo(
@@ -46,6 +51,8 @@ export function PrepForm({ isRunning, error, onStart, onMoreCaptioners }: Props)
   const [escalate, setEscalate] = useState(true);
   const [escalateEveryNth, setEscalateEveryNth] = useState(DEFAULT_ESCALATE_EVERY_NTH);
   const [contextOffset, setContextOffset] = useState(DEFAULT_CONTEXT_OFFSET);
+  /** "Store frames in" — blank keeps the default datasets folder. */
+  const [dataDir, setDataDir] = useState("");
 
   // Captioning is on by default, but only ever resolves to a captioner that is
   // actually installed -- with an empty library it stays off (and the checkbox
@@ -79,7 +86,7 @@ export function PrepForm({ isRunning, error, onStart, onMoreCaptioners }: Props)
   const start = () => {
     const path = root.trim();
     if (!path) return;
-    onStart({
+    const params: DatasetPrepParams = {
       root: path,
       mode,
       captioner: captionerId,
@@ -92,7 +99,8 @@ export function PrepForm({ isRunning, error, onStart, onMoreCaptioners }: Props)
       escalate: escalate && !!chosenCaptioner?.supports_escalation,
       escalate_every_nth: escalateEveryNth,
       context_offset: contextOffset,
-    });
+    };
+    onStart(withDataDir(params, dataDir));
   };
 
   return (
@@ -277,6 +285,22 @@ export function PrepForm({ isRunning, error, onStart, onMoreCaptioners }: Props)
           </>
         )}
       </fieldset>
+
+      <StorageDirField
+        label="Store frames in"
+        value={dataDir}
+        onChange={setDataDir}
+        defaultDir={about?.datasets_dir ?? null}
+        locationKey="datasets"
+        minFreeGB={PREP_MIN_FREE_GB}
+        help={
+          <>
+            Optional. Put a large dataset on another drive to keep this one free. Frames and
+            previews go to <code>&lt;folder&gt;\&lt;job id&gt;</code>; your source media stay where
+            they are. The run needs at least {PREP_MIN_FREE_GB} GB free there.
+          </>
+        }
+      />
 
       <button
         type="button"

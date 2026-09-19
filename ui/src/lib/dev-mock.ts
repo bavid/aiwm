@@ -16,6 +16,12 @@ import {
   trainingEscalation,
   trainingModelRow,
 } from "./dev-mock-training";
+import {
+  checkPrepDataDir,
+  checkRunDataDir,
+  mockDialogOpen,
+  mockStorageLocations,
+} from "./dev-mock-storage";
 
 type AnyRecord = Record<string, unknown>;
 
@@ -1621,6 +1627,11 @@ export function installDevMock(): void {
             `configuration error: dataset root must be an absolute folder path, got ${JSON.stringify(prepRoot)}`,
           );
         }
+        // "Store frames in": refused up front like the core, before a job exists.
+        const prepDataDir = String(((body.params ?? {}) as AnyRecord).data_dir ?? "").trim();
+        if (jobType === "dataset_prep" && prepDataDir !== "") {
+          checkPrepDataDir(prepDataDir, prepRoot);
+        }
         // Auto's real per-role pick isn't mocked -- just default sanely per
         // job type instead of always falling back to a video model.
         const autoModel: Record<string, string> = {
@@ -2126,6 +2137,7 @@ export function installDevMock(): void {
         const prompts = (body.sample_prompts as string[]) ?? [];
         const id = `tr-${seq++}`;
         const dataDir = typeof body.data_dir === "string" ? body.data_dir.trim() : "";
+        if (dataDir) checkRunDataDir(dataDir);
         const run = mkTrainingRun(id, String(body.name ?? "Training run"), {
           ...(dataDir ? { work_dir: `${dataDir.replace(/[\\/]+$/, "")}\\${id}` } : {}),
           profile_family: "flux2-klein-4b",
@@ -2238,24 +2250,8 @@ export function installDevMock(): void {
           stale_days: 45,
         };
       }
-      case "storage_locations": {
-        const row = (
-          key: string, label: string, path: string, configurable: boolean,
-          bytes: number, files: number,
-        ): AnyRecord => ({
-          key, label, path, configurable, exists: true, bytes, files, skipped: 0,
-          volume_free_bytes: 1_496_000_000_000, volume_total_bytes: 2_000_000_000_000,
-        });
-        return [
-          row("outputs", "Generated media (outputs)", "E:\\AI\\data\\outputs", true, 4_812_300_000, 214),
-          row("datasets", "Dataset work folders", "E:\\AI\\data\\outputs\\datasets", true, 18_640_000_000, 9_212),
-          row("training", "Training runs", "E:\\AI\\data\\training", true, 96_400_000_000, 1_340),
-          row("models", "Model store", "E:\\AI\\models", true, 210_000_000_000, 18),
-          row("runtimes", "Managed runtime installs", "E:\\AI\\data\\runtimes", true, 14_200_000_000, 3_801),
-          row("cache", "Disposable cache", "E:\\AI\\data\\cache", true, 320_000_000, 640),
-          row("downloads", "Download staging", "E:\\AI\\data\\.downloads", false, 0, 0),
-        ];
-      }
+      case "storage_locations":
+        return mockStorageLocations();
       case "delete_model": {
         const i = MODELS.findIndex((m) => m.id === a.id);
         if (i < 0) throw new Error(`model ${a.id} is not in the library`);
@@ -2927,6 +2923,7 @@ export function installDevMock(): void {
       }
 
       default:
+        if (cmd === "plugin:dialog|open") return mockDialogOpen(a);
         if (cmd.startsWith("plugin:")) return null; // opener plugin etc. — no-op
         console.warn("dev-mock: unhandled command", cmd);
         return null;

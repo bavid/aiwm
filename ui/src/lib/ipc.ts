@@ -1010,6 +1010,10 @@ export interface DatasetPrepParams {
   escalate?: boolean;
   escalate_every_nth?: number;
   context_offset?: number;
+  /** "Store frames in": the work folder becomes `<data_dir>\<prep job id>`.
+   *  Omit for the default datasets folder (Settings → Data locations). The
+   *  core refuses a folder that overlaps a source or another dataset. */
+  data_dir?: string;
 }
 
 /** One item of a curation set (`GET /datasets/{id}/frames`) — a still frame,

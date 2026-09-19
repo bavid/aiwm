@@ -7,7 +7,10 @@ import {
   type TrainingPresetValues,
   type TrainingProfile,
 } from "../../lib/ipc";
+import { StorageDirField } from "../../components/StorageDirField";
 import { humanize } from "../../lib/errors";
+import { useAbout } from "../../lib/hooks";
+import { withDataDir } from "../../lib/storage-locations";
 import { tokenWarning } from "../dataset/tokens";
 import { FineTune } from "./FineTune";
 import { Preflight } from "./Preflight";
@@ -17,6 +20,8 @@ const MAX_TRIGGER = 30;
 /** Every fine-tuning field blank — the run uses the preset's own values. */
 const NO_OVERRIDES: TuneDraft = { rank: "", lr: "", resolution: "", steps: "" };
 const MAX_PROMPTS = 3;
+/** The core refuses to start a run below this much free space on its drive. */
+const RUN_MIN_FREE_GB = 20;
 
 const PRESETS: { id: TrainingPreset; label: string }[] = [
   { id: "fast", label: "Fast" },
@@ -94,6 +99,9 @@ export function NewRunForm({
   const [prompts, setPrompts] = useState<SamplePrompt[]>(() => [newPrompt("")]);
   const [promptsDirty, setPromptsDirty] = useState(false);
   const [datasetId, setDatasetId] = useState(initialDatasetId ?? "");
+  /** "Store run in" — blank keeps the default training folder. */
+  const [dataDir, setDataDir] = useState("");
+  const about = useAbout();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -144,15 +152,20 @@ export function NewRunForm({
     setBusy(true);
     setError(null);
     try {
-      await startTrainingRun({
-        name: name.trim(),
-        target_model_id: targetModelId,
-        dataset_id: datasetId,
-        trigger_word: trigger,
-        preset,
-        hyperparams: parsedTune.values,
-        sample_prompts: filledPrompts,
-      });
+      await startTrainingRun(
+        withDataDir(
+          {
+            name: name.trim(),
+            target_model_id: targetModelId,
+            dataset_id: datasetId,
+            trigger_word: trigger,
+            preset,
+            hyperparams: parsedTune.values,
+            sample_prompts: filledPrompts,
+          },
+          dataDir,
+        ),
+      );
       onStarted();
     } catch (e) {
       setError(humanize(e));
@@ -306,6 +319,22 @@ export function NewRunForm({
         </div>
       </fieldset>
 
+      <StorageDirField
+        label="Store run in"
+        value={dataDir}
+        onChange={setDataDir}
+        defaultDir={about?.training_dir ?? null}
+        locationKey="training"
+        minFreeGB={RUN_MIN_FREE_GB}
+        help={
+          <>
+            Optional. Checkpoints, samples and logs go to <code>&lt;folder&gt;\&lt;run id&gt;</code> —
+            pick a roomy drive for long runs. Resume and cleanup follow the run there. At least{" "}
+            {RUN_MIN_FREE_GB} GB free is needed to start.
+          </>
+        }
+      />
+
       <Preflight status={status} profile={profile} onStatusChanged={onStatusChanged} />
 
       <div className="runform__actions">
@@ -316,7 +345,11 @@ export function NewRunForm({
           <span className="muted">Every blocking check above has to be green first.</span>
         )}
       </div>
-      {error && <p className="training__err">{error}</p>}
+      {error && (
+        <p className="training__err" role="alert">
+          {error}
+        </p>
+      )}
     </form>
   );
 }

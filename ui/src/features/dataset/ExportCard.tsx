@@ -1,6 +1,6 @@
 import { useId } from "react";
 import type { CaptionOrder } from "../../lib/ipc";
-import { browseForDirectory } from "./browse";
+import { browseForDirectory } from "../../lib/browse";
 
 export type ExportState =
   | { kind: "idle" }
