@@ -6,6 +6,13 @@
  *  and controls are what this is for. */
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import { HIRES_UPSCALE_METHODS } from "../features/image/hires-fix";
+import {
+  OFFLINE_DOWNLOAD_REFUSAL,
+  TRAINING_KNOWN_MOCK,
+  TRAINING_STACKS_MOCK,
+  trainingCaptioners,
+  trainingModelRow,
+} from "./dev-mock-training";
 
 type AnyRecord = Record<string, unknown>;
 
@@ -1521,9 +1528,9 @@ export function installDevMock(): void {
         // (e.g. after delete_model splices MODELS).
         return MODELS.map((m) => ({ ...m }));
       case "list_known_models":
-        return KNOWN_MOCK;
+        return [...KNOWN_MOCK, ...TRAINING_KNOWN_MOCK];
       case "list_model_stacks":
-        return STACKS_MOCK;
+        return [...STACKS_MOCK, ...TRAINING_STACKS_MOCK];
       case "list_featured_models":
         return FEATURED_MOCK;
       case "list_colibri_models":
@@ -1848,19 +1855,9 @@ export function installDevMock(): void {
         return { exported: kept.length, dest_dir: String(a.destDir ?? "") };
       }
       case "list_captioners":
-        return [
-          {
-            id: "florence2", name: "Florence-2 (prose)", style: "prose", role: "vision_florence2",
-            vram_mb: 2600, license: "MIT", supports_escalation: true, required_files: [],
-            installed: false,
-          },
-          {
-            id: "wd-eva02-tagger-v3", name: "WD EVA02 Tagger v3 (Danbooru tags)", style: "tags",
-            role: "vision_wd_tagger", vram_mb: 0, license: "Apache-2.0",
-            supports_escalation: false, required_files: ["model.onnx", "selected_tags.csv"],
-            installed: true,
-          },
-        ];
+        // Installed only once every required file of a stack is in the
+        // library -- flips when the last download of a stack finishes.
+        return trainingCaptioners(MODELS);
       case "list_datasets":
         progressDatasetJobs();
         return DATASETS.map((d) => ({ ...d }));
@@ -2473,6 +2470,10 @@ export function installDevMock(): void {
             if (next >= size) {
               d.state = "done";
               d.model_id = `m-dl-${seq++}`;
+              // A captioner file imports as a library row (kind folder +
+              // default role), which is what flips the captioner registry.
+              const row = trainingModelRow(d);
+              if (row) MODELS.push(mkModel(String(d.model_id), String(row.name), row));
             }
           }
         }
@@ -2480,6 +2481,8 @@ export function installDevMock(): void {
         // Vec each call, and `usePolled` needs a changed reference to re-render.
         return DOWNLOADS.map((d) => ({ ...d }));
       case "enqueue_download": {
+        // ADR-009: the real download manager refuses every enqueue offline.
+        if (CONFIG.offline_mode) throw new Error(OFFLINE_DOWNLOAD_REFUSAL);
         const body = (a.body ?? {}) as AnyRecord;
         const d: AnyRecord = {
           id: `dl-${seq++}`, url: String(body.url ?? ""),

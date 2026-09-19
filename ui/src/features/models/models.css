@@ -391,7 +391,9 @@
   margin: var(--space-2) 0 var(--space-3);
 }
 
-.chip--on {
+/* `.chip.` for specificity: the Dataset tab's global `.chip` is bundled later
+   and would otherwise reset the "on" state of every Models-tab chip. */
+.chip.chip--on {
   background: var(--accent);
   color: var(--accent-fg);
   border-color: var(--accent);
