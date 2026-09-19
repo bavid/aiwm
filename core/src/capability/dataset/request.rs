@@ -168,6 +168,22 @@ impl DatasetPrepRequest {
         })
     }
 
+    /// Refuse a chosen [`Self::data_dir`] that collides with an existing
+    /// dataset — see [`location::check_against_datasets`] for the exact
+    /// rule. `datasets_root` is the configured default datasets folder,
+    /// where older rows' work folders are derived. The default location is
+    /// not checked here.
+    pub fn check_against_datasets(
+        &self,
+        datasets: &[crate::db::Dataset],
+        datasets_root: &Path,
+    ) -> Result<()> {
+        match &self.data_dir {
+            Some(dir) => location::check_against_datasets(dir, datasets, datasets_root),
+            None => Ok(()),
+        }
+    }
+
     /// Refuse a chosen [`Self::data_dir`] that is the model store `store` or
     /// lies inside it. The default location is not checked here.
     pub fn check_outside_store(&self, store: &Path) -> Result<()> {

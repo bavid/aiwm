@@ -398,6 +398,31 @@ async fn a_recorded_folder_inside_the_model_store_is_refused() {
     assert!(f.exists(), "{s:?}");
 }
 
+/// The store folder need not exist yet (it is created lazily): a recorded
+/// folder that would hold it is still refused.
+#[tokio::test]
+async fn a_recorded_folder_holding_a_store_that_does_not_exist_yet_is_refused() {
+    let fx = fixture().await;
+    let (src, video) = source(&fx, "src-m");
+    let work = fx.tmp.path().join("chosen").join("job-s");
+    let id = recorded_dataset(&fx, &src, &work).await;
+    let f = write(&work.join("f.png"), 9);
+    fx.row_in(&id, &f, &video).await;
+    let roots = DataRoots {
+        models: work.join("models"),
+        ..fx.roots()
+    };
+    assert!(!roots.models.exists(), "fixture: the store is missing");
+
+    let u = usage(&fx.db, &roots, &id).await.unwrap().unwrap();
+    assert_eq!(u.work_dir, None, "{u:?}");
+    let s = delete_dataset_with_files(&fx.db, &roots, &id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(f.exists(), "{s:?}");
+}
+
 #[tokio::test]
 async fn a_recorded_drive_root_is_refused() {
     let fx = fixture().await;

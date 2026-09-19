@@ -1308,6 +1308,8 @@ impl JobEngine {
             // through it; the preflight refuses a nearly full drive before
             // anything is extracted.
             req.check_outside_store(&self.vision_store)?;
+            let datasets = self.db.datasets().list().await?;
+            req.check_against_datasets(&datasets, &self.datasets_dir)?;
             let work_dir = req
                 .data_dir
                 .clone()
@@ -1937,6 +1939,50 @@ mod tests {
             "the store refusal is the reason"
         );
         assert!(!data_dir.exists());
+    }
+
+    /// Re-checked in the engine for jobs that did not come through HTTP: a
+    /// `data_dir` inside another dataset's work folder is refused before
+    /// anything is created.
+    #[tokio::test]
+    async fn dataset_prep_refuses_a_data_dir_inside_another_datasets_work_folder() {
+        let fx = vision_fixture(16_384, Duration::ZERO).await;
+        let chosen = tempfile::tempdir().unwrap();
+        let other_work = chosen.path().join("frames").join("job-other");
+        fx.db
+            .datasets()
+            .create(crate::db::NewDataset {
+                name: "Neighbour".into(),
+                mode: crate::db::DatasetMode::Frames,
+                source_root: chosen
+                    .path()
+                    .join("other-src")
+                    .to_string_lossy()
+                    .into_owned(),
+                prep_job_id: None,
+                work_dir: Some(other_work.to_string_lossy().into_owned()),
+            })
+            .await
+            .unwrap();
+        let root = prep_root_with_one_image();
+        let data_dir = other_work.join("nested");
+        let job = submit_prep(
+            &fx.engine,
+            serde_json::json!({
+                "root": root.path().to_string_lossy(),
+                "data_dir": data_dir.to_string_lossy(),
+            }),
+        )
+        .await;
+
+        let outcome = fx.engine.run_next().await.unwrap().unwrap();
+
+        assert!(matches!(outcome, JobOutcome::Failed { .. }), "{outcome:?}");
+        let stored = fx.db.jobs().get(&job.id).await.unwrap().unwrap();
+        let err = stored.error_text.unwrap_or_default();
+        assert!(err.contains("Neighbour"), "{err}");
+        assert!(!data_dir.exists(), "nothing is created");
+        assert_eq!(fx.db.datasets().list().await.unwrap().len(), 1);
     }
 
     #[tokio::test]

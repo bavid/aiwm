@@ -41,6 +41,7 @@ use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
 use std::path::{Component, Path, PathBuf};
 
+use crate::capability::dataset::location::same_or_inside;
 use crate::db::{Dataset, DatasetFrame};
 
 use super::{
@@ -226,7 +227,8 @@ fn single_component(name: &str) -> Option<&str> {
 const MIN_WORK_FOLDER_DEPTH: usize = 2;
 
 /// The rules a recorded work folder `w` (canonical) must pass on its own:
-/// deep enough below its drive, not overlapping the model store, and not
+/// deep enough below its drive, not overlapping the model store (compared as
+/// configured and resolved, so a store that does not exist yet counts), and not
 /// holding an app root (the datasets root, the outputs folder). The rules
 /// against source folders and other datasets' folders are in
 /// [`WorkFolders::resolve`].
@@ -236,7 +238,7 @@ pub(super) fn unfit_work_folder(w: &Path, app_roots: &[&Path], models: Option<&P
         .filter(|c| matches!(c, Component::Normal(_)))
         .count();
     depth < MIN_WORK_FOLDER_DEPTH
-        || models.is_some_and(|m| overlaps(m, w))
+        || models.is_some_and(|m| same_or_inside(m, w) || same_or_inside(w, m))
         || app_roots.iter().any(|r| r.starts_with(w))
 }
 
@@ -326,7 +328,11 @@ impl Guard {
     pub(super) fn build(roots: &DataRoots, snap: &Snapshot) -> Self {
         let outputs = std::fs::canonicalize(&roots.outputs).ok();
         let datasets_root = std::fs::canonicalize(&roots.datasets).ok();
-        let models = std::fs::canonicalize(&roots.models).ok();
+        // The store as configured, not canonicalised: it is created lazily
+        // and may not exist yet. `unfit_work_folder` compares it lexically
+        // and resolved (nearest existing ancestor), so a missing store still
+        // counts.
+        let models = Some(roots.models.as_path()).filter(|m| !m.as_os_str().is_empty());
 
         let source_dirs: Vec<PathBuf> = canonical_all(
             std::iter::once(snap.dataset.source_root.as_str())
@@ -342,7 +348,7 @@ impl Guard {
             snap,
             datasets_root.as_deref(),
             outputs.as_deref(),
-            models.as_deref(),
+            models,
             &source_dirs,
         );
         let foreign_dirs: Vec<PathBuf> =

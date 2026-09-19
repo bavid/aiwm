@@ -157,9 +157,11 @@ pub async fn submit_job(app: &App, body: SubmitJobDto) -> Result<Job> {
     // root folder): refuse it now with a 400 instead of queueing a job that
     // can only fail.
     if new.job_type == "dataset_prep" {
+        let datasets = app.db.datasets().list().await?;
         crate::capability::dataset::DatasetPrepRequest::from_params(&new.params)
             .and_then(|req| {
                 req.check_outside_store(&app.config.store_path)?;
+                req.check_against_datasets(&datasets, &app.paths.datasets_dir())?;
                 Ok(req)
             })
             .map_err(|e| match e {
@@ -3129,6 +3131,51 @@ mod tests {
         let err = submit_job(&app, body).await.unwrap_err();
         assert!(matches!(err, CoreError::Config(_)), "{err}");
         assert!(err.to_string().contains("model store"), "{err}");
+        assert!(app
+            .db
+            .jobs()
+            .list(&JobFilter::default())
+            .await
+            .unwrap()
+            .is_empty());
+    }
+
+    /// A dataset prep storing its frames inside another dataset's source
+    /// folder is refused at submission, naming that dataset.
+    #[tokio::test]
+    async fn submit_job_refuses_a_data_dir_inside_another_datasets_source() {
+        let tmp = tempfile::tempdir().unwrap();
+        let app = App::load(crate::AppPaths::rooted(tmp.path()))
+            .await
+            .unwrap();
+        let other_src = tmp.path().join("other-src");
+        app.db
+            .datasets()
+            .create(crate::db::NewDataset {
+                name: "Neighbour".into(),
+                mode: crate::db::DatasetMode::Frames,
+                source_root: other_src.to_string_lossy().into_owned(),
+                prep_job_id: None,
+                work_dir: None,
+            })
+            .await
+            .unwrap();
+        let body = SubmitJobDto {
+            job_type: "dataset_prep".into(),
+            capability: None,
+            runtime_id: None,
+            model_id: None,
+            vram_needed_mb: 0,
+            agent_session: false,
+            session_id: None,
+            params: serde_json::json!({
+                "root": tmp.path().join("src").to_string_lossy(),
+                "data_dir": other_src.join("frames").to_string_lossy(),
+            }),
+        };
+        let err = submit_job(&app, body).await.unwrap_err();
+        assert!(matches!(err, CoreError::Config(_)), "{err}");
+        assert!(err.to_string().contains("Neighbour"), "{err}");
         assert!(app
             .db
             .jobs()

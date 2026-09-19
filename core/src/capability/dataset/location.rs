@@ -6,7 +6,9 @@
 //! either counts: the lexically normalised path (`.`/`..` folded) and the
 //! resolved one (the nearest existing ancestor canonicalised, links and
 //! junctions followed, the rest appended). On Windows both are compared
-//! case-insensitively, as the file system does.
+//! case-insensitively, and trailing dots and spaces of a component are
+//! dropped (`src.` and `src ` name `src`), as Win32 does for any path that
+//! is not a verbatim `\\?\` one.
 
 use std::path::{Component, Path, PathBuf};
 
@@ -52,10 +54,20 @@ fn resolved(path: &Path) -> Option<PathBuf> {
 
 /// [`lexical`] without the case folding (the disk is asked with it).
 fn lexical_plain(path: &Path) -> PathBuf {
+    let verbatim = matches!(
+        path.components().next(),
+        Some(Component::Prefix(p)) if p.kind().is_verbatim()
+    );
     let mut out = PathBuf::new();
     for c in path.components() {
         match c {
             Component::CurDir => {}
+            Component::Normal(name) if !verbatim => {
+                let name = win32_component(name);
+                if !name.is_empty() {
+                    out.push(name);
+                }
+            }
             Component::ParentDir => {
                 if matches!(out.components().next_back(), Some(Component::Normal(_))) {
                     out.pop();
@@ -65,6 +77,19 @@ fn lexical_plain(path: &Path) -> PathBuf {
         }
     }
     out
+}
+
+/// A path component as Win32 reads it: trailing dots and spaces dropped.
+#[cfg(windows)]
+fn win32_component(name: &std::ffi::OsStr) -> String {
+    name.to_string_lossy()
+        .trim_end_matches(['.', ' '])
+        .to_string()
+}
+
+#[cfg(not(windows))]
+fn win32_component(name: &std::ffi::OsStr) -> std::ffi::OsString {
+    name.to_os_string()
 }
 
 /// `inner` is `outer` or lies inside it, by either comparison form.
@@ -119,6 +144,82 @@ pub(crate) fn check_data_dir(data_dir: &Path, source_root: &Path) -> Result<()> 
     Ok(())
 }
 
+/// A chosen `data_dir` checked against every existing dataset. The new work
+/// folder will be `<data_dir>/<new prep job id>`, so the exact rule is:
+///
+/// - `data_dir` must not be, or lie inside, any dataset's `source_root` —
+///   frames would be written into someone's source media;
+/// - `data_dir` must not hold any dataset's `source_root` — the new work
+///   folder's parent would then hold source media, and a later mix-up of
+///   the two could only hurt the source;
+/// - `data_dir` must not be, or lie inside, any dataset's work folder — the
+///   recorded `work_dir`, or for older rows the derived
+///   `<datasets_root>/<prep_job_id>` — the new folder would sit inside
+///   another dataset's app-owned folder, which the housekeeping guard then
+///   refuses to walk and deleting that dataset could reach into.
+///
+/// A `data_dir` that merely *holds* other datasets' work folders is fine:
+/// that is what the default datasets root does, and the new folder is just
+/// a sibling of theirs. Rows with neither `work_dir` nor a single-component
+/// `prep_job_id` have no work folder to collide with. The error names the
+/// conflicting dataset.
+pub(crate) fn check_against_datasets(
+    data_dir: &Path,
+    datasets: &[crate::db::Dataset],
+    datasets_root: &Path,
+) -> Result<()> {
+    for d in datasets {
+        let source = Path::new(&d.source_root);
+        if !d.source_root.is_empty() && same_or_inside(data_dir, source) {
+            return Err(conflict(
+                data_dir,
+                &d.name,
+                &format!("lies inside its source folder {}", source.display()),
+            ));
+        }
+        if !d.source_root.is_empty() && same_or_inside(source, data_dir) {
+            return Err(conflict(
+                data_dir,
+                &d.name,
+                &format!("holds its source folder {}", source.display()),
+            ));
+        }
+        if let Some(work) = work_folder_of(d, datasets_root) {
+            if same_or_inside(data_dir, &work) {
+                return Err(conflict(
+                    data_dir,
+                    &d.name,
+                    &format!("lies inside its work folder {}", work.display()),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// A dataset's work folder as the guard sees it (existing or not): the
+/// recorded `work_dir`, else `<datasets_root>/<prep_job_id>` when the job id
+/// is one plain path component.
+fn work_folder_of(d: &crate::db::Dataset, datasets_root: &Path) -> Option<PathBuf> {
+    if let Some(work) = d.work_dir.as_deref().filter(|w| !w.is_empty()) {
+        return Some(PathBuf::from(work));
+    }
+    let job = d.prep_job_id.as_deref()?;
+    let mut parts = Path::new(job).components();
+    match (parts.next(), parts.next()) {
+        (Some(Component::Normal(_)), None) => Some(datasets_root.join(job)),
+        _ => None,
+    }
+}
+
+fn conflict(data_dir: &Path, dataset: &str, why: &str) -> CoreError {
+    CoreError::Config(format!(
+        "frames cannot be stored in {}: it {why} of dataset \"{dataset}\" \u{2014} choose \
+         another folder",
+        data_dir.display()
+    ))
+}
+
 /// `data_dir` must not be the model store or lie inside it.
 pub(crate) fn check_outside_store(data_dir: &Path, store: &Path) -> Result<()> {
     if store.as_os_str().is_empty() || !same_or_inside(data_dir, store) {
@@ -158,4 +259,151 @@ pub fn prepare_work_root(work_root: &Path, probe: FreeSpaceProbe) -> Result<()> 
             work_root.display()
         ))
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::{Dataset, DatasetMode};
+
+    fn dataset(name: &str, source: &Path, job: Option<&str>, work: Option<&Path>) -> Dataset {
+        Dataset {
+            id: format!("id-{name}"),
+            name: name.into(),
+            mode: DatasetMode::Frames,
+            source_root: source.to_string_lossy().into_owned(),
+            trigger_word: String::new(),
+            prep_job_id: job.map(str::to_string),
+            export_dir: None,
+            work_dir: work.map(|w| w.to_string_lossy().into_owned()),
+            created_at: String::new(),
+        }
+    }
+
+    fn refused(r: Result<()>, name: &str) {
+        let err = r.expect_err("the data_dir must be refused");
+        assert!(matches!(err, CoreError::Config(_)), "{err}");
+        assert!(err.to_string().contains(name), "names the dataset: {err}");
+    }
+
+    /// Layout: `<tmp>/datasets` (default root), `<tmp>/srcA` (A's source),
+    /// A's recorded work folder `<tmp>/chosen/job-a`, B a legacy row whose
+    /// folder is derived as `<tmp>/datasets/job-b`. Nothing needs to exist.
+    struct Layout {
+        tmp: tempfile::TempDir,
+        root: PathBuf,
+        datasets: Vec<Dataset>,
+    }
+
+    fn layout() -> Layout {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("datasets");
+        let a = dataset(
+            "Alpha",
+            &tmp.path().join("srcA"),
+            Some("job-a"),
+            Some(&tmp.path().join("chosen").join("job-a")),
+        );
+        let b = dataset("Beta", &tmp.path().join("srcB"), Some("job-b"), None);
+        Layout {
+            tmp,
+            root,
+            datasets: vec![a, b],
+        }
+    }
+
+    impl Layout {
+        fn check(&self, data_dir: &Path) -> Result<()> {
+            check_against_datasets(data_dir, &self.datasets, &self.root)
+        }
+    }
+
+    #[test]
+    fn a_data_dir_at_or_inside_another_datasets_source_is_refused() {
+        let l = layout();
+        refused(l.check(&l.tmp.path().join("srcA")), "Alpha");
+        refused(l.check(&l.tmp.path().join("srcA").join("frames")), "Alpha");
+    }
+
+    #[test]
+    fn a_data_dir_holding_another_datasets_source_is_refused() {
+        let l = layout();
+        // `<tmp>` holds srcA and srcB.
+        refused(l.check(l.tmp.path()), "Alpha");
+    }
+
+    #[test]
+    fn a_data_dir_at_or_inside_a_recorded_work_folder_is_refused() {
+        let l = layout();
+        let work = l.tmp.path().join("chosen").join("job-a");
+        refused(l.check(&work), "Alpha");
+        refused(l.check(&work.join("raw")), "Alpha");
+    }
+
+    #[test]
+    fn a_data_dir_at_or_inside_a_derived_work_folder_is_refused() {
+        let l = layout();
+        refused(l.check(&l.root.join("job-b")), "Beta");
+        refused(l.check(&l.root.join("job-b").join("deeper")), "Beta");
+    }
+
+    /// Holding other datasets' work folders is what the default root does:
+    /// allowed, the new work folder `<data_dir>/<new job>` is a sibling.
+    #[test]
+    fn a_data_dir_merely_holding_work_folders_is_accepted() {
+        let l = layout();
+        assert!(l.check(&l.root).is_ok());
+        assert!(l.check(&l.tmp.path().join("chosen")).is_ok());
+        assert!(l.check(&l.tmp.path().join("elsewhere")).is_ok());
+    }
+
+    /// A row without prep job and without recorded folder has no work
+    /// folder to collide with; a job id that is not one path component is
+    /// never joined under the root.
+    #[test]
+    fn rows_without_a_work_folder_do_not_block() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("datasets");
+        let loose = dataset("Loose", &tmp.path().join("s1"), None, None);
+        let odd = dataset("Odd", &tmp.path().join("s2"), Some(r"..\escape"), None);
+        let all = [loose, odd];
+        assert!(check_against_datasets(&root.join("x"), &all, &root).is_ok());
+        assert!(check_against_datasets(&tmp.path().join("escape"), &all, &root).is_ok());
+    }
+
+    #[test]
+    fn the_store_check_works_when_the_store_does_not_exist() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = tmp.path().join("no-store-yet");
+        assert!(check_outside_store(&store.join("frames"), &store).is_err());
+    }
+
+    /// Win32 drops trailing dots and spaces from a path component, so
+    /// `src.` and `src ` name the folder `src`.
+    #[cfg(windows)]
+    #[test]
+    fn trailing_dots_and_spaces_name_the_same_folder() {
+        let tmp = tempfile::tempdir().unwrap();
+        // A source that does not exist: only the lexical form can match.
+        let missing = tmp.path().join("missing-src");
+        for spelled in [
+            "missing-src.",
+            "missing-src ",
+            "missing-src. .",
+            "missing-src.",
+        ] {
+            let dir = tmp.path().join(spelled).join("frames");
+            assert!(same_or_inside(&dir, &missing), "{spelled:?}");
+            assert!(check_data_dir(&dir, &missing).is_err(), "{spelled:?}");
+        }
+        // An existing source: the resolved form must agree.
+        let src = tmp.path().join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        for spelled in ["src.", "src ", "src.."] {
+            let dir = tmp.path().join(spelled);
+            assert!(check_data_dir(&dir, &src).is_err(), "{spelled:?}");
+        }
+        // A real sibling is not confused with it.
+        assert!(check_data_dir(&tmp.path().join("src.d"), &src).is_ok());
+    }
 }
