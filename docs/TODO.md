@@ -1982,7 +1982,54 @@ Ziel des Nutzers: nicht alles (bis ~1 TB Rohmaterial) in einem Lauf trainieren,
 sondern eine LoRA schrittweise mit weiteren Datasets verbessern — und dabei
 jederzeit sehen, womit eine LoRA bisher trainiert wurde.
 
-- **LoRA-Übersicht** — eine Ansicht (Training-Tab oder Model Library) mit
+**Erledigt (Plan 11 "LoRA Overview & Continue Training", umgesetzt 2026-09-19):**
+Migration 0020 (`training_runs.init_lora_model_id`, `image_count`); `POST
+/training/runs` nimmt `init_lora_model_id`, der Core rendert
+`network.pretrained_lora_path` in die ai-toolkit-Config und verweigert vorher
+(HTTP 400, nichts angelegt): kein LoRA (Store-Ordner), Datei fehlt, andere
+Familie oder keine Familie, Rank ≠ Rank der LoRA (aus dem safetensors-Header),
+Alpha ≠ Rank, Quell-Lauf noch nicht abgeschlossen. Lineage wird beim Lesen aus
+`init_lora_model_id` → `models.source = training:<id>` berechnet (zyklensicher,
+fehlendes Glied beendet die Kette). `GET /training/loras` (Liste mit Summen)
+und `GET /training/loras/{model_id}` (Läufe älteste zuerst). Training-Tab:
+Abschnitt "Your LoRAs" mit Historie, "Im Image-Tab testen", "Mit weiterem
+Dataset trainieren" (Formular vorbelegt, Rank festgenagelt, Hinweis zum
+Vergessen), Datenmengen-Hinweis im Kopf.
+
+Gemessen 2026-09-19 mit echtem `aiwm-cored` aus dem Worktree (DB gesichert,
+Migration 0020 live angewendet), RTX 4080 SUPER 16 GB, Leerlauf 965 MiB.
+Ausgangslage: genau **eine** selbst trainierte LoRA in der Library
+(`myrender-v2`, flux2, Rank 16, 46.223.656 B, aus Lauf `01a0af0a…`, 600 Steps,
+fast, FLUX.2 [klein] 4B); der Export-Ordner des Datasets `train-material` und
+der Arbeitsordner von Lauf 1 waren seit dem 17.09. von der Platte verschwunden
+(DB-Zeilen zeigten ins Leere) — der Export wurde per `POST /datasets/{id}/export`
+an den eingetragenen Pfad neu erzeugt (50 Bilder / 50 Captions nur mit
+Trigger-Wort, 80.277.647 B, 104 ms). Weitertrainiert wurde deshalb auf
+**demselben** Dataset (es gibt kein zweites mit Export) — die Mechanik ist
+identisch; gemessen ist die kleinste erlaubte Step-Zahl (50, `STEPS_RANGE`),
+nicht ein sinnvoller Lauf.
+
+| Schritt | Ergebnis |
+|---|---|
+| `GET /training/loras` vorher | 1 Eintrag: `myrender-v2`, `runs` 1, `total_steps` 600, `total_images` null (Lauf 1 ist älter als Migration 0020) |
+| `POST /training/runs` (fast, `steps` 50, `rank` 16, 1 Sample-Prompt, `init_lora_model_id` = myrender-v2) | HTTP 201 sofort; Lauf `01a0bab4-546e…`, `init_lora_model_id` gesetzt, **`image_count` 50** (= Export) |
+| `config.yaml` | `pretrained_lora_path: E:\AI\models\image/loras\myrender-v2.safetensors` (byte-gleich mit `models.file_path`), `linear: 16`, `linear_alpha: 16`, `steps: 50` |
+| `train.log` (ai-toolkit) | `create LoRA network. base dim (rank): 16, alpha: 16` · `create LoRA for U-Net: 80 modules.` · **`Using pretrained lora path from config: E:\AI\models\image/loras\myrender-v2.safetensors`** · `#### IMPORTANT RESUMING FROM …myrender-v2.safetensors ####` · `Loading from …myrender-v2.safetensors` · **`Missing keys: []`** · `Found 50 images` |
+| Zeit | POST 19:26:15 → Trainer-Log 19:26:39 → Modell + LoRA geladen 19:27:25 → Step 4 19:27:50 → Step 50 19:29:05 (~1,6 s/Step) → importiert 19:29:26: **190,7 s Wandzeit** (`duration_secs` 190); Lauf 1 (600 Steps) brauchte 1.217 s |
+| VRAM (nvidia-smi, alle 5 s, ganze Karte) | Laden 5.169 → 9.834 MiB; Training konstant 11.729–11.731 MiB bei 100 % Auslastung; **Spitze 11.915 MiB** (Sample + Speichern am Ende); danach 963 MiB |
+| Ergebnis | neue Library-Zeile `myrender-v3` (`01a0bab7-3d74…`, flux2, `source training:01a0bab4…`, 46.223.656 B); `myrender-v2` unverändert (Datei-mtime 17.09. 13:24:58); `last_loss` 1,061 (bei 50 Steps schwankend 0,57–1,06 — keine Aussage) |
+| `GET /training/loras` nachher | 2 Einträge: `myrender-v3` **`runs` 2, `total_steps` 650**, `total_images` null (Lauf 1 ohne Zählung, absichtlich keine Teilsumme); `myrender-v2` weiterhin `runs` 1 |
+| `GET /training/loras/{v3}` | Läufe älteste zuerst: Lauf 1 (`myrender-v2`, 600 Steps, 1.217 s, `init_lora_name` null, `samples` [] — Arbeitsordner weg) → Lauf 2 (`myrender-v3`, 50 Steps, 190 s, **`init_lora_name` "myrender-v2"**, `image_count` 50, 1 Sample); Lineage von `myrender-v2` unverändert 1 Lauf |
+| Arbeitsordner Lauf 2 | 93.536.565 B: Checkpoint 46.223.656, `optimizer.pt` 47.115.531, 2 Samples (Step 0 und 50) + Thumbs, `config.yaml`, `train.log` 38.209 B |
+| Abgelehnt (HTTP 400, kein Lauf, kein Ordner) | Basis-Modell als Start: `"FLUX.2 [klein] 4B base (training)" is not a LoRA — only a LoRA from the library can be continued`; VAE als Start: `"flux2-vae" is not a LoRA — …`; Rank 32: `"myrender-v2" has rank 16 — set the rank to 16 to continue it (this run asked for 32)`; unbekannte ID: `the LoRA you chose to continue is no longer in the library`; `steps` 49: `steps 49 is outside the allowed range 50..=20000` |
+| Nicht messbar | Familien-Konflikt (es gibt keine LoRA einer anderen Familie in der Library — nur per Test bewiesen); Alpha ≠ Rank (myrender-v2 ist PEFT-Format ohne Alpha-Tensor = Alpha gleich Rank — nur per Test bewiesen) |
+
+Auffälligkeiten (vorbestehend, nicht Plan 11): `train.log` enthält jede
+Trainer-Zeile doppelt (stdout und stderr landen beide in der Datei);
+`GET /training/profiles` führt unter `trainable_models` der flux2-klein-4b-
+Profile auch die LoRAs selbst und die VAEs (Familie `flux2`) auf.
+
+- ✅ **LoRA-Übersicht** — eine Ansicht (Training-Tab oder Model Library) mit
   allen selbst trainierten LoRAs. Eine LoRA auswählen zeigt ihre
   **Trainingshistorie**: jeder Lauf, der zu ihr beigetragen hat, mit Dataset
   (Name, Quellordner), Anzahl Frames/Bilder, Captioner, Trigger-Wort,
@@ -1995,8 +2042,10 @@ jederzeit sehen, womit eine LoRA bisher trainiert wurde.
   mit Dataset-Bezug, und die fertige LoRA wird mit `source training:<id>` in
   die Library importiert — die Verknüpfung LoRA → Lauf existiert also für den
   ersten Lauf; für Folge-Läufe braucht es eine Kette (Eltern-LoRA / Lineage).
-- **Bestehende LoRA mit einem anderen Dataset weitertrainieren** — neuer
+- ✅ **Bestehende LoRA mit einem anderen Dataset weitertrainieren** — neuer
   Lauf, der die gewählte LoRA als Startpunkt nimmt statt bei null anzufangen.
+  (Geprüft: ai-toolkit `e65c4d0` nimmt `network.pretrained_lora_path`; siehe
+  Messung oben. Gleiche Familie und gleicher Rank werden im Core erzwungen.)
   Heute nicht möglich: `Runner::resume` (`core/src/training/runner.rs:340`)
   setzt nur einen *pausierten/unterbrochenen* Lauf mit derselben Config fort
   (ai-toolkit findet seinen eigenen letzten Checkpoint unter demselben
@@ -2009,13 +2058,14 @@ jederzeit sehen, womit eine LoRA bisher trainiert wurde.
   in der Lineage der Übersicht.
 - **Vergessen verhindern (wichtig, in UI und Hilfe erklären):** wer nur auf
   Dataset Y weitertrainiert, driftet in Richtung Y und verliert teilweise, was
-  aus X gelernt wurde. Angebotene Wege: (a) **Mischen** — beim Weitertrainieren
+  aus X gelernt wurde. *(Plan 11: der Hinweis steht im Formular; das
+  Mischen unten ist nicht gebaut.)* Angebotene Wege: (a) **Mischen** — beim Weitertrainieren
   einen einstellbaren Anteil der früheren Datasets wieder mit einspeisen
   (Standard vorgeschlagen, abschaltbar); (b) Alternative ohne Weitertrainieren:
   ein Dataset schrittweise um neues Material erweitern und neu trainieren.
   Die Übersicht zeigt pro Version, welche Datasets in welchem Anteil
   eingeflossen sind.
-- **Datenmenge realistisch einordnen:** für eine LoRA reichen typischerweise
+- ✅ **Datenmenge realistisch einordnen:** für eine LoRA reichen typischerweise
   einige hundert bis einige tausend gut ausgewählte Bilder; die Pipeline
   sampelt Frames (Standard 1,5 fps) und filtert Unschärfe/Duplikate. Die
   Übersicht und die Hilfe sollen das sagen, damit niemand 1 TB Rohvideo für
