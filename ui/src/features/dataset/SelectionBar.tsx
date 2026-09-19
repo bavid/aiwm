@@ -1,4 +1,5 @@
-import type { ReactNode } from "react";
+import { useId, type ReactNode } from "react";
+import { HelpHint } from "../../components/HelpHint";
 import { framesLabel } from "./curation";
 
 type Props = {
@@ -34,13 +35,15 @@ export function SelectionBar({
   onCompactChange,
   children,
 }: Props) {
+  const deleteId = useId();
   return (
     <div className="curation__bar card" role="group" aria-label="Selection">
       <div className="curation__bar-main">
         <span className="curation__bar-count">
           {selectedTotal > 0
             ? `${framesLabel(selectedTotal)} selected`
-            : "Click, Ctrl-click, Shift-click or draw a box to select"}
+            : "Click, Ctrl-click, Shift-click or draw a box to select"}{" "}
+          <HelpHint area="dataset" setting="keep-discard" />
         </span>
         <button
           type="button"
@@ -62,6 +65,7 @@ export function SelectionBar({
           Discard{toDiscard > 0 ? ` ${toDiscard.toLocaleString()}` : ""} →<kbd>D</kbd>
         </button>
         <button
+          id={deleteId}
           type="button"
           className="chip curation__action curation__action--danger"
           disabled={selectedTotal === 0 || !canDelete}
@@ -71,6 +75,7 @@ export function SelectionBar({
         >
           Delete…<kbd>Del</kbd>
         </button>
+        <HelpHint area="dataset" setting="delete-frames" describes={deleteId} />
         <button
           type="button"
           className="chip"

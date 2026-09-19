@@ -19,9 +19,13 @@
 
 .storedir__head {
   display: flex;
-  align-items: baseline;
-  justify-content: space-between;
+  align-items: center;
   gap: var(--space-2);
+}
+
+/* The badge keeps the right edge; a `?` hint may sit between it and the label. */
+.storedir__head .storedir__badge {
+  margin-left: auto;
 }
 
 .storedir__label {

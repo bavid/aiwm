@@ -1,0 +1,169 @@
+/* The Help tab (`Help.tsx`): header with search, a section nav on the left
+   (shared `SectionNav`), topic cards on the right. */
+
+.help {
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+.help__head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-3) var(--space-4);
+  margin-bottom: var(--space-4);
+}
+
+.help__head h2 {
+  margin: 0;
+}
+
+.help__search {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 1 1 320px;
+  max-width: 520px;
+}
+
+.help__search input {
+  flex: 1;
+  min-width: 0;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+}
+
+.help__search input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.help__status {
+  flex-basis: 100%;
+  min-height: 1.2em;
+  margin: 0;
+  font-size: var(--text-sm);
+}
+
+.help__body {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-5);
+}
+
+.help__sections {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: var(--space-4);
+}
+
+.help__topic h3 {
+  margin: 0 0 var(--space-1);
+}
+
+.help__topic h3:focus-visible,
+.help__setting h4:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 4px;
+  border-radius: 2px;
+}
+
+.help__summary {
+  margin: 0 0 var(--space-3);
+  color: var(--muted);
+}
+
+.help__topic p,
+.help__topic li {
+  font-size: var(--text-md);
+  line-height: 1.55;
+}
+
+.help__topic ol,
+.help__topic ul {
+  margin: 0 0 var(--space-3);
+  padding-left: 1.4em;
+}
+
+.help__topic li + li {
+  margin-top: var(--space-1);
+}
+
+.help__settings {
+  display: grid;
+  gap: var(--space-3);
+  margin-top: var(--space-3);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border-soft);
+}
+
+.help__setting {
+  padding: var(--space-3);
+  border: 1px solid var(--border-soft);
+  border-left: 3px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+
+.help__setting h4 {
+  margin: 0 0 var(--space-2);
+  font-size: var(--text-md);
+}
+
+.help__qa {
+  display: grid;
+  grid-template-columns: minmax(12ch, 18ch) 1fr;
+  gap: var(--space-1) var(--space-3);
+  margin: 0;
+}
+
+.help__qa dt {
+  color: var(--muted);
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding-top: 0.2em;
+}
+
+.help__qa dd {
+  margin: 0;
+  font-size: var(--text-sm);
+  line-height: 1.5;
+}
+
+@media (max-width: 720px) {
+  .help__qa {
+    grid-template-columns: 1fr;
+  }
+}
+
+.help mark {
+  padding: 0 0.1em;
+  border-radius: 2px;
+  background: color-mix(in oklab, var(--accent) 30%, transparent);
+  color: inherit;
+}
+
+.help__empty {
+  color: var(--muted);
+}
+
+/* The jumped-to target: a ring that fades, then normal. */
+.help__topic[data-flash],
+.help__setting[data-flash] {
+  animation: help-flash 1.6s ease-out;
+}
+
+@keyframes help-flash {
+  0% {
+    box-shadow: 0 0 0 3px var(--accent);
+  }
+  100% {
+    box-shadow: 0 0 0 0 transparent;
+  }
+}

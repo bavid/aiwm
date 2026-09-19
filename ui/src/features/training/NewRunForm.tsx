@@ -8,6 +8,7 @@ import {
   type TrainingPresetValues,
   type TrainingProfile,
 } from "../../lib/ipc";
+import { HelpHint } from "../../components/HelpHint";
 import { StorageDirField } from "../../components/StorageDirField";
 import { humanize } from "../../lib/errors";
 import { useAbout } from "../../lib/hooks";
@@ -114,6 +115,8 @@ export function NewRunForm({
     trigger: useId(),
     dataset: useId(),
     notice: useId(),
+    presets: useId(),
+    prompts: useId(),
   };
 
   /** Only exported datasets can be trained from — the trainer reads the
@@ -257,8 +260,11 @@ export function NewRunForm({
       </header>
 
       <div className="runform__grid">
-        <label className="datasetform__field" htmlFor={ids.target}>
-          <span>Target model</span>
+        <div className="datasetform__field">
+          <span>
+            <label htmlFor={ids.target}>Target model</label>
+            <HelpHint area="training" setting="target-model" describes={ids.target} />
+          </span>
           <select
             id={ids.target}
             value={targetModelId}
@@ -275,10 +281,13 @@ export function NewRunForm({
               </optgroup>
             ))}
           </select>
-        </label>
+        </div>
 
-        <label className="datasetform__field" htmlFor={ids.startFrom}>
-          <span>Start from</span>
+        <div className="datasetform__field">
+          <span>
+            <label htmlFor={ids.startFrom}>Start from</label>
+            <HelpHint area="training" setting="start-from" describes={ids.startFrom} />
+          </span>
           <select
             id={ids.startFrom}
             value={initLoraId}
@@ -299,10 +308,13 @@ export function NewRunForm({
               </option>
             )}
           </select>
-        </label>
+        </div>
 
-        <label className="datasetform__field" htmlFor={ids.dataset}>
-          <span>Dataset</span>
+        <div className="datasetform__field">
+          <span>
+            <label htmlFor={ids.dataset}>Dataset</label>
+            <HelpHint area="training" setting="dataset" describes={ids.dataset} />
+          </span>
           <select id={ids.dataset} value={datasetId} onChange={(e) => setDatasetId(e.target.value)}>
             <option value="">Pick an exported dataset…</option>
             {exported.map((d) => (
@@ -311,10 +323,13 @@ export function NewRunForm({
               </option>
             ))}
           </select>
-        </label>
+        </div>
 
-        <label className="datasetform__field" htmlFor={ids.name}>
-          <span>Run name</span>
+        <div className="datasetform__field">
+          <span>
+            <label htmlFor={ids.name}>Run name</label>
+            <HelpHint area="training" setting="run-name" describes={ids.name} />
+          </span>
           <input
             id={ids.name}
             type="text"
@@ -323,10 +338,13 @@ export function NewRunForm({
             placeholder={initLora ? `${initLora.name} v2` : "Kenji Character v1"}
             autoFocus={seed !== null}
           />
-        </label>
+        </div>
 
-        <label className="datasetform__field" htmlFor={ids.trigger}>
-          <span>Trigger word</span>
+        <div className="datasetform__field">
+          <span>
+            <label htmlFor={ids.trigger}>Trigger word</label>
+            <HelpHint area="training" setting="trigger-word" describes={ids.trigger} />
+          </span>
           <input
             id={ids.trigger}
             type="text"
@@ -335,7 +353,7 @@ export function NewRunForm({
             onChange={(e) => setTrigger(sanitizeTrigger(e.target.value))}
             placeholder="kenji_xy"
           />
-        </label>
+        </div>
       </div>
 
       <p className="datasetform__hint">
@@ -359,8 +377,9 @@ export function NewRunForm({
         </div>
       )}
 
-      <fieldset className="runform__presets">
+      <fieldset className="runform__presets" id={ids.presets}>
         <legend>Preset</legend>
+        <HelpHint area="training" setting="preset" describes={ids.presets} />
         {PRESETS.map((p) => (
           <label key={p.id} className="runform__preset">
             <input
@@ -386,8 +405,9 @@ export function NewRunForm({
         lockedRank={lockedRank}
       />
 
-      <fieldset className="runform__presets">
+      <fieldset className="runform__presets" id={ids.prompts}>
         <legend>Sample prompts (1–{MAX_PROMPTS})</legend>
+        <HelpHint area="training" setting="sample-prompts" describes={ids.prompts} />
         <div className="runform__prompts">
           {prompts.map((p, i) => (
             <div className="runform__prompt" key={p.id}>
@@ -434,6 +454,7 @@ export function NewRunForm({
         defaultDir={about?.training_dir ?? null}
         locationKey="training"
         minFreeGiB={RUN_MIN_FREE_GIB}
+        hint={(id) => <HelpHint area="training" setting="store-run-in" describes={id} />}
         help={
           <>
             Optional. Checkpoints, samples and logs go to <code>&lt;folder&gt;\&lt;run id&gt;</code> —

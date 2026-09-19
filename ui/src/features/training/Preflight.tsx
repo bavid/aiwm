@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import { HelpHint } from "../../components/HelpHint";
 import { humanize } from "../../lib/errors";
 import { installTrainer, type TrainerStatus, type TrainingProfile } from "../../lib/ipc";
 
@@ -10,20 +11,24 @@ type RowState = "pass" | "fail" | "note";
 type ItemProps = {
   state: RowState;
   label: string;
+  /** The row's `?` hint, after the label. */
+  hint?: ReactNode;
   children?: ReactNode;
 };
 
 const MARK: Record<RowState, string> = { pass: "✓", fail: "✗", note: "·" };
 
-function Item({ state, label, children }: ItemProps) {
+function Item({ state, label, hint, children }: ItemProps) {
   return (
     <div className="preflight__item" data-ok={state}>
-      <p className="preflight__line">
+      {/* A div, not a <p>: the hint's panel holds paragraphs of its own. */}
+      <div className="preflight__line">
         <span className="preflight__mark" aria-hidden="true">
           {MARK[state]}
         </span>
         <span>{label}</span>
-      </p>
+        {hint}
+      </div>
       {children}
     </div>
   );
@@ -126,7 +131,11 @@ export function Preflight({ status, profile, onStatusChanged }: Props) {
     <section className="preflight" aria-label="Preflight">
       <h4>Before the run starts</h4>
 
-      <Item state={trainerState} label={trainerLabel}>
+      <Item
+        state={trainerState}
+        label={trainerLabel}
+        hint={<HelpHint area="training" setting="preflight-trainer" />}
+      >
         {status && (status.installing || !status.installed || status.env_broken) && (
           <>
             <p className="preflight__fix">{status.detail}</p>
@@ -142,7 +151,11 @@ export function Preflight({ status, profile, onStatusChanged }: Props) {
         )}
       </Item>
 
-      <Item state={baseState} label={baseLabel}>
+      <Item
+        state={baseState}
+        label={baseLabel}
+        hint={<HelpHint area="training" setting="preflight-base-weights" />}
+      >
         {profile && !profile.base_installed && (
           <>
             <div className="preflight__cmd">
@@ -161,6 +174,7 @@ export function Preflight({ status, profile, onStatusChanged }: Props) {
       <Item
         state="note"
         label="The chat model and ComfyUI will be unloaded; image/video jobs wait while training runs."
+        hint={<HelpHint area="training" setting="preflight-gpu" />}
       />
 
       {profile?.license_note && <Item state="note" label={profile.license_note} />}

@@ -1,4 +1,5 @@
 import { useId } from "react";
+import { HelpHint } from "../../components/HelpHint";
 import type { CaptionOrder } from "../../lib/ipc";
 import { useFolderPicker } from "../../lib/browse";
 
@@ -44,8 +45,11 @@ export function ExportCard({
   return (
     <div className="card dataset__export">
       <h3>Export</h3>
-      <label className="datasetform__field" htmlFor={destDirId}>
-        <span>Destination folder</span>
+      <div className="datasetform__field">
+        <span>
+          <label htmlFor={destDirId}>Destination folder</label>
+          <HelpHint area="dataset" setting="export-destination" describes={destDirId} />
+        </span>
         <div className="datasetform__row">
           <input
             id={destDirId}
@@ -62,14 +66,17 @@ export function ExportCard({
             Browse…
           </button>
         </div>
-      </label>
+      </div>
       {picker.error && (
         <p className="dataset__err" role="alert">
           {picker.error}
         </p>
       )}
-      <label className="datasetform__field datasetform__field--inline" htmlFor={orderId}>
-        <span>Caption order</span>
+      <div className="datasetform__field datasetform__field--inline">
+        <span>
+          <label htmlFor={orderId}>Caption order</label>
+          <HelpHint area="dataset" setting="caption-order" describes={orderId} />
+        </span>
         <select
           id={orderId}
           value={captionOrder}
@@ -78,7 +85,7 @@ export function ExportCard({
           <option value="prose_first">Prose first (FLUX.2)</option>
           <option value="tags_first">Tags first (Anime/SDXL)</option>
         </select>
-      </label>
+      </div>
       <button
         type="button"
         className="datasetform__go"

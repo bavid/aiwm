@@ -66,11 +66,21 @@
   gap: var(--space-3);
 }
 
+/* The field's caption. Holds either plain text or (where a `?` hint sits
+   next to it) a `<label for>` and the hint, so it is a small flex row. */
 .datasetform__field > span {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
   font-size: var(--text-xs);
   text-transform: uppercase;
   letter-spacing: 0.04em;
   color: var(--muted);
+}
+
+.datasetform__field > span > label {
+  cursor: default;
 }
 
 .datasetform__field input {
@@ -121,6 +131,16 @@
 
 .datasetform__check input {
   margin-top: 3px;
+}
+
+/* A check row with a `?` hint: the text is a real `<label for>`, the hint a
+   sibling, so the hint's name never joins the checkbox's. */
+.datasetform__check > label {
+  cursor: pointer;
+}
+
+.datasetform__check .helphint {
+  flex-shrink: 0;
 }
 
 .datasetform__go {

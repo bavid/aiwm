@@ -13,6 +13,7 @@ import {
   type SkippedFile,
 } from "../../lib/ipc";
 import { openFolder } from "../../lib/browse";
+import { HelpHint } from "../../components/HelpHint";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { errorText, filesLabel, framesLabel } from "./curation";
 import { formatBytes } from "./format";
@@ -113,6 +114,9 @@ export function HousekeepingPanel({
   const focusResult = useRef(false);
   const thresholdId = useId();
   const thresholdHelpId = useId();
+  const dedupBtnId = useId();
+  const cleanupBtnId = useId();
+  const deleteBtnId = useId();
   const isClips = dataset.mode === "clips";
   /** Where this dataset's frames live: recorded on the row since Plan 10,
    *  else as measured (older datasets). */
@@ -279,9 +283,12 @@ export function HousekeepingPanel({
 
       <div className="housekeeping__tools">
         <div className="housekeeping__tool">
-          <label className="housekeeping__label" htmlFor={thresholdId}>
-            Duplicate threshold <output htmlFor={thresholdId}>{threshold}</output>
-          </label>
+          <span className="housekeeping__label housekeeping__label--row">
+            <label htmlFor={thresholdId}>
+              Duplicate threshold <output htmlFor={thresholdId}>{threshold}</output>
+            </label>
+            <HelpHint area="dataset" setting="dedup-threshold" describes={thresholdId} />
+          </span>
           <input
             id={thresholdId}
             type="range"
@@ -298,23 +305,31 @@ export function HousekeepingPanel({
               ? "Duplicate search works on still frames; this dataset holds clips."
               : `Lower = only near-identical frames; higher also catches similar shots. Default ${DEFAULT_DEDUP_THRESHOLD}. Marked frames move to Discard and can be moved back.`}
           </p>
-          <button
-            type="button"
-            className="chip"
-            disabled={isClips || isRunning || busy !== null}
-            onClick={() => void runDedup()}
-          >
-            {busy === "dedup" ? "Searching…" : "Find duplicates"}
-          </button>
+          <span className="housekeeping__label--row">
+            <button
+              id={dedupBtnId}
+              type="button"
+              className="chip"
+              disabled={isClips || isRunning || busy !== null}
+              onClick={() => void runDedup()}
+            >
+              {busy === "dedup" ? "Searching…" : "Find duplicates"}
+            </button>
+            <HelpHint area="dataset" setting="find-duplicates" describes={dedupBtnId} />
+          </span>
         </div>
 
         <div className="housekeeping__tool">
-          <span className="housekeeping__label">Clean up</span>
+          <span className="housekeeping__label housekeeping__label--row">
+            Clean up
+            <HelpHint area="dataset" setting="clean-up" describes={cleanupBtnId} />
+          </span>
           <p className="housekeeping__help">
             Deletes every frame in Discard with its file, after a preview. Kept frames are never
             touched.
           </p>
           <button
+            id={cleanupBtnId}
             type="button"
             className="chip"
             disabled={isRunning || busy !== null || discardedCount === 0}
@@ -325,11 +340,15 @@ export function HousekeepingPanel({
         </div>
 
         <div className="housekeeping__tool housekeeping__tool--danger">
-          <span className="housekeeping__label">Delete dataset</span>
+          <span className="housekeeping__label housekeeping__label--row">
+            Delete dataset
+            <HelpHint area="dataset" setting="delete-dataset" describes={deleteBtnId} />
+          </span>
           <p className="housekeeping__help">
             Removes the dataset, its frames and its work folder. Source videos are never touched.
           </p>
           <button
+            id={deleteBtnId}
             type="button"
             className="chip housekeeping__danger"
             disabled={isRunning || busy !== null}

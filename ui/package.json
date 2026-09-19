@@ -8,7 +8,8 @@
     "build": "vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
-    "lint": "eslint .",
+    "lint": "eslint . && pnpm lint:help",
+    "lint:help": "node scripts/check-help.mjs",
     "tauri": "tauri"
   },
   "dependencies": {

@@ -1,4 +1,5 @@
 import { useId, useState } from "react";
+import { HelpHint } from "../../components/HelpHint";
 import { createConcept, deleteConcept, type DatasetConcept } from "../../lib/ipc";
 import { CONCEPT_REMINDER, ConceptRow } from "./ConceptRow";
 import { tokenWarning } from "./tokens";
@@ -87,8 +88,11 @@ export function ConceptsPanel({ datasetId, concepts, onChanged }: Props) {
             placeholder="Kenji"
           />
         </label>
-        <label className="datasetform__field" htmlFor={tokenId}>
-          <span>Token</span>
+        <div className="datasetform__field">
+          <span>
+            <label htmlFor={tokenId}>Token</label>
+            <HelpHint area="dataset" setting="concept" describes={tokenId} />
+          </span>
           <input
             id={tokenId}
             type="text"
@@ -97,10 +101,13 @@ export function ConceptsPanel({ datasetId, concepts, onChanged }: Props) {
             placeholder="kenji_xy"
             className="concepts__token-input"
           />
-        </label>
+        </div>
         {draftWarning && <p className="concepts__warn">{draftWarning}</p>}
-        <label className="datasetform__field" htmlFor={descId}>
-          <span>Description (optional)</span>
+        <div className="datasetform__field">
+          <span>
+            <label htmlFor={descId}>Description (optional)</label>
+            <HelpHint area="dataset" setting="concept-description" describes={descId} />
+          </span>
           <input
             id={descId}
             type="text"
@@ -108,7 +115,7 @@ export function ConceptsPanel({ datasetId, concepts, onChanged }: Props) {
             onChange={(e) => setDescription(e.target.value)}
             placeholder="bare feet, visible"
           />
-        </label>
+        </div>
         <button type="button" className="datasetform__go" onClick={create} disabled={!canCreate}>
           {busy ? "Creating…" : "Create concept"}
         </button>

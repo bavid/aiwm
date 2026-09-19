@@ -5,6 +5,7 @@ import { Chat } from "./features/chat/Chat";
 import { Dashboard } from "./features/dashboard/Dashboard";
 import { DatasetStudio } from "./features/dataset/Dataset";
 import { Diagnostics } from "./features/diagnostics/Diagnostics";
+import { Help } from "./features/help/Help";
 import { ImageStudio, type ImagePrefill } from "./features/image/Image";
 import { Jobs } from "./features/jobs/Jobs";
 import { Models, type ModelsFocus } from "./features/models/Models";
@@ -16,6 +17,8 @@ import { Voice } from "./features/voice/Voice";
 import { CommandPalette } from "./components/CommandPalette";
 import { JobNotifications } from "./components/JobNotifications";
 import { ShortcutsHelp } from "./components/ShortcutsHelp";
+import { HelpNavigationContext, type HelpFocus } from "./help/HelpContext.ts";
+import type { HelpArea } from "./help/index.ts";
 import { useAbout, useRuntimes } from "./lib/hooks";
 
 type Tab =
@@ -32,7 +35,8 @@ type Tab =
   | "models"
   | "benchmark"
   | "diagnostics"
-  | "settings";
+  | "settings"
+  | "help";
 
 const TABS: { id: Tab; label: string; icon: ReactNode }[] = [
   {
@@ -182,6 +186,17 @@ const TABS: { id: Tab; label: string; icon: ReactNode }[] = [
       </svg>
     ),
   },
+  {
+    id: "help",
+    label: "Help",
+    icon: (
+      <svg viewBox="0 0 20 20">
+        <circle cx="10" cy="10" r="7.4" />
+        <path d="M7.6 8a2.4 2.4 0 1 1 3.4 2.2c-.7.35-1 .8-1 1.5v.5" />
+        <circle cx="10" cy="14.6" r="0.9" fill="currentColor" />
+      </svg>
+    ),
+  },
 ];
 
 const SIDEBAR_COLLAPSED_KEY = "aiwm:sidebar-collapsed";
@@ -216,6 +231,15 @@ export default function App() {
   }, []);
   const clearImagePrefill = useCallback(() => setImagePrefill(null), []);
 
+  /** Any tab -> Help tab: a `?` hint's "More in Help", or a palette topic. */
+  const [helpFocus, setHelpFocus] = useState<HelpFocus | null>(null);
+  const clearHelpFocus = useCallback(() => setHelpFocus(null), []);
+  const openHelp = useCallback((area: HelpArea, key?: string) => {
+    setHelpFocus({ area, key });
+    setTab("help");
+  }, []);
+  const openHelpTab = useCallback(() => setTab("help"), []);
+
   const trainFromDataset = useCallback((datasetId: string) => {
     setPendingTrainingDataset(datasetId);
     setTab("training");
@@ -241,107 +265,112 @@ export default function App() {
   const runtimesOnline = (runtimes ?? []).filter((r) => r.health === "healthy").length;
 
   return (
-    <div className="app" data-sidebar-collapsed={collapsed}>
-      <CommandPalette onNavigate={navigate} />
-      <JobNotifications onNavigate={navigate} />
-      <ShortcutsHelp />
+    <HelpNavigationContext.Provider value={openHelp}>
+      <div className="app" data-sidebar-collapsed={collapsed}>
+        <CommandPalette onNavigate={navigate} onOpenHelp={openHelp} />
+        <JobNotifications onNavigate={navigate} />
+        <ShortcutsHelp onOpenHelp={openHelpTab} />
 
-      <aside className="sidebar" aria-label="Primary">
-        <div className="brand">
-          <div className="brand__mark">Ai</div>
-          <div className="brand__meta">
-            <div className="brand__name">AIWM</div>
-            <div className="brand__rig">{about?.offline_mode ? "offline" : "AI Workstation Manager"}</div>
+        <aside className="sidebar" aria-label="Primary">
+          <div className="brand">
+            <div className="brand__mark">Ai</div>
+            <div className="brand__meta">
+              <div className="brand__name">AIWM</div>
+              <div className="brand__rig">{about?.offline_mode ? "offline" : "AI Workstation Manager"}</div>
+            </div>
           </div>
-        </div>
 
-        <nav className="navgroup" role="tablist" aria-label="Views">
-          {TABS.map((t) => (
-            <button
-              key={t.id}
-              className="navitem"
-              role="tab"
-              aria-selected={tab === t.id}
-              onClick={() => setTab(t.id)}
-            >
-              {t.icon}
-              <span className="label">{t.label}</span>
-            </button>
-          ))}
-        </nav>
+          <nav className="navgroup" role="tablist" aria-label="Views">
+            {TABS.map((t) => (
+              <button
+                key={t.id}
+                className="navitem"
+                role="tab"
+                aria-selected={tab === t.id}
+                onClick={() => setTab(t.id)}
+              >
+                {t.icon}
+                <span className="label">{t.label}</span>
+              </button>
+            ))}
+          </nav>
 
-        <div className="sidebar__spacer" />
+          <div className="sidebar__spacer" />
 
-        <div className="sidebar__status">
-          <span className="status-dot" data-state={runtimesOnline > 0 ? "healthy" : undefined} />
-          <span>{runtimes ? `${runtimesOnline} of ${runtimes.length} runtimes online` : "…"}</span>
-        </div>
-        <button
-          type="button"
-          className="collapse-btn"
-          onClick={toggleCollapsed}
-          aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-        >
-          <svg viewBox="0 0 20 20">
-            <path d="M12.5 4 7 10l5.5 6" />
-          </svg>
-          <span className="label">Collapse</span>
-        </button>
-      </aside>
+          <div className="sidebar__status">
+            <span className="status-dot" data-state={runtimesOnline > 0 ? "healthy" : undefined} />
+            <span>{runtimes ? `${runtimesOnline} of ${runtimes.length} runtimes online` : "…"}</span>
+          </div>
+          <button
+            type="button"
+            className="collapse-btn"
+            onClick={toggleCollapsed}
+            aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+          >
+            <svg viewBox="0 0 20 20">
+              <path d="M12.5 4 7 10l5.5 6" />
+            </svg>
+            <span className="label">Collapse</span>
+          </button>
+        </aside>
 
-      {/* Every tab stays mounted -- only visibility toggles via `hidden`. A
-          tab used to fully unmount on navigation, which wiped any in-progress
-          draft (a typed prompt, unsent form state) the moment you looked at
-          another tab and came back -- a real, reported bug for Image/Video,
-          but the same conditional-mount pattern affected every tab equally. */}
-      <main className="main">
-        <div hidden={tab !== "dashboard"}>
-          <Dashboard onNavigate={navigate} />
-        </div>
-        <div hidden={tab !== "chat"}>
-          <Chat />
-        </div>
-        <div hidden={tab !== "image"}>
-          <ImageStudio prefill={imagePrefill} onPrefillConsumed={clearImagePrefill} />
-        </div>
-        <div hidden={tab !== "video"}>
-          <VideoStudio />
-        </div>
-        <div hidden={tab !== "voice"}>
-          <Voice />
-        </div>
-        <div hidden={tab !== "stories"}>
-          <Stories />
-        </div>
-        <div hidden={tab !== "dataset"}>
-          <DatasetStudio onTrainLora={trainFromDataset} onOpenCaptioners={openCaptionerCatalog} />
-        </div>
-        <div hidden={tab !== "training"}>
-          <Training
-            pendingDatasetId={pendingTrainingDataset}
-            onPendingDatasetConsumed={clearPendingTrainingDataset}
-            onTestLora={testLora}
-          />
-        </div>
-        <div hidden={tab !== "jobs"}>
-          <Jobs />
-        </div>
-        <div hidden={tab !== "agents"}>
-          <AgentsWorkbench />
-        </div>
-        <div hidden={tab !== "models"}>
-          <Models focus={modelsFocus} onFocusConsumed={clearModelsFocus} />
-        </div>
-        <div hidden={tab !== "benchmark"}>
-          <Benchmark onNavigate={navigate} />
-        </div>
-        <div hidden={tab !== "diagnostics"}>
-          <Diagnostics />
-        </div>
-        <div hidden={tab !== "settings"}>
-          <Settings />
-        </div>
-      </main>
-    </div>
+        {/* Every tab stays mounted -- only visibility toggles via `hidden`. A
+            tab used to fully unmount on navigation, which wiped any in-progress
+            draft (a typed prompt, unsent form state) the moment you looked at
+            another tab and came back -- a real, reported bug for Image/Video,
+            but the same conditional-mount pattern affected every tab equally. */}
+        <main className="main">
+          <div hidden={tab !== "dashboard"}>
+            <Dashboard onNavigate={navigate} />
+          </div>
+          <div hidden={tab !== "chat"}>
+            <Chat />
+          </div>
+          <div hidden={tab !== "image"}>
+            <ImageStudio prefill={imagePrefill} onPrefillConsumed={clearImagePrefill} />
+          </div>
+          <div hidden={tab !== "video"}>
+            <VideoStudio />
+          </div>
+          <div hidden={tab !== "voice"}>
+            <Voice />
+          </div>
+          <div hidden={tab !== "stories"}>
+            <Stories />
+          </div>
+          <div hidden={tab !== "dataset"}>
+            <DatasetStudio onTrainLora={trainFromDataset} onOpenCaptioners={openCaptionerCatalog} />
+          </div>
+          <div hidden={tab !== "training"}>
+            <Training
+              pendingDatasetId={pendingTrainingDataset}
+              onPendingDatasetConsumed={clearPendingTrainingDataset}
+              onTestLora={testLora}
+            />
+          </div>
+          <div hidden={tab !== "jobs"}>
+            <Jobs />
+          </div>
+          <div hidden={tab !== "agents"}>
+            <AgentsWorkbench />
+          </div>
+          <div hidden={tab !== "models"}>
+            <Models focus={modelsFocus} onFocusConsumed={clearModelsFocus} />
+          </div>
+          <div hidden={tab !== "benchmark"}>
+            <Benchmark onNavigate={navigate} />
+          </div>
+          <div hidden={tab !== "diagnostics"}>
+            <Diagnostics />
+          </div>
+          <div hidden={tab !== "settings"}>
+            <Settings />
+          </div>
+          <div hidden={tab !== "help"}>
+            <Help focus={helpFocus} onFocusConsumed={clearHelpFocus} />
+          </div>
+        </main>
+      </div>
+    </HelpNavigationContext.Provider>
   );
 }

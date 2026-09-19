@@ -1,4 +1,5 @@
 import { useId, useState } from "react";
+import { HelpHint } from "../../components/HelpHint";
 import { humanize } from "../../lib/errors";
 import { useTrainingRun } from "../../lib/hooks";
 import {
@@ -106,6 +107,9 @@ export function RunCard({
   onTestLora,
 }: Props) {
   const logId = useId();
+  /** One id per action button, so its `?` hint can describe it. */
+  const base = useId();
+  const id = (action: string) => `${base}-${action}`;
   const [expanded, setExpanded] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [purge, setPurge] = useState(false);
@@ -212,6 +216,7 @@ export function RunCard({
 
       <div className="runcard__actions">
         <button
+          id={id("pause")}
           type="button"
           className="chip"
           disabled={busy || run.state !== "running"}
@@ -219,7 +224,9 @@ export function RunCard({
         >
           Pause
         </button>
+        <HelpHint area="training" setting="pause" describes={id("pause")} />
         <button
+          id={id("resume")}
           type="button"
           className="chip"
           disabled={busy || (run.state !== "paused" && run.state !== "interrupted")}
@@ -227,7 +234,9 @@ export function RunCard({
         >
           Resume
         </button>
+        <HelpHint area="training" setting="resume" describes={id("resume")} />
         <button
+          id={id("cancel")}
           type="button"
           className="chip"
           disabled={busy || !CANCELLABLE.includes(run.state)}
@@ -235,7 +244,9 @@ export function RunCard({
         >
           Cancel
         </button>
+        <HelpHint area="training" setting="cancel" describes={id("cancel")} />
         <button
+          id={id("delete")}
           type="button"
           className="chip"
           disabled={busy || !DELETABLE.includes(run.state)}
@@ -243,14 +254,19 @@ export function RunCard({
         >
           Delete
         </button>
+        <HelpHint area="training" setting="delete-run" describes={id("delete")} />
         {resultModelId && (
-          <button
-            type="button"
-            className="chip"
-            onClick={() => onTestLora(resultModelId, run.trigger_word)}
-          >
-            Test now
-          </button>
+          <>
+            <button
+              id={id("test")}
+              type="button"
+              className="chip"
+              onClick={() => onTestLora(resultModelId, run.trigger_word)}
+            >
+              Test now
+            </button>
+            <HelpHint area="training" setting="test-now" describes={id("test")} />
+          </>
         )}
         <button
           type="button"
@@ -266,10 +282,18 @@ export function RunCard({
       {confirmDelete && (
         <div className="runcard__confirm">
           <span>Delete “{run.name}” from the history?</span>
-          <label>
-            <input type="checkbox" checked={purge} onChange={(e) => setPurge(e.target.checked)} />
-            also delete its work folder (checkpoints and previews)
-          </label>
+          <span className="runcard__purge">
+            <input
+              id={id("purge")}
+              type="checkbox"
+              checked={purge}
+              onChange={(e) => setPurge(e.target.checked)}
+            />
+            <label htmlFor={id("purge")}>
+              also delete its work folder (checkpoints and previews)
+            </label>
+            <HelpHint area="training" setting="purge-work-folder" describes={id("purge")} />
+          </span>
           <button
             type="button"
             className="chip"

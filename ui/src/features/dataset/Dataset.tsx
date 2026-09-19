@@ -23,6 +23,7 @@ import {
   type JobDetail,
   type JobState,
 } from "../../lib/ipc";
+import { HelpHint } from "../../components/HelpHint";
 import { ConceptsPanel } from "./ConceptsPanel";
 import { CurationBoard } from "./CurationBoard";
 import { errorText, framesLabel, isDiscarded } from "./curation";
@@ -377,8 +378,11 @@ export function DatasetStudio({ onTrainLora, onOpenCaptioners }: Props) {
             </p>
 
             {activeDataset && (
-              <label className="datasetform__field datasetform__field--inline" htmlFor={triggerId}>
-                <span>Trigger word</span>
+              <div className="datasetform__field datasetform__field--inline">
+                <span>
+                  <label htmlFor={triggerId}>Trigger word</label>
+                  <HelpHint area="dataset" setting="trigger-word" describes={triggerId} />
+                </span>
                 <input
                   id={triggerId}
                   type="text"
@@ -397,7 +401,7 @@ export function DatasetStudio({ onTrainLora, onOpenCaptioners }: Props) {
                   onBlur={commitTrigger}
                   placeholder="ghibli_xy"
                 />
-              </label>
+              </div>
             )}
             {activeDataset && triggerWarn && <p className="dataset__warn">{triggerWarn}</p>}
           </div>

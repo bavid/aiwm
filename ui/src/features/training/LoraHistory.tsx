@@ -1,4 +1,5 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useId, useRef } from "react";
+import { HelpHint } from "../../components/HelpHint";
 import type { LineageRun, LoraLineage, LoraSummary, TrainingProfile } from "../../lib/ipc";
 import { formatCount, formatDuration, formatWhen } from "./format";
 import { effectiveHyperparams } from "./hyperparams";
@@ -129,6 +130,7 @@ export function LoraHistory({
   onClose,
 }: Props) {
   const headingRef = useRef<HTMLHeadingElement>(null);
+  const continueId = useId();
 
   // Selecting a row from the table above moves the reader to the panel it
   // opened; re-selecting another LoRA moves it again.
@@ -144,9 +146,12 @@ export function LoraHistory({
     <section className="card lorahistory" aria-labelledby="lorahistory-heading">
       <header className="lorahistory__head">
         <div className="lorahistory__summary">
-          <h4 id="lorahistory-heading" ref={headingRef} tabIndex={-1}>
-            {lora.name}
-          </h4>
+          <div className="training__headrow">
+            <h4 id="lorahistory-heading" ref={headingRef} tabIndex={-1}>
+              {lora.name}
+            </h4>
+            <HelpHint area="training" setting="lora-history" />
+          </div>
           <p className="muted">
             {lora.trained
               ? `${lora.runs} ${lora.runs === 1 ? "run" : "runs"} · ${lora.total_steps.toLocaleString()} steps · ${formatCount(lora.total_images)} images`
@@ -162,9 +167,15 @@ export function LoraHistory({
           >
             Test in Image tab
           </button>
-          <button type="button" className="chip lorahistory__continue" onClick={onContinue}>
+          <button
+            id={continueId}
+            type="button"
+            className="chip lorahistory__continue"
+            onClick={onContinue}
+          >
             Continue with another dataset
           </button>
+          <HelpHint area="training" setting="continue-training" describes={continueId} />
           <button type="button" className="chip" onClick={onClose}>
             Close
           </button>

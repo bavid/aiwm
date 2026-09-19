@@ -196,6 +196,14 @@
 .curation__filters {
   display: flex;
   flex-wrap: wrap;
+  gap: var(--space-1) var(--space-2);
+}
+
+/* A reason chip with its `?` beside it; an opened hint takes the row below. */
+.curation__filter-item {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
   gap: var(--space-1);
 }
 

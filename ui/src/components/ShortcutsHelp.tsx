@@ -12,8 +12,9 @@ const isTypingTarget = (el: EventTarget | null) =>
   el instanceof HTMLElement && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable);
 
 /** A "?" overlay listing keyboard shortcuts -- discoverability for the
- *  command palette and anything else that only exists as a key combo. */
-export function ShortcutsHelp() {
+ *  command palette and anything else that only exists as a key combo. Also
+ *  the way to the Help tab for someone who pressed `?` looking for help. */
+export function ShortcutsHelp({ onOpenHelp }: { onOpenHelp: () => void }) {
   const [open, setOpen] = useState(false);
 
   useEffect(() => {
@@ -53,6 +54,18 @@ export function ShortcutsHelp() {
             </li>
           ))}
         </ul>
+        <div style={{ padding: "0 var(--space-4) var(--space-4)" }}>
+          <button
+            type="button"
+            className="chip"
+            onClick={() => {
+              setOpen(false);
+              onOpenHelp();
+            }}
+          >
+            Open Help
+          </button>
+        </div>
       </div>
     </div>
   );

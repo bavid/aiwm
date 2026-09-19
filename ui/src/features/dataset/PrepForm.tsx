@@ -1,4 +1,5 @@
 import { useCallback, useId, useMemo, useRef, useState } from "react";
+import { HelpHint } from "../../components/HelpHint";
 import { StorageDirField } from "../../components/StorageDirField";
 import { useAbout, useCaptioners } from "../../lib/hooks";
 import type { DatasetMode, DatasetPrepParams } from "../../lib/ipc";
@@ -83,6 +84,9 @@ export function PrepForm({ isRunning, error, onStart, onMoreCaptioners }: Props)
   const rootPicker = useFolderPicker(setRoot);
   const modeId = useId();
   const escalateNoteId = useId();
+  /** One id per field, so its `<label for>` and its `?` hint can name it. */
+  const base = useId();
+  const id = (field: string) => `${base}-${field}`;
 
   const start = () => {
     const path = root.trim();
@@ -106,10 +110,14 @@ export function PrepForm({ isRunning, error, onStart, onMoreCaptioners }: Props)
 
   return (
     <div className="datasetform">
-      <label className="datasetform__field">
-        <span>Root folder</span>
+      <div className="datasetform__field">
+        <span>
+          <label htmlFor={id("root")}>Root folder</label>
+          <HelpHint area="dataset" setting="root" describes={id("root")} />
+        </span>
         <div className="datasetform__row">
           <input
+            id={id("root")}
             type="text"
             value={root}
             onChange={(e) => setRoot(e.target.value)}
@@ -119,25 +127,32 @@ export function PrepForm({ isRunning, error, onStart, onMoreCaptioners }: Props)
             Browse…
           </button>
         </div>
-      </label>
+      </div>
       {rootPicker.error && (
         <p className="dataset__err" role="alert">
           {rootPicker.error}
         </p>
       )}
 
-      <label className="datasetform__field" htmlFor={modeId}>
-        <span>Mode</span>
+      <div className="datasetform__field">
+        <span>
+          <label htmlFor={modeId}>Mode</label>
+          <HelpHint area="dataset" setting="mode" describes={modeId} />
+        </span>
         <select id={modeId} value={mode} onChange={(e) => setMode(e.target.value as DatasetMode)}>
           <option value="frames">Frames (stills from video + images)</option>
           <option value="clips">Clips (whole videos, for video models)</option>
         </select>
-      </label>
+      </div>
 
       <div className="datasetform__grid">
-        <label className="datasetform__field">
-          <span>Sample rate (fps)</span>
+        <div className="datasetform__field">
+          <span>
+            <label htmlFor={id("sample-fps")}>Sample rate (fps)</label>
+            <HelpHint area="dataset" setting="sample-fps" describes={id("sample-fps")} />
+          </span>
           <input
+            id={id("sample-fps")}
             type="number"
             min={0.1}
             max={10}
@@ -145,10 +160,14 @@ export function PrepForm({ isRunning, error, onStart, onMoreCaptioners }: Props)
             value={sampleFps}
             onChange={(e) => setSampleFps(Number(e.target.value))}
           />
-        </label>
-        <label className="datasetform__field">
-          <span>Blur threshold</span>
+        </div>
+        <div className="datasetform__field">
+          <span>
+            <label htmlFor={id("blur-threshold")}>Blur threshold</label>
+            <HelpHint area="dataset" setting="blur-threshold" describes={id("blur-threshold")} />
+          </span>
           <input
+            id={id("blur-threshold")}
             type="number"
             min={0}
             max={10000}
@@ -156,10 +175,14 @@ export function PrepForm({ isRunning, error, onStart, onMoreCaptioners }: Props)
             value={blurThreshold}
             onChange={(e) => setBlurThreshold(Number(e.target.value))}
           />
-        </label>
-        <label className="datasetform__field">
-          <span>Duplicate distance</span>
+        </div>
+        <div className="datasetform__field">
+          <span>
+            <label htmlFor={id("duplicate-distance")}>Duplicate distance</label>
+            <HelpHint area="dataset" setting="duplicate-distance" describes={id("duplicate-distance")} />
+          </span>
           <input
+            id={id("duplicate-distance")}
             type="number"
             min={0}
             max={64}
@@ -167,10 +190,14 @@ export function PrepForm({ isRunning, error, onStart, onMoreCaptioners }: Props)
             value={phashMaxDistance}
             onChange={(e) => setPhashMaxDistance(Number(e.target.value))}
           />
-        </label>
-        <label className="datasetform__field">
-          <span>Max frames per clip (0 = all)</span>
+        </div>
+        <div className="datasetform__field">
+          <span>
+            <label htmlFor={id("max-frames-per-clip")}>Max frames per clip (0 = all)</label>
+            <HelpHint area="dataset" setting="max-frames-per-clip" describes={id("max-frames-per-clip")} />
+          </span>
           <input
+            id={id("max-frames-per-clip")}
             type="number"
             min={0}
             max={500}
@@ -178,11 +205,15 @@ export function PrepForm({ isRunning, error, onStart, onMoreCaptioners }: Props)
             value={maxFramesPerClip}
             onChange={(e) => setMaxFramesPerClip(Number(e.target.value))}
           />
-        </label>
+        </div>
         {mode === "clips" && (
-          <label className="datasetform__field">
-            <span>Min clip length (s)</span>
+          <div className="datasetform__field">
+            <span>
+              <label htmlFor={id("min-clip-secs")}>Min clip length (s)</label>
+              <HelpHint area="dataset" setting="min-clip-secs" describes={id("min-clip-secs")} />
+            </span>
             <input
+              id={id("min-clip-secs")}
               type="number"
               min={0}
               max={600}
@@ -190,27 +221,29 @@ export function PrepForm({ isRunning, error, onStart, onMoreCaptioners }: Props)
               value={minClipSecs}
               onChange={(e) => setMinClipSecs(Number(e.target.value))}
             />
-          </label>
+          </div>
         )}
       </div>
 
       <fieldset className="datasetform__captioning" ref={captioningRef}>
         <legend>Auto-caption</legend>
-        <label className="datasetform__check">
+        <div className="datasetform__check">
           <input
+            id={id("auto-caption")}
             type="checkbox"
             checked={captionOn}
             disabled={installed.length === 0}
             onChange={(e) => setCaptionWanted(e.target.checked)}
           />
-          <span>
+          <label htmlFor={id("auto-caption")}>
             Describe every kept frame automatically.{" "}
             <em>
               Recommended for style LoRAs: what is described stays controllable, what is not becomes
               part of the style.
             </em>
-          </span>
-        </label>
+          </label>
+          <HelpHint area="dataset" setting="auto-caption" describes={id("auto-caption")} />
+        </div>
 
         {noneInstalled && (
           <CaptionerHint
@@ -238,20 +271,22 @@ export function PrepForm({ isRunning, error, onStart, onMoreCaptioners }: Props)
             settling={install.settling}
             onInstall={install.startInstall}
             onMoreCaptioners={onMoreCaptioners}
+            hint={<HelpHint area="dataset" setting="captioner" />}
           />
         )}
 
         {captionOn && chosenCaptioner && (
           <>
-            <label className="datasetform__check">
+            <div className="datasetform__check">
               <input
+                id={id("escalate")}
                 type="checkbox"
                 checked={escalate && chosenCaptioner.supports_escalation}
                 disabled={!chosenCaptioner.supports_escalation}
                 aria-describedby={chosenCaptioner.supports_escalation ? undefined : escalateNoteId}
                 onChange={(e) => setEscalate(e.target.checked)}
               />
-              <span>
+              <label htmlFor={id("escalate")}>
                 Escalate uncertain captions to Qwen2.5-VL with temporal context (frame vs. a later
                 frame)
                 {!chosenCaptioner.supports_escalation && (
@@ -260,13 +295,18 @@ export function PrepForm({ isRunning, error, onStart, onMoreCaptioners }: Props)
                     there is no uncertain sentence to re-check.
                   </em>
                 )}
-              </span>
-            </label>
+              </label>
+              <HelpHint area="dataset" setting="escalate" describes={id("escalate")} />
+            </div>
             {escalate && chosenCaptioner.supports_escalation && (
               <>
-                <label className="datasetform__field datasetform__field--inline">
-                  <span>Escalate every Nth frame too</span>
+                <div className="datasetform__field datasetform__field--inline">
+                  <span>
+                    <label htmlFor={id("nth")}>Escalate every Nth frame too</label>
+                    <HelpHint area="dataset" setting="escalate-every-nth" describes={id("nth")} />
+                  </span>
                   <input
+                    id={id("nth")}
                     type="number"
                     min={0}
                     max={500}
@@ -274,10 +314,14 @@ export function PrepForm({ isRunning, error, onStart, onMoreCaptioners }: Props)
                     value={escalateEveryNth}
                     onChange={(e) => setEscalateEveryNth(Number(e.target.value))}
                   />
-                </label>
-                <label className="datasetform__field datasetform__field--inline">
-                  <span>Context offset (frames)</span>
+                </div>
+                <div className="datasetform__field datasetform__field--inline">
+                  <span>
+                    <label htmlFor={id("offset")}>Context offset (frames)</label>
+                    <HelpHint area="dataset" setting="context-offset" describes={id("offset")} />
+                  </span>
                   <input
+                    id={id("offset")}
                     type="number"
                     min={1}
                     max={50}
@@ -285,7 +329,7 @@ export function PrepForm({ isRunning, error, onStart, onMoreCaptioners }: Props)
                     value={contextOffset}
                     onChange={(e) => setContextOffset(Number(e.target.value))}
                   />
-                </label>
+                </div>
               </>
             )}
           </>
@@ -299,6 +343,7 @@ export function PrepForm({ isRunning, error, onStart, onMoreCaptioners }: Props)
         defaultDir={about?.datasets_dir ?? null}
         locationKey="datasets"
         minFreeGiB={PREP_MIN_FREE_GIB}
+        hint={(id) => <HelpHint area="dataset" setting="store-frames-in" describes={id} />}
         help={
           <>
             Optional. Put a large dataset on another drive to keep this one free. Frames and
