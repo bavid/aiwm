@@ -3,7 +3,6 @@
    panel takes its own full-width line under the host. */
 
 .helphint {
-  position: relative;
   display: inline-flex;
   align-items: center;
   vertical-align: middle;
@@ -48,18 +47,22 @@
 }
 
 /* A popover under the `?`, over the page: hosts are label rows, narrow grid
-   cells and button rows, none of which has room for a paragraph in flow —
-   and an in-flow panel would push the very control it explains out from
-   under the pointer. Anchored to the wrapper's left edge; `HelpHint` flips
-   it to the right edge (`data-align="end"`) when it would run off screen.
-   The font resets undo an uppercase, letter-spaced host caption. */
+   cells, button rows and scrolling columns, none of which has room for a
+   paragraph in flow — and an in-flow panel would push the very control it
+   explains out from under the pointer, an absolute one would be clipped by
+   a scrolling or `overflow: hidden` host. So it lives in `document.body`
+   (a portal) with `position: fixed`; `HelpHint` sets `top`/`left` from the
+   button's rectangle and flips it up or left at the window edges. Below the
+   dialogs (palette 100, notifications 90, lightbox 1000). */
 .helphint__panel {
-  position: absolute;
-  top: calc(100% + var(--space-1));
+  position: fixed;
+  top: 0;
   left: 0;
   z-index: 20;
   width: max-content;
   max-width: min(52ch, calc(100vw - 2 * var(--space-4)));
+  max-height: calc(100vh - 2 * var(--space-4));
+  overflow: auto;
   padding: var(--space-3);
   border: 1px solid var(--border);
   border-left: 3px solid var(--accent);
@@ -75,11 +78,6 @@
   letter-spacing: 0;
   white-space: normal;
   cursor: auto;
-}
-
-.helphint__panel[data-align="end"] {
-  left: auto;
-  right: 0;
 }
 
 .helphint__panel[hidden] {

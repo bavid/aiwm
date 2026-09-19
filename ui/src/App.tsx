@@ -1,11 +1,10 @@
-import { useCallback, useState, type ReactNode } from "react";
+import { lazy, Suspense, useCallback, useState, type ReactNode } from "react";
 import { AgentsWorkbench } from "./features/agents/Agents";
 import { Benchmark } from "./features/benchmark/Benchmark";
 import { Chat } from "./features/chat/Chat";
 import { Dashboard } from "./features/dashboard/Dashboard";
 import { DatasetStudio } from "./features/dataset/Dataset";
 import { Diagnostics } from "./features/diagnostics/Diagnostics";
-import { Help } from "./features/help/Help";
 import { ImageStudio, type ImagePrefill } from "./features/image/Image";
 import { Jobs } from "./features/jobs/Jobs";
 import { Models, type ModelsFocus } from "./features/models/Models";
@@ -20,6 +19,11 @@ import { ShortcutsHelp } from "./components/ShortcutsHelp";
 import { HelpNavigationContext, type HelpFocus } from "./help/HelpContext.ts";
 import type { HelpArea } from "./help/index.ts";
 import { useAbout, useRuntimes } from "./lib/hooks";
+
+/** The Help tab is its own chunk: pages of text most sessions never open.
+ *  It is rendered only once the tab has been opened (see below), so the
+ *  chunk is fetched then, not at start-up. */
+const Help = lazy(() => import("./features/help/Help").then((m) => ({ default: m.Help })));
 
 type Tab =
   | "dashboard"
@@ -239,6 +243,10 @@ export default function App() {
     setTab("help");
   }, []);
   const openHelpTab = useCallback(() => setTab("help"), []);
+  /** Once the Help tab has been shown it stays mounted like every other
+   *  tab; before that its lazy chunk is not even requested. */
+  const [isHelpMounted, setIsHelpMounted] = useState(false);
+  if (tab === "help" && !isHelpMounted) setIsHelpMounted(true);
 
   const trainFromDataset = useCallback((datasetId: string) => {
     setPendingTrainingDataset(datasetId);
@@ -367,7 +375,11 @@ export default function App() {
             <Settings />
           </div>
           <div hidden={tab !== "help"}>
-            <Help focus={helpFocus} onFocusConsumed={clearHelpFocus} />
+            {isHelpMounted && (
+              <Suspense fallback={<p className="muted">Loading help…</p>}>
+                <Help focus={helpFocus} onFocusConsumed={clearHelpFocus} />
+              </Suspense>
+            )}
           </div>
         </main>
       </div>

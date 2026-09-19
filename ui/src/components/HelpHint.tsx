@@ -1,4 +1,5 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
+import { createPortal } from "react-dom";
 import { findSetting, type HelpArea } from "../help/index.ts";
 import { useOpenHelp } from "../help/HelpContext.ts";
 import "./help-hint.css";
@@ -15,83 +16,131 @@ type Props = {
   describes?: string;
 };
 
+/** Gap between the button and the panel, and the panel's minimum distance
+ *  from the window edges, in px. */
+const GAP = 4;
+const EDGE = 8;
+
+/** Removes our description token from `el`'s `aria-describedby` and, when
+ *  `add` is set, appends it. Attribute-only, so the host component's own
+ *  `aria-describedby` (an error line, a help paragraph) is kept. */
+function syncDescribedBy(el: Element, token: string, add: boolean) {
+  const tokens = (el.getAttribute("aria-describedby") ?? "")
+    .split(/\s+/)
+    .filter((t) => t !== "" && t !== token);
+  if (add) tokens.push(token);
+  if (tokens.length > 0) el.setAttribute("aria-describedby", tokens.join(" "));
+  else el.removeAttribute("aria-describedby");
+}
+
+/** Places `panel` (position: fixed) under `button`'s left edge, in the
+ *  viewport: to the left of the button's right edge when it would run off
+ *  the right side, above the button when it would run off the bottom. */
+function placePanel(button: HTMLElement, panel: HTMLElement) {
+  const r = button.getBoundingClientRect();
+  const w = panel.offsetWidth;
+  const h = panel.offsetHeight;
+  let left = r.left;
+  if (left + w > window.innerWidth - EDGE) left = Math.max(EDGE, r.right - w);
+  let top = r.bottom + GAP;
+  if (top + h > window.innerHeight - EDGE && r.top - GAP - h >= EDGE) top = r.top - GAP - h;
+  panel.style.left = `${Math.round(left)}px`;
+  panel.style.top = `${Math.round(top)}px`;
+}
+
 /** The `?` next to a setting: a real disclosure, not a `title=` tooltip — a
  *  tooltip never reaches keyboard users, is announced unreliably by screen
  *  readers and does not exist on touch (see `FitBadge` for the same
  *  argument). Enter/Space toggle (a plain `<button>`), Escape closes and
  *  returns focus to the button, a press outside closes, "More in Help" jumps
- *  to the setting on the Help tab. The panel is a popover in the DOM right
- *  after the button (`aria-controls`), so reading order and focus order are
- *  the same. The text comes from `src/help/`, the same source the Help tab
- *  renders. */
+ *  to the setting on the Help tab. The text comes from `src/help/`, the same
+ *  source the Help tab renders.
+ *
+ *  The panel is rendered through a portal into `document.body` and
+ *  positioned from the button's rectangle: hosts include scrolling columns
+ *  and `overflow: hidden` cards, which would clip an in-place panel. Focus
+ *  stays on the button; the panel is tied to it by `aria-controls` and,
+ *  while open, `aria-details`, so a screen reader can reach it although it
+ *  is not adjacent in the DOM. Any scroll outside the panel closes it, and
+ *  so does the button leaving view (its tab hidden, its column scrolled),
+ *  so a fixed panel never floats away from its trigger. */
 export function HelpHint({ area, setting, describes }: Props) {
   const [open, setOpen] = useState(false);
   const panelId = useId();
   const descId = useId();
   const buttonRef = useRef<HTMLButtonElement>(null);
-  const wrapRef = useRef<HTMLSpanElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const openHelp = useOpenHelp();
   const found = findSetting(area, setting);
 
-  // The panel is a popover anchored at the button's left edge; near the
-  // right edge of the window it would run off screen, so anchor it at the
-  // right edge instead. Measured before paint, on every open.
+  // Position before paint on every open, and again when the window resizes.
   useLayoutEffect(() => {
+    const button = buttonRef.current;
     const panel = panelRef.current;
-    if (!open || !panel) return;
-    panel.removeAttribute("data-align");
-    const overflows = panel.getBoundingClientRect().right > window.innerWidth - 8;
-    if (overflows) panel.setAttribute("data-align", "end");
+    if (!open || !button || !panel) return;
+    placePanel(button, panel);
+    const onResize = () => placePanel(button, panel);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
   }, [open]);
 
   // A popover that stays open while the reader works elsewhere would sit on
-  // top of that work: close it on any pointer press outside it. (Escape and
+  // top of that work: close it on any pointer press outside the button and
+  // the panel, and on any scroll that is not the panel's own. (Escape and
   // the button itself handle the keyboard; focus is left where it is.)
   useEffect(() => {
     if (!open) return;
+    const isOurs = (target: EventTarget | null) =>
+      target instanceof Node &&
+      (buttonRef.current?.contains(target) || panelRef.current?.contains(target));
     const onPointerDown = (e: PointerEvent) => {
-      if (e.target instanceof Node && wrapRef.current?.contains(e.target)) return;
-      setOpen(false);
+      if (!isOurs(e.target)) setOpen(false);
+    };
+    const onScroll = (e: Event) => {
+      if (!isOurs(e.target)) setOpen(false);
     };
     document.addEventListener("pointerdown", onPointerDown);
-    return () => document.removeEventListener("pointerdown", onPointerDown);
+    document.addEventListener("scroll", onScroll, true);
+    // The panel lives in <body>, so a `hidden` ancestor of the button (the
+    // tab switching away, a collapsed section) does not hide it: close it
+    // whenever the button itself is no longer visible.
+    const observer = new IntersectionObserver(([entry]) => {
+      if (entry && !entry.isIntersecting) setOpen(false);
+    });
+    if (buttonRef.current) observer.observe(buttonRef.current);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("scroll", onScroll, true);
+      observer.disconnect();
+    };
   }, [open]);
 
-  // The described control belongs to the host component, which may set its
-  // own `aria-describedby` (an error line, a help paragraph). Keep our token
-  // in that list while collapsed and out of it while open, re-asserted after
-  // every render so a host re-render that rewrote the attribute cannot drop
-  // it. Attribute-only, so React's own reconciliation is not disturbed.
+  // Keep our token in the described control's `aria-describedby` while
+  // collapsed and out of it while open. Deliberately no dependency array:
+  // the control belongs to the host component, which may rewrite the
+  // attribute on any of its own renders (e.g. an error id appearing), and a
+  // HelpHint re-renders whenever its host does — so re-asserting after every
+  // render is what keeps the token from being dropped. Idempotent and cheap.
   useEffect(() => {
     if (!describes) return;
     const el = document.getElementById(describes);
-    if (!el) return;
-    const tokens = (el.getAttribute("aria-describedby") ?? "")
-      .split(/\s+/)
-      .filter((t) => t !== "" && t !== descId);
-    if (!open) tokens.push(descId);
-    if (tokens.length > 0) el.setAttribute("aria-describedby", tokens.join(" "));
-    else el.removeAttribute("aria-describedby");
+    if (el) syncDescribedBy(el, descId, !open);
   });
 
   useEffect(() => {
     if (!describes) return;
     return () => {
       const el = document.getElementById(describes);
-      if (!el) return;
-      const tokens = (el.getAttribute("aria-describedby") ?? "")
-        .split(/\s+/)
-        .filter((t) => t !== "" && t !== descId);
-      if (tokens.length > 0) el.setAttribute("aria-describedby", tokens.join(" "));
-      else el.removeAttribute("aria-describedby");
+      if (el) syncDescribedBy(el, descId, false);
     };
   }, [describes, descId]);
 
   if (!found) return null;
   const { setting: s } = found;
 
-  const onKeyDown = (e: KeyboardEvent<HTMLSpanElement>) => {
+  // Reaches this handler from the panel too: a portal's React events bubble
+  // through the React tree, not the DOM.
+  const onKeyDown = (e: KeyboardEvent<HTMLElement>) => {
     if (e.key !== "Escape" || !open) return;
     e.preventDefault();
     e.stopPropagation();
@@ -99,8 +148,54 @@ export function HelpHint({ area, setting, describes }: Props) {
     buttonRef.current?.focus();
   };
 
+  const panel = (
+    <div
+      ref={panelRef}
+      id={panelId}
+      className="helphint__panel"
+      hidden={!open}
+      onKeyDown={onKeyDown}
+    >
+      <p className="helphint__title">{s.label}</p>
+      <dl className="helphint__qa">
+        <dt>What does it do?</dt>
+        <dd>{s.what}</dd>
+        <dt>Why do I need it?</dt>
+        <dd>{s.why}</dd>
+        <dt>What happens when I change or start it?</dt>
+        <dd>{s.effect}</dd>
+        <dt>What do I gain?</dt>
+        <dd>{s.benefit}</dd>
+        {s.pitfalls && (
+          <>
+            <dt>Watch out</dt>
+            <dd>{s.pitfalls}</dd>
+          </>
+        )}
+        {s.measured && (
+          <>
+            <dt>Measured</dt>
+            <dd className="numeric">{s.measured}</dd>
+          </>
+        )}
+      </dl>
+      {openHelp && (
+        <button
+          type="button"
+          className="chip helphint__more"
+          onClick={() => {
+            setOpen(false);
+            openHelp(area, setting);
+          }}
+        >
+          More in Help
+        </button>
+      )}
+    </div>
+  );
+
   return (
-    <span ref={wrapRef} className="helphint" onKeyDown={onKeyDown}>
+    <span className="helphint" onKeyDown={onKeyDown}>
       <button
         ref={buttonRef}
         type="button"
@@ -108,6 +203,7 @@ export function HelpHint({ area, setting, describes }: Props) {
         aria-label={`Help: ${s.label}`}
         aria-expanded={open}
         aria-controls={panelId}
+        aria-details={open ? panelId : undefined}
         onClick={() => setOpen((v) => !v)}
       >
         <span aria-hidden="true">?</span>
@@ -117,40 +213,7 @@ export function HelpHint({ area, setting, describes }: Props) {
           {s.what}
         </span>
       )}
-      <div ref={panelRef} id={panelId} className="helphint__panel" hidden={!open}>
-        <p className="helphint__title">{s.label}</p>
-        <dl className="helphint__qa">
-          <dt>What does it do?</dt>
-          <dd>{s.what}</dd>
-          <dt>Why do I need it?</dt>
-          <dd>{s.why}</dd>
-          <dt>What happens when I change or start it?</dt>
-          <dd>{s.effect}</dd>
-          <dt>What do I gain?</dt>
-          <dd>{s.benefit}</dd>
-          {s.pitfalls && (
-            <>
-              <dt>Watch out</dt>
-              <dd>{s.pitfalls}</dd>
-            </>
-          )}
-          {s.measured && (
-            <>
-              <dt>Measured</dt>
-              <dd className="numeric">{s.measured}</dd>
-            </>
-          )}
-        </dl>
-        {openHelp && (
-          <button
-            type="button"
-            className="chip helphint__more"
-            onClick={() => openHelp(area, setting)}
-          >
-            More in Help
-          </button>
-        )}
-      </div>
+      {createPortal(panel, document.body)}
     </span>
   );
 }
