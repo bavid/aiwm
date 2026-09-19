@@ -140,8 +140,13 @@ pub async fn import_model(
             .map_err(|e| CoreError::Config(format!("create {}: {e}", parent.display())))?;
     }
 
-    let (src, dst, keep) = (source.clone(), dest.clone(), req.keep_original);
     let is_pinned = pinned_file.is_some();
+    if is_pinned {
+        // Before the insert: `models.file_path` is unique, and a file of an
+        // earlier catalog revision may still hold this very path.
+        prune_pinned_folder(db, store_root, kind).await?;
+    }
+    let (src, dst, keep) = (source.clone(), dest.clone(), req.keep_original);
     tokio::task::spawn_blocking(move || {
         if is_pinned {
             // Same rule as the repair path: never write through a link.
@@ -176,9 +181,6 @@ pub async fn import_model(
 
     let model = db.models().insert(new).await?;
     link_for_kind(db, &model, kind, store_root).await?;
-    if is_pinned {
-        prune_pinned_folder(db, store_root, kind).await?;
-    }
     let model = db
         .models()
         .get(&model.id)
@@ -1650,6 +1652,40 @@ mod tests {
             models.get(&sibling_row.id).await.unwrap().is_some(),
             "outside the folder"
         );
+    }
+
+    /// Found in the real Plan 8 run: `models.file_path` is unique, so a new
+    /// catalog file sharing its name with an old-revision file (`config.json`,
+    /// `model.safetensors`, ...) must drop the old row *before* its own row
+    /// is inserted -- not fail with a UNIQUE violation.
+    #[tokio::test]
+    async fn a_new_catalog_file_replaces_the_old_revisions_row_at_the_same_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = tmp.path().join("store");
+        let db = Database::connect_in_memory().await.unwrap();
+        // Exactly the path string the importer records (same join), so the
+        // old row really collides with the new one.
+        let dir = store.join(ModelKind::Florence2Engine.store_subdir());
+        std::fs::create_dir_all(&dir).unwrap();
+        let dest = dir.join("generation_config.json");
+        let old_body = b"{\n    \"num_beams\": 3,\n    \"early_stopping\": false\n}";
+        std::fs::write(&dest, old_body).unwrap();
+        let old_row = insert_stale_row(&db, &dest, old_body).await;
+
+        let src = write_safetensors(
+            tmp.path(),
+            "generation_config.json",
+            FLORENCE2_GENERATION_CONFIG,
+        );
+        let out = import_as(&db, &store, &src, "florence2_engine")
+            .await
+            .unwrap();
+
+        assert!(!out.already_present);
+        assert_eq!(Path::new(&out.model.file_path), dest.as_path());
+        assert_eq!(std::fs::read(&dest).unwrap(), FLORENCE2_GENERATION_CONFIG);
+        assert!(db.models().get(&old_row.id).await.unwrap().is_none());
+        assert_eq!(db.models().list().await.unwrap().len(), 1);
     }
 
     /// The repair path (the file's hash already in the library) prunes the
