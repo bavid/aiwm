@@ -138,6 +138,12 @@ pub struct JobEngine {
     /// independent of `outputs_dir` so a dataset override doesn't move
     /// generated media and vice versa.
     datasets_dir: PathBuf,
+    /// The default training folder (`AppPaths::training_dir`): a prep's
+    /// chosen `data_dir` is checked against every training run's folder,
+    /// derived under it for a row without a recorded one. Empty until
+    /// [`Self::with_training_dir`] sets it — then only recorded run folders
+    /// are checked.
+    training_dir: PathBuf,
     /// Free-space probe for the dataset-prep preflight
     /// ([`dataset::location::prepare_work_root`]); a test seam, the real one
     /// is [`crate::cleanup::volume_free`].
@@ -174,6 +180,7 @@ impl JobEngine {
             vision_store: PathBuf::new(),
             outputs_dir,
             datasets_dir,
+            training_dir: PathBuf::new(),
             prep_free_space: crate::cleanup::volume_free,
             telemetry: frozen_telemetry(),
             auto_preference: crate::select::AutoPreference::default(),
@@ -187,6 +194,14 @@ impl JobEngine {
     #[must_use]
     pub fn with_telemetry(mut self, telemetry: watch::Receiver<SystemTelemetry>) -> Self {
         self.telemetry = telemetry;
+        self
+    }
+
+    /// The default training folder, for the prep `data_dir` check against
+    /// training runs (see the field docs).
+    #[must_use]
+    pub fn with_training_dir(mut self, training_dir: PathBuf) -> Self {
+        self.training_dir = training_dir;
         self
     }
 
@@ -1310,6 +1325,8 @@ impl JobEngine {
             req.check_outside_store(&self.vision_store)?;
             let datasets = self.db.datasets().list().await?;
             req.check_against_datasets(&datasets, &self.datasets_dir)?;
+            let runs = self.db.training_runs().list().await?;
+            req.check_against_runs(&runs, &self.training_dir)?;
             let work_dir = req
                 .data_dir
                 .clone()
@@ -1983,6 +2000,50 @@ mod tests {
         assert!(err.contains("Neighbour"), "{err}");
         assert!(!data_dir.exists(), "nothing is created");
         assert_eq!(fx.db.datasets().list().await.unwrap().len(), 1);
+    }
+
+    /// Re-checked in the engine for jobs that did not come through HTTP: a
+    /// `data_dir` inside a training run's folder is refused before anything
+    /// is created — purging the run would take the frames with it.
+    #[tokio::test]
+    async fn dataset_prep_refuses_a_data_dir_inside_a_training_run_folder() {
+        let fx = vision_fixture(16_384, Duration::ZERO).await;
+        let chosen = tempfile::tempdir().unwrap();
+        let run_folder = chosen.path().join("runs").join("run-1");
+        fx.db
+            .training_runs()
+            .create(crate::db::NewTrainingRun {
+                name: "Earlier".into(),
+                profile_family: "flux2-klein-4b".into(),
+                target_model_id: None,
+                dataset_id: None,
+                data_kind: crate::db::DatasetMode::Frames,
+                trigger_word: "t".into(),
+                preset: crate::db::Preset::Fast,
+                hyperparams_json: "{}".into(),
+                sample_prompts_json: "[]".into(),
+                work_dir: run_folder.to_string_lossy().into_owned(),
+            })
+            .await
+            .unwrap();
+        let root = prep_root_with_one_image();
+        let data_dir = run_folder.join("frames");
+        let job = submit_prep(
+            &fx.engine,
+            serde_json::json!({
+                "root": root.path().to_string_lossy(),
+                "data_dir": data_dir.to_string_lossy(),
+            }),
+        )
+        .await;
+
+        let outcome = fx.engine.run_next().await.unwrap().unwrap();
+
+        assert!(matches!(outcome, JobOutcome::Failed { .. }), "{outcome:?}");
+        let stored = fx.db.jobs().get(&job.id).await.unwrap().unwrap();
+        let err = stored.error_text.unwrap_or_default();
+        assert!(err.contains("Earlier"), "{err}");
+        assert!(!data_dir.exists(), "nothing is created");
     }
 
     #[tokio::test]

@@ -70,6 +70,10 @@ pub struct DataRoots {
     pub datasets: PathBuf,
     /// The model store (`config.store_path`): never part of a work folder.
     pub models: PathBuf,
+    /// The default training root (`AppPaths::training_dir`): the folder of a
+    /// training run row without a recorded `work_dir` is derived under it.
+    /// Run folders are never walked or deleted into (see `guard.rs`).
+    pub training: PathBuf,
 }
 
 /// A file a deletion left alone, and why (one of the `SKIP_*` constants;
@@ -473,11 +477,13 @@ async fn snapshot(db: &Database, dataset_id: &str) -> Result<Option<Snapshot>> {
         .dataset_frames()
         .list_paths_outside_dataset(dataset_id)
         .await?;
+    let runs = db.training_runs().list().await?;
     Ok(Some(Snapshot {
         dataset,
         frames,
         others,
         foreign_frames,
+        runs,
     }))
 }
 

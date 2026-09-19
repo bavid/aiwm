@@ -224,6 +224,7 @@ impl App {
                 paths.datasets_dir(),
             )
             .with_telemetry(telemetry.subscribe())
+            .with_training_dir(paths.training_dir())
             .with_auto_preference(auto_pref)
             .with_registry(registry.clone())
             .with_colibri(colibri.clone())

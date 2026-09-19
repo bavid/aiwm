@@ -487,3 +487,74 @@ fn a_work_folder_holding_the_model_store_is_unfit() {
     );
     assert!(unfit);
 }
+
+// --- training run folders are foreign ------------------------------------------
+
+/// A training run whose recorded folder is `folder`.
+async fn run_in(fx: &Fx, folder: &Path) {
+    fx.db
+        .training_runs()
+        .create(crate::db::NewTrainingRun {
+            name: "Run".into(),
+            profile_family: "flux2-klein-4b".into(),
+            target_model_id: None,
+            dataset_id: None,
+            data_kind: DatasetMode::Frames,
+            trigger_word: "t".into(),
+            preset: crate::db::Preset::Fast,
+            hyperparams_json: "{}".into(),
+            sample_prompts_json: "[]".into(),
+            work_dir: folder.to_string_lossy().into_owned(),
+        })
+        .await
+        .unwrap();
+}
+
+/// A run folder inside a dataset's work folder is never walked or deleted
+/// into: the checkpoints are the run's, not the dataset's.
+#[tokio::test]
+async fn a_run_folder_inside_a_work_folder_survives_deleting_the_dataset() {
+    let fx = fixture().await;
+    let (src, video) = source(&fx, "src-run-in");
+    let work = fx.tmp.path().join("chosen").join("job-w");
+    let id = recorded_dataset(&fx, &src, &work).await;
+    let f = write(&work.join("f.png"), 9);
+    fx.row_in(&id, &f, &video).await;
+    let run_dir = work.join("run-1");
+    let ckpt = write(&run_dir.join("lora.safetensors"), 5);
+    run_in(&fx, &run_dir).await;
+
+    let u = usage_of(&fx, &id).await;
+    assert!(!u.work_walkable, "{u:?}");
+    delete_dataset_with_files(&fx.db, &fx.roots(), &id)
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert!(ckpt.exists(), "the run's checkpoint survives");
+}
+
+/// A dataset work folder inside a run's folder is not the dataset's own:
+/// its frames are left alone (the run owns the folder).
+#[tokio::test]
+async fn a_work_folder_inside_a_run_folder_is_not_the_datasets_own() {
+    let fx = fixture().await;
+    let (src, video) = source(&fx, "src-in-run");
+    let run_dir = fx.tmp.path().join("runs").join("run-2");
+    let config = write(&run_dir.join("config.yaml"), 3);
+    run_in(&fx, &run_dir).await;
+    let work = run_dir.join("frames").join("job-r");
+    let id = recorded_dataset(&fx, &src, &work).await;
+    let f = write(&work.join("f.png"), 9);
+    fx.row_in(&id, &f, &video).await;
+
+    let u = usage_of(&fx, &id).await;
+    assert_eq!(u.work_dir, None, "{u:?}");
+    delete_dataset_with_files(&fx.db, &fx.roots(), &id)
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert!(f.exists(), "nothing inside the run folder is deleted");
+    assert!(config.exists());
+}

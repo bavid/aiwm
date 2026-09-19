@@ -212,7 +212,7 @@ pub(crate) fn dataset_conflict(
 /// A dataset's work folder as the guard sees it (existing or not): the
 /// recorded `work_dir`, else `<datasets_root>/<prep_job_id>` when the job id
 /// is one plain path component.
-fn work_folder_of(d: &crate::db::Dataset, datasets_root: &Path) -> Option<PathBuf> {
+pub(crate) fn work_folder_of(d: &crate::db::Dataset, datasets_root: &Path) -> Option<PathBuf> {
     if let Some(work) = d.work_dir.as_deref().filter(|w| !w.is_empty()) {
         return Some(PathBuf::from(work));
     }
@@ -230,6 +230,43 @@ fn conflict(data_dir: &Path, dataset: &str, why: &str) -> CoreError {
          another folder",
         data_dir.display()
     ))
+}
+
+/// A chosen `data_dir` checked against every training run's folder — the
+/// recorded `work_dir`, or for a row without one the derived
+/// `<training_root>/<run id>` (skipped when `training_root` is empty). The
+/// new work folder will be `<data_dir>/<new prep job id>`, so the rule is:
+///
+/// - `data_dir` must not be, or lie inside, any run's folder — the frames
+///   would land inside the run, and purging the run (which removes its whole
+///   folder) would delete them;
+/// - `data_dir` *holding* run folders is fine: the new work folder is a
+///   sibling of theirs, and neither can reach into the other.
+///
+/// The mirror rule (a run may not be stored inside a dataset's work folder)
+/// is in [`crate::training::location::check_run_data_dir`]. The error names
+/// the run.
+pub(crate) fn check_against_runs(
+    data_dir: &Path,
+    runs: &[crate::db::TrainingRun],
+    training_root: &Path,
+) -> Result<()> {
+    for run in runs {
+        if run.work_dir.trim().is_empty() && training_root.as_os_str().is_empty() {
+            continue;
+        }
+        let folder = crate::training::location::run_folder(run, training_root);
+        if same_or_inside(data_dir, &folder) {
+            return Err(CoreError::Config(format!(
+                "frames cannot be stored in {}: it lies inside the folder {} of training run \
+                 \"{}\" \u{2014} choose another folder",
+                data_dir.display(),
+                folder.display(),
+                run.name
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// `data_dir` must not be the model store or lie inside it.

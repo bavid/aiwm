@@ -184,6 +184,21 @@ impl DatasetPrepRequest {
         }
     }
 
+    /// Refuse a chosen [`Self::data_dir`] that is a training run's folder or
+    /// lies inside one — see [`location::check_against_runs`]. `training_root`
+    /// is the default training folder, where the folder of a run row without
+    /// a recorded one is derived. The default location is not checked here.
+    pub fn check_against_runs(
+        &self,
+        runs: &[crate::db::TrainingRun],
+        training_root: &Path,
+    ) -> Result<()> {
+        match &self.data_dir {
+            Some(dir) => location::check_against_runs(dir, runs, training_root),
+            None => Ok(()),
+        }
+    }
+
     /// Refuse a chosen [`Self::data_dir`] that is the model store `store` or
     /// lies inside it. The default location is not checked here.
     pub fn check_outside_store(&self, store: &Path) -> Result<()> {

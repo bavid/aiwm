@@ -140,6 +140,7 @@ impl Fx {
             outputs: self.outputs.clone(),
             datasets: self.datasets.clone(),
             models: self.models.clone(),
+            training: self.tmp.path().join("training"),
         }
     }
 

@@ -30,7 +30,10 @@
 //! folder. A row without `work_dir` keeps the derived
 //! `<datasets root>/<prep_job_id>`. Other datasets' recorded folders are
 //! protected like their derived ones; one that cannot be located stops every
-//! walk.
+//! walk. **Training run folders** (the recorded `work_dir`, or the derived
+//! `<training root>/<run id>`) are protected exactly like another dataset's
+//! work folder: a work folder overlapping one is not the dataset's own, no
+//! walk enters one, and no file inside one is deleted.
 //!
 //! A folder is walked (every file in it considered) only when it is this
 //! dataset's work folder and nothing of another dataset and no source folder
@@ -58,6 +61,8 @@ pub(super) struct Snapshot {
     pub(super) others: Vec<Dataset>,
     /// `(frame_path, source_path)` of every frame not in this dataset.
     pub(super) foreign_frames: Vec<(String, String)>,
+    /// Every training run: their folders are foreign to every dataset.
+    pub(super) runs: Vec<crate::db::TrainingRun>,
 }
 
 pub(super) enum Verdict {
@@ -243,7 +248,9 @@ pub(super) fn unfit_work_folder(w: &Path, app_roots: &[&Path], models: Option<&P
 }
 
 /// Every dataset's work folder: the recorded `work_dir` (Plan 10) when the
-/// row has one, else `<datasets_root>/<prep_job_id>`.
+/// row has one, else `<datasets_root>/<prep_job_id>` — plus every training
+/// run's folder (recorded, or `<training root>/<run id>`), which counts as
+/// another owner's folder.
 struct WorkFolders {
     /// This dataset's, when it exists and passes every rule.
     own: Option<PathBuf>,
@@ -263,6 +270,7 @@ impl WorkFolders {
         outputs: Option<&Path>,
         models: Option<&Path>,
         source_dirs: &[PathBuf],
+        training_root: &Path,
     ) -> Self {
         let derived = |d: &Dataset| -> Option<PathBuf> {
             let root = datasets_root?;
@@ -286,6 +294,24 @@ impl WorkFolders {
                 FolderState::Resolved(dir) => others.push(dir),
                 FolderState::Gone => {}
                 FolderState::Unresolvable => unresolved.push(path.to_path_buf()),
+            }
+        }
+        // Training run folders are foreign to every dataset, exactly like
+        // another dataset's recorded work folder: never this dataset's own,
+        // never walked into, nothing inside them deleted.
+        for run in &snap.runs {
+            if run.work_dir.trim().is_empty() && training_root.as_os_str().is_empty() {
+                continue;
+            }
+            let path = crate::training::location::run_folder(run, training_root);
+            if !path.is_absolute() {
+                unresolved.push(path);
+                continue;
+            }
+            match classify_folder(std::fs::canonicalize(&path)) {
+                FolderState::Resolved(dir) => others.push(dir),
+                FolderState::Gone => {}
+                FolderState::Unresolvable => unresolved.push(path),
             }
         }
         let own = match snap.dataset.work_dir.as_deref() {
@@ -350,6 +376,7 @@ impl Guard {
             outputs.as_deref(),
             models,
             &source_dirs,
+            &roots.training,
         );
         let foreign_dirs: Vec<PathBuf> =
             other_exports.iter().cloned().chain(works.others).collect();

@@ -115,6 +115,7 @@ fn guard_build_timing() {
         frames,
         others,
         foreign_frames,
+        runs: Vec::new(),
     };
 
     for (label, staying) in [
@@ -130,6 +131,7 @@ fn guard_build_timing() {
                 outputs: outputs.clone(),
                 datasets: datasets_root.clone(),
                 models: tmp.path().join("models"),
+                training: tmp.path().join("training"),
             },
             &snap,
         )
