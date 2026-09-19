@@ -2293,6 +2293,9 @@ export interface StartRunBody {
   preset: TrainingPreset;
   hyperparams: TrainingHyperparams;
   sample_prompts: string[];
+  /** "Store run in": the run gets `<data_dir>\<run_id>`. Omit for the
+   *  default training folder (Settings → Data locations). */
+  data_dir?: string;
 }
 
 export const trainerStatus = () => invoke<TrainerStatus>("training_status");

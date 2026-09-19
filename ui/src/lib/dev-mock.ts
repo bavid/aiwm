@@ -2124,7 +2124,10 @@ export function installDevMock(): void {
       case "start_training_run": {
         const body = (a.body ?? {}) as AnyRecord;
         const prompts = (body.sample_prompts as string[]) ?? [];
-        const run = mkTrainingRun(`tr-${seq++}`, String(body.name ?? "Training run"), {
+        const id = `tr-${seq++}`;
+        const dataDir = typeof body.data_dir === "string" ? body.data_dir.trim() : "";
+        const run = mkTrainingRun(id, String(body.name ?? "Training run"), {
+          ...(dataDir ? { work_dir: `${dataDir.replace(/[\\/]+$/, "")}\\${id}` } : {}),
           profile_family: "flux2-klein-4b",
           target_model_id: String(body.target_model_id ?? ""),
           dataset_id: String(body.dataset_id ?? ""),

@@ -94,6 +94,10 @@ pub struct StartRequest {
     pub preset: Preset,
     pub hyperparams: Hyperparams,
     pub sample_prompts: Vec<String>,
+    /// The folder to store this run in — the run gets `<data_dir>/<run_id>`.
+    /// `None` is the runner's own root ([`crate::AppPaths::training_dir`]).
+    /// The caller has validated it (see [`crate::training::location`]).
+    pub data_dir: Option<PathBuf>,
 }
 
 pub use crate::cleanup::FreeSpaceProbe;
@@ -225,15 +229,29 @@ impl Runner {
             .map_or(TRAINER_IMAGE, |cmd| cmd.image.as_str())
     }
 
-    /// `<data>/training/<run_id>` — the run's config, log, PID file and
-    /// ai-toolkit output tree. Never deleted automatically, not even on
-    /// cancel: the checkpoints in it are the user's.
-    pub fn work_dir(&self, run_id: &str) -> PathBuf {
+    /// `<runner root>/<run_id>` — where a run lives when it was started
+    /// without a chosen folder. Only a *default*: everything that touches an
+    /// existing run goes through [`Self::run_dir`].
+    pub fn default_work_dir(&self, run_id: &str) -> PathBuf {
         self.data_dir.join(run_id)
     }
 
-    pub fn log_path(&self, run_id: &str) -> PathBuf {
-        self.work_dir(run_id).join(LOG_FILE)
+    /// The folder this run actually lives in — its config, log, PID file and
+    /// ai-toolkit output tree: the `work_dir` recorded on the row, which is
+    /// `<chosen folder>/<run_id>` for a run started with "Store run in" and
+    /// keeps pointing at the old place after the default training folder
+    /// moves. The derived [`Self::default_work_dir`] is only the fallback for
+    /// a row whose stored value is empty — the id exists only once the row
+    /// does, so [`Self::create_and_start`] inserts `""` and records the real
+    /// folder right after; a crash between the two leaves such a row, and
+    /// nothing else can. Never deleted automatically, not even on cancel: the
+    /// checkpoints in it are the user's.
+    pub fn run_dir(&self, run: &TrainingRun) -> PathBuf {
+        crate::training::location::run_folder(run, &self.data_dir)
+    }
+
+    pub fn log_path(&self, run: &TrainingRun) -> PathBuf {
+        self.run_dir(run).join(LOG_FILE)
     }
 
     // ---------------------------------------------------------------- start
@@ -251,6 +269,7 @@ impl Runner {
                 Some(req.dataset_id.as_str()),
                 req.hyperparams,
                 req.sample_prompts.clone(),
+                req.data_dir.as_deref().unwrap_or(&self.data_dir),
             )
             .await?;
 
@@ -277,11 +296,17 @@ impl Runner {
                 work_dir: String::new(),
             })
             .await?;
-        let work_dir = self.work_dir(&run.id);
+        let work_dir = req
+            .data_dir
+            .as_deref()
+            .unwrap_or(&self.data_dir)
+            .join(&run.id);
+        let work_dir = work_dir.to_string_lossy().into_owned();
         self.db
             .training_runs()
-            .set_work_dir(&run.id, &work_dir.to_string_lossy())
+            .set_work_dir(&run.id, &work_dir)
             .await?;
+        let run = TrainingRun { work_dir, ..run };
 
         self.launch_into(&run, &prep, RunState::Preparing, RunState::Running)
             .await?;
@@ -433,35 +458,33 @@ impl Runner {
 
     async fn recover_run(&self, run: &TrainingRun) -> Result<()> {
         // A `finishing` row never has a process — only an unfinished import.
-        if run.state != RunState::Finishing
-            && self.process_alive(run, &self.work_dir(&run.id)).await
-        {
+        if run.state != RunState::Finishing && self.process_alive(run, &self.run_dir(run)).await {
             let reserve = find_for_family(&run.profile_family)
                 .map(|p| p.vram.reserve_mb)
                 .unwrap_or_default();
             self.adapter.load_model(TRAINING_MODEL_ID, reserve).await?;
             self.adapter.mark_alive(&run.id, reserve);
             self.scheduler.pin(TRAINING_MODEL_ID);
-            self.seed_cursor_at_the_tail(&run.id).await;
+            self.seed_cursor_at_the_tail(run).await;
             tracing::info!(run = %run.id, "reattached to a training run that survived the restart");
             return Ok(());
         }
 
         tracing::warn!(run = %run.id, "a training run did not survive the restart");
-        self.seed_cursor_at_the_tail(&run.id).await;
+        self.seed_cursor_at_the_tail(run).await;
         self.reconcile_dead(run).await
     }
 
     /// Start reading this run's log near its end. A multi-hour run's log is
     /// megabytes of redrawn `tqdm` bars, but the markers that decide its fate
     /// are all in the last chunk.
-    async fn seed_cursor_at_the_tail(&self, run_id: &str) {
-        let len = tokio::fs::metadata(self.log_path(run_id))
+    async fn seed_cursor_at_the_tail(&self, run: &TrainingRun) {
+        let len = tokio::fs::metadata(self.log_path(run))
             .await
             .map(|m| m.len())
             .unwrap_or(0);
         self.set_poll_state(
-            run_id,
+            &run.id,
             PollState {
                 offset: len.saturating_sub(RECOVERY_TAIL_BYTES),
                 ..PollState::default()
@@ -483,7 +506,7 @@ impl Runner {
 
     /// Render the config, spawn the detached trainer, take the reservation.
     async fn launch(&self, run: &TrainingRun, prep: &Prepared) -> Result<()> {
-        let work_dir = self.work_dir(&run.id);
+        let work_dir = self.run_dir(run);
         tokio::fs::create_dir_all(&work_dir).await.map_err(|e| {
             training_err(format!(
                 "cannot create the training folder {}: {e}",
@@ -509,7 +532,7 @@ impl Runner {
             .await
             .map_err(|e| training_err(format!("cannot write the training config: {e}")))?;
 
-        let log = self.log_path(&run.id);
+        let log = self.log_path(run);
         // Everything already in the log belongs to an earlier attempt: a stale
         // `Error running job:` from the run we are resuming past must not fail
         // the relaunch the moment it starts.
@@ -680,7 +703,7 @@ impl Runner {
     /// kill, `Ok(false)` when the process had already gone — see the module
     /// docs on why that distinction cannot come from `kill_tree` itself.
     async fn stop_process(&self, run: &TrainingRun) -> Result<bool> {
-        let work_dir = self.work_dir(&run.id);
+        let work_dir = self.run_dir(run);
         if !self.process_alive(run, &work_dir).await {
             return Ok(false);
         }

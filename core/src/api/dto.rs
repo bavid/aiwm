@@ -440,6 +440,22 @@ pub struct StartRunDto {
     pub hyperparams: crate::training::config::Hyperparams,
     #[serde(default)]
     pub sample_prompts: Vec<String>,
+    /// "Store run in": the folder the run's own folder `<data_dir>/<run_id>`
+    /// is created in. Omitted or blank means the default training folder —
+    /// unlike the Settings paths, leaving it out is the normal case here.
+    #[serde(default)]
+    pub data_dir: Option<String>,
+}
+
+impl StartRunDto {
+    /// The chosen folder, `None` when omitted or blank.
+    pub fn chosen_data_dir(&self) -> Option<std::path::PathBuf> {
+        self.data_dir
+            .as_deref()
+            .map(str::trim)
+            .filter(|d| !d.is_empty())
+            .map(std::path::PathBuf::from)
+    }
 }
 
 /// `GET /training/runs/{id}` — the stored row plus the two things that live

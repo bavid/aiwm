@@ -306,6 +306,7 @@ fn start_request(name: &str, target: &str, dataset: &str, steps: u32) -> StartRe
             ..Hyperparams::default()
         },
         sample_prompts: vec!["tgr_xy a test".into()],
+        data_dir: None,
     }
 }
 
@@ -314,12 +315,12 @@ fn pid_of(run: &TrainingRun) -> u32 {
 }
 
 fn read_log(runner: &Runner, id: &str) -> String {
-    std::fs::read_to_string(runner.log_path(id)).unwrap_or_default()
+    std::fs::read_to_string(runner.default_work_dir(id).join("train.log")).unwrap_or_default()
 }
 
 /// The run's ai-toolkit output directory: `<work_dir>/output/<name>`.
 fn out_dir(runner: &Runner, run: &TrainingRun) -> PathBuf {
-    training_folder(&runner.work_dir(&run.id)).join(&run.name)
+    training_folder(&runner.default_work_dir(&run.id)).join(&run.name)
 }
 
 /// The `_<step:09>` suffix of a checkpoint file name.

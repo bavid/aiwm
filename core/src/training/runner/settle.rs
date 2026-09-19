@@ -84,7 +84,7 @@ impl Runner {
         // recovery still settles such a row — there the absence *is* the
         // evidence, because nothing survived the restart.
         if run.pid.is_none()
-            && read_pid_file(&self.work_dir(&run.id))
+            && read_pid_file(&self.run_dir(run))
                 .await
                 .ok()
                 .flatten()
@@ -108,8 +108,8 @@ impl Runner {
         //
         // A `finishing` row is exempt: it has no process left, only an import
         // that did not get to run.
-        let alive = run.state != RunState::Finishing
-            && self.process_alive(run, &self.work_dir(&run.id)).await;
+        let alive =
+            run.state != RunState::Finishing && self.process_alive(run, &self.run_dir(run)).await;
 
         let seen = self.observe(run).await?;
         if alive {
@@ -124,11 +124,11 @@ impl Runner {
     /// Shared by the poller, startup recovery and the pause/cancel paths, so
     /// all three judge a dead process from exactly the same evidence.
     pub(super) async fn observe(&self, run: &TrainingRun) -> Result<Observation> {
-        let work_dir = self.work_dir(&run.id);
+        let work_dir = self.run_dir(run);
         let mut poll = self.poll_state(&run.id);
         let mut state = run.state;
 
-        let (chunk, offset) = tail_log(&self.log_path(&run.id), poll.offset).await?;
+        let (chunk, offset) = tail_log(&self.log_path(run), poll.offset).await?;
         poll.offset = offset;
 
         let mut latest = None;

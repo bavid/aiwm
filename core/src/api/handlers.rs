@@ -873,6 +873,21 @@ pub async fn start_training_run(app: &App, body: StartRunDto) -> Result<crate::d
     check_trainer_online(app)?;
     let trigger_word = check_trigger_word(&body.trigger_word)?;
     let sample_prompts = check_sample_prompts(&body.sample_prompts)?;
+    let data_dir = body.chosen_data_dir();
+    if let Some(dir) = &data_dir {
+        let datasets = app.db.datasets().list().await?;
+        let runs = app.db.training_runs().list().await?;
+        crate::training::location::check_run_data_dir(
+            dir,
+            &crate::training::location::RunLocationContext {
+                store: &app.config.store_path,
+                datasets: &datasets,
+                datasets_root: &app.paths.datasets_dir(),
+                runs: &runs,
+                training_root: &app.paths.training_dir(),
+            },
+        )?;
+    }
 
     app.training_runner
         .create_and_start(crate::training::runner::StartRequest {
@@ -883,20 +898,16 @@ pub async fn start_training_run(app: &App, body: StartRunDto) -> Result<crate::d
             preset: body.preset,
             hyperparams: body.hyperparams,
             sample_prompts,
+            data_dir,
         })
         .await
 }
 
-/// The directory a run's output actually lives in: the path recorded on the
-/// row (a run started before the data folder moved keeps its own), falling
-/// back to the runner's derived path for a row that never got one.
+/// The directory a run's output actually lives in — the runner's own
+/// [`crate::training::runner::Runner::run_dir`], so samples, the log tail,
+/// the detail view and purge follow exactly the folder the runner uses.
 fn run_work_dir(app: &App, run: &crate::db::TrainingRun) -> PathBuf {
-    let recorded = run.work_dir.trim();
-    if recorded.is_empty() {
-        app.training_runner.work_dir(&run.id)
-    } else {
-        PathBuf::from(recorded)
-    }
+    app.training_runner.run_dir(run)
 }
 
 /// The sample images ai-toolkit wrote alongside the latest checkpoint,
@@ -3277,5 +3288,197 @@ mod tests {
             model_kind_hint: None,
             base_model_family: None,
         }
+    }
+
+    // --------------------------------------- per-run location (Plan 10)
+
+    fn start_body(data_dir: Option<&std::path::Path>) -> StartRunDto {
+        StartRunDto {
+            name: "lora".into(),
+            target_model_id: "m".into(),
+            dataset_id: "d".into(),
+            trigger_word: "tgr_xy".into(),
+            preset: crate::db::Preset::Fast,
+            hyperparams: crate::training::config::Hyperparams::default(),
+            sample_prompts: vec!["tgr_xy a cat".into()],
+            data_dir: data_dir.map(|d| d.to_string_lossy().into_owned()),
+        }
+    }
+
+    async fn loaded_app() -> (App, tempfile::TempDir) {
+        let tmp = tempfile::tempdir().unwrap();
+        let app = App::load(crate::AppPaths::rooted(tmp.path()))
+            .await
+            .unwrap();
+        (app, tmp)
+    }
+
+    fn new_run(work_dir: &std::path::Path) -> crate::db::NewTrainingRun {
+        crate::db::NewTrainingRun {
+            name: "Earlier".into(),
+            profile_family: "flux2-klein-4b".into(),
+            target_model_id: None,
+            dataset_id: None,
+            data_kind: crate::db::DatasetMode::Frames,
+            trigger_word: "tgr_xy".into(),
+            preset: crate::db::Preset::Fast,
+            hyperparams_json: "{}".into(),
+            sample_prompts_json: "[]".into(),
+            work_dir: work_dir.to_string_lossy().into_owned(),
+        }
+    }
+
+    /// `data_dir` refused before anything is created, with `needle` in the
+    /// message.
+    async fn assert_start_refused(app: &App, data_dir: &std::path::Path, needle: &str) {
+        let err = start_training_run(app, start_body(Some(data_dir)))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, CoreError::Config(_)), "{err}");
+        assert!(err.to_string().contains(needle), "{needle:?} in: {err}");
+        assert!(
+            !err.to_string().contains("not installed"),
+            "refused by the folder check, not the runner: {err}"
+        );
+    }
+
+    #[test]
+    fn a_blank_or_missing_data_dir_means_the_default_folder() {
+        let body: StartRunDto = serde_json::from_value(serde_json::json!({
+            "name": "l", "target_model_id": "m", "dataset_id": "d",
+            "trigger_word": "t", "preset": "fast"
+        }))
+        .unwrap();
+        assert_eq!(body.chosen_data_dir(), None);
+        let blank: StartRunDto = serde_json::from_value(serde_json::json!({
+            "name": "l", "target_model_id": "m", "dataset_id": "d",
+            "trigger_word": "t", "preset": "fast", "data_dir": "  "
+        }))
+        .unwrap();
+        assert_eq!(blank.chosen_data_dir(), None);
+        let set: StartRunDto = serde_json::from_value(serde_json::json!({
+            "name": "l", "target_model_id": "m", "dataset_id": "d",
+            "trigger_word": "t", "preset": "fast", "data_dir": " E:\\runs "
+        }))
+        .unwrap();
+        assert_eq!(set.chosen_data_dir(), Some(PathBuf::from("E:\\runs")));
+    }
+
+    #[tokio::test]
+    async fn start_run_refuses_a_relative_data_dir() {
+        let (app, _tmp) = loaded_app().await;
+        assert_start_refused(&app, std::path::Path::new("runs\\here"), "absolute").await;
+    }
+
+    #[tokio::test]
+    async fn start_run_refuses_a_whole_drive() {
+        let (app, tmp) = loaded_app().await;
+        let drive = tmp.path().ancestors().last().unwrap().to_path_buf();
+        assert_start_refused(&app, &drive, "whole drive").await;
+    }
+
+    #[tokio::test]
+    async fn start_run_refuses_a_data_dir_in_the_model_store() {
+        let (app, _tmp) = loaded_app().await;
+        let store = app.config.store_path.clone();
+        assert_start_refused(&app, &store, "model store").await;
+        assert_start_refused(&app, &store.join("runs"), "model store").await;
+    }
+
+    #[tokio::test]
+    async fn start_run_refuses_a_data_dir_overlapping_a_dataset() {
+        let (app, tmp) = loaded_app().await;
+        let media = tmp.path().join("media");
+        let source = media.join("src");
+        let job = app
+            .db
+            .jobs()
+            .insert(NewJob::new("dataset_prep"))
+            .await
+            .unwrap();
+        let work = tmp.path().join("frames").join(&job.id);
+        app.db
+            .datasets()
+            .create(crate::db::NewDataset {
+                name: "Neighbour".into(),
+                mode: crate::db::DatasetMode::Frames,
+                source_root: source.to_string_lossy().into_owned(),
+                prep_job_id: Some(job.id.clone()),
+                work_dir: Some(work.to_string_lossy().into_owned()),
+            })
+            .await
+            .unwrap();
+        // Inside, equal to, or holding the source; inside the work folder.
+        for dir in [
+            source.join("runs"),
+            source.clone(),
+            media,
+            work.join("runs"),
+        ] {
+            assert_start_refused(&app, &dir, "Neighbour").await;
+        }
+    }
+
+    #[tokio::test]
+    async fn start_run_refuses_a_data_dir_inside_another_runs_folder() {
+        let (app, tmp) = loaded_app().await;
+        let earlier = tmp.path().join("runs").join("earlier-run");
+        app.db
+            .training_runs()
+            .create(new_run(&earlier))
+            .await
+            .unwrap();
+        assert_start_refused(&app, &earlier, "Earlier").await;
+        assert_start_refused(&app, &earlier.join("nested"), "Earlier").await;
+    }
+
+    /// A folder that breaks no rule — holding other runs' folders is what
+    /// the default root does — reaches the runner, which then refuses for
+    /// its own reason (no trainer in a throwaway app).
+    #[tokio::test]
+    async fn start_run_accepts_a_folder_that_breaks_no_rule() {
+        let (app, tmp) = loaded_app().await;
+        let runs = tmp.path().join("runs");
+        app.db
+            .training_runs()
+            .create(new_run(&runs.join("earlier-run")))
+            .await
+            .unwrap();
+        let err = start_training_run(&app, start_body(Some(&runs)))
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("not installed"), "{err}");
+    }
+
+    /// Purge removes the folder recorded on the row — and nothing at the
+    /// derived default path, which may belong to nobody.
+    #[tokio::test]
+    async fn purging_a_run_deletes_its_stored_folder_only() {
+        let (app, tmp) = loaded_app().await;
+        let stored = tmp.path().join("elsewhere").join("run");
+        std::fs::create_dir_all(&stored).unwrap();
+        std::fs::write(stored.join("train.log"), b"log").unwrap();
+        let run = app
+            .db
+            .training_runs()
+            .create(new_run(&stored))
+            .await
+            .unwrap();
+        let derived = app.training_runner.default_work_dir(&run.id);
+        std::fs::create_dir_all(&derived).unwrap();
+        std::fs::write(derived.join("keep.txt"), b"keep").unwrap();
+        app.db
+            .training_runs()
+            .set_state(&run.id, crate::db::RunState::Cancelled)
+            .await
+            .unwrap();
+
+        delete_training_run(&app, &run.id, true).await.unwrap();
+
+        assert!(!stored.exists(), "the stored folder is purged");
+        assert!(
+            derived.join("keep.txt").exists(),
+            "the derived path is untouched"
+        );
     }
 }

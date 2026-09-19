@@ -168,33 +168,45 @@ pub(crate) fn check_against_datasets(
     datasets: &[crate::db::Dataset],
     datasets_root: &Path,
 ) -> Result<()> {
+    match dataset_conflict(data_dir, datasets, datasets_root) {
+        Some((dataset, why)) => Err(conflict(data_dir, &dataset, &why)),
+        None => Ok(()),
+    }
+}
+
+/// The first dataset a folder chosen to store app data in would collide
+/// with, by the rules of [`check_against_datasets`]: `(dataset name, why)`,
+/// the reason phrased to follow "it". Shared with the training-run location
+/// check, which words its own message around it.
+pub(crate) fn dataset_conflict(
+    data_dir: &Path,
+    datasets: &[crate::db::Dataset],
+    datasets_root: &Path,
+) -> Option<(String, String)> {
     for d in datasets {
         let source = Path::new(&d.source_root);
         if !d.source_root.is_empty() && same_or_inside(data_dir, source) {
-            return Err(conflict(
-                data_dir,
-                &d.name,
-                &format!("lies inside its source folder {}", source.display()),
+            return Some((
+                d.name.clone(),
+                format!("lies inside its source folder {}", source.display()),
             ));
         }
         if !d.source_root.is_empty() && same_or_inside(source, data_dir) {
-            return Err(conflict(
-                data_dir,
-                &d.name,
-                &format!("holds its source folder {}", source.display()),
+            return Some((
+                d.name.clone(),
+                format!("holds its source folder {}", source.display()),
             ));
         }
         if let Some(work) = work_folder_of(d, datasets_root) {
             if same_or_inside(data_dir, &work) {
-                return Err(conflict(
-                    data_dir,
-                    &d.name,
-                    &format!("lies inside its work folder {}", work.display()),
+                return Some((
+                    d.name.clone(),
+                    format!("lies inside its work folder {}", work.display()),
                 ));
             }
         }
     }
-    Ok(())
+    None
 }
 
 /// A dataset's work folder as the guard sees it (existing or not): the
