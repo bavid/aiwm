@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
+import { HelpHint } from "../../components/HelpHint";
 import { useAbout, useCivitaiStatus, useLocalApiStatus, useRegistryStatus } from "../../lib/hooks";
 import {
   cleanupOutputs,
@@ -110,6 +111,8 @@ export function Settings() {
   const [cleanupResult, setCleanupResult] = useState<SweepResult | null>(null);
   const [cleanupError, setCleanupError] = useState<string | null>(null);
   const [revealError, setRevealError] = useState<string | null>(null);
+  const ids = useId();
+  const id = (name: string) => `${ids}-${name}`;
 
   useEffect(() => {
     getConfig()
@@ -218,9 +221,11 @@ export function Settings() {
             <section className="card set-group">
               <header className="card__head">
                 <h2>Appearance</h2>
-                <span className="card__sub">applies instantly</span>
+                <span className="card__sub">
+                  applies instantly <HelpHint area="settings" setting="theme" describes={id("theme")} />
+                </span>
               </header>
-              <div className="segmented" role="radiogroup" aria-label="Theme">
+              <div id={id("theme")} className="segmented" role="radiogroup" aria-label="Theme">
                 {THEME_OPTIONS.map((o) => (
                   <button
                     key={o.value}
@@ -283,9 +288,15 @@ export function Settings() {
                   have old outputs pruned automatically; both at <code>0</code> keeps
                   everything forever (the previous behaviour).
                 </p>
-                <label className="set-field">
-                  <span>Delete outputs older than (days, 0 = no age limit)</span>
+                <div className="set-field">
+                  <span>
+                    <label htmlFor={id("age")}>
+                      Delete outputs older than (days, 0 = no age limit)
+                    </label>
+                    <HelpHint area="settings" setting="retention-age" describes={id("age")} />
+                  </span>
                   <input
+                    id={id("age")}
                     type="number"
                     min={0}
                     step={1}
@@ -294,10 +305,14 @@ export function Settings() {
                       patchRetention({ max_age_days: Math.max(0, Number(e.target.value) || 0) })
                     }
                   />
-                </label>
-                <label className="set-field">
-                  <span>Keep total size under (MB, 0 = no size limit)</span>
+                </div>
+                <div className="set-field">
+                  <span>
+                    <label htmlFor={id("size")}>Keep total size under (MB, 0 = no size limit)</label>
+                    <HelpHint area="settings" setting="retention-size" describes={id("size")} />
+                  </span>
                   <input
+                    id={id("size")}
                     type="number"
                     min={0}
                     step={100}
@@ -306,24 +321,27 @@ export function Settings() {
                       patchRetention({ max_total_mb: Math.max(0, Number(e.target.value) || 0) })
                     }
                   />
-                </label>
+                </div>
                 {dirty && (
                   <p className="muted">Save below before "Clean up now" uses the new limits.</p>
                 )}
                 <div className="set-cleanup">
                   <button
+                    id={id("cleanup")}
                     type="button"
                     className="set-cleanup__go"
                     disabled={cleaning || !retentionActive}
-                    title={
-                      retentionActive
-                        ? "Delete files the saved policy no longer allows, right now"
-                        : "Set an age or size limit above (and save) to enable this"
-                    }
+                    aria-describedby={retentionActive ? undefined : id("cleanup-why")}
                     onClick={handleCleanup}
                   >
                     {cleaning ? "Cleaning up…" : "Clean up now"}
                   </button>
+                  {!retentionActive && (
+                    <span id={id("cleanup-why")} className="visually-hidden">
+                      Set an age or size limit above (and save) to enable this.
+                    </span>
+                  )}
+                  <HelpHint area="settings" setting="clean-up-now" describes={id("cleanup")} />
                   {cleanupResult && (
                     <span className="muted numeric">
                       {cleanupResult.deleted_files === 0
@@ -346,19 +364,23 @@ export function Settings() {
                   <h2>Scheduler</h2>
                   <span className="card__sub">restart to apply</span>
                 </header>
-                <label className="set-field set-field--inline">
+                <div className="set-field set-field--inline">
                   <span>
-                    VRAM budget (MB) — <code>0</code> auto-detects the GPU
-                    {about ? ` · now planning against ${about.vram_budget_mb} MB` : ""}
+                    <label htmlFor={id("budget")}>
+                      VRAM budget (MB) — <code>0</code> auto-detects the GPU
+                      {about ? ` · now planning against ${about.vram_budget_mb} MB` : ""}
+                    </label>
+                    <HelpHint area="settings" setting="vram-budget" describes={id("budget")} />
                   </span>
                   <input
+                    id={id("budget")}
                     type="number"
                     min={0}
                     step={512}
                     value={form.vram_budget_mb}
                     onChange={(e) => patch({ vram_budget_mb: numeric(e.target.value) })}
                   />
-                </label>
+                </div>
               </section>
 
               <section className="card set-group">
@@ -366,13 +388,17 @@ export function Settings() {
                   <h2>Model selection (Auto)</h2>
                   <span className="card__sub">restart to apply</span>
                 </header>
-                <label className="set-field">
+                <div className="set-field">
                   <span>
-                    When a job asks for <code>Auto</code>, rank the role's models by their
-                    benchmark (run “Test” on the Models tab) — a model that fits your VRAM
-                    budget always wins first. No benchmark data → most-recently-used.
+                    <label htmlFor={id("auto")}>
+                      When a job asks for <code>Auto</code>, rank the role's models by their
+                      benchmark (run “Test” on the Models tab) — a model that fits your VRAM
+                      budget always wins first. No benchmark data → most-recently-used.
+                    </label>
+                    <HelpHint area="settings" setting="auto-preference" describes={id("auto")} />
                   </span>
                   <select
+                    id={id("auto")}
                     value={form.models.auto_preference}
                     onChange={(e) =>
                       patchModels({ auto_preference: e.target.value as AutoPreference })
@@ -384,7 +410,7 @@ export function Settings() {
                       </option>
                     ))}
                   </select>
-                </label>
+                </div>
               </section>
             </>
           )}
@@ -397,75 +423,95 @@ export function Settings() {
                   <span className="card__sub">applies on the next model load</span>
                 </header>
                 <div className="set-grid">
-                  <label className="set-field set-field--inline">
+                  <div className="set-field set-field--inline">
                     <span>
-                      GPU layers (<code>-ngl</code>) — 999 offloads everything
+                      <label htmlFor={id("ngl")}>
+                        GPU layers (<code>-ngl</code>) — 999 offloads everything
+                      </label>
+                      <HelpHint area="settings" setting="gpu-layers" describes={id("ngl")} />
                     </span>
                     <input
+                      id={id("ngl")}
                       type="number"
                       min={0}
                       value={form.llama.gpu_layers}
                       onChange={(e) => patchLlama({ gpu_layers: numeric(e.target.value) })}
                     />
-                  </label>
-                  <label className="set-field set-field--inline">
+                  </div>
+                  <div className="set-field set-field--inline">
                     <span>
-                      Context size (<code>-c</code>) — <code>0</code> caps the model's
-                      trained context
+                      <label htmlFor={id("ctx")}>
+                        Context size (<code>-c</code>) — <code>0</code> caps the model's
+                        trained context
+                      </label>
+                      <HelpHint area="settings" setting="ctx-size" describes={id("ctx")} />
                     </span>
                     <input
+                      id={id("ctx")}
                       type="number"
                       min={0}
                       step={1024}
                       value={form.llama.ctx_size}
                       onChange={(e) => patchLlama({ ctx_size: numeric(e.target.value) })}
                     />
-                  </label>
-                  <label className="set-field set-field--inline">
-                    <span>Load timeout (seconds)</span>
+                  </div>
+                  <div className="set-field set-field--inline">
+                    <span>
+                      <label htmlFor={id("timeout")}>Load timeout (seconds)</label>
+                      <HelpHint area="settings" setting="load-timeout" describes={id("timeout")} />
+                    </span>
                     <input
+                      id={id("timeout")}
                       type="number"
                       min={10}
                       max={3600}
                       value={form.llama.load_timeout_secs}
                       onChange={(e) => patchLlama({ load_timeout_secs: numeric(e.target.value) })}
                     />
-                  </label>
+                  </div>
                 </div>
-                <label className="set-toggle">
+                <div className="set-toggle">
                   <input
+                    id={id("flash")}
                     type="checkbox"
                     checked={form.llama.flash_attention}
                     onChange={(e) => patchLlama({ flash_attention: e.target.checked })}
                   />
-                  <span>
+                  <label htmlFor={id("flash")}>
                     <strong>Flash attention</strong> — <code>--flash-attn on</code>
-                  </span>
-                </label>
-                <label className="set-toggle">
+                  </label>
+                  <HelpHint area="settings" setting="flash-attention" describes={id("flash")} />
+                </div>
+                <div className="set-toggle">
                   <input
+                    id={id("jinja")}
                     type="checkbox"
                     checked={form.llama.jinja}
                     onChange={(e) => patchLlama({ jinja: e.target.checked })}
                   />
-                  <span>
+                  <label htmlFor={id("jinja")}>
                     <strong>Jinja chat template</strong> — <code>--jinja</code>. Needed for
                     tool calls (agents); correct for chat. Turn off only if a model's
                     embedded template misbehaves.
-                  </span>
-                </label>
-                <label className="set-field">
+                  </label>
+                  <HelpHint area="settings" setting="jinja" describes={id("jinja")} />
+                </div>
+                <div className="set-field">
                   <span>
-                    Chat template override — <code>--chat-template</code>, e.g.{" "}
-                    <code>qwen2.5-coder</code>. Empty = the GGUF's own.
+                    <label htmlFor={id("template")}>
+                      Chat template override — <code>--chat-template</code>, e.g.{" "}
+                      <code>qwen2.5-coder</code>. Empty = the GGUF's own.
+                    </label>
+                    <HelpHint area="settings" setting="chat-template" describes={id("template")} />
                   </span>
                   <input
+                    id={id("template")}
                     type="text"
                     value={form.llama.chat_template}
                     spellCheck={false}
                     onChange={(e) => patchLlama({ chat_template: e.target.value })}
                   />
-                </label>
+                </div>
               </section>
 
               <section className="card set-group">
@@ -475,11 +521,15 @@ export function Settings() {
                     applies live — restarts a running server for you
                   </span>
                 </header>
-                <label className="set-field">
+                <div className="set-field">
                   <span>
-                    VRAM mode — the <code>--*vram</code> flag ComfyUI starts with
+                    <label htmlFor={id("vram-mode")}>
+                      VRAM mode — the <code>--*vram</code> flag ComfyUI starts with
+                    </label>
+                    <HelpHint area="settings" setting="vram-mode" describes={id("vram-mode")} />
                   </span>
                   <select
+                    id={id("vram-mode")}
                     value={form.comfyui.vram_mode}
                     onChange={(e) => patchComfy({ vram_mode: e.target.value })}
                   >
@@ -489,14 +539,18 @@ export function Settings() {
                       </option>
                     ))}
                   </select>
-                </label>
+                </div>
                 <div className="set-grid">
-                  <label className="set-field set-field--inline">
+                  <div className="set-field set-field--inline">
                     <span>
-                      Reserve VRAM (GB) — <code>--reserve-vram</code>, kept free for the
-                      OS. <code>0</code> = off. Helps avoid OOM on long video clips.
+                      <label htmlFor={id("reserve")}>
+                        Reserve VRAM (GB) — <code>--reserve-vram</code>, kept free for the
+                        OS. <code>0</code> = off. Helps avoid OOM on long video clips.
+                      </label>
+                      <HelpHint area="settings" setting="reserve-vram" describes={id("reserve")} />
                     </span>
                     <input
+                      id={id("reserve")}
                       type="number"
                       min={0}
                       max={8}
@@ -506,20 +560,24 @@ export function Settings() {
                         patchComfy({ reserve_vram_mb: Math.round(numeric(e.target.value, true) * 1024) })
                       }
                     />
-                  </label>
+                  </div>
                 </div>
-                <label className="set-field">
+                <div className="set-field">
                   <span>
-                    Extra args — appended verbatim (power users), e.g.{" "}
-                    <code>--fast --use-sage-attention</code>
+                    <label htmlFor={id("extra")}>
+                      Extra args — appended verbatim (power users), e.g.{" "}
+                      <code>--fast --use-sage-attention</code>
+                    </label>
+                    <HelpHint area="settings" setting="extra-args" describes={id("extra")} />
                   </span>
                   <input
+                    id={id("extra")}
                     type="text"
                     value={form.comfyui.extra_args}
                     spellCheck={false}
                     onChange={(e) => patchComfy({ extra_args: e.target.value })}
                   />
-                </label>
+                </div>
               </section>
             </>
           )}
@@ -537,17 +595,19 @@ export function Settings() {
                   <h2>Network</h2>
                   <span className="card__sub">applies instantly</span>
                 </header>
-                <label className="set-toggle">
+                <div className="set-toggle">
                   <input
+                    id={id("offline")}
                     type="checkbox"
                     checked={form.offline_mode}
                     onChange={(e) => patch({ offline_mode: e.target.checked })}
                   />
-                  <span>
+                  <label htmlFor={id("offline")}>
                     <strong>Offline mode</strong> — block every outbound network call
                     (model downloads, runtime installs).
-                  </span>
-                </label>
+                  </label>
+                  <HelpHint area="settings" setting="offline-mode" describes={id("offline")} />
+                </div>
               </section>
             </>
           )}
@@ -583,6 +643,7 @@ function HuggingFaceCard() {
   const [value, setValue] = useState("");
   const [msg, setMsg] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const tokenId = useId();
 
   const save = async (token: string) => {
     setBusy(true);
@@ -608,13 +669,17 @@ function HuggingFaceCard() {
         <h2>Hugging Face</h2>
         <span className="card__sub">restart to apply</span>
       </header>
-      <label className="set-field">
+      <div className="set-field">
         <span>
-          Access token — optional, only for <strong>gated</strong> repos or if you
-          hit the anonymous rate limit. Stored on this machine only (never in a
-          backup). Currently: <strong>{status?.token_set ? "set" : "not set"}</strong>.
+          <label htmlFor={tokenId}>
+            Access token — optional, only for <strong>gated</strong> repos or if you
+            hit the anonymous rate limit. Stored on this machine only (never in a
+            backup). Currently: <strong>{status?.token_set ? "set" : "not set"}</strong>.
+          </label>
+          <HelpHint area="settings" setting="hf-token" describes={tokenId} />
         </span>
         <input
+          id={tokenId}
           type="password"
           value={value}
           placeholder={status?.token_set ? "•••••••• (leave blank to keep)" : "hf_…"}
@@ -625,7 +690,7 @@ function HuggingFaceCard() {
             setMsg(null);
           }}
         />
-      </label>
+      </div>
       <div className="rt-setup">
         <button type="button" disabled={busy || !value.trim()} onClick={() => save(value)}>
           {busy ? "Saving…" : "Save token"}
@@ -653,6 +718,7 @@ function CivitaiCard() {
   const [value, setValue] = useState("");
   const [msg, setMsg] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const keyId = useId();
 
   const save = async (token: string) => {
     setBusy(true);
@@ -678,13 +744,17 @@ function CivitaiCard() {
         <h2>Civitai</h2>
         <span className="card__sub">restart to apply</span>
       </header>
-      <label className="set-field">
+      <div className="set-field">
         <span>
-          API key — optional, only for <strong>gated/early-access</strong> content or if you
-          hit the anonymous rate limit. Stored on this machine only (never in a backup).
-          Currently: <strong>{status?.token_set ? "set" : "not set"}</strong>.
+          <label htmlFor={keyId}>
+            API key — optional, only for <strong>gated/early-access</strong> content or if you
+            hit the anonymous rate limit. Stored on this machine only (never in a backup).
+            Currently: <strong>{status?.token_set ? "set" : "not set"}</strong>.
+          </label>
+          <HelpHint area="settings" setting="civitai-key" describes={keyId} />
         </span>
         <input
+          id={keyId}
           type="password"
           value={value}
           placeholder={status?.token_set ? "•••••••• (leave blank to keep)" : "civitai key…"}
@@ -695,7 +765,7 @@ function CivitaiCard() {
             setMsg(null);
           }}
         />
-      </label>
+      </div>
       <div className="rt-setup">
         <button type="button" disabled={busy || !value.trim()} onClick={() => save(value)}>
           {busy ? "Saving…" : "Save token"}
@@ -722,6 +792,9 @@ function LocalApiCard() {
   const [value, setValue] = useState("");
   const [msg, setMsg] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const ids = useId();
+  const endpointId = `${ids}-endpoint`;
+  const tokenId = `${ids}-token`;
 
   const save = async (token: string) => {
     setBusy(true);
@@ -743,21 +816,33 @@ function LocalApiCard() {
         <h2>Local API</h2>
         <span className="card__sub">applies immediately</span>
       </header>
-      <label className="set-field">
+      <div className="set-field">
         <span>
-          Endpoint — point an OpenAI-compatible tool here with{" "}
-          <code>Authorization: Bearer &lt;token&gt;</code>. It forwards to whichever
-          model is currently loaded on llama.cpp; nothing loaded means a 503.
-        </span>
-        <input type="text" value={status?.endpoint ?? ""} readOnly spellCheck={false} />
-      </label>
-      <label className="set-field">
-        <span>
-          Bearer token — required; the endpoint refuses every request until one is
-          set. Stored on this machine only (never in a backup). Currently:{" "}
-          <strong>{status?.token_set ? "set" : "not set"}</strong>.
+          <label htmlFor={endpointId}>
+            Endpoint — point an OpenAI-compatible tool here with{" "}
+            <code>Authorization: Bearer &lt;token&gt;</code>. It forwards to whichever
+            model is currently loaded on llama.cpp; nothing loaded means a 503.
+          </label>
+          <HelpHint area="settings" setting="local-api" describes={endpointId} />
         </span>
         <input
+          id={endpointId}
+          type="text"
+          value={status?.endpoint ?? ""}
+          readOnly
+          spellCheck={false}
+        />
+      </div>
+      <div className="set-field">
+        <span>
+          <label htmlFor={tokenId}>
+            Bearer token — required; the endpoint refuses every request until one is
+            set. Stored on this machine only (never in a backup). Currently:{" "}
+            <strong>{status?.token_set ? "set" : "not set"}</strong>.
+          </label>
+        </span>
+        <input
+          id={tokenId}
           type="password"
           value={value}
           placeholder={status?.token_set ? "•••••••• (leave blank to keep)" : "sk-…"}
@@ -768,7 +853,7 @@ function LocalApiCard() {
             setMsg(null);
           }}
         />
-      </label>
+      </div>
       <div className="rt-setup">
         <button type="button" disabled={busy || !value.trim()} onClick={() => save(value)}>
           {busy ? "Saving…" : "Save token"}

@@ -43,11 +43,25 @@
   gap: var(--space-1);
 }
 
+/* The field's caption. Holds either plain text or (where a `?` hint sits
+   next to it) a `<label for>` and the hint, so it is a small flex row. */
 .imgform__field > span {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
   font-size: var(--text-xs);
   text-transform: uppercase;
   letter-spacing: 0.04em;
   color: var(--muted);
+}
+
+.imgform__field > span > label {
+  cursor: default;
+}
+
+.hiresfix__check label {
+  cursor: pointer;
 }
 
 .imgform__field textarea,
@@ -93,6 +107,14 @@
 .imgform__presets {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* The session picker with its `?` hint beside it. */
+.imgform__session {
+  display: flex;
+  align-items: center;
   gap: var(--space-2);
 }
 

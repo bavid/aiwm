@@ -1,3 +1,4 @@
+import { HelpHint } from "../../components/HelpHint";
 import type { Benchmark, BenchSuite } from "../../lib/ipc";
 import {
   formatLoad,
@@ -27,7 +28,7 @@ export function ResultCard({ bench, suite, modelName }: Props) {
       <div className="bench__hero">
         <p className="bench__hero-num numeric">{formatTps(bench.gen_tps)}</p>
         <p className="bench__hero-unit">
-          tok/s generated
+          tok/s generated <HelpHint area="benchmark" setting="result" />
           <em>
             {modelName} · {suite?.title ?? bench.suite ?? "quick test"}
           </em>

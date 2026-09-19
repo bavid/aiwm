@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
+import { HelpHint } from "../../components/HelpHint";
 import { PromptAssistant } from "../../components/PromptAssistant";
 import { QueueList } from "../../components/QueueList";
 import { VoiceIdentityPicker } from "../../components/VoiceIdentityPicker";
@@ -110,6 +111,13 @@ export function Voice() {
   // has no equivalent, so this only ever matters while `engine === "dia"`.
   const [voiceIdentityId, setVoiceIdentityId] = useState<string | null>(null);
   const engineReady = engine === "dia" ? diaReady : kokoroReady;
+  const ids = useId();
+  const engineGroupId = `${ids}-engine`;
+  const presetGroupId = `${ids}-presets`;
+  const voiceId = `${ids}-voice`;
+  const speedId = `${ids}-speed`;
+  const identityId = `${ids}-identity`;
+  const narratorId = `${ids}-narrator`;
 
   // Kokoro is imported far more often than Dia, so it's the sane default --
   // but if only Dia turns out to be ready (Kokoro was never imported), land
@@ -284,14 +292,22 @@ export function Voice() {
           <span className="card__sub">an off-screen voice, used a beat at a time</span>
         </header>
 
-        <div className="voice__engines" role="radiogroup" aria-label="Narration engine">
+        <div className="voice__group-head">
+          <span id={`${engineGroupId}-label`}>Narration engine</span>
+          <HelpHint area="voice" setting="engine" describes={engineGroupId} />
+        </div>
+        <div
+          id={engineGroupId}
+          className="voice__engines"
+          role="radiogroup"
+          aria-labelledby={`${engineGroupId}-label`}
+        >
           <button
             type="button"
             role="radio"
             aria-checked={engine === "kokoro"}
             className={`voice__engine ${engine === "kokoro" ? "voice__engine--on" : ""}`}
             disabled={!kokoroReady}
-            title={kokoroReady ? undefined : "Import Kokoro on the Models tab to unlock this"}
             onClick={() => selectEngine("kokoro")}
           >
             <span className="voice__engine-label">Kokoro</span>
@@ -305,7 +321,6 @@ export function Voice() {
             aria-checked={engine === "dia"}
             className={`voice__engine ${engine === "dia" ? "voice__engine--on" : ""}`}
             disabled={!diaReady}
-            title={diaReady ? undefined : "Import Dia on the Models tab to unlock this"}
             onClick={() => selectEngine("dia")}
           >
             <span className="voice__engine-label">Dia (expressive)</span>
@@ -318,20 +333,31 @@ export function Voice() {
         </div>
 
         {engine === "kokoro" && (
-          <div className="voice__presets">
+          <>
+            <div className="voice__group-head">
+              <span id={`${presetGroupId}-label`}>Mood</span>
+              <HelpHint area="voice" setting="preset" describes={presetGroupId} />
+            </div>
+            <div
+              id={presetGroupId}
+              className="voice__presets"
+              role="group"
+              aria-labelledby={`${presetGroupId}-label`}
+            >
             {PRESETS.map((p) => (
               <button
                 key={p.id}
                 type="button"
                 className={`voice__preset ${activePreset === p.id ? "voice__preset--on" : ""}`}
+                aria-pressed={activePreset === p.id}
                 onClick={() => applyPreset(p)}
-                title={p.blurb}
               >
                 <span className="voice__preset-label">{p.label}</span>
                 <span className="voice__preset-blurb">{p.blurb}</span>
               </button>
             ))}
-          </div>
+            </div>
+          </>
         )}
 
         <PromptAssistant
@@ -361,9 +387,13 @@ export function Voice() {
 
           {engine === "kokoro" ? (
             <div className="voiceform__grid">
-              <label className="voiceform__field">
-                <span>Voice (advanced)</span>
+              <div className="voiceform__field">
+                <span>
+                  <label htmlFor={voiceId}>Voice (advanced)</label>
+                  <HelpHint area="voice" setting="voice-advanced" describes={voiceId} />
+                </span>
                 <select
+                  id={voiceId}
                   value={voice}
                   onChange={(e) => {
                     setVoice(e.target.value);
@@ -376,10 +406,14 @@ export function Voice() {
                     </option>
                   ))}
                 </select>
-              </label>
-              <label className="voiceform__field">
-                <span>Speed — {speed.toFixed(2)}×</span>
+              </div>
+              <div className="voiceform__field">
+                <span>
+                  <label htmlFor={speedId}>Speed — {speed.toFixed(2)}×</label>
+                  <HelpHint area="voice" setting="speed" describes={speedId} />
+                </span>
                 <input
+                  id={speedId}
                   type="range"
                   min={MIN_SPEED}
                   max={MAX_SPEED}
@@ -390,12 +424,19 @@ export function Voice() {
                     setActivePreset(null);
                   }}
                 />
-              </label>
+              </div>
             </div>
           ) : (
             <div className="voiceform__field">
-              <span>Voice</span>
-              <VoiceIdentityPicker value={voiceIdentityId} onChange={setVoiceIdentityId} />
+              <span>
+                <label htmlFor={identityId}>Voice</label>
+                <HelpHint area="voice" setting="voice-identity" describes={identityId} />
+              </span>
+              <VoiceIdentityPicker
+                value={voiceIdentityId}
+                onChange={setVoiceIdentityId}
+                selectId={identityId}
+              />
               {voiceIdentityId ? (
                 <span className="voice__hint">
                   Cloned from a saved reference clip — a real, chosen voice character, not just
@@ -404,15 +445,19 @@ export function Voice() {
                 </span>
               ) : (
                 <>
-                  <label className="voiceform__field">
-                    <span>Narrator identity (free text)</span>
+                  <div className="voiceform__field">
+                    <span>
+                      <label htmlFor={narratorId}>Narrator identity (free text)</label>
+                      <HelpHint area="voice" setting="narrator-identity" describes={narratorId} />
+                    </span>
                     <input
+                      id={narratorId}
                       type="text"
                       value={voice}
                       onChange={(e) => setVoice(e.target.value)}
                       placeholder={DEFAULT_DIA_NARRATOR}
                     />
-                  </label>
+                  </div>
                   <span className="voice__hint">
                     Dia has no named voices — reusing the same identity (e.g. "gravelly old
                     man") keeps repeat narration sounding like the same speaker, but it's still
@@ -484,7 +529,7 @@ export function Voice() {
                 <button
                   type="button"
                   className="voice__hrow-clean"
-                  title="Reduce background noise on this clip"
+                  aria-label={`Clean audio: ${promptOf(j) || "untitled"}`}
                   disabled={cleaningId === j.id}
                   onClick={() => handleClean(j.id)}
                 >
@@ -493,8 +538,7 @@ export function Voice() {
                 <button
                   type="button"
                   className="voice__hrow-delete"
-                  title="Delete"
-                  aria-label="Delete this narration"
+                  aria-label={`Delete narration: ${promptOf(j) || "untitled"}`}
                   onClick={() => handleDelete(j.id)}
                 >
                   ×
@@ -525,6 +569,7 @@ function Result({
   onClean?: () => void;
   cleaning?: boolean;
 }) {
+  const cleanId = useId();
   if (!job) return <p className="muted">Write a line and hit Preview.</p>;
 
   const running = !DONE.includes(job.state);
@@ -552,15 +597,18 @@ function Result({
           </button>
         )}
         {finished && onClean && (
-          <button
-            type="button"
-            className="voiceresult__cancel"
-            onClick={onClean}
-            disabled={cleaning}
-            title="Reduce background noise on this clip"
-          >
-            {cleaning ? "Cleaning…" : "Clean audio"}
-          </button>
+          <>
+            <button
+              id={cleanId}
+              type="button"
+              className="voiceresult__cancel"
+              onClick={onClean}
+              disabled={cleaning}
+            >
+              {cleaning ? "Cleaning…" : "Clean audio"}
+            </button>
+            <HelpHint area="voice" setting="clean-audio" describes={cleanId} />
+          </>
         )}
         {!running && onDelete && (
           <button type="button" className="voiceresult__cancel" onClick={onDelete}>

@@ -1,3 +1,4 @@
+import { HelpHint } from "../../components/HelpHint";
 import type { Benchmark } from "../../lib/ipc";
 import { ShortMark } from "./ShortMark";
 import {
@@ -20,7 +21,9 @@ type Props = {
 export function History({ rows, modelName, suiteTitle }: Props) {
   return (
     <section className="card bench__history" aria-label="Run history">
-      <h2>History</h2>
+      <h2>
+        History <HelpHint area="benchmark" setting="history" />
+      </h2>
       {rows.length === 0 ? (
         <p className="muted">
           {modelName

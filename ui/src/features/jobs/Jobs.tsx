@@ -1,4 +1,5 @@
-import { useMemo, useState } from "react";
+import { useId, useMemo, useState } from "react";
+import { HelpHint } from "../../components/HelpHint";
 import { useJobs, useSessions } from "../../lib/hooks";
 import { assistantKindOf, cancelJob, type Job, type JobState } from "../../lib/ipc";
 import "./jobs.css";
@@ -53,6 +54,9 @@ export function Jobs() {
   const { data: videoSessions } = useSessions("video");
   const [typeFilter, setTypeFilter] = useState<JobTypeFilter>("all");
   const [stateFilter, setStateFilter] = useState<StateFilter>("all");
+  const ids = useId();
+  const typeId = `${ids}-type`;
+  const stateGroupId = `${ids}-state`;
 
   const sessionNames = useMemo(() => {
     const m = new Map<string, string>();
@@ -74,7 +78,12 @@ export function Jobs() {
       </header>
 
       <div className="jobspage__filters">
-        <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value as JobTypeFilter)}>
+        <select
+          id={typeId}
+          aria-label="Job type"
+          value={typeFilter}
+          onChange={(e) => setTypeFilter(e.target.value as JobTypeFilter)}
+        >
           <option value="all">All types</option>
           {JOB_TYPES.map((t) => (
             <option key={t} value={t}>
@@ -82,7 +91,8 @@ export function Jobs() {
             </option>
           ))}
         </select>
-        <div className="jobspage__chips">
+        <HelpHint area="jobs" setting="type-filter" describes={typeId} />
+        <div id={stateGroupId} className="jobspage__chips" role="group" aria-label="Job state">
           {STATE_FILTERS.map((f) => (
             <button
               key={f.key}
@@ -95,6 +105,7 @@ export function Jobs() {
             </button>
           ))}
         </div>
+        <HelpHint area="jobs" setting="state-filter" describes={stateGroupId} />
       </div>
 
       {!jobs ? (
@@ -110,7 +121,10 @@ export function Jobs() {
               <th>Session</th>
               <th>State</th>
               <th>Created</th>
-              <th />
+              <th>
+                <span className="visually-hidden">Actions</span>{" "}
+                <HelpHint area="jobs" setting="cancel" />
+              </th>
             </tr>
           </thead>
           <tbody>

@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
+import { HelpHint } from "../../components/HelpHint";
 import { Lightbox } from "../../components/Lightbox";
 import { LoraPicker } from "../../components/LoraPicker";
 import { Meter } from "../../components/Meter";
@@ -116,6 +117,11 @@ export function VideoStudio() {
   const [startJob, setStartJob] = useState("none");
   const [startPath, setStartPath] = useState("");
   const [sendError, setSendError] = useState<string | null>(null);
+  const ids = useId();
+  const startJobId = `${ids}-start`;
+  const seedId = `${ids}-seed`;
+  const modelPickId = `${ids}-model`;
+  const estimateId = `${ids}-estimate`;
 
   const [pendingId, setPendingId] = useState<string | null>(null);
   const [detail, setDetail] = useState<JobDetail | null>(null);
@@ -307,9 +313,12 @@ export function VideoStudio() {
 
         <fieldset className="startframe">
           <legend>Start from an image (optional)</legend>
-          <label className="imgform__field">
-            <span>A finished image</span>
-            <select value={startJob} onChange={(e) => setStartJob(e.target.value)}>
+          <div className="imgform__field">
+            <span>
+              <label htmlFor={startJobId}>A finished image</label>
+              <HelpHint area="video" setting="start-frame" describes={startJobId} />
+            </span>
+            <select id={startJobId} value={startJob} onChange={(e) => setStartJob(e.target.value)}>
               <option value="none">None — text to video</option>
               {imageJobs.map((j) => (
                 <option key={j.id} value={j.id}>
@@ -317,7 +326,7 @@ export function VideoStudio() {
                 </option>
               ))}
             </select>
-          </label>
+          </div>
           <label className="imgform__field">
             <span>…or an image file</span>
             <div className="pathpick">
@@ -424,18 +433,62 @@ export function VideoStudio() {
           </div>
 
           <div className="imgform__grid">
-            <NumField label="Width" value={width} step={DIM_STEP} min={MIN_DIM} max={MAX_DIM} onChange={setWidth} />
+            <NumField
+              label="Width"
+              value={width}
+              step={DIM_STEP}
+              min={MIN_DIM}
+              max={MAX_DIM}
+              onChange={setWidth}
+              hint={(id) => <HelpHint area="video" setting="size" describes={id} />}
+            />
             <NumField label="Height" value={height} step={DIM_STEP} min={MIN_DIM} max={MAX_DIM} onChange={setHeight} />
-            <NumField label="Frames" value={frames} step={4} min={MIN_FRAMES} max={MAX_FRAMES} onChange={setFrames} />
-            <NumField label="FPS" value={fps} step={1} min={MIN_FPS} max={MAX_FPS} onChange={setFps} />
-            <NumField label="Steps" value={steps} step={1} min={1} max={MAX_STEPS} onChange={setSteps} />
-            <NumField label="CFG" value={cfg} step={0.5} min={1} max={15} onChange={setCfg} />
+            <NumField
+              label="Frames"
+              value={frames}
+              step={4}
+              min={MIN_FRAMES}
+              max={MAX_FRAMES}
+              onChange={setFrames}
+              hint={(id) => <HelpHint area="video" setting="frames" describes={id} />}
+            />
+            <NumField
+              label="FPS"
+              value={fps}
+              step={1}
+              min={MIN_FPS}
+              max={MAX_FPS}
+              onChange={setFps}
+              hint={(id) => <HelpHint area="video" setting="fps" describes={id} />}
+            />
+            <NumField
+              label="Steps"
+              value={steps}
+              step={1}
+              min={1}
+              max={MAX_STEPS}
+              onChange={setSteps}
+              hint={(id) => <HelpHint area="video" setting="steps" describes={id} />}
+            />
+            <NumField
+              label="CFG"
+              value={cfg}
+              step={0.5}
+              min={1}
+              max={15}
+              onChange={setCfg}
+              hint={(id) => <HelpHint area="video" setting="cfg" describes={id} />}
+            />
           </div>
 
           <div className="imgform__grid">
-            <label className="imgform__field">
-              <span>Seed</span>
+            <div className="imgform__field">
+              <span>
+                <label htmlFor={seedId}>Seed</label>
+                <HelpHint area="video" setting="seed" describes={seedId} />
+              </span>
               <input
+                id={seedId}
                 type="text"
                 inputMode="numeric"
                 value={seed}
@@ -443,10 +496,13 @@ export function VideoStudio() {
                 placeholder="random"
                 spellCheck={false}
               />
-            </label>
-            <label className="imgform__field imgform__field--wide">
-              <span>Model</span>
-              <select value={modelId} onChange={(e) => setModelId(e.target.value)}>
+            </div>
+            <div className="imgform__field imgform__field--wide">
+              <span>
+                <label htmlFor={modelPickId}>Model</label>
+                <HelpHint area="video" setting="model" describes={modelPickId} />
+              </span>
+              <select id={modelPickId} value={modelId} onChange={(e) => setModelId(e.target.value)}>
                 <option value="auto">Auto (most-recently-used)</option>
                 {videoModels.map((m) => (
                   <option key={m.id} value={m.id}>
@@ -454,7 +510,7 @@ export function VideoStudio() {
                   </option>
                 ))}
               </select>
-            </label>
+            </div>
           </div>
           <VramEstimateHint
             vramEstimateMb={videoModels.find((m) => m.id === modelId)?.vram_estimate_mb}
@@ -467,11 +523,12 @@ export function VideoStudio() {
             onChange={setLoras}
           />
 
-          <p className={heavy ? "video__note video__note--warn" : "video__note"}>
+          <p id={estimateId} className={heavy ? "video__note video__note--warn" : "video__note"}>
             ~{clipSecs.toFixed(1)}s clip · very rough guess {estLo}–{estHi} min on a 16 GB card
             (not yet calibrated). Video is slow — minutes, not seconds. The window stays usable
             while it renders.
-            {heavy && " Above 480p / 81 frames is much slower and can run out of VRAM."}
+            {heavy && " Above 480p / 81 frames is much slower and can run out of VRAM."}{" "}
+            <HelpHint area="video" setting="time-estimate" />
           </p>
 
           <button type="submit" className="imgform__go" disabled={!canGenerate}>
@@ -565,7 +622,6 @@ export function VideoStudio() {
                   <button
                     type="button"
                     className="gallery__zoom"
-                    title="Zoom"
                     aria-label="Zoom this video"
                     onClick={(e) => {
                       e.stopPropagation();
@@ -577,7 +633,6 @@ export function VideoStudio() {
                   <button
                     type="button"
                     className="gallery__delete"
-                    title="Delete"
                     aria-label="Delete this video"
                     onClick={(e) => {
                       e.stopPropagation();
@@ -683,6 +738,7 @@ function Result({
   onUpscale?: () => void;
   onReuseSeed: (seed: string) => void;
 }) {
+  const upscaleId = useId();
   if (!job) return <p className="muted">Fill in a prompt and hit Generate.</p>;
 
   const isUpscale = job.job_type === "upscale";
@@ -729,7 +785,9 @@ function Result({
           <>
             <dt>Upscaled from</dt>
             <dd className="numeric">{up.source ?? "—"}</dd>
-            <dt>RTX Video Super Resolution</dt>
+            <dt>
+              RTX Video Super Resolution <HelpHint area="upscale" setting="factor" />
+            </dt>
             <dd className="numeric">{upscaleSummary(up)}</dd>
           </>
         ) : (
@@ -783,9 +841,12 @@ function Result({
       </dl>
       <div className="result__actions">
         {job.state === "completed" && onUpscale && (
-          <button type="button" className="result__cancel" onClick={onUpscale}>
-            Upscale
-          </button>
+          <>
+            <button id={upscaleId} type="button" className="result__cancel" onClick={onUpscale}>
+              Upscale
+            </button>
+            <HelpHint area="upscale" setting="upscale" describes={upscaleId} />
+          </>
         )}
         {job.state === "completed" && (
           <button

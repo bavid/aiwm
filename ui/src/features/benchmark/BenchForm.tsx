@@ -1,4 +1,5 @@
 import { useId } from "react";
+import { HelpHint } from "../../components/HelpHint";
 import type { BenchSuite, Model } from "../../lib/ipc";
 import { MAX_RUNS, MIN_RUNS, totalPasses } from "./benchmark-utils";
 
@@ -57,6 +58,7 @@ export function BenchForm({
   const modelField = `${ids}-model`;
   const suiteField = `${ids}-suite`;
   const runsField = `${ids}-runs`;
+  const startField = `${ids}-start`;
 
   const suite = suites.find((s) => s.id === suiteId) ?? null;
   const passes = totalPasses(suite, runs);
@@ -74,8 +76,11 @@ export function BenchForm({
       }}
     >
       <div className="bench__fields">
-        <label className="bench__field" htmlFor={modelField}>
-          <span>Model</span>
+        <div className="bench__field">
+          <span>
+            <label htmlFor={modelField}>Model</label>
+            <HelpHint area="benchmark" setting="model" describes={modelField} />
+          </span>
           <select id={modelField} value={modelId} onChange={(e) => onModelChange(e.target.value)}>
             {models.map((m) => (
               <option key={m.id} value={m.id}>
@@ -83,10 +88,13 @@ export function BenchForm({
               </option>
             ))}
           </select>
-        </label>
+        </div>
 
-        <label className="bench__field" htmlFor={suiteField}>
-          <span>Test set</span>
+        <div className="bench__field">
+          <span>
+            <label htmlFor={suiteField}>Test set</label>
+            <HelpHint area="benchmark" setting="suite" describes={suiteField} />
+          </span>
           <select id={suiteField} value={suiteId} onChange={(e) => onSuiteChange(e.target.value)}>
             {suites.length === 0 && <option value="">Loading…</option>}
             {suites.map((s) => (
@@ -95,10 +103,13 @@ export function BenchForm({
               </option>
             ))}
           </select>
-        </label>
+        </div>
 
-        <label className="bench__field bench__field--runs" htmlFor={runsField}>
-          <span>Passes per prompt</span>
+        <div className="bench__field bench__field--runs">
+          <span>
+            <label htmlFor={runsField}>Passes per prompt</label>
+            <HelpHint area="benchmark" setting="passes" describes={runsField} />
+          </span>
           <input
             id={runsField}
             type="number"
@@ -110,7 +121,7 @@ export function BenchForm({
             onChange={(e) => onRunsTextChange(e.target.value)}
             onBlur={onRunsCommit}
           />
-        </label>
+        </div>
       </div>
 
       {suite && (
@@ -137,9 +148,10 @@ export function BenchForm({
       )}
 
       <div className="bench__actions">
-        <button type="submit" className="bench__go" disabled={!ready || busy}>
+        <button id={startField} type="submit" className="bench__go" disabled={!ready || busy}>
           {busy ? "Running…" : "Start benchmark"}
         </button>
+        <HelpHint area="benchmark" setting="start" describes={startField} />
         {busy && (
           <button type="button" className="chip" onClick={onStop}>
             Stop

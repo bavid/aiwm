@@ -56,7 +56,7 @@ export function QueueList({
                 type="button"
                 className="queue-list__cancel"
                 onClick={() => onCancel(j.id)}
-                title="Cancel"
+                aria-label={`Cancel ${promptOf(j) || "this job"}`}
               >
                 ×
               </button>

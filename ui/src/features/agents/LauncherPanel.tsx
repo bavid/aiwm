@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useId, useState } from "react";
+import { HelpHint } from "../../components/HelpHint";
 import { useAgentRuntimes, useLauncherStatus } from "../../lib/hooks";
 import { launchExternal, stopExternalLaunch, type LaunchTool } from "../../lib/ipc";
 
@@ -24,6 +25,10 @@ export function LauncherPanel({
   const [workspace, setWorkspace] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const ids = useId();
+  const toolId = `${ids}-tool`;
+  const modelFieldId = `${ids}-model`;
+  const workspaceId = `${ids}-workspace`;
 
   const rt = (runtimes ?? []).find((r) => r.id === tool);
   const rtInstalled = rt?.installed ?? tool === "opencode";
@@ -82,9 +87,12 @@ export function LauncherPanel({
         </div>
       ) : (
         <div className="launcher__form">
-          <label className="profform__field">
-            <span>Tool</span>
-            <select value={tool} onChange={(e) => setTool(e.target.value as LaunchTool)}>
+          <div className="profform__field">
+            <span>
+              <label htmlFor={toolId}>Tool</label>
+              <HelpHint area="agents" setting="launcher" describes={toolId} />
+            </span>
+            <select id={toolId} value={tool} onChange={(e) => setTool(e.target.value as LaunchTool)}>
               {(runtimes ?? [{ id: "opencode", installed: true }]).map((r) => (
                 <option key={r.id} value={r.id}>
                   {TOOL_LABEL[r.id as LaunchTool] ?? r.id}
@@ -92,7 +100,7 @@ export function LauncherPanel({
                 </option>
               ))}
             </select>
-          </label>
+          </div>
           {!rtInstalled && (
             <p className="muted">
               {TOOL_LABEL[tool]} isn’t installed — install it and reopen this form (see the
@@ -100,9 +108,12 @@ export function LauncherPanel({
             </p>
           )}
 
-          <label className="profform__field">
-            <span>Coding model</span>
-            <select value={modelId} onChange={(e) => setModelId(e.target.value)}>
+          <div className="profform__field">
+            <span>
+              <label htmlFor={modelFieldId}>Coding model</label>
+              <HelpHint area="agents" setting="coding-model" describes={modelFieldId} />
+            </span>
+            <select id={modelFieldId} value={modelId} onChange={(e) => setModelId(e.target.value)}>
               <option value="auto">Auto — most-recently-used “coding” model</option>
               {codingModels.map((m) => (
                 <option key={m.id} value={m.id}>
@@ -110,18 +121,22 @@ export function LauncherPanel({
                 </option>
               ))}
             </select>
-          </label>
+          </div>
 
-          <label className="profform__field">
-            <span>Workspace folder</span>
+          <div className="profform__field">
+            <span>
+              <label htmlFor={workspaceId}>Workspace folder</label>
+              <HelpHint area="agents" setting="workspace" describes={workspaceId} />
+            </span>
             <input
+              id={workspaceId}
               type="text"
               value={workspace}
               onChange={(e) => setWorkspace(e.target.value)}
               placeholder="E:\\projects\\my-repo"
               spellCheck={false}
             />
-          </label>
+          </div>
 
           <button type="button" onClick={launch} disabled={busy || !workspace.trim() || !rtInstalled}>
             {busy ? "Launching…" : "Launch"}

@@ -1,3 +1,5 @@
+import { useId, type ReactNode } from "react";
+
 interface NumFieldProps {
   label: string;
   value: number;
@@ -5,15 +7,27 @@ interface NumFieldProps {
   min: number;
   max: number;
   onChange: (n: number) => void;
+  /** Renders the `?` help hint next to the label; gets the input's id so the
+   *  hint can describe it. A render prop rather than `{area, setting}`, so
+   *  the caller writes the hint element itself with literal props that
+   *  `scripts/check-help.mjs` can verify. */
+  hint?: (inputId: string) => ReactNode;
 }
 
 /** A labelled numeric input used by the Image and Video studios. The parent
- *  owns clamping/snapping — this only forwards finite numbers. */
-export function NumField({ label, value, step, min, max, onChange }: NumFieldProps) {
+ *  owns clamping/snapping — this only forwards finite numbers. The caption is
+ *  a `<label for>` next to the optional hint, never wrapping it, so the
+ *  hint's own name never joins the input's. */
+export function NumField({ label, value, step, min, max, onChange, hint }: NumFieldProps) {
+  const id = useId();
   return (
-    <label className="imgform__field">
-      <span>{label}</span>
+    <div className="imgform__field">
+      <span>
+        <label htmlFor={id}>{label}</label>
+        {hint?.(id)}
+      </span>
       <input
+        id={id}
         type="number"
         value={value}
         step={step}
@@ -25,6 +39,6 @@ export function NumField({ label, value, step, min, max, onChange }: NumFieldPro
         }}
         spellCheck={false}
       />
-    </label>
+    </div>
   );
 }

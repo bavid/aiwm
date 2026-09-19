@@ -115,7 +115,7 @@ export function ChatSessionSidebar({
           <button
             type="button"
             className="chat-sidebar__icon"
-            title="Rename"
+            aria-label={`Rename ${s.name}`}
             onClick={() => startRename(s.id, s.name)}
           >
             ✎
@@ -124,7 +124,7 @@ export function ChatSessionSidebar({
             <button
               type="button"
               className="chat-sidebar__icon"
-              title="Unarchive"
+              aria-label={`Unarchive ${s.name}`}
               onClick={() => setArchived(s.id, false)}
             >
               ⤴
@@ -133,7 +133,7 @@ export function ChatSessionSidebar({
             <button
               type="button"
               className="chat-sidebar__icon"
-              title="Archive"
+              aria-label={`Archive ${s.name}`}
               onClick={() => setArchived(s.id, true)}
             >
               ⤓
@@ -142,7 +142,7 @@ export function ChatSessionSidebar({
           <button
             type="button"
             className="chat-sidebar__icon chat-sidebar__icon--danger"
-            title="Delete"
+            aria-label={`Delete ${s.name}`}
             onClick={() => remove(s.id, s.name)}
           >
             ×

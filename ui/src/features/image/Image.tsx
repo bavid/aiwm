@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
+import { HelpHint } from "../../components/HelpHint";
 import { Lightbox } from "../../components/Lightbox";
 import { LoraPicker } from "../../components/LoraPicker";
 import { Meter } from "../../components/Meter";
@@ -115,6 +116,14 @@ export function ImageStudio({ prefill = null, onPrefillConsumed }: Props = {}) {
   const [sendError, setSendError] = useState<string | null>(null);
   const [sourceJob, setSourceJob] = useState("none");
   const [sourcePath, setSourcePath] = useState("");
+  const ids = useId();
+  const sourceJobId = `${ids}-source`;
+  const negativeId = `${ids}-negative`;
+  const swapId = `${ids}-swap`;
+  const seedId = `${ids}-seed`;
+  const modelPickId = `${ids}-model`;
+  const presetId = `${ids}-preset`;
+  const sessionHintId = `${ids}-session`;
 
   const selectedCheckpoint = checkpoints.find((m) => m.id === modelId);
   const isFlux = modelId !== "auto" && selectedCheckpoint?.family === "flux";
@@ -357,13 +366,19 @@ export function ImageStudio({ prefill = null, onPrefillConsumed }: Props = {}) {
             <span className="card__sub">Auto · {checkpoints.length} checkpoint(s)</span>
           )}
         </header>
-        <SessionSwitcher capability="image" activeId={sessionId} onChange={setSessionId} />
+        <div className="imgform__session" id={sessionHintId}>
+          <SessionSwitcher capability="image" activeId={sessionId} onChange={setSessionId} />
+          <HelpHint area="image" setting="sessions" describes={sessionHintId} />
+        </div>
 
         <fieldset className="startframe">
           <legend>Edit an existing image (optional)</legend>
-          <label className="imgform__field">
-            <span>A finished image</span>
-            <select value={sourceJob} onChange={(e) => setSourceJob(e.target.value)}>
+          <div className="imgform__field">
+            <span>
+              <label htmlFor={sourceJobId}>A finished image</label>
+              <HelpHint area="image" setting="edit-source" describes={sourceJobId} />
+            </span>
+            <select id={sourceJobId} value={sourceJob} onChange={(e) => setSourceJob(e.target.value)}>
               <option value="none">None — generate from a prompt</option>
               {priorImages.map((j) => (
                 <option key={j.id} value={j.id}>
@@ -371,7 +386,7 @@ export function ImageStudio({ prefill = null, onPrefillConsumed }: Props = {}) {
                 </option>
               ))}
             </select>
-          </label>
+          </div>
           <label className="imgform__field">
             <span>…or an image file</span>
             <div className="pathpick">
@@ -444,16 +459,20 @@ export function ImageStudio({ prefill = null, onPrefillConsumed }: Props = {}) {
 
           {!editing && (
             <>
-              <label className="imgform__field">
-                <span>Negative prompt</span>
+              <div className="imgform__field">
+                <span>
+                  <label htmlFor={negativeId}>Negative prompt</label>
+                  <HelpHint area="image" setting="negative-prompt" describes={negativeId} />
+                </span>
                 <textarea
+                  id={negativeId}
                   value={negative}
                   onChange={(e) => setNegative(e.target.value)}
                   rows={2}
                   spellCheck
                   placeholder="blurry, low quality, watermark"
                 />
-              </label>
+              </div>
               <PromptPresetPicker kind="negative" onApply={appendNegative} />
             </>
           )}
@@ -476,20 +495,29 @@ export function ImageStudio({ prefill = null, onPrefillConsumed }: Props = {}) {
                   </button>
                 ))}
                 <button
+                  id={swapId}
                   type="button"
                   className="chip"
-                  title="Swap width and height"
+                  aria-label="Swap width and height"
                   onClick={() => {
                     setWidth(height);
                     setHeight(width);
                   }}
                 >
-                  ↔
+                  <span aria-hidden="true">↔</span>
                 </button>
               </div>
 
               <div className="imgform__grid">
-                <NumField label="Width" value={width} step={DIM_STEP} min={MIN_DIM} max={MAX_DIM} onChange={setWidth} />
+                <NumField
+                  label="Width"
+                  value={width}
+                  step={DIM_STEP}
+                  min={MIN_DIM}
+                  max={MAX_DIM}
+                  onChange={setWidth}
+                  hint={(id) => <HelpHint area="image" setting="size" describes={id} />}
+                />
                 <NumField label="Height" value={height} step={DIM_STEP} min={MIN_DIM} max={MAX_DIM} onChange={setHeight} />
               </div>
             </>
@@ -499,7 +527,15 @@ export function ImageStudio({ prefill = null, onPrefillConsumed }: Props = {}) {
           )}
 
           <div className="imgform__grid">
-            <NumField label="Steps" value={steps} step={1} min={1} max={60} onChange={setSteps} />
+            <NumField
+              label="Steps"
+              value={steps}
+              step={1}
+              min={1}
+              max={60}
+              onChange={setSteps}
+              hint={(id) => <HelpHint area="image" setting="steps" describes={id} />}
+            />
             <NumField
               label={isFlux ? "Guidance" : "CFG"}
               value={cfg}
@@ -507,6 +543,7 @@ export function ImageStudio({ prefill = null, onPrefillConsumed }: Props = {}) {
               min={1}
               max={isFlux || isFlux2 ? 10 : 15}
               onChange={setCfg}
+              hint={(id) => <HelpHint area="image" setting="cfg" describes={id} />}
             />
           </div>
           {isFlux && (
@@ -529,9 +566,13 @@ export function ImageStudio({ prefill = null, onPrefillConsumed }: Props = {}) {
           )}
 
           <div className="imgform__grid">
-            <label className="imgform__field">
-              <span>Seed</span>
+            <div className="imgform__field">
+              <span>
+                <label htmlFor={seedId}>Seed</label>
+                <HelpHint area="image" setting="seed" describes={seedId} />
+              </span>
               <input
+                id={seedId}
                 type="text"
                 inputMode="numeric"
                 value={seed}
@@ -539,10 +580,13 @@ export function ImageStudio({ prefill = null, onPrefillConsumed }: Props = {}) {
                 placeholder="random"
                 spellCheck={false}
               />
-            </label>
-            <label className="imgform__field imgform__field--wide">
-              <span>Model</span>
-              <select value={modelId} onChange={(e) => setModelId(e.target.value)}>
+            </div>
+            <div className="imgform__field imgform__field--wide">
+              <span>
+                <label htmlFor={modelPickId}>Model</label>
+                <HelpHint area="image" setting="model" describes={modelPickId} />
+              </span>
+              <select id={modelPickId} value={modelId} onChange={(e) => setModelId(e.target.value)}>
                 <option value="auto">Auto (most-recently-used)</option>
                 {checkpoints.map((m) => (
                   <option key={m.id} value={m.id}>
@@ -550,17 +594,13 @@ export function ImageStudio({ prefill = null, onPrefillConsumed }: Props = {}) {
                   </option>
                 ))}
               </select>
-            </label>
+            </div>
           </div>
           <div className="imgform__presets">
-            <button
-              type="button"
-              className="chip"
-              title="FLUX.2 [klein] 9B + realistic-detail LoRA, low CFG, a lighting prompt suffix"
-              onClick={applySmartphonePreset}
-            >
+            <button id={presetId} type="button" className="chip" onClick={applySmartphonePreset}>
               Smartphone photo preset
             </button>
+            <HelpHint area="image" setting="smartphone-preset" describes={presetId} />
           </div>
           <LoraPicker
             models={models ?? []}
@@ -655,7 +695,6 @@ export function ImageStudio({ prefill = null, onPrefillConsumed }: Props = {}) {
                   <button
                     type="button"
                     className="gallery__zoom"
-                    title="Zoom"
                     aria-label="Zoom this image"
                     onClick={(e) => {
                       e.stopPropagation();
@@ -667,7 +706,6 @@ export function ImageStudio({ prefill = null, onPrefillConsumed }: Props = {}) {
                   <button
                     type="button"
                     className="gallery__delete"
-                    title="Delete"
                     aria-label="Delete this image"
                     onClick={(e) => {
                       e.stopPropagation();
@@ -767,6 +805,9 @@ function Result({
   onUseAsBase?: () => void;
   onReuseSeed: (seed: string) => void;
 }) {
+  const ids = useId();
+  const upscaleId = `${ids}-upscale`;
+  const useAsBaseId = `${ids}-base`;
   if (!job) return <p className="muted">Fill in a prompt and hit Generate.</p>;
 
   const isUpscale = job.job_type === "upscale";
@@ -818,7 +859,9 @@ function Result({
           <>
             <dt>Upscaled from</dt>
             <dd className="numeric">{up.source ?? "—"}</dd>
-            <dt>RTX Video Super Resolution</dt>
+            <dt>
+              RTX Video Super Resolution <HelpHint area="upscale" setting="factor" />
+            </dt>
             <dd className="numeric">{upscaleSummary(up)}</dd>
           </>
         ) : (
@@ -882,14 +925,20 @@ function Result({
       </dl>
       <div className="result__actions">
         {job.state === "completed" && onUpscale && (
-          <button type="button" className="result__cancel" onClick={onUpscale}>
-            Upscale
-          </button>
+          <>
+            <button id={upscaleId} type="button" className="result__cancel" onClick={onUpscale}>
+              Upscale
+            </button>
+            <HelpHint area="upscale" setting="upscale" describes={upscaleId} />
+          </>
         )}
         {job.state === "completed" && onUseAsBase && (
-          <button type="button" className="result__cancel" onClick={onUseAsBase}>
-            Use as base
-          </button>
+          <>
+            <button id={useAsBaseId} type="button" className="result__cancel" onClick={onUseAsBase}>
+              Use as base
+            </button>
+            <HelpHint area="image" setting="use-as-base" describes={useAsBaseId} />
+          </>
         )}
         {job.state === "completed" && (
           <button

@@ -153,7 +153,7 @@ export function SessionSwitcher({ capability, activeId, onChange }: SessionSwitc
           </optgroup>
         )}
       </select>
-      <button type="button" className="session-switcher__icon" onClick={startCreate} title="New session">
+      <button type="button" className="session-switcher__icon" onClick={startCreate} aria-label="New session">
         +
       </button>
       {current && (
@@ -162,7 +162,7 @@ export function SessionSwitcher({ capability, activeId, onChange }: SessionSwitc
             type="button"
             className="session-switcher__icon"
             onClick={startRename}
-            title="Rename session"
+            aria-label={`Rename session ${current.name}`}
           >
             ✎
           </button>
@@ -171,7 +171,7 @@ export function SessionSwitcher({ capability, activeId, onChange }: SessionSwitc
               type="button"
               className="session-switcher__icon"
               onClick={() => setSessionArchived(current.id, false).then(refetch)}
-              title="Unarchive"
+              aria-label={`Unarchive session ${current.name}`}
             >
               ⤴
             </button>
@@ -180,7 +180,7 @@ export function SessionSwitcher({ capability, activeId, onChange }: SessionSwitc
               type="button"
               className="session-switcher__icon"
               onClick={archiveCurrent}
-              title="Archive session"
+              aria-label={`Archive session ${current.name}`}
             >
               ⤓
             </button>
@@ -189,7 +189,7 @@ export function SessionSwitcher({ capability, activeId, onChange }: SessionSwitc
             type="button"
             className="session-switcher__icon session-switcher__icon--danger"
             onClick={deleteCurrent}
-            title="Delete session"
+            aria-label={`Delete session ${current.name}`}
           >
             ×
           </button>

@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { ChatSessionSidebar } from "../../components/ChatSessionSidebar";
 import { CompareModels } from "../../components/CompareModels";
+import { HelpHint } from "../../components/HelpHint";
 import {
   useAbout,
   useDocuments,
@@ -110,6 +111,12 @@ export function Chat() {
   const [sendError, setSendError] = useState<string | null>(null);
   const [compareOpen, setCompareOpen] = useState(false);
   const logRef = useRef<HTMLDivElement>(null);
+  const ids = useId();
+  const personaWrapId = `${ids}-persona`;
+  const modelPickId = `${ids}-model`;
+  const compareId = `${ids}-compare`;
+  const composerId = `${ids}-composer`;
+  const sidebarId = `${ids}-sidebar`;
   // Which session's history `turns` currently reflects -- `undefined` means
   // "nothing loaded yet". Re-derive from the jobs table on mount and whenever
   // the user switches sessions; otherwise leave `turns` alone so an optimistic
@@ -354,45 +361,60 @@ export function Chat() {
 
   return (
     <div className="chat-page">
-      <ChatSessionSidebar
-        activeId={sessionId}
-        onChange={setSessionId}
-        sessions={sessions}
-        onRefetch={refetchSessions}
-      />
+      <div className="chat-page__sidebar" id={sidebarId}>
+        <ChatSessionSidebar
+          activeId={sessionId}
+          onChange={setSessionId}
+          sessions={sessions}
+          onRefetch={refetchSessions}
+        />
+        <p className="chat-page__sidebar-hint">
+          <HelpHint area="chat" setting="sessions" describes={sidebarId} />
+        </p>
+      </div>
       <div className="chat">
         <div className="chat__head">
           {/* Keyed by the chat: switching chats must not leave the previous
               one's persona sitting in the chip while the new one resolves. */}
-          <PersonaControls
-            key={sessionId ?? "ungrouped"}
-            sessionId={sessionId}
-            sessionMode={session ? session.persona_mode : null}
-            sessionPersonaId={session?.persona_id ?? null}
-            onSessionsChanged={refetchSessions}
-          />
-          <select
-            className="chat__model"
-            value={modelId}
-            onChange={(e) => setModelId(e.target.value)}
-            title="Which model answers"
-          >
-            <option value="auto">Auto (most-recently-used)</option>
-            {chatModels.map((m) => (
-              <option key={m.id} value={m.id}>
-                {m.name}
-              </option>
-            ))}
-          </select>
-          {chatModels.length >= 2 && (
-            <button
-              type="button"
-              className="chat__compare"
-              onClick={() => setCompareOpen(true)}
-              title="Send one prompt to two models at once"
+          <span className="chat__head-group" id={personaWrapId}>
+            <PersonaControls
+              key={sessionId ?? "ungrouped"}
+              sessionId={sessionId}
+              sessionMode={session ? session.persona_mode : null}
+              sessionPersonaId={session?.persona_id ?? null}
+              onSessionsChanged={refetchSessions}
+            />
+            <HelpHint area="chat" setting="persona" describes={personaWrapId} />
+          </span>
+          <span className="chat__head-group">
+            <select
+              id={modelPickId}
+              className="chat__model"
+              value={modelId}
+              onChange={(e) => setModelId(e.target.value)}
+              aria-label="Which model answers"
             >
-              Compare models
-            </button>
+              <option value="auto">Auto (most-recently-used)</option>
+              {chatModels.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.name}
+                </option>
+              ))}
+            </select>
+            <HelpHint area="chat" setting="model" describes={modelPickId} />
+          </span>
+          {chatModels.length >= 2 && (
+            <span className="chat__head-group">
+              <button
+                id={compareId}
+                type="button"
+                className="chat__compare"
+                onClick={() => setCompareOpen(true)}
+              >
+                Compare models
+              </button>
+              <HelpHint area="chat" setting="compare" describes={compareId} />
+            </span>
           )}
         </div>
         <CompareModels open={compareOpen} onClose={() => setCompareOpen(false)} chatModels={chatModels} />
@@ -434,6 +456,8 @@ export function Chat() {
           }}
         >
           <textarea
+            id={composerId}
+            aria-label="Message"
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
             onKeyDown={onKeyDown}
@@ -445,6 +469,7 @@ export function Chat() {
                 : "Message, or /image · /video · /edit a prompt — Enter to send, Shift+Enter for a newline"
             }
           />
+          <HelpHint area="chat" setting="composer" describes={composerId} />
           <button type="submit" disabled={!prompt.trim() || (!!pendingId && !stuck)}>
             {pendingId && !stuck ? "…" : "Send"}
           </button>
@@ -463,6 +488,7 @@ function DocumentsBar({ sessionId }: { sessionId: string | null }) {
   const { data: documents } = useDocuments(sessionId);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const attachId = useId();
 
   if (!sessionId) return null;
 
@@ -516,9 +542,10 @@ function DocumentsBar({ sessionId }: { sessionId: string | null }) {
           </button>
         </span>
       ))}
-      <button type="button" className="chat__doc-attach" onClick={attach} disabled={busy}>
+      <button id={attachId} type="button" className="chat__doc-attach" onClick={attach} disabled={busy}>
         {busy ? "Adding…" : "+ Attach document"}
       </button>
+      <HelpHint area="chat" setting="documents" describes={attachId} />
       {error && <span className="chat__doc-err">{error}</span>}
     </div>
   );
@@ -585,7 +612,7 @@ function ChatTurn({
           </button>
         )}
         {!running && (
-          <button type="button" className="turn__cancel" onClick={onDelete} title="Delete this message">
+          <button type="button" className="turn__cancel" onClick={onDelete} aria-label="Delete this message">
             Delete
           </button>
         )}

@@ -10,11 +10,43 @@
  *  extension, no enums. */
 
 /** One documented area of the app. Each area is a section of the Help tab. */
-export type HelpArea = "dataset" | "training";
+export type HelpArea =
+  | "getting-started"
+  | "dashboard"
+  | "chat"
+  | "image"
+  | "video"
+  | "upscale"
+  | "voice"
+  | "stories"
+  | "dataset"
+  | "training"
+  | "jobs"
+  | "agents"
+  | "models"
+  | "benchmark"
+  | "diagnostics"
+  | "settings"
+  | "shortcuts";
 
 export const HELP_AREA_LABEL: Record<HelpArea, string> = {
+  "getting-started": "Getting started",
+  dashboard: "Dashboard",
+  chat: "Chat",
+  image: "Image",
+  video: "Video",
+  upscale: "Upscale",
+  voice: "Voice",
+  stories: "Stories",
   dataset: "Dataset",
   training: "Training",
+  jobs: "Jobs",
+  agents: "Agents",
+  models: "Models & Discover",
+  benchmark: "Benchmark",
+  diagnostics: "Diagnostics",
+  settings: "Settings",
+  shortcuts: "Shortcuts",
 };
 
 /** A paragraph, an ordered list of steps, or a bullet list. */

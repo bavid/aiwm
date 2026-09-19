@@ -36,6 +36,7 @@ export function SelectionBar({
   children,
 }: Props) {
   const deleteId = useId();
+  const deleteBlockedId = useId();
   return (
     <div className="curation__bar card" role="group" aria-label="Selection">
       <div className="curation__bar-main">
@@ -69,12 +70,19 @@ export function SelectionBar({
           type="button"
           className="chip curation__action curation__action--danger"
           disabled={selectedTotal === 0 || !canDelete}
-          title={canDelete ? undefined : "Wait for the prep run to finish before deleting"}
+          aria-describedby={canDelete ? undefined : deleteBlockedId}
           onClick={onDelete}
           aria-keyshortcuts="Delete"
         >
           Delete…<kbd>Del</kbd>
         </button>
+        {/* Why Delete is disabled, as a description rather than a `title=`
+            tooltip; the `?` hint keeps its own description token beside it. */}
+        {!canDelete && (
+          <span id={deleteBlockedId} className="visually-hidden">
+            Wait for the prep run to finish before deleting.
+          </span>
+        )}
         <HelpHint area="dataset" setting="delete-frames" describes={deleteId} />
         <button
           type="button"

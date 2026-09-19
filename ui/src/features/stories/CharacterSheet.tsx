@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { HelpHint } from "../../components/HelpHint";
 import { useCharacterLog, useCharacterRelationships } from "../../lib/hooks";
 import {
   addCharacterRelationship,
@@ -147,7 +148,9 @@ export function CharacterSheet({
   return (
     <aside ref={sheetRef} className="char-sheet" aria-label={`${character.name} — Character Sheet`}>
       <header className="char-sheet__head">
-        <h3>{character.name}</h3>
+        <h3>
+          {character.name} <HelpHint area="stories" setting="character" />
+        </h3>
         <button type="button" className="char-sheet__close" onClick={onClose} aria-label="Close character sheet">
           ×
         </button>
@@ -159,8 +162,9 @@ export function CharacterSheet({
         className="char-sheet__portrait"
       />
       {character.portrait_job_id && (
-        <span className="badge badge--soft" title="Regenerating this portrait, or a scene featuring only this character, anchors the render to it (IP-Adapter / reference-latent) instead of generating independently.">
-          Consistency-anchored
+        <span className="char-sheet__anchor">
+          <span className="badge badge--soft">Consistency-anchored</span>
+          <HelpHint area="stories" setting="consistency-anchor" />
         </span>
       )}
       <button type="button" className="char-sheet__generate" onClick={generatePortrait} disabled={generating || !story}>

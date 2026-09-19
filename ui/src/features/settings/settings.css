@@ -53,9 +53,18 @@
   gap: var(--space-1);
 }
 
+/* The field's caption: plain text, or a `<label for>` beside its `?` hint. */
 .set-field > span {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
   font-size: var(--text-sm);
   color: var(--muted);
+}
+
+.set-field > span > label {
+  cursor: default;
 }
 
 .set-field input,
@@ -140,6 +149,10 @@
 
 .set-toggle input {
   margin-top: 2px;
+}
+
+.set-toggle label {
+  cursor: pointer;
 }
 
 .set-toggle strong {

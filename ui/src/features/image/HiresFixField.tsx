@@ -1,4 +1,5 @@
 import { useId, useState } from "react";
+import { HelpHint } from "../../components/HelpHint";
 import {
   HIRES_DENOISE_MAX,
   HIRES_DENOISE_MIN,
@@ -25,10 +26,18 @@ type Props = {
 
 /** Hi-Res-Fix: render once at the requested size, then upscale that latent
  *  and re-sample it at a low denoise. Text-to-image only — an image *edit*
- *  and Story Studio's own submit path never show this. */
+ *  and Story Studio's own submit path never show this. Every caption is a
+ *  `<label for>` beside its `?` hint, never wrapping it, so the hint's name
+ *  never joins the control's. */
 export function HiresFixField({ value, onChange, width, height, steps }: Props) {
   const [advancedOpen, setAdvancedOpen] = useState(false);
-  const advancedId = useId();
+  const ids = useId();
+  const advancedId = `${ids}-adv`;
+  const enableId = `${ids}-enable`;
+  const scaleId = `${ids}-scale`;
+  const denoiseId = `${ids}-denoise`;
+  const stepsId = `${ids}-steps`;
+  const methodId = `${ids}-method`;
 
   const patch = (next: Partial<HiresFixSettings>) => onChange({ ...value, ...next });
 
@@ -38,21 +47,27 @@ export function HiresFixField({ value, onChange, width, height, steps }: Props) 
   return (
     <fieldset className="hiresfix">
       <legend>Hi-res fix</legend>
-      <label className="hiresfix__check">
+      <div className="hiresfix__check">
         <input
+          id={enableId}
           type="checkbox"
           checked={value.enabled}
           onChange={(e) => patch({ enabled: e.target.checked })}
         />
-        <span>Render once, then refine the result at a higher resolution</span>
-      </label>
+        <label htmlFor={enableId}>Render once, then refine the result at a higher resolution</label>
+        <HelpHint area="image" setting="hires-enable" describes={enableId} />
+      </div>
 
       {value.enabled && (
         <>
           <div className="imgform__grid">
-            <label className="imgform__field">
-              <span>Scale</span>
+            <div className="imgform__field">
+              <span>
+                <label htmlFor={scaleId}>Scale</label>
+                <HelpHint area="image" setting="hires-scale" describes={scaleId} />
+              </span>
               <select
+                id={scaleId}
                 value={String(value.scaleBy)}
                 onChange={(e) => patch({ scaleBy: Number(e.target.value) })}
               >
@@ -62,17 +77,19 @@ export function HiresFixField({ value, onChange, width, height, steps }: Props) 
                   </option>
                 ))}
               </select>
-            </label>
-            <label className="imgform__field">
+            </div>
+            <div className="imgform__field">
               <span>
+                <label htmlFor={denoiseId}>Denoise</label>
                 {/* The slider itself announces its value, so the visible
-                    read-out would only churn the label's accessible name. */}
-                Denoise{" "}
+                    read-out stays out of the label. */}
                 <span className="hiresfix__value" aria-hidden="true">
                   {value.denoise.toFixed(2)}
                 </span>
+                <HelpHint area="image" setting="hires-denoise" describes={denoiseId} />
               </span>
               <input
+                id={denoiseId}
                 type="range"
                 className="hiresfix__slider"
                 min={HIRES_DENOISE_MIN}
@@ -84,7 +101,7 @@ export function HiresFixField({ value, onChange, width, height, steps }: Props) 
                   if (Number.isFinite(n)) patch({ denoise: snapDenoise(n) });
                 }}
               />
-            </label>
+            </div>
           </div>
 
           <p className="hiresfix__hint">
@@ -107,9 +124,13 @@ export function HiresFixField({ value, onChange, width, height, steps }: Props) 
               The parent owns every value, so nothing is lost by unmounting. */}
           {advancedOpen && (
             <div className="hiresfix__adv" id={advancedId}>
-              <label className="imgform__field">
-                <span>Steps</span>
+              <div className="imgform__field">
+                <span>
+                  <label htmlFor={stepsId}>Steps</label>
+                  <HelpHint area="image" setting="hires-steps" describes={stepsId} />
+                </span>
                 <input
+                  id={stepsId}
                   type="number"
                   inputMode="numeric"
                   step={1}
@@ -121,10 +142,14 @@ export function HiresFixField({ value, onChange, width, height, steps }: Props) 
                     patch({ steps: v === "" ? "" : String(clampHiresSteps(Number(v))) });
                   }}
                 />
-              </label>
-              <label className="imgform__field">
-                <span>Upscale method</span>
+              </div>
+              <div className="imgform__field">
+                <span>
+                  <label htmlFor={methodId}>Upscale method</label>
+                  <HelpHint area="image" setting="hires-upscale-method" describes={methodId} />
+                </span>
                 <select
+                  id={methodId}
                   value={value.upscaleMethod}
                   onChange={(e) => patch({ upscaleMethod: e.target.value })}
                 >
@@ -134,7 +159,7 @@ export function HiresFixField({ value, onChange, width, height, steps }: Props) 
                     </option>
                   ))}
                 </select>
-              </label>
+              </div>
             </div>
           )}
         </>

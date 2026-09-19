@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useId, useState } from "react";
+import { HelpHint } from "../../components/HelpHint";
 import { createScene, updateScene, type Character, type DialogueLineBody, type SceneDetail, type StoryLocation } from "../../lib/ipc";
 
 interface DraftLine extends DialogueLineBody {
@@ -37,6 +38,9 @@ export function SceneEditor({
   const [participantIds, setParticipantIds] = useState<string[]>(initial?.participant_ids ?? []);
   const [lines, setLines] = useState<DraftLine[]>(() => draftLinesOf(initial));
   const [saving, setSaving] = useState(false);
+  const ids = useId();
+  const redlineId = `${ids}-redline`;
+  const dialogueId = `${ids}-dialogue`;
 
   const toggleParticipant = (id: string) => {
     const isRemoving = participantIds.includes(id);
@@ -85,14 +89,18 @@ export function SceneEditor({
 
   return (
     <div className="scene-editor">
-      <label>
-        Redline
+      <div className="scene-editor__field">
+        <span>
+          <label htmlFor={redlineId}>Redline</label>
+          <HelpHint area="stories" setting="scene" describes={redlineId} />
+        </span>
         <input
+          id={redlineId}
           value={redline}
           onChange={(e) => setRedline(e.target.value)}
           placeholder="e.g. 5 travelers meet in a tavern, suddenly a shivering roar in the mountain"
         />
-      </label>
+      </div>
       <label>
         Narrative
         <textarea value={narrative} onChange={(e) => setNarrative(e.target.value)} rows={4} />
@@ -124,8 +132,11 @@ export function SceneEditor({
         ))}
       </fieldset>
 
-      <fieldset className="scene-editor__dialogue">
-        <legend>Dialogue (always shown as overlay text, never in the image)</legend>
+      <fieldset className="scene-editor__dialogue" id={dialogueId}>
+        <legend>
+          Dialogue (always shown as overlay text, never in the image){" "}
+          <HelpHint area="stories" setting="dialogue" describes={dialogueId} />
+        </legend>
         {lines.map((line) => (
           <div key={line.key} className="scene-editor__line">
             <select

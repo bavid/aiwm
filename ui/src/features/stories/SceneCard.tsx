@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useId, useState } from "react";
+import { HelpHint } from "../../components/HelpHint";
 import {
   addSceneImage,
   deleteScene,
@@ -36,6 +37,7 @@ export function SceneCard({
   onChanged: () => void;
 }) {
   const [generating, setGenerating] = useState(false);
+  const generateId = useId();
 
   const nameOf = (id: string) => characters.find((c) => c.id === id)?.name ?? "(unknown)";
   const locationName = locations.find((l) => l.id === scene.location_id)?.name ?? null;
@@ -105,19 +107,18 @@ export function SceneCard({
       </div>
 
       <div className="scene-card__image-actions">
-        <button
-          type="button"
-          onClick={generate}
-          disabled={generating}
-          title={
-            anchorJobId
-              ? `Anchored to ${soloParticipant?.name}'s portrait for a consistent look`
-              : undefined
-          }
-        >
+        <button id={generateId} type="button" onClick={generate} disabled={generating}>
           {generating ? "Generating…" : canonical ? "Generate alternate" : "Generate image"}
           {anchorJobId && !generating && " (anchored)"}
+          {anchorJobId && !generating && (
+            <span className="visually-hidden"> — to {soloParticipant?.name}'s portrait</span>
+          )}
         </button>
+        {anchorJobId ? (
+          <HelpHint area="stories" setting="consistency-anchor" describes={generateId} />
+        ) : (
+          <HelpHint area="stories" setting="scene-images" describes={generateId} />
+        )}
         {alternates.length > 0 && (
           <ul className="scene-card__alternates">
             {alternates.map((img) => (

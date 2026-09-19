@@ -1,3 +1,4 @@
+import { HelpHint } from "../../components/HelpHint";
 import type { Benchmark } from "../../lib/ipc";
 import { ShortMark } from "./ShortMark";
 import {
@@ -48,7 +49,9 @@ export function Comparison({
 
   return (
     <section className="card bench__compare" aria-label="Model comparison">
-      <h2>Comparison</h2>
+      <h2>
+        Comparison <HelpHint area="benchmark" setting="comparison" />
+      </h2>
       <div className="bench__tablewrap">
         <table className="bench__table bench__table--bars">
           <caption>

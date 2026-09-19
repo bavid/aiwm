@@ -148,11 +148,6 @@ export const FrameCard = memo(function FrameCard({
           data-empty={!hasThumb}
           data-drag-handle
           draggable
-          title={
-            isCompact
-              ? frame.caption || frame.tag
-              : "Click to select · Ctrl-click to add · Shift-click for a range · drag to move"
-          }
           onClick={(e) => onSelectClick(frame, modifiersOf(e))}
           onDragStart={(e) => onDragStart(frame, e)}
           onDragEnd={onDragEnd}
@@ -162,11 +157,7 @@ export const FrameCard = memo(function FrameCard({
           {hasThumb && (
             <img src={imageUrl} alt={frame.caption || frame.tag} loading="lazy" draggable={false} />
           )}
-          <label
-            className="framecard__select"
-            title="Add to or remove from the selection"
-            onClick={(e) => e.stopPropagation()}
-          >
+          <label className="framecard__select" onClick={(e) => e.stopPropagation()}>
             <input
               type="checkbox"
               checked={isSelected}
@@ -185,8 +176,9 @@ export const FrameCard = memo(function FrameCard({
             <span className="framecard__badge framecard__badge--excluded">Excluded</span>
           ) : (
             frame.caption_engine === "qwen2.5-vl" && (
-              <span className="framecard__badge" title="Re-captioned with temporal context">
+              <span className="framecard__badge">
                 Qwen
+                <span className="visually-hidden"> — re-captioned with temporal context</span>
               </span>
             )
           )}
