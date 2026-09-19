@@ -574,3 +574,89 @@ async fn clear_finished_is_a_noop_when_nothing_is_terminal() {
     assert_eq!(m.clear_finished().await.unwrap(), 0);
     assert_eq!(m.list().await.unwrap().len(), 1);
 }
+
+fn idle_manager(db: &Database, tmp: &std::path::Path) -> DownloadManager {
+    DownloadManager::new(
+        db.clone(),
+        tmp.join("store"),
+        tmp.join(".downloads"),
+        Arc::new(AtomicBool::new(false)),
+    )
+}
+
+fn req_with_sha(name: &str, sha256: &str) -> EnqueueRequest {
+    EnqueueRequest {
+        sha256: Some(sha256.into()),
+        ..req(name)
+    }
+}
+
+/// Two tabs (or two clicks) installing the same catalog file must not queue
+/// it twice: while a download of that SHA-256 is still active (queued,
+/// running, paused or verifying), a second enqueue hands back that download.
+#[tokio::test]
+async fn an_enqueue_of_a_file_already_downloading_returns_the_active_download() {
+    let tmp = tempfile::tempdir().unwrap();
+    let db = Database::connect_in_memory().await.unwrap();
+    let m = idle_manager(&db, tmp.path());
+    let sha = "ab".repeat(32);
+
+    let first = m.enqueue(req_with_sha("model.onnx", &sha)).await.unwrap();
+    for state in [
+        DownloadState::Queued,
+        DownloadState::Running,
+        DownloadState::Paused,
+        DownloadState::Verifying,
+    ] {
+        db.downloads()
+            .set_state(&first.id, state, None)
+            .await
+            .unwrap();
+        // Same file, hash in another case -- still the same file.
+        let again = m
+            .enqueue(req_with_sha("model.onnx", &sha.to_ascii_uppercase()))
+            .await
+            .unwrap();
+        assert_eq!(again.id, first.id, "{state:?}");
+        assert_eq!(again.state, state);
+    }
+    assert_eq!(m.list().await.unwrap().len(), 1, "queued exactly once");
+}
+
+/// A finished or failed earlier attempt is history, not an active download:
+/// asking again queues a fresh one.
+#[tokio::test]
+async fn a_finished_or_failed_download_of_the_same_file_does_not_block_a_new_one() {
+    let tmp = tempfile::tempdir().unwrap();
+    let db = Database::connect_in_memory().await.unwrap();
+    let m = idle_manager(&db, tmp.path());
+    let sha = "cd".repeat(32);
+
+    let done = m.enqueue(req_with_sha("a.onnx", &sha)).await.unwrap();
+    db.downloads()
+        .set_state(&done.id, DownloadState::Done, None)
+        .await
+        .unwrap();
+    let second = m.enqueue(req_with_sha("a.onnx", &sha)).await.unwrap();
+    assert_ne!(second.id, done.id);
+
+    db.downloads()
+        .set_state(&second.id, DownloadState::Failed, Some("boom"))
+        .await
+        .unwrap();
+    let third = m.enqueue(req_with_sha("a.onnx", &sha)).await.unwrap();
+    assert_ne!(third.id, second.id);
+    assert_eq!(m.list().await.unwrap().len(), 3);
+}
+
+/// Without a hash there is no way to tell two files apart -- nothing merges.
+#[tokio::test]
+async fn downloads_without_a_hash_are_never_merged() {
+    let tmp = tempfile::tempdir().unwrap();
+    let db = Database::connect_in_memory().await.unwrap();
+    let m = idle_manager(&db, tmp.path());
+
+    let a = m.enqueue(req("same.gguf")).await.unwrap();
+    let b = m.enqueue(req("same.gguf")).await.unwrap();
+    assert_ne!(a.id, b.id);
+}

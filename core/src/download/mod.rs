@@ -100,9 +100,19 @@ impl DownloadManager {
     /// Queue a download. Refused in offline mode, or when the store volume
     /// clearly cannot hold the file (Phase 6.8 — the size only counts once, on
     /// the store volume, since `import_model` moves it there).
+    ///
+    /// Idempotent per file: while a download with the same SHA-256 is still
+    /// active (queued, running, paused or verifying) that download is returned
+    /// unchanged instead of queuing the file a second time — two tabs, or two
+    /// quick clicks, installing the same catalog stack must not fetch it
+    /// twice. The caller sees the existing row's `state` and treats it as
+    /// "already downloading". Without a hash nothing is merged.
     pub async fn enqueue(&self, req: EnqueueRequest) -> Result<Download> {
         if self.is_offline() {
             return Err(err("offline mode is on — cannot download"));
+        }
+        if let Some(active) = self.active_with_sha256(req.sha256.as_deref()).await? {
+            return Ok(active);
         }
         if let Some(size) = req.size_bytes {
             if let Some((free, _total)) = crate::cleanup::volume_free(&self.store_root) {
@@ -135,6 +145,20 @@ impl DownloadManager {
             .await?;
         self.wake.notify_one();
         Ok(d)
+    }
+
+    /// The newest not-yet-terminal download of the file with this SHA-256
+    /// (compared case-insensitively), if any.
+    async fn active_with_sha256(&self, sha256: Option<&str>) -> Result<Option<Download>> {
+        let Some(want) = sha256.map(str::trim).filter(|s| !s.is_empty()) else {
+            return Ok(None);
+        };
+        Ok(self.db.downloads().list().await?.into_iter().find(|d| {
+            !d.state.is_terminal()
+                && d.sha256
+                    .as_deref()
+                    .is_some_and(|have| have.trim().eq_ignore_ascii_case(want))
+        }))
     }
 
     pub async fn list(&self) -> Result<Vec<Download>> {
