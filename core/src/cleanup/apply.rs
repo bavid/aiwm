@@ -44,7 +44,7 @@ use crate::db::{Database, NewCleanupLogEntry};
 use crate::{CoreError, Result};
 
 use super::is_reparse_point;
-use super::scan::{self, capped, display, ScanContext, GROUP_KEYS};
+use super::scan::{self, capped, display, ScanContext, DETAIL_CAP, GROUP_KEYS};
 
 /// Skip reasons this module adds to housekeeping's.
 /// The id is not (or no longer) something the scan offers.
@@ -53,6 +53,9 @@ pub const SKIP_NOT_OFFERED: &str = "not_offered";
 pub const SKIP_MISSING: &str = "missing";
 /// A link or junction: never followed, left alone.
 pub const SKIP_LINK: &str = "link_not_followed";
+/// A staging folder whose download was resumed after the request's
+/// preflight: its row is read again right before deleting, and it stays.
+pub const SKIP_DOWNLOAD_ACTIVE: &str = "download_active";
 
 /// `POST /cleanup/apply`'s body.
 #[derive(Debug, Clone, Deserialize)]
@@ -235,14 +238,35 @@ async fn log(db: &Database, entries: &[EntryResult]) -> Result<()> {
                 freed_bytes: e.bytes,
                 removed_rows: e.rows,
                 skipped_count: e.skipped.len() as u64,
-                detail: serde_json::json!({
-                    "skipped": e.skipped,
-                    "paths": capped(e.paths.iter().cloned()),
-                }),
+                detail: log_detail(e),
             })
             .await?;
     }
     Ok(())
+}
+
+/// The `detail_json` of one log row: the skips and the paths, each capped
+/// at [`DETAIL_CAP`] plus one "… and N more" marker (a skip-shaped one for
+/// the skips, so the list stays homogeneous). The full counts are in the
+/// row's own columns.
+fn log_detail(e: &EntryResult) -> serde_json::Value {
+    let skipped: Vec<SkippedFile> = if e.skipped.len() <= DETAIL_CAP {
+        e.skipped.clone()
+    } else {
+        let more = e.skipped.len() - DETAIL_CAP;
+        e.skipped[..DETAIL_CAP]
+            .iter()
+            .cloned()
+            .chain(std::iter::once(SkippedFile {
+                path: "\u{2026}".into(),
+                reason: format!("\u{2026} and {more} more"),
+            }))
+            .collect()
+    };
+    serde_json::json!({
+        "skipped": skipped,
+        "paths": capped(e.paths.iter().cloned()),
+    })
 }
 
 fn summarise(dry_run: bool, entries: Vec<EntryResult>) -> ApplyResult {

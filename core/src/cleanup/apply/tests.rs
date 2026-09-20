@@ -535,3 +535,107 @@ async fn a_real_apply_writes_one_log_row_per_entry_and_a_dry_run_none() {
     assert_eq!((unknown.deleted_files, unknown.skipped_count), (0, 1));
     assert_eq!(unknown.detail["skipped"][0]["reason"], SKIP_NOT_OFFERED);
 }
+
+/// A staging folder's download row is read again right before that folder
+/// goes — in the caches group itself, not only in the request preflight: a
+/// download resumed (`Failed` → `Queued`) after the preflight keeps its
+/// folder, with reason `download_active`; a still-failed one goes.
+#[tokio::test]
+async fn a_staging_folder_whose_download_resumed_after_the_preflight_is_kept() {
+    let fx = fixture().await;
+    let resumed = fx.download(DownloadState::Failed).await;
+    let failed = fx.download(DownloadState::Failed).await;
+    let staging = fx.paths().downloads_dir();
+    // Between the preflight and the caches group: the daemon's resume.
+    fx.db
+        .downloads()
+        .set_state(&resumed, DownloadState::Queued, None)
+        .await
+        .unwrap();
+
+    let ids = vec![
+        format!("download-staging:{resumed}"),
+        format!("download-staging:{failed}"),
+    ];
+    let r = super::caches::caches(&fx.db, &fx.ctx, &ids, false)
+        .await
+        .unwrap();
+
+    let kept = r.iter().find(|e| e.id == ids[0]).unwrap();
+    assert_eq!(reasons(kept), [SKIP_DOWNLOAD_ACTIVE]);
+    assert_eq!(kept.files, 0);
+    assert!(staging.join(&resumed).join("w.safetensors.part").is_file());
+    let gone = r.iter().find(|e| e.id == ids[1]).unwrap();
+    assert_eq!(gone.files, 1);
+    assert!(!staging.join(&failed).exists());
+}
+
+/// The log row's detail caps the skip list like the path list: 20 entries
+/// plus one "… and N more" marker of the same shape.
+#[test]
+fn log_detail_caps_the_skip_list() {
+    let skipped: Vec<SkippedFile> = (0..25)
+        .map(|i| SkippedFile {
+            path: format!("E:\\x\\{i}.png"),
+            reason: SKIP_LINK.into(),
+        })
+        .collect();
+    let e = EntryResult {
+        group: "caches".into(),
+        id: "cache".into(),
+        skipped: skipped.clone(),
+        paths: (0..30).map(|i| format!("E:\\x\\f{i}")).collect(),
+        ..EntryResult::default()
+    };
+
+    let detail = log_detail(&e);
+
+    let logged = detail["skipped"].as_array().unwrap();
+    assert_eq!(logged.len(), 21);
+    assert_eq!(logged[19]["path"], "E:\\x\\19.png");
+    assert_eq!(logged[20]["path"], "\u{2026}");
+    assert_eq!(logged[20]["reason"], "\u{2026} and 5 more");
+    let paths = detail["paths"].as_array().unwrap();
+    assert_eq!(paths.len(), 21);
+    assert_eq!(paths[20], "\u{2026} and 10 more");
+    // Under the cap nothing is added.
+    let few = EntryResult {
+        skipped: skipped[..3].to_vec(),
+        ..e
+    };
+    assert_eq!(log_detail(&few)["skipped"].as_array().unwrap().len(), 3);
+}
+
+/// A junction physically inside an unclaimed work folder pointing at the
+/// model store: the folder goes as a whole, the junction with it, the
+/// store's file survives.
+#[cfg(windows)]
+#[tokio::test]
+async fn removing_an_unclaimed_folder_never_follows_a_junction_inside_it() {
+    let fx = fixture().await;
+    let weights = fx.ctx.store.join("image").join("big.safetensors");
+    touch(&weights, 10_000, 1);
+    let folder = fx.paths().datasets_dir().join("gone-dataset");
+    touch(&folder.join("raw").join("b.png"), 400, 1);
+    if !crate::training::location::tests::make_junction(&folder.join("models"), &fx.ctx.store) {
+        eprintln!("skipped: cannot create a junction here");
+        return;
+    }
+
+    let r = run(
+        &fx,
+        false,
+        vec![sel("unclaimed_dataset_folders", &["gone-dataset"])],
+    )
+    .await
+    .unwrap();
+
+    let e = by_id(&r, "unclaimed_dataset_folders", "gone-dataset");
+    assert_eq!((e.files, e.bytes), (1, 400), "{:?}", e.skipped);
+    assert!(weights.is_file(), "the junction target is untouched");
+    assert!(
+        !folder.exists(),
+        "the folder and the junction in it are gone"
+    );
+    assert!(fx.ctx.store.join("image").is_dir());
+}

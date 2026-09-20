@@ -20,7 +20,7 @@ use super::super::scan::caches::{
 };
 use super::{
     blocking, canonical_dir, empty_folder, entry, not_offered, refused, remove_tree,
-    strictly_inside, EntryResult, ScanContext, Tally, SKIP_OUTSIDE,
+    strictly_inside, EntryResult, ScanContext, Tally, SKIP_DOWNLOAD_ACTIVE, SKIP_OUTSIDE,
 };
 
 const CACHES: &str = "caches";
@@ -47,18 +47,56 @@ pub(super) async fn caches(
         .filter(|j| !j.state.is_terminal())
         .map(|j| j.id)
         .collect();
-    let ctx = ctx.clone();
-    let ids = ids.to_vec();
-    blocking(move || {
-        let now = OffsetDateTime::now_utc();
-        let active: HashSet<&str> = active_jobs.iter().map(String::as_str).collect();
-        ids.iter()
-            .map(|id| cache_entry(&ctx, id, &active, now, dry_run))
-            .collect()
-    })
-    .await
+    let mut out = Vec::with_capacity(ids.len());
+    for id in ids {
+        let entry = match id.strip_prefix(STAGING_PREFIX) {
+            Some(name) => staging_now(db, ctx, id, name, dry_run).await?,
+            None => {
+                let ctx = ctx.clone();
+                let id = id.clone();
+                let active_jobs = active_jobs.clone();
+                blocking(move || {
+                    let active: HashSet<&str> = active_jobs.iter().map(String::as_str).collect();
+                    cache_entry(&ctx, &id, &active, OffsetDateTime::now_utc(), dry_run)
+                })
+                .await?
+            }
+        };
+        out.push(entry);
+    }
+    Ok(out)
 }
 
+/// One staging folder, its download row read again right before it goes:
+/// the request's preflight ran before the earlier groups, and a failed
+/// download can legally be resumed (`Failed` → `Queued`) in the meantime —
+/// then the daemon writes into this very folder again, and it stays.
+async fn staging_now(
+    db: &Database,
+    ctx: &ScanContext,
+    id: &str,
+    name: &str,
+    dry_run: bool,
+) -> Result<EntryResult> {
+    if let Some(d) = db.downloads().get(name).await? {
+        if !d.state.is_terminal() {
+            return Ok(refused(
+                CACHES,
+                id,
+                &format!("Download staging {name}"),
+                &ctx.paths.downloads_dir().join(name),
+                SKIP_DOWNLOAD_ACTIVE,
+            ));
+        }
+    }
+    let ctx = ctx.clone();
+    let id = id.to_string();
+    let name = name.to_string();
+    blocking(move || staging(&ctx, &id, &name, dry_run)).await
+}
+
+/// The cache, the pending import and the ComfyUI leftovers; a staging id
+/// never reaches this (see [`staging_now`]).
 fn cache_entry(
     ctx: &ScanContext,
     id: &str,
@@ -83,9 +121,6 @@ fn cache_entry(
             &ctx.paths.pending_import_dir(),
             dry_run,
         );
-    }
-    if let Some(name) = id.strip_prefix(STAGING_PREFIX) {
-        return staging(ctx, id, name, dry_run);
     }
     if let Some(sub) = id.strip_prefix(COMFYUI_PREFIX) {
         return comfyui(ctx, id, sub, active, now, dry_run);
