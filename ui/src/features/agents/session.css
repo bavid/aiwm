@@ -1,0 +1,238 @@
+/* The session panel around the transcript: the status line that says whose
+   turn it is, the empty state, and the composer. The transcript's own blocks
+   live in `transcript.css`. Pulled in by `agents.css`. */
+
+.agents__session {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  min-height: 62vh;
+}
+
+.agents__session--empty {
+  min-height: 0;
+}
+
+/* --- header: who, how long, and whose turn it is --- */
+
+.sess__head {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.sess__title {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.sess__profile {
+  padding: 1px var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--accent) 12%, var(--surface));
+  font-size: var(--text-xs);
+  font-weight: 600;
+}
+
+.sess__since {
+  margin-left: auto;
+  color: var(--faint);
+  font-size: var(--text-xs);
+}
+
+/* The state as a dot, a word and a sentence — the sentence is what makes it
+   readable, and it is never colour alone. */
+.sstatus {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-left-width: 3px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  font-size: var(--text-sm);
+}
+
+.sstatus__dot {
+  width: 8px;
+  height: 8px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--muted);
+  transform: translateY(-1px);
+}
+
+.sstatus__hint {
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+.sstatus[data-state="starting"],
+.sstatus[data-state="working"] {
+  border-left-color: var(--load-warn);
+}
+.sstatus[data-state="starting"] .sstatus__dot,
+.sstatus[data-state="working"] .sstatus__dot {
+  background: var(--load-warn);
+}
+
+.sstatus[data-state="idle"] {
+  border-left-color: var(--load-ok);
+}
+.sstatus[data-state="idle"] .sstatus__dot {
+  background: var(--load-ok);
+}
+
+.sstatus[data-state="awaiting_approval"] {
+  border-left-color: var(--accent);
+  background: color-mix(in oklab, var(--accent) 8%, var(--surface));
+}
+.sstatus[data-state="awaiting_approval"] .sstatus__dot {
+  background: var(--accent);
+}
+
+.sstatus[data-state="failed"] {
+  border-left-color: var(--load-crit);
+}
+.sstatus[data-state="failed"] .sstatus__dot {
+  background: var(--load-crit);
+}
+
+.sess__jump {
+  align-self: flex-start;
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid color-mix(in oklab, var(--accent) 45%, var(--border));
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--accent);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.sess__jump:hover {
+  background: color-mix(in oklab, var(--accent) 10%, var(--surface));
+}
+
+/* --- the empty panel: what will appear here, and what to press --- */
+
+.sess__placeholder {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+
+.sess__placeholder-lead {
+  margin: 0;
+  font-size: var(--text-md);
+}
+
+.sess__preview {
+  margin: 0;
+  padding-left: var(--space-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  color: var(--muted);
+  font-size: var(--text-sm);
+  line-height: 1.55;
+}
+
+.sess__over {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  align-items: flex-start;
+}
+
+/* --- composer --- */
+
+.agents__composer {
+  display: grid;
+  gap: var(--space-2);
+  border-top: 1px solid var(--border);
+  padding-top: var(--space-3);
+}
+
+.agents__composer textarea {
+  resize: vertical;
+  min-height: 2.8em;
+  max-height: 30vh;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--text);
+  font: inherit;
+  line-height: 1.5;
+}
+
+.agents__composer textarea:disabled {
+  opacity: 0.6;
+}
+
+.agents__composer textarea:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.agents__composer-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.agents__composer-actions button[type="submit"] {
+  padding: var(--space-2) var(--space-4);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: var(--accent);
+  color: var(--accent-fg);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.agents__composer-actions button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.agents__stop {
+  margin-left: auto;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.agents__stop:hover:not(:disabled) {
+  color: var(--load-crit);
+  border-color: color-mix(in oklab, var(--load-crit) 40%, var(--border));
+}
+
+.agents__newbtn {
+  align-self: flex-start;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.agents__newbtn:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}

@@ -1,18 +1,44 @@
 import type { HelpSetting, HelpTopic } from "./types.ts";
 
-/** Agents tab: profiles (OpenCode / Hermes), sessions with approvals, the
- *  external terminal launcher. Facts from `features/agents/*`
- *  (`Agents.tsx`, `NewProfileForm.tsx`, `SessionPanel.tsx`,
- *  `TranscriptView.tsx`, `LauncherPanel.tsx`) and the E2E notes in
- *  `docs/TODO.md` (2026-09-12). */
+/** Agents tab: the start-here checklist, the runtime cards, profiles
+ *  (OpenCode / Hermes), sessions with approvals, the external terminal
+ *  launcher. Facts from `features/agents/*` (`Agents.tsx`, `StartHere.tsx`,
+ *  `RuntimeCards.tsx`, `ProfileList.tsx`, `NewProfileForm.tsx`,
+ *  `SessionPanel.tsx`, `TranscriptView.tsx`, `LauncherPanel.tsx`) and the E2E
+ *  notes in `docs/TODO.md` (2026-09-12). */
 
 const SETTINGS: readonly HelpSetting[] = [
+  {
+    key: "start-here",
+    label: "Start here",
+    what: "The checklist at the top of the tab: a coding model, an installed runtime, a profile — the three things that must exist before an agent can run.",
+    why: "Each one lives on a different surface (the Models tab, a runtime card, the profile form), so a first visit otherwise opens on a wall of controls with no obvious first step.",
+    effect: "A step that is missing says what to do and, for the profile, opens the form. Once all three hold, the checklist collapses to one line naming the next action.",
+    benefit: "One place that answers \"what is stopping me\" without reading the whole page.",
+  },
+  {
+    key: "runtime-status",
+    label: "Runtime status",
+    what: "One card per agent runtime: installed or not, what it is, and how many of your coding models it can actually drive.",
+    why: "Both facts decide whether a session can start, and both used to be visible only inside the collapsed profile form.",
+    effect: "A missing runtime shows its install step — \"Install Hermes\" for Hermes, the npm line for OpenCode. The model line counts the coding models, and for Hermes counts how many reach its context floor.",
+    benefit: "The state of the two runtimes is readable at a glance, before you fill in a form.",
+    pitfalls: "Hermes needs at least 64,000 tokens of context, for its main model and its auxiliary compression model alike; the Qwen2.5-Coder 14B models tested here are 32K and do not meet it (2026-09-12). A profile still saves, but the session errors out immediately.",
+  },
+  {
+    key: "transcript",
+    label: "Transcript",
+    what: "The scrolling record of a session: the agent's messages, each tool call with its command and output, each approval prompt and what you answered.",
+    why: "What the agent did matters more than what it said, so tool calls are cards rather than prose.",
+    effect: "Blocks carry the time they started and who they came from. A tool's output folds after 12 lines with a button to show all of it. An answered approval keeps its decision on screen — \"Allowed once\", \"Allowed for this session\" or \"Denied\" — instead of only fading.",
+    benefit: "A long run stays scannable: you can find the one command that failed without scrolling through a file dump.",
+  },
   {
     key: "runtime",
     label: "Runtime",
     what: "Which agent program drives the session: OpenCode or Hermes.",
     why: "They are different tools with different requirements: OpenCode is a Node program you install yourself (opencode-ai on npm, on your PATH); Hermes is a Python service the app can install for you.",
-    effect: "A runtime that is not installed disables Create; the form shows how to get it. \"Install Hermes\" pulls about 120 packages plus its own toolchain — a few minutes, with a progress line.",
+    effect: "A runtime that is not installed disables Create and says so; its card above has the install step. \"Install Hermes\" pulls about 120 packages plus its own toolchain — a few minutes, with a progress line.",
     benefit: "Pick the tool; the app runs it against your local model.",
     pitfalls: "Hermes requires a model with at least 64,000 tokens of context — for its main model and its auxiliary compression model alike. The Qwen2.5-Coder 14B models tested here are 32K and do not meet it (2026-09-12); OpenCode has no such requirement and works after the context fix.",
   },
@@ -54,7 +80,7 @@ const SETTINGS: readonly HelpSetting[] = [
     label: "Session",
     what: "One conversation with the agent in the chosen workspace: transcript, tool calls with their command and output, approvals, a composer, Stop.",
     why: "The transcript is where you see what the agent did, not only what it said.",
-    effect: "New session starts the runtime and its model (\"Starting the runtime…\"); Send is enabled while the agent is idle; Stop ends the session. One session runs at a time — the profile list is disabled while one is open.",
+    effect: "Start session brings up the runtime and its model; the status line says whose turn it is (\"Starting\", \"Working\", \"Needs your approval\", \"Your turn\"); Stop session ends it. One session runs at a time — the profile rows say so instead of going quietly dead.",
     benefit: "A coding agent on your own model, on your own machine.",
     pitfalls: "Turns can take longer than 30 seconds; the adapters stream over a dedicated connection so a long turn no longer counts as a dead runtime (fixed 2026-09-12).",
   },
@@ -65,7 +91,7 @@ const SETTINGS: readonly HelpSetting[] = [
     why: "Some people want the tool's own interface, not the embedded transcript.",
     effect: "The model is loaded and kept for the terminal; you drive the tool yourself. The terminal keeps running after AIWM closes — but the model server does not, so closing AIWM leaves the terminal with a dead connection. \"Stop & release model\" frees the model.",
     benefit: "The native tool, with the model management done for you.",
-    pitfalls: "Only one external launch at a time; Hermes must be installed first (see the profile form).",
+    pitfalls: "Only one external launch at a time; Hermes must be installed first (see its runtime card).",
   },
 ];
 
@@ -92,11 +118,11 @@ export const AGENTS_TOPICS: readonly HelpTopic[] = [
         kind: "steps",
         items: [
           "Models tab: import a coding GGUF and give it the \"coding\" role (the Code catalogue tab does this on download).",
-          "Install the runtime: OpenCode yourself (npm), Hermes from the profile form.",
+          "Install the runtime: OpenCode yourself (npm), Hermes from its runtime card.",
           "+ New profile: name, runtime, coding model, workspace folder, optional extra read-only folders. Create.",
-          "New session. Wait for \"idle\", then type what you want done — Enter sends.",
-          "Answer each approval prompt: Allow once, Always (for the shown pattern), or leave it and Stop.",
-          "Stop ends the session; Close transcript clears the panel. Delete removes a profile.",
+          "Start session. Wait for \"Your turn\", then type what you want done — Enter sends.",
+          "Answer each approval prompt: Allow once, allow the shown pattern for the session, or Deny.",
+          "Stop session ends it; Close transcript clears the panel. Delete removes a profile, after a confirm.",
         ],
       },
     ],

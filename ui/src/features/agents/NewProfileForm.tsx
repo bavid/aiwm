@@ -1,24 +1,30 @@
 import { useId, useState } from "react";
 import { HelpHint } from "../../components/HelpHint";
-import { useAgentRuntimes } from "../../lib/hooks";
-import { createAgent, installHermes, type AgentInstallStatus } from "../../lib/ipc";
+import { createAgent, type AgentRuntime } from "../../lib/ipc";
+import {
+  autoPick,
+  ctxLabel,
+  HERMES_CTX_FLOOR,
+  meetsHermesFloor,
+  runtimeName,
+  type CodingModel,
+} from "./labels";
 
-const RUNTIME_LABEL: Record<string, string> = {
-  opencode: "OpenCode",
-  hermes: "Hermes",
-};
-
-/** The collapsible "New profile" form. `codingModels` are the library models
- *  carrying the `coding` role. */
+/** The "New profile" form. `open` lives in the parent so the "Start here"
+ *  checklist can open it — the one control a first-time visitor needs. */
 export function NewProfileForm({
   codingModels,
+  runtimes,
+  open,
+  onOpenChange,
   onCreated,
 }: {
-  codingModels: { id: string; name: string }[];
+  codingModels: readonly CodingModel[];
+  runtimes: AgentRuntime[] | null;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
   onCreated: () => void;
 }) {
-  const { data: runtimes } = useAgentRuntimes();
-  const [open, setOpen] = useState(false);
   const [adapter, setAdapter] = useState("opencode");
   const [name, setName] = useState("");
   const [workspace, setWorkspace] = useState("");
@@ -35,6 +41,8 @@ export function NewProfileForm({
 
   const rt = (runtimes ?? []).find((r) => r.id === adapter);
   const rtInstalled = rt?.installed ?? adapter === "opencode";
+  const picked = modelId === "auto" ? null : codingModels.find((m) => m.id === modelId);
+  const auto = autoPick(codingModels);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -56,7 +64,7 @@ export function NewProfileForm({
       setWorkspace("");
       setAllowed("");
       setModelId("auto");
-      setOpen(false);
+      onOpenChange(false);
       onCreated();
     } catch (e2) {
       setErr(e2 instanceof Error ? e2.message : String(e2));
@@ -67,14 +75,14 @@ export function NewProfileForm({
 
   if (!open) {
     return (
-      <button type="button" className="agents__addbtn" onClick={() => setOpen(true)}>
+      <button type="button" className="agents__addbtn" onClick={() => onOpenChange(true)}>
         + New profile
       </button>
     );
   }
 
   return (
-    <form className="profform" onSubmit={submit}>
+    <form className="profform" onSubmit={submit} aria-label="New agent profile">
       <div className="profform__field">
         <span>
           <label htmlFor={nameId}>Name</label>
@@ -85,6 +93,7 @@ export function NewProfileForm({
           value={name}
           onChange={(e) => setName(e.target.value)}
           placeholder="Repo coder"
+          autoFocus
         />
       </div>
 
@@ -96,13 +105,18 @@ export function NewProfileForm({
         <select id={runtimeId} value={adapter} onChange={(e) => setAdapter(e.target.value)}>
           {(runtimes ?? [{ id: "opencode", installed: true }]).map((r) => (
             <option key={r.id} value={r.id}>
-              {RUNTIME_LABEL[r.id] ?? r.id}
+              {runtimeName(r.id)}
               {r.installed ? "" : " — not installed"}
             </option>
           ))}
         </select>
       </div>
-      {!rtInstalled && rt && <RuntimeSetup runtime={rt} />}
+      {!rtInstalled && (
+        <p className="profform__warn">
+          {runtimeName(adapter)} is not installed, so Create is off. Its card above has the
+          install step.
+        </p>
+      )}
 
       <div className="profform__field">
         <span>
@@ -113,14 +127,28 @@ export function NewProfileForm({
           <option value="auto">Auto — most-recently-used “coding” model</option>
           {codingModels.map((m) => (
             <option key={m.id} value={m.id}>
-              {m.name}
+              {m.name} — {ctxLabel(m.ctx_max)}
             </option>
           ))}
         </select>
       </div>
-      {codingModels.length === 0 && (
+      {modelId === "auto" && auto && (
         <p className="muted">
-          No model has the “coding” role yet — import a coding GGUF (e.g. Qwen2.5-Coder for
+          Auto would pick <strong>{auto.name}</strong> right now ({ctxLabel(auto.ctx_max)}) —
+          whichever coding model was used last.
+        </p>
+      )}
+      {adapter === "hermes" && picked && !meetsHermesFloor(picked) && (
+        <p className="profform__warn">
+          {picked.name} has a {ctxLabel(picked.ctx_max)}. Hermes needs{" "}
+          {HERMES_CTX_FLOOR.toLocaleString("en-US")} tokens for its main model and its
+          auxiliary compression model alike, and errors out below that. The profile saves;
+          the session will not start.
+        </p>
+      )}
+      {codingModels.length === 0 && (
+        <p className="profform__warn">
+          No model has the “coding” role yet — import a coding GGUF (Qwen2.5-Coder for
           OpenCode, Hermes-3 for Hermes) on the Models tab and tick “coding”.
         </p>
       )}
@@ -156,8 +184,9 @@ export function NewProfileForm({
       </div>
 
       <p className="muted">
-        The agent may run shell commands and edit files — every command and every edit asks for
-        your approval, edits stay inside the workspace, and it has no network access.
+        The agent may run shell commands and edit files — every command and every edit asks
+        for your approval, edits stay inside the workspace folder, and it has no network
+        access.
       </p>
 
       <div className="profform__buttons">
@@ -167,69 +196,15 @@ export function NewProfileForm({
         >
           {busy ? "Creating…" : "Create profile"}
         </button>
-        <button type="button" className="profform__cancel" onClick={() => setOpen(false)}>
+        <button
+          type="button"
+          className="profform__cancel"
+          onClick={() => onOpenChange(false)}
+        >
           Cancel
         </button>
       </div>
       {err && <p className="agents__err">{err}</p>}
     </form>
-  );
-}
-
-function phaseLabel(s: AgentInstallStatus): string {
-  if (s.state === "running") {
-    const pct =
-      s.total_bytes > 0 ? ` ${Math.round((s.done_bytes / s.total_bytes) * 100)}%` : "";
-    return `${s.phase.replace(/_/g, " ")}${pct}…`;
-  }
-  if (s.state === "failed") return `failed: ${s.error}`;
-  return "";
-}
-
-function RuntimeSetup({
-  runtime,
-}: {
-  runtime: { id: string; install?: AgentInstallStatus };
-}) {
-  const [starting, setStarting] = useState(false);
-  const status = runtime.install;
-  const running = status?.state === "running";
-
-  if (runtime.id !== "hermes") {
-    return (
-      <p className="muted">
-        OpenCode isn’t installed. Install <code>opencode-ai</code> (npm) and make sure{" "}
-        <code>opencode</code> is on your PATH, then reopen this form.
-      </p>
-    );
-  }
-
-  const install = async () => {
-    setStarting(true);
-    try {
-      await installHermes();
-    } catch {
-      /* status will show the failure on the next poll */
-    } finally {
-      setStarting(false);
-    }
-  };
-
-  return (
-    <div className="rtsetup">
-      <p className="muted">
-        Hermes runs as a local Python service. Setup pulls ~120 packages plus its own
-        toolchain — a few minutes.
-      </p>
-      <button
-        type="button"
-        onClick={install}
-        disabled={starting || running}
-        className="rtsetup__btn"
-      >
-        {running ? phaseLabel(status) : starting ? "Starting…" : "Install Hermes"}
-      </button>
-      {status?.state === "failed" && <p className="agents__err">{status.error}</p>}
-    </div>
   );
 }

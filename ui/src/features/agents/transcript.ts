@@ -1,9 +1,13 @@
 import type { AgentEventPayload, ToolStatus } from "../../lib/ipc";
 
-/** One rendered transcript entry — a fold of the raw `AgentEvent` stream. */
-export type TextBlock = { block: "text"; text: string };
+/** One rendered transcript entry — a fold of the raw `AgentEvent` stream.
+ *  `ts` is the stamp of the event that opened the block (a text block keeps
+ *  the first delta's time, a tool card the time it was announced), so the
+ *  transcript can be read as a timeline. */
+export type TextBlock = { block: "text"; ts: string; text: string };
 export type ToolBlock = {
   block: "tool";
+  ts: string;
   id: string;
   name: string;
   status: ToolStatus;
@@ -12,13 +16,14 @@ export type ToolBlock = {
 };
 export type PermissionBlock = {
   block: "permission";
+  ts: string;
   id: string;
   kind: string;
   summary: string;
   always: string | null;
 };
-export type IdleBlock = { block: "idle" };
-export type ErrorBlock = { block: "error"; message: string };
+export type IdleBlock = { block: "idle"; ts: string };
+export type ErrorBlock = { block: "error"; ts: string; message: string };
 export type Block = TextBlock | ToolBlock | PermissionBlock | IdleBlock | ErrorBlock;
 
 /** A short one-line label for a tool call's input — the shell command if there
@@ -40,13 +45,14 @@ function commandOf(input: unknown): string | null {
 /** Fold the raw event stream into a readable transcript: consecutive text
  *  deltas merge, a tool call updates in place by id, a permission ask shows
  *  once. */
-export function groupEvents(events: { payload: AgentEventPayload }[]): Block[] {
+export function groupEvents(events: { ts?: string; payload: AgentEventPayload }[]): Block[] {
   const blocks: Block[] = [];
-  for (const { payload } of events) {
+  for (const { ts: rawTs, payload } of events) {
+    const ts = rawTs ?? "";
     if (payload.type === "text") {
       const last = blocks[blocks.length - 1];
       if (last && last.block === "text") last.text += payload.text;
-      else if (payload.text) blocks.push({ block: "text", text: payload.text });
+      else if (payload.text) blocks.push({ block: "text", ts, text: payload.text });
     } else if (payload.type === "tool") {
       const existing = blocks.find(
         (b): b is ToolBlock => b.block === "tool" && b.id === payload.id,
@@ -59,6 +65,7 @@ export function groupEvents(events: { payload: AgentEventPayload }[]): Block[] {
       } else {
         blocks.push({
           block: "tool",
+          ts,
           id: payload.id || `t${blocks.length}`,
           name: payload.name,
           status: payload.status,
@@ -70,6 +77,7 @@ export function groupEvents(events: { payload: AgentEventPayload }[]): Block[] {
       if (!blocks.some((b) => b.block === "permission" && b.id === payload.id)) {
         blocks.push({
           block: "permission",
+          ts,
           id: payload.id,
           kind: payload.kind,
           summary: payload.summary,
@@ -77,9 +85,9 @@ export function groupEvents(events: { payload: AgentEventPayload }[]): Block[] {
         });
       }
     } else if (payload.type === "idle") {
-      if (blocks[blocks.length - 1]?.block !== "idle") blocks.push({ block: "idle" });
+      if (blocks[blocks.length - 1]?.block !== "idle") blocks.push({ block: "idle", ts });
     } else if (payload.type === "error") {
-      blocks.push({ block: "error", message: payload.message });
+      blocks.push({ block: "error", ts, message: payload.message });
     }
   }
   return blocks;

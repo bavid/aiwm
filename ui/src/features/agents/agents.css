@@ -1,219 +1,274 @@
+/* Agents tab — the page shell: one reading order down the page. What this is,
+   what is still missing, the two runtimes, then the work (profiles beside the
+   live session), with the external terminal last as the quiet alternative.
+   The parts live next to their components; this file pulls them in so a panel
+   never depends on another panel's import order. Reuses the app-wide
+   `.card` / `.badge` / `.muted` / `.numeric` vocabulary. */
+
+@import "./profiles.css";
+@import "./session.css";
+@import "./transcript.css";
+@import "./launcher.css";
+
 .agents {
-  display: grid;
-  grid-template-columns: minmax(320px, 380px) minmax(0, 1fr);
-  gap: var(--space-4);
-  max-width: 1100px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  max-width: 1160px;
   margin: 0 auto;
-  align-items: start;
+  width: 100%;
 }
 
-@media (max-width: 900px) {
-  .agents {
-    grid-template-columns: 1fr;
-  }
+/* --- page header --- */
+
+.agents__head h1 {
+  font-size: var(--text-xl);
 }
 
-.agents__profiles,
-.agents__session {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-4);
-}
-
-.agents__session {
-  min-height: 60vh;
-}
-
-/* --- profile list --- */
-
-.prof-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-}
-
-.prof {
-  display: flex;
-  gap: var(--space-3);
-  padding: var(--space-3);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--surface-2);
-}
-
-.prof__main {
-  display: grid;
-  gap: 2px;
-  min-width: 0;
-  flex: 1;
-}
-
-.prof__name {
-  font-weight: 600;
-}
-
-.prof__badges {
-  display: flex;
-  gap: var(--space-1);
-  margin: 2px 0;
-}
-
-.prof__path,
-.prof__extra {
-  font-size: var(--text-xs);
+.agents__lede {
+  margin: var(--space-2) 0 0;
+  max-width: 68ch;
   color: var(--muted);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.prof__actions {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-  align-self: center;
-}
-
-.prof__go {
-  padding: var(--space-1) var(--space-3);
-  border: 1px solid transparent;
-  border-radius: var(--radius-sm);
-  background: var(--accent);
-  color: var(--accent-fg);
-  font-weight: 600;
-  cursor: pointer;
-}
-
-.prof__del {
-  padding: 1px var(--space-2);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--muted);
-  font-size: var(--text-xs);
-  cursor: pointer;
-}
-
-.prof__del:hover:not(:disabled) {
-  color: var(--load-crit);
-  border-color: color-mix(in oklab, var(--load-crit) 40%, var(--border));
-}
-
-.prof__go:disabled,
-.prof__del:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
-}
-
-.badge {
-  display: inline-flex;
-  align-items: center;
-  padding: 1px var(--space-2);
-  border-radius: 999px;
-  background: color-mix(in oklab, var(--accent) 14%, var(--surface));
-  color: var(--text);
-  font-size: var(--text-xs);
-  border: 1px solid var(--border);
-}
-
-.badge--soft {
-  background: var(--surface);
-  color: var(--muted);
-}
-
-.badge--warn {
-  background: color-mix(in oklab, var(--load-warn) 22%, var(--surface));
-  border-color: color-mix(in oklab, var(--load-warn) 45%, var(--border));
-}
-
-/* --- new profile form --- */
-
-.agents__addbtn {
-  align-self: flex-start;
-  padding: var(--space-2) var(--space-3);
-  border: 1px dashed var(--border);
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--muted);
-  cursor: pointer;
-}
-
-.agents__addbtn:hover {
-  color: var(--text);
-  border-color: var(--accent);
-}
-
-.profform {
-  display: grid;
-  gap: var(--space-3);
-  padding: var(--space-4);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--surface-2);
-}
-
-.profform__field {
-  display: grid;
-  gap: var(--space-1);
   font-size: var(--text-sm);
+  line-height: 1.6;
 }
 
-.profform__field span {
-  color: var(--muted);
+.agents h2 {
+  font-size: var(--text-md);
 }
 
-/* The field's caption: a `<label for>` beside its `?` hint. */
-.profform__field > span {
-  display: inline-flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: var(--space-2);
-}
-
-.profform__field input,
-.profform__field select {
-  padding: var(--space-2);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--surface);
-  color: var(--text);
-  font: inherit;
-}
-
-.profform__buttons {
-  display: flex;
-  gap: var(--space-2);
-}
-
-.profform__buttons button {
-  padding: var(--space-2) var(--space-4);
-  border: 1px solid transparent;
-  border-radius: var(--radius-sm);
-  background: var(--accent);
-  color: var(--accent-fg);
-  font-weight: 600;
-  cursor: pointer;
-}
-
-.profform__buttons button:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.profform__cancel {
-  background: transparent !important;
-  color: var(--muted) !important;
-  border-color: var(--border) !important;
-  font-weight: 400 !important;
+.agents h3 {
+  font-size: var(--text-sm);
+  letter-spacing: 0.01em;
 }
 
 .agents__err {
   margin: 0;
   color: var(--load-crit);
   font-size: var(--text-sm);
+}
+
+/* --- "start here" checklist, and the one-line strip it becomes --- */
+
+.agents__start {
+  border-color: color-mix(in oklab, var(--accent) 32%, var(--border));
+}
+
+.agents__start-lede {
+  margin: calc(-1 * var(--space-2)) 0 var(--space-4);
+  max-width: 62ch;
+}
+
+.startlist {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  counter-reset: startstep;
+}
+
+.startstep {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+
+.startstep[data-done="true"] {
+  opacity: 0.6;
+}
+
+.startstep__mark {
+  counter-increment: startstep;
+  width: 20px;
+  height: 20px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+
+/* Not done: the step number, so the order is explicit. Done: a tick. */
+.startstep[data-done="false"] .startstep__mark::before {
+  content: counter(startstep);
+}
+
+.startstep[data-done="true"] .startstep__mark {
+  border-color: var(--load-ok);
+  color: var(--load-ok);
+}
+
+.startstep__body {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  flex: 1;
+  min-width: 0;
+}
+
+.startstep__label {
+  font-weight: 600;
+  font-size: var(--text-sm);
+}
+
+.startstep__hint {
+  color: var(--muted);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+}
+
+.agents__step-btn {
+  flex: none;
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: var(--accent);
+  color: var(--accent-fg);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.agents__step-btn:hover {
+  background: color-mix(in oklab, var(--accent) 85%, var(--text));
+}
+
+/* The collapsed form of the checklist: everything is in place, so one line.
+   Deliberately not a flex row — running text must not be cut into flex items,
+   or every element boundary inside the sentence grows a gap. */
+.agents__ready {
+  margin: 0;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid color-mix(in oklab, var(--accent) 28%, var(--border));
+  border-radius: var(--radius);
+  background: color-mix(in oklab, var(--accent) 7%, var(--surface));
+  font-size: var(--text-sm);
+  line-height: 1.6;
+}
+
+.agents__ready-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: var(--space-2);
+  border-radius: 50%;
+  transform: translateY(-1px);
+  background: var(--load-ok);
+}
+
+.agents__ready-dot[data-state="live"] {
+  background: var(--accent);
+}
+
+/* --- runtime cards --- */
+
+.rtrow {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.rtrow__head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+
+/* `start`, not stretch: a runtime with nothing to fix ends where its text
+   ends instead of padding itself out to match the one that needs an install
+   step. */
+.rtrow__cards {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3);
+  align-items: start;
+}
+
+.rtcard {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-4);
+}
+
+.rtcard[data-installed="true"] {
+  border-color: color-mix(in oklab, var(--load-ok) 28%, var(--border));
+}
+
+.rtcard__head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.rtcard__status {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.rtcard__status[data-state="ok"] {
+  color: var(--load-ok);
+}
+
+.rtcard__status[data-state="crit"] {
+  color: var(--load-crit);
+}
+
+.rtcard__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--faint);
+}
+
+.rtcard__dot[data-state="ok"] {
+  background: var(--load-ok);
+}
+
+.rtcard__dot[data-state="crit"] {
+  background: var(--load-crit);
+}
+
+.rtcard__blurb,
+.rtcard__models {
+  margin: 0;
+  font-size: var(--text-sm);
+  line-height: 1.55;
+}
+
+.rtcard__models {
+  padding-top: var(--space-1);
+  border-top: 1px dashed var(--border);
+  color: var(--text);
+}
+
+.rtcard__todo {
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  border-left: 2px solid color-mix(in oklab, var(--load-warn) 60%, var(--border));
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  background: color-mix(in oklab, var(--load-warn) 8%, var(--surface));
+  font-size: var(--text-xs);
+  line-height: 1.6;
+}
+
+.rtcard__todo code {
+  font-family: var(--font-mono);
+  font-size: 0.95em;
 }
 
 .rtsetup {
@@ -235,326 +290,27 @@
   cursor: pointer;
 }
 
+.rtsetup__btn:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
 .rtsetup__btn:disabled {
   opacity: 0.6;
   cursor: default;
 }
 
-/* --- session panel --- */
+/* --- work area: profiles beside the session --- */
 
-.state {
-  font-weight: 600;
-  color: var(--muted);
-}
-
-.state[data-state="working"],
-.state[data-state="starting"] {
-  color: var(--load-warn);
-}
-
-.state[data-state="idle"] {
-  color: var(--load-ok);
-}
-
-.state[data-state="awaiting_approval"] {
-  color: var(--accent);
-}
-
-.state[data-state="failed"] {
-  color: var(--load-crit);
-}
-
-.transcript {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-  padding-right: var(--space-2);
-}
-
-.tblock {
-  max-width: 92%;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
-.tblock--text {
-  padding: var(--space-3);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm) var(--radius) var(--radius) var(--radius);
-  background: var(--surface);
-}
-
-.tblock--idle {
-  align-self: center;
-  color: var(--muted);
-  font-size: var(--text-xs);
-  letter-spacing: 0.04em;
-}
-
-.tblock--error {
-  padding: var(--space-2) var(--space-3);
-  border: 1px solid color-mix(in oklab, var(--load-crit) 45%, var(--border));
-  border-radius: var(--radius-sm);
-  background: color-mix(in oklab, var(--load-crit) 8%, var(--surface));
-  color: var(--load-crit);
-  font-size: var(--text-sm);
-}
-
-/* --- tool call card --- */
-
-.tool {
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--surface-2);
-  overflow: hidden;
-}
-
-.tool[data-status="running"] {
-  border-color: color-mix(in oklab, var(--load-warn) 40%, var(--border));
-}
-
-.tool[data-status="error"] {
-  border-color: color-mix(in oklab, var(--load-crit) 40%, var(--border));
-}
-
-.tool[data-status="done"] {
-  border-color: color-mix(in oklab, var(--load-ok) 35%, var(--border));
-}
-
-.tool__head {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-2) var(--space-3);
-  border-bottom: 1px solid var(--border);
-}
-
-.tool__name {
-  font-family: var(--font-mono);
-  font-size: var(--text-sm);
-  font-weight: 600;
-}
-
-.tool__status {
-  margin-left: auto;
-  font-size: var(--text-xs);
-  color: var(--muted);
-}
-
-.tool__cmd,
-.tool__out {
-  margin: 0;
-  padding: var(--space-2) var(--space-3);
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
-  line-height: 1.5;
-  white-space: pre-wrap;
-  word-break: break-word;
-  overflow-x: auto;
-}
-
-.tool__cmd {
-  color: var(--text);
-}
-
-.tool__out {
-  color: var(--muted);
-  border-top: 1px dashed var(--border);
-  max-height: 240px;
-  overflow-y: auto;
-}
-
-/* --- approval prompt --- */
-
-.approval {
-  border: 1px solid color-mix(in oklab, var(--accent) 45%, var(--border));
-  border-radius: var(--radius-sm);
-  background: color-mix(in oklab, var(--accent) 8%, var(--surface));
-  padding: var(--space-3);
+.agents__work {
   display: grid;
-  gap: var(--space-2);
+  grid-template-columns: minmax(340px, 400px) minmax(0, 1fr);
+  gap: var(--space-4);
+  align-items: start;
 }
 
-.approval[data-answered="true"] {
-  opacity: 0.55;
-}
-
-.approval__head {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-}
-
-.approval__kind {
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
-  color: var(--muted);
-}
-
-.approval__cmd {
-  margin: 0;
-  padding: var(--space-2) var(--space-3);
-  border-radius: var(--radius-sm);
-  background: var(--surface);
-  border: 1px solid var(--border);
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
-.approval__actions {
-  display: flex;
-  gap: var(--space-2);
-}
-
-.approval__actions button {
-  padding: var(--space-1) var(--space-3);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--surface);
-  color: var(--text);
-  font-size: var(--text-sm);
-  cursor: pointer;
-}
-
-.approval__actions button:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.approval__allow {
-  background: var(--accent) !important;
-  color: var(--accent-fg) !important;
-  border-color: transparent !important;
-  font-weight: 600;
-}
-
-.approval__deny:hover:not(:disabled) {
-  color: var(--load-crit);
-  border-color: color-mix(in oklab, var(--load-crit) 45%, var(--border));
-}
-
-/* --- composer --- */
-
-.agents__composer {
-  display: grid;
-  gap: var(--space-2);
-  border-top: 1px solid var(--border);
-  padding-top: var(--space-3);
-}
-
-.agents__composer textarea {
-  resize: vertical;
-  min-height: 2.8em;
-  max-height: 30vh;
-  padding: var(--space-2) var(--space-3);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--surface-2);
-  color: var(--text);
-  font: inherit;
-  line-height: 1.5;
-}
-
-.agents__composer textarea:disabled {
-  opacity: 0.6;
-}
-
-.agents__composer textarea:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
-}
-
-.agents__composer-actions {
-  display: flex;
-  gap: var(--space-2);
-}
-
-.agents__composer-actions button[type="submit"] {
-  padding: var(--space-2) var(--space-4);
-  border: 1px solid transparent;
-  border-radius: var(--radius-sm);
-  background: var(--accent);
-  color: var(--accent-fg);
-  font-weight: 600;
-  cursor: pointer;
-}
-
-.agents__composer-actions button:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.agents__stop {
-  margin-left: auto;
-  padding: var(--space-2) var(--space-3);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--muted);
-  cursor: pointer;
-}
-
-.agents__stop:hover:not(:disabled) {
-  color: var(--load-crit);
-  border-color: color-mix(in oklab, var(--load-crit) 40%, var(--border));
-}
-
-.agents__newbtn {
-  align-self: flex-start;
-  padding: var(--space-2) var(--space-3);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--muted);
-  cursor: pointer;
-}
-
-.agents__newbtn:hover {
-  color: var(--text);
-}
-
-/* --- external launcher --- */
-
-.launcher {
-  gap: var(--space-3);
-}
-
-.launcher__form {
-  display: grid;
-  gap: var(--space-3);
-}
-
-.launcher__form button,
-.launcher__active button {
-  justify-self: flex-start;
-  padding: var(--space-2) var(--space-4);
-  border: 1px solid transparent;
-  border-radius: var(--radius-sm);
-  background: var(--accent);
-  color: var(--accent-fg);
-  font-weight: 600;
-  cursor: pointer;
-}
-
-.launcher__form button:disabled,
-.launcher__active button:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.launcher__active {
-  display: grid;
-  gap: var(--space-2);
-}
-
-.launcher__row {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  flex-wrap: wrap;
+@media (max-width: 1000px) {
+  .agents__work,
+  .rtrow__cards {
+    grid-template-columns: 1fr;
+  }
 }

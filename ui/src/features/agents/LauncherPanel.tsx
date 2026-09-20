@@ -1,23 +1,34 @@
 import { useId, useState } from "react";
 import { HelpHint } from "../../components/HelpHint";
-import { useAgentRuntimes, useLauncherStatus } from "../../lib/hooks";
-import { launchExternal, stopExternalLaunch, type LaunchTool } from "../../lib/ipc";
-
-const TOOL_LABEL: Record<LaunchTool, string> = {
-  opencode: "OpenCode",
-  hermes: "Hermes",
-};
+import { useLauncherStatus } from "../../lib/hooks";
+import {
+  launchExternal,
+  stopExternalLaunch,
+  type AgentRuntime,
+  type LaunchTool,
+} from "../../lib/ipc";
+import {
+  ctxLabel,
+  folderName,
+  HERMES_CTX_FLOOR,
+  meetsHermesFloor,
+  runtimeName,
+  type CodingModel,
+} from "./labels";
 
 /** Opens a real, independent terminal running OpenCode or Hermes against a
- *  pinned local model -- distinct from the embedded agent sessions above:
- *  the user drives this terminal directly, and it keeps running even after
- *  AIWM closes (the backing model server does not -- see the warning below). */
+ *  pinned local model — distinct from the embedded sessions above: the person
+ *  drives that terminal directly, and it keeps running after AIWM closes (the
+ *  backing model server does not, which is the warning below). Deliberately
+ *  the quietest card on the tab: it is the alternative route, not the one to
+ *  take first. */
 export function LauncherPanel({
   codingModels,
+  runtimes,
 }: {
-  codingModels: { id: string; name: string }[];
+  codingModels: readonly CodingModel[];
+  runtimes: AgentRuntime[] | null;
 }) {
-  const { data: runtimes } = useAgentRuntimes();
   const { data: status, refetch } = useLauncherStatus();
 
   const [tool, setTool] = useState<LaunchTool>("opencode");
@@ -32,6 +43,8 @@ export function LauncherPanel({
 
   const rt = (runtimes ?? []).find((r) => r.id === tool);
   const rtInstalled = rt?.installed ?? tool === "opencode";
+  const picked = modelId === "auto" ? null : codingModels.find((m) => m.id === modelId);
+  const ctxRisk = tool === "hermes" && picked != null && !meetsHermesFloor(picked);
 
   const launch = async () => {
     if (!workspace.trim() || busy || !rtInstalled) return;
@@ -62,25 +75,40 @@ export function LauncherPanel({
   };
 
   return (
-    <section className="card launcher">
+    <section className="card launcher" aria-labelledby="agents-launch-h">
       <header className="card__head">
-        <h2>Launch external terminal</h2>
+        <h2 id="agents-launch-h">Or: the tool in its own terminal</h2>
+        <span className="card__sub">
+          <HelpHint area="agents" setting="launcher" />
+        </span>
       </header>
-      <p className="muted">
-        Opens a real, independent terminal window running the tool directly, pointed at a
-        pinned local model. Unlike the sessions above, you drive it yourself and it keeps
-        running even if you close AIWM -- but the model server does not, so closing AIWM
-        leaves the terminal open with a dead connection.
+      <p className="muted launcher__lede">
+        Opens a real terminal window running the tool directly against a pinned local model.
+        You drive it yourself — no transcript, no approval prompts here — and it keeps running
+        after AIWM closes. The model server does not, so closing AIWM leaves that terminal
+        with a dead connection.
+      </p>
+
+      <p className="visually-hidden" aria-live="polite">
+        {status
+          ? `${runtimeName(status.tool)} is running in ${status.workspace} on ${status.model_name}.`
+          : "No external terminal is running."}
       </p>
 
       {status ? (
         <div className="launcher__active">
-          <div className="launcher__row">
-            <span className="badge">{TOOL_LABEL[status.tool]}</span>
-            <span>{status.model_name}</span>
-            <span className="prof__path numeric">{status.workspace}</span>
-          </div>
-          {status.warning && <p className="agents__err">{status.warning}</p>}
+          <p className="launcher__live">
+            <span className="launcher__dot" aria-hidden="true" />
+            <strong>{runtimeName(status.tool)} is running</strong> in{" "}
+            {folderName(status.workspace)}, on {status.model_name}.
+          </p>
+          <dl className="launcher__facts">
+            <dt>Folder</dt>
+            <dd className="numeric">{status.workspace}</dd>
+            <dt>Model served at</dt>
+            <dd className="numeric">{status.base_url}</dd>
+          </dl>
+          {status.warning && <p className="launcher__warn">{status.warning}</p>}
           <button type="button" onClick={stop} disabled={busy}>
             {busy ? "Releasing…" : "Stop & release model"}
           </button>
@@ -92,19 +120,23 @@ export function LauncherPanel({
               <label htmlFor={toolId}>Tool</label>
               <HelpHint area="agents" setting="launcher" describes={toolId} />
             </span>
-            <select id={toolId} value={tool} onChange={(e) => setTool(e.target.value as LaunchTool)}>
+            <select
+              id={toolId}
+              value={tool}
+              onChange={(e) => setTool(e.target.value as LaunchTool)}
+            >
               {(runtimes ?? [{ id: "opencode", installed: true }]).map((r) => (
                 <option key={r.id} value={r.id}>
-                  {TOOL_LABEL[r.id as LaunchTool] ?? r.id}
+                  {runtimeName(r.id)}
                   {r.installed ? "" : " — not installed"}
                 </option>
               ))}
             </select>
           </div>
           {!rtInstalled && (
-            <p className="muted">
-              {TOOL_LABEL[tool]} isn’t installed — install it and reopen this form (see the
-              profile setup above for Hermes).
+            <p className="launcher__warn">
+              {runtimeName(tool)} is not installed, so Launch is off — its card above has the
+              install step.
             </p>
           )}
 
@@ -113,15 +145,26 @@ export function LauncherPanel({
               <label htmlFor={modelFieldId}>Coding model</label>
               <HelpHint area="agents" setting="coding-model" describes={modelFieldId} />
             </span>
-            <select id={modelFieldId} value={modelId} onChange={(e) => setModelId(e.target.value)}>
+            <select
+              id={modelFieldId}
+              value={modelId}
+              onChange={(e) => setModelId(e.target.value)}
+            >
               <option value="auto">Auto — most-recently-used “coding” model</option>
               {codingModels.map((m) => (
                 <option key={m.id} value={m.id}>
-                  {m.name}
+                  {m.name} — {ctxLabel(m.ctx_max)}
                 </option>
               ))}
             </select>
           </div>
+          {ctxRisk && picked && (
+            <p className="launcher__warn">
+              {picked.name} has a {ctxLabel(picked.ctx_max)}; Hermes needs{" "}
+              {HERMES_CTX_FLOOR.toLocaleString("en-US")} tokens. The terminal opens, then the
+              tool errors out.
+            </p>
+          )}
 
           <div className="profform__field">
             <span>
@@ -138,8 +181,12 @@ export function LauncherPanel({
             />
           </div>
 
-          <button type="button" onClick={launch} disabled={busy || !workspace.trim() || !rtInstalled}>
-            {busy ? "Launching…" : "Launch"}
+          <button
+            type="button"
+            onClick={launch}
+            disabled={busy || !workspace.trim() || !rtInstalled}
+          >
+            {busy ? "Launching…" : "Launch terminal"}
           </button>
         </div>
       )}
