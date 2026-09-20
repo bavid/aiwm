@@ -2404,6 +2404,40 @@ Hinweis auf das versteckte; aufgeklappt 3 Kacheln inkl. ▶ beim Video; Lightbox
 mit „Preview 1 of 3" → Next → beim Video ein `<video>`-Element und kein
 „Next" mehr; nach „Show NSFW" 4 Kacheln und kein Hinweis mehr.
 
+### Nachtrag 2: „Viele NSFW-Modelle laden nicht — 401" ✅ behoben (2026-09-20)
+
+Aus dem echten Log des Nutzers (`data/logs/aiwm.log`, 18:19–18:20 Uhr):
+
+```
+download retrying … error=… GET https://civitai.com/api/download/models/3147117?fileId=3027612 returned 401
+download retrying … error=… GET https://civitai.com/api/download/models/3329215?fileId=3215326 returned 401
+```
+
+Nachgestellt: beide URLs antworten **unangemeldet mit 401**, auf `civitai.com`
+**und** auf `civitai.red`. Andere Modelle (auch als NSFW markierte) antworten
+dagegen mit 307 auf die signierte CDN-URL — es hängt also am einzelnen Modell,
+nicht am NSFW-Schalter.
+
+**Ursache im Code:** Der API-Key wurde ausschließlich an die *Registry* gereicht
+(Suche/Details, `App::load` → `CivitaiSource::with_token`). Der
+**Download-Manager kannte ihn nie** — in `core/src/download/mod.rs` kam weder
+`token` noch `bearer_auth` vor. Suchen ging deshalb anonym, Herunterladen eines
+kontopflichtigen Modells nicht.
+
+**Behoben:** `DownloadManager::with_tokens(HostTokens { civitai, huggingface })`,
+gefüllt aus denselben maschinenlokalen Token-Dateien. Der Key geht **nur an den
+Host, dem er gehört** (exakte Domain oder Subdomain; `civitai.com.evil.test`
+bekommt nichts) und **nie an die CDN-Umleitung** — dieses Verhalten ist mit
+einem Test über zwei lokale Server festgenagelt, der prüft, dass der
+`Authorization`-Header beim Hostwechsel verschwindet. Ein 401/403 sagt jetzt
+außerdem im Klartext, was fehlt: „this file needs your Civitai API key — add it
+in Settings → Network & API" bzw. bei gesetztem Key, dass er nicht akzeptiert
+wurde.
+
+**Für dich:** Key einmal im Civitai-Konto erzeugen (Account → API Keys) und in
+Settings → „Network & API" → Civitai einfügen. Die App nimmt **kein Passwort**
+und meldet sich nicht selbst an.
+
 ### Nachtrag: „Ich finde ein Modell nicht, obwohl NSFW an ist" (2026-09-20)
 
 Gemeldet mit `https://civitai.red/models/2786499/realism-by-stable-yogi-krea2`

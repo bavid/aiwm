@@ -70,6 +70,71 @@ pub struct DownloadManager {
     /// Held across "is this file already downloading?" and the insert, so two
     /// concurrent enqueues of one file cannot both see "no" and both insert.
     enqueue_lock: Mutex<()>,
+    /// API keys for the two hosts that gate some of their files. Empty by
+    /// default; set from the machine-local token files in `App::load`.
+    tokens: HostTokens,
+}
+
+/// The API keys a download may present, per host.
+///
+/// Searching and downloading are two different gates: Civitai's *API* answers
+/// anonymously (verified 2026-09-20), but a file whose model requires an
+/// account answers `401` to an anonymous `GET /api/download/models/...` —
+/// which is what a user sees as "many NSFW models won't download". The key
+/// that already lifts gated content for search has to reach the download too.
+#[derive(Debug, Clone, Default)]
+pub struct HostTokens {
+    pub civitai: Option<String>,
+    pub huggingface: Option<String>,
+}
+
+impl HostTokens {
+    /// The token to present to `url`, if any.
+    ///
+    /// Matching is on the host and only the host: exactly the known domain, or
+    /// a subdomain of it. A look-alike like `civitai.com.evil.test` must never
+    /// receive the key, and neither must the CDN a download redirects to (that
+    /// url is already signed and needs no header).
+    fn for_url(&self, url: &str) -> Option<&str> {
+        let host = reqwest::Url::parse(url)
+            .ok()?
+            .host_str()?
+            .to_ascii_lowercase();
+        let matches = |domain: &str| host == domain || host.ends_with(&format!(".{domain}"));
+        if matches("civitai.com") || matches("civitai.red") {
+            return self.civitai.as_deref();
+        }
+        if matches("huggingface.co") || matches("hf.co") {
+            return self.huggingface.as_deref();
+        }
+        None
+    }
+
+    /// Whether a host is one we *could* have authenticated to — used to tell
+    /// "you need a key" apart from "your key was not accepted" in a 401.
+    fn knows(&self, url: &str) -> bool {
+        reqwest::Url::parse(url)
+            .ok()
+            .and_then(|u| u.host_str().map(str::to_ascii_lowercase))
+            .is_some_and(|h| {
+                ["civitai.com", "civitai.red", "huggingface.co", "hf.co"]
+                    .iter()
+                    .any(|d| h == *d || h.ends_with(&format!(".{d}")))
+            })
+    }
+
+    /// Which key a url would need, named for the error message.
+    fn key_name(url: &str) -> &'static str {
+        let host = reqwest::Url::parse(url)
+            .ok()
+            .and_then(|u| u.host_str().map(str::to_ascii_lowercase))
+            .unwrap_or_default();
+        if host.contains("civitai") {
+            "Civitai API key"
+        } else {
+            "Hugging Face token"
+        }
+    }
 }
 
 /// Why `transfer` stopped short of a finished file.
@@ -94,7 +159,14 @@ impl DownloadManager {
             offline,
             wake: Notify::new(),
             enqueue_lock: Mutex::new(()),
+            tokens: HostTokens::default(),
         }
+    }
+
+    /// Present these API keys when downloading from the hosts they belong to.
+    pub fn with_tokens(mut self, tokens: HostTokens) -> Self {
+        self.tokens = tokens;
+        self
     }
 
     fn is_offline(&self) -> bool {
@@ -450,6 +522,13 @@ impl DownloadManager {
             .build()
             .map_err(|e| Stopped::Transport(err(e)))?;
         let mut req = client.get(&d.url);
+        // Only ever to the host the key belongs to. reqwest drops the header
+        // itself when a redirect leaves that host (pinned by
+        // `the_key_is_not_forwarded_when_a_redirect_leaves_the_host`), which is
+        // what keeps it off the signed CDN url a Civitai download ends at.
+        if let Some(token) = self.tokens.for_url(&d.url) {
+            req = req.bearer_auth(token);
+        }
         if offset > 0 {
             req = req.header("Range", format!("bytes={offset}-"));
         }
@@ -464,6 +543,27 @@ impl DownloadManager {
             return Ok(());
         }
         if !(200..300).contains(&status) {
+            // A gated file answers 401/403. Say which key would open it rather
+            // than only the number — this is the single most common real
+            // failure, and the fix is one field in Settings.
+            if matches!(status, 401 | 403) && self.tokens.knows(&d.url) {
+                let key = HostTokens::key_name(&d.url);
+                let hint = if self.tokens.for_url(&d.url).is_some() {
+                    format!(
+                        "your {key} did not open it — the file may need an account that owns it, \
+                         or the key may be wrong"
+                    )
+                } else {
+                    format!(
+                        "this file needs your {key} — add it in Settings → Network & API, then \
+                         start the download again"
+                    )
+                };
+                return Err(Stopped::Transport(err(format!(
+                    "GET {} returned {status}: {hint}",
+                    d.url
+                ))));
+            }
             return Err(Stopped::Transport(err(format!(
                 "GET {} returned {status}",
                 d.url
@@ -610,3 +710,6 @@ async fn verify(
     .await
     .map_err(|e| err(format!("verify worker panicked: {e}")))?
 }
+
+#[cfg(test)]
+mod auth_tests;
