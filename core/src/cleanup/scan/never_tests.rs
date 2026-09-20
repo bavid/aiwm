@@ -9,6 +9,7 @@ use super::tests::{
 use super::*;
 use crate::db::{DownloadState, RunState};
 use crate::orchestrator::JobState;
+use std::path::PathBuf;
 
 /// An outputs folder configured inside the model store: its files are
 /// model-adjacent, so no media group lists them.
@@ -375,6 +376,53 @@ async fn a_non_terminal_jobs_files_are_never_listed() {
     assert!(group_of(&r, "caches").entries.is_empty());
     assert_never_listed(&r, "in-progress.mp4");
     assert_never_listed(&r, &job);
+}
+
+/// A drive letter no volume is mounted on right now, as an unplugged
+/// external drive presents itself: every path on it is `NotFound`.
+#[cfg(windows)]
+fn unmounted_drive() -> Option<PathBuf> {
+    ('D'..='Z')
+        .rev()
+        .map(|letter| PathBuf::from(format!("{letter}:\\")))
+        .find(|root| !root.exists())
+}
+
+/// Frame rows whose files live on a drive that is not connected are not
+/// "missing": the files come back with the drive, and deleting the rows
+/// would throw away the curation. They are protected, once per dataset and
+/// drive; rows on a connected drive whose file is really gone still count.
+#[cfg(windows)]
+#[tokio::test]
+async fn frame_rows_on_a_disconnected_drive_are_never_missing() {
+    let Some(drive) = unmounted_drive() else {
+        eprintln!("skipped: every drive letter is in use");
+        return;
+    };
+    let fx = fixture().await;
+    let job = fx.job(JobState::Cancelled, None).await;
+    let ds = fx.dataset("External", &job).await;
+    let away = drive.join("frames").join("External");
+    fx.frame(&ds, &away.join("a.png"), None, "", false).await;
+    fx.frame(&ds, &away.join("b.png"), None, "", false).await;
+    let work = fx.ctx.paths.datasets_dir().join(&job).join("raw");
+    fx.frame(&ds, &work.join("really-gone.png"), None, "", false)
+        .await;
+
+    let r = fx.scan().await;
+
+    let g = group_of(&r, "missing_frame_rows");
+    assert_eq!(entry_ids(g), [ds.id.as_str()]);
+    assert_eq!(g.entries[0].rows, 1, "only the row on the connected drive");
+    assert!(
+        has_note(
+            &r,
+            "2 frame rows of dataset \"External\"",
+            &format!("not connected ({})", drive.display())
+        ),
+        "{:?}",
+        r.protected
+    );
 }
 
 /// A junction directly under the datasets root pointing into the model
