@@ -83,6 +83,15 @@ const SETTINGS: readonly HelpSetting[] = [
     benefit: "Know before pressing Generate whether to go smaller.",
     pitfalls: "A guess, not a measurement: the only measured clips are the tiny 128×128 smoke tests.",
   },
+  {
+    key: "sessions",
+    label: "Sessions",
+    what: "The list on the left: New session, rename, archive, delete, and \"Ungrouped clips\" for clips that belong to no session. The same list the Chat and Image tabs have.",
+    why: "A project's clips stay together in their own gallery instead of one endless stream.",
+    effect: "New clips are tagged with the picked session; the Gallery below shows only this session's clips (24 per page). A new session opens its name field right away. Archive hides a session under \"Show archived\"; Delete removes the session but keeps its clips, just ungrouped.",
+    benefit: "Galleries that match your projects, and the same session list on every tab.",
+    pitfalls: "The Queue still lists every video job across all sessions — switching sessions changes the Gallery, not the queue.",
+  },
 ];
 
 export const VIDEO_TOPICS: readonly HelpTopic[] = [

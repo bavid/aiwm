@@ -51,12 +51,6 @@
   color: var(--accent);
 }
 
-/* A session switcher placed as its own row right under a card's header
-   (Image/Video studios, where the header itself is too narrow to fit it). */
-.card > .session-switcher {
-  margin-bottom: var(--space-4);
-}
-
 /* `.muted` lives in `index.css`: every tab uses it, so it must not depend on
    the Dashboard's stylesheet being imported. */
 

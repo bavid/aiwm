@@ -1,19 +1,42 @@
-import { useState } from "react";
-import { useAgents, useModels } from "../../lib/hooks";
+import { useMemo, useRef, useState } from "react";
+import { HelpHint } from "../../components/HelpHint";
+import { useAgentRuntimes, useAgents, useModels } from "../../lib/hooks";
 import { deleteAgent, openAgentSession, type Agent } from "../../lib/ipc";
+import type { CodingModel } from "./labels";
 import { LauncherPanel } from "./LauncherPanel";
 import { NewProfileForm } from "./NewProfileForm";
+import { ProfileList } from "./ProfileList";
+import { RuntimeCards } from "./RuntimeCards";
 import { SessionPanel } from "./SessionPanel";
+import { StartHere } from "./StartHere";
 import "./agents.css";
 
+/** The Agents tab, top to bottom: what the tab is, what still has to be set
+ *  up, the state of the two runtimes, then the actual work — profiles on the
+ *  left, the live session on the right — and the external terminal last. */
 export function AgentsWorkbench() {
   const { data: profiles, refetch } = useAgents();
   const { data: models } = useModels();
-  const codingModels = (models ?? []).filter((m) => m.roles.includes("coding"));
+  const { data: runtimes } = useAgentRuntimes();
+
+  const codingModels = useMemo<CodingModel[]>(
+    () =>
+      (models ?? [])
+        .filter((m) => m.roles.includes("coding"))
+        .map((m) => ({
+          id: m.id,
+          name: m.name,
+          ctx_max: m.ctx_max,
+          last_used_at: m.last_used_at,
+        })),
+    [models],
+  );
 
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [activeProfile, setActiveProfile] = useState<Agent | null>(null);
   const [startError, setStartError] = useState<string | null>(null);
+  const [formOpen, setFormOpen] = useState(false);
+  const profilesRef = useRef<HTMLElement>(null);
 
   const start = async (profile: Agent) => {
     setStartError(null);
@@ -26,98 +49,76 @@ export function AgentsWorkbench() {
     }
   };
 
+  const openForm = () => {
+    setFormOpen(true);
+    profilesRef.current?.scrollIntoView({ block: "nearest" });
+  };
+
   return (
-    <div className="agents">
-      <section className="card agents__profiles">
-        <header className="card__head">
-          <h2>Agent profiles</h2>
-          <span className="card__sub numeric">{profiles?.length ?? 0}</span>
-        </header>
+    <section className="agents" aria-label="Agents">
+      <header className="agents__head">
+        <h1>Agents</h1>
+        <p className="agents__lede">
+          A coding agent on your own machine and your own model, locked to one folder. Every
+          command it wants to run and every file it wants to change waits for your approval,
+          and it has no network access. <HelpHint area="agents" setting="start-here" />
+        </p>
+      </header>
 
-        {profiles && profiles.length === 0 && (
-          <p className="muted">
-            No profiles yet. A profile binds an agent runtime to a workspace folder and a
-            coding model.
-          </p>
-        )}
-        <ul className="prof-list">
-          {(profiles ?? []).map((p) => (
-            <ProfileRow
-              key={p.id}
-              profile={p}
-              modelName={p.model_id ? nameFor(codingModels, p.model_id) : null}
-              disabled={sessionId != null}
-              onStart={() => start(p)}
-              onDelete={async () => {
-                await deleteAgent(p.id);
-                if (activeProfile?.id === p.id) setSessionId(null);
-                refetch();
-              }}
-            />
-          ))}
-        </ul>
-
-        <NewProfileForm codingModels={codingModels} onCreated={refetch} />
-        {startError && <p className="agents__err">{startError}</p>}
-      </section>
-
-      <SessionPanel
-        sessionId={sessionId}
-        profileName={activeProfile?.name ?? null}
-        onClosed={() => setSessionId(null)}
+      <StartHere
+        codingModels={codingModels}
+        runtimes={runtimes}
+        profileCount={profiles?.length ?? 0}
+        sessionOpen={sessionId != null}
+        formOpen={formOpen}
+        onNewProfile={openForm}
       />
 
-      <LauncherPanel codingModels={codingModels} />
-    </div>
-  );
-}
+      <RuntimeCards runtimes={runtimes} codingModels={codingModels} />
 
-function nameFor(models: { id: string; name: string }[], id: string): string {
-  return models.find((m) => m.id === id)?.name ?? id;
-}
+      <div className="agents__work">
+        <section className="card agents__profiles" ref={profilesRef} tabIndex={-1}
+          aria-labelledby="agents-prof-h">
+          <header className="card__head">
+            <h2 id="agents-prof-h">Profiles</h2>
+            <span className="card__sub numeric">{profiles?.length ?? 0}</span>
+          </header>
 
-function ProfileRow({
-  profile,
-  modelName,
-  disabled,
-  onStart,
-  onDelete,
-}: {
-  profile: Agent;
-  modelName: string | null;
-  disabled: boolean;
-  onStart: () => void;
-  onDelete: () => void;
-}) {
-  return (
-    <li className="prof">
-      <div className="prof__main">
-        <span className="prof__name">{profile.name}</span>
-        <span className="prof__badges">
-          <span className="badge">{profile.adapter}</span>
-          <span className="badge badge--soft">{modelName ?? "Auto · coding"}</span>
-        </span>
-        <span className="prof__path numeric">{profile.workspace_path}</span>
-        {profile.allowed_paths.length > 0 && (
-          <span className="prof__extra numeric">
-            + reads {profile.allowed_paths.join(", ")}
-          </span>
-        )}
+          <ProfileList
+            profiles={profiles}
+            codingModels={codingModels}
+            runtimes={runtimes}
+            sessionOpen={sessionId != null}
+            onStart={start}
+            onDelete={async (p) => {
+              await deleteAgent(p.id);
+              if (activeProfile?.id === p.id) setSessionId(null);
+              refetch();
+              profilesRef.current?.focus();
+            }}
+          />
+
+          <NewProfileForm
+            codingModels={codingModels}
+            runtimes={runtimes}
+            open={formOpen}
+            onOpenChange={setFormOpen}
+            onCreated={refetch}
+          />
+          {startError && <p className="agents__err">{startError}</p>}
+        </section>
+
+        <SessionPanel
+          sessionId={sessionId}
+          profileName={activeProfile?.name ?? null}
+          onClosed={() => {
+            setSessionId(null);
+            profilesRef.current?.focus();
+          }}
+        />
       </div>
-      <div className="prof__actions">
-        <button type="button" className="prof__go" onClick={onStart} disabled={disabled}>
-          New session
-        </button>
-        <button
-          type="button"
-          className="prof__del"
-          onClick={onDelete}
-          disabled={disabled}
-          aria-label={`Delete ${profile.name}`}
-        >
-          Delete
-        </button>
-      </div>
-    </li>
+
+      <LauncherPanel codingModels={codingModels} runtimes={runtimes} />
+    </section>
   );
 }

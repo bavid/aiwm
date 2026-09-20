@@ -1,73 +1,158 @@
+import { useId, useState } from "react";
 import type { PermissionDecision } from "../../lib/ipc";
-import type { Block } from "./transcript";
+import {
+  approvalDomId,
+  clockOf,
+  DECISION_LABEL,
+  permissionAction,
+  toolBlurb,
+  TOOL_STATUS_LABEL,
+} from "./labels";
+import type { Block, PermissionBlock, ToolBlock } from "./transcript";
 
-/** One transcript block — a text paragraph, a tool-call card, an inline
- *  approval prompt, an idle marker, or an error. */
+/** How many lines of a tool's output show before it is folded. A `cat` of a
+ *  long file used to push everything else off the screen. */
+const PREVIEW_LINES = 12;
+
+/** One transcript block — an agent paragraph, a tool-call card, an inline
+ *  approval prompt, an end-of-turn marker, or an error. */
 export function TranscriptBlock({
   block,
-  answered,
+  decision,
   onAnswer,
 }: {
   block: Block;
-  answered: boolean;
+  decision: PermissionDecision | null;
   onAnswer: (requestId: string, decision: PermissionDecision) => void;
 }) {
   if (block.block === "text") {
-    return <div className="tblock tblock--text">{block.text}</div>;
-  }
-  if (block.block === "idle") {
-    return <div className="tblock tblock--idle">— idle —</div>;
-  }
-  if (block.block === "error") {
-    return <div className="tblock tblock--error">{block.message}</div>;
-  }
-  if (block.block === "tool") {
     return (
-      <div className="tool" data-status={block.status}>
-        <div className="tool__head">
-          <span className="tool__name">{block.name}</span>
-          <span className="tool__status">{block.status}</span>
-        </div>
-        {block.command && <pre className="tool__cmd">{block.command}</pre>}
-        {block.output && <pre className="tool__out">{block.output}</pre>}
+      <div className="tblock tblock--text">
+        <span className="tblock__who">
+          Agent
+          {block.ts && <span className="tblock__time numeric"> {clockOf(block.ts)}</span>}
+        </span>
+        <p className="tblock__body">{block.text}</p>
       </div>
     );
   }
-  return (
-    <div className="approval" data-answered={answered}>
-      <div className="approval__head">
-        <span className="badge badge--warn">approval</span>
-        <span className="approval__kind">{block.kind}</span>
+  if (block.block === "idle") {
+    return (
+      <p className="tblock tblock--idle">
+        <span aria-hidden="true">— </span>turn finished, your move<span aria-hidden="true"> —</span>
+      </p>
+    );
+  }
+  if (block.block === "error") {
+    return (
+      <div className="tblock tblock--error">
+        <span className="tblock__who">Runtime error</span>
+        <p className="tblock__body">{block.message}</p>
       </div>
+    );
+  }
+  if (block.block === "tool") return <ToolCard block={block} />;
+  return <Approval block={block} decision={decision} onAnswer={onAnswer} />;
+}
+
+function ToolCard({ block }: { block: ToolBlock }) {
+  const [expanded, setExpanded] = useState(false);
+  /** Names the output block the fold button controls, so a screen reader can
+   *  follow the disclosure rather than only hear that it toggled. */
+  const outId = useId();
+  const lines = block.output ? block.output.split("\n") : [];
+  const foldable = lines.length > PREVIEW_LINES;
+  const shown = foldable && !expanded ? lines.slice(0, PREVIEW_LINES).join("\n") : block.output;
+  const gloss = toolBlurb(block.name);
+
+  return (
+    <div className="tool" data-status={block.status}>
+      <div className="tool__head">
+        <span className="tool__name">{block.name}</span>
+        {gloss && <span className="tool__gloss">{gloss}</span>}
+        <span className="tool__status" data-status={block.status}>
+          {TOOL_STATUS_LABEL[block.status]}
+        </span>
+        {block.ts && <span className="tool__time numeric">{clockOf(block.ts)}</span>}
+      </div>
+      {block.command && <pre className="tool__cmd">{block.command}</pre>}
+      {block.output && (
+        <>
+          <pre id={outId} className="tool__out" data-folded={foldable && !expanded}>
+            {shown}
+          </pre>
+          {foldable && (
+            <button
+              type="button"
+              className="tool__more"
+              aria-expanded={expanded}
+              aria-controls={outId}
+              onClick={() => setExpanded((v) => !v)}
+            >
+              {expanded
+                ? `Fold ${lines.length} lines of output`
+                : `Show all ${lines.length} lines of output`}
+            </button>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+function Approval({
+  block,
+  decision,
+  onAnswer,
+}: {
+  block: PermissionBlock;
+  decision: PermissionDecision | null;
+  onAnswer: (requestId: string, decision: PermissionDecision) => void;
+}) {
+  const answered = decision != null;
+  return (
+    <section
+      className="approval"
+      id={approvalDomId(block.id)}
+      data-answered={answered}
+      aria-label={`Approval: ${permissionAction(block.kind)}`}
+      tabIndex={-1}
+    >
+      <header className="approval__head">
+        <span className="badge badge--warn">{answered ? "answered" : "approval needed"}</span>
+        <span className="approval__kind">
+          The agent wants to {permissionAction(block.kind)}.
+        </span>
+      </header>
       <pre className="approval__cmd">{block.summary}</pre>
-      <div className="approval__actions">
-        <button
-          type="button"
-          className="approval__allow"
-          disabled={answered}
-          onClick={() => onAnswer(block.id, "allow_once")}
-        >
-          Allow once
-        </button>
-        {block.always && (
+      {answered ? (
+        <p className="approval__outcome">
+          <span aria-hidden="true">{decision === "deny" ? "✕" : "✓"}</span>{" "}
+          {DECISION_LABEL[decision]}
+        </p>
+      ) : (
+        <div className="approval__actions">
           <button
             type="button"
-            disabled={answered}
-            onClick={() => onAnswer(block.id, "allow_always")}
+            className="approval__allow"
+            onClick={() => onAnswer(block.id, "allow_once")}
           >
-            Always
-            <span className="visually-hidden"> — always allow: {block.always}</span>
+            Allow once
           </button>
-        )}
-        <button
-          type="button"
-          className="approval__deny"
-          disabled={answered}
-          onClick={() => onAnswer(block.id, "deny")}
-        >
-          Deny
-        </button>
-      </div>
-    </div>
+          {block.always && (
+            <button type="button" onClick={() => onAnswer(block.id, "allow_always")}>
+              Allow <code className="approval__pattern">{block.always}</code> all session
+            </button>
+          )}
+          <button
+            type="button"
+            className="approval__deny"
+            onClick={() => onAnswer(block.id, "deny")}
+          >
+            Deny
+          </button>
+        </div>
+      )}
+    </section>
   );
 }

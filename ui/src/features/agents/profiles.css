@@ -1,0 +1,281 @@
+/* The profiles column: the saved profile rows, their blocked/warning states,
+   and the "New profile" form. Pulled in by `agents.css`. */
+
+.agents__profiles {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.agents__profiles:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.prof-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.prof {
+  display: flex;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  transition: border-color var(--dur) var(--ease);
+}
+
+.prof:hover {
+  border-color: color-mix(in oklab, var(--accent) 30%, var(--border));
+}
+
+.prof[data-blocked="true"] {
+  background: var(--surface);
+}
+
+.prof__main {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.prof__name {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: var(--text-md);
+}
+
+.prof__badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  margin: var(--space-1) 0;
+}
+
+.prof__path {
+  font-size: var(--text-xs);
+  color: var(--muted);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* A word in front of a path, so a row never opens with a bare `E:\…`. */
+.prof__caption {
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 0.68rem;
+  color: var(--faint);
+}
+
+.prof__folder {
+  font-weight: 600;
+  color: var(--text);
+}
+
+/* The whole path stays on screen — it is the sandbox boundary — but the last
+   segment carries the weight, and it wraps instead of being clipped into a
+   half-truth. */
+.prof__parent {
+  color: var(--faint);
+}
+
+.prof__note {
+  margin-top: var(--space-1);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+  color: var(--load-warn);
+}
+
+.prof__actions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  align-self: center;
+  flex: none;
+}
+
+.prof__go {
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: var(--accent);
+  color: var(--accent-fg);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.prof__go:hover:not(:disabled) {
+  background: color-mix(in oklab, var(--accent) 85%, var(--text));
+}
+
+.prof__del {
+  padding: 1px var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+
+.prof__del:hover:not(:disabled) {
+  color: var(--load-crit);
+  border-color: color-mix(in oklab, var(--load-crit) 40%, var(--border));
+}
+
+/* The second press of a two-step delete: it looks like what it does. */
+.prof__del--go {
+  color: var(--load-crit);
+  border-color: color-mix(in oklab, var(--load-crit) 50%, var(--border));
+  background: color-mix(in oklab, var(--load-crit) 8%, var(--surface));
+  font-weight: 600;
+}
+
+.prof__go:disabled,
+.prof__del:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.agents__empty {
+  margin: 0;
+  padding: var(--space-4);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  font-size: var(--text-sm);
+  line-height: 1.6;
+  color: var(--muted);
+}
+
+.agents__empty strong {
+  color: var(--text);
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px var(--space-2);
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--accent) 14%, var(--surface));
+  color: var(--text);
+  font-size: var(--text-xs);
+  border: 1px solid var(--border);
+}
+
+.badge--soft {
+  background: var(--surface);
+  color: var(--muted);
+}
+
+.badge--warn {
+  background: color-mix(in oklab, var(--load-warn) 22%, var(--surface));
+  border-color: color-mix(in oklab, var(--load-warn) 45%, var(--border));
+}
+
+/* --- new profile form --- */
+
+.agents__addbtn {
+  align-self: flex-start;
+  padding: var(--space-2) var(--space-3);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.agents__addbtn:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.profform {
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+
+.profform__field {
+  display: grid;
+  gap: var(--space-1);
+  font-size: var(--text-sm);
+}
+
+.profform__field span {
+  color: var(--muted);
+}
+
+/* The field's caption: a `<label for>` beside its `?` hint. */
+.profform__field > span {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.profform__field input,
+.profform__field select {
+  padding: var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+}
+
+.profform__field input:focus-visible,
+.profform__field select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* A stated consequence, not a decoration: shown wherever a choice will make
+   the run fail or leave a button off. */
+.profform__warn,
+.launcher__warn {
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  border-left: 2px solid color-mix(in oklab, var(--load-warn) 60%, var(--border));
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  background: color-mix(in oklab, var(--load-warn) 8%, var(--surface));
+  font-size: var(--text-xs);
+  line-height: 1.6;
+}
+
+.profform__buttons {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.profform__buttons button {
+  padding: var(--space-2) var(--space-4);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: var(--accent);
+  color: var(--accent-fg);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.profform__buttons button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.profform__cancel {
+  background: transparent !important;
+  color: var(--muted) !important;
+  border-color: var(--border) !important;
+  font-weight: 400 !important;
+}

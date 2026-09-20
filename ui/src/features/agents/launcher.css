@@ -1,0 +1,93 @@
+/* The external-terminal launcher: the alternative route, so deliberately the
+   quietest card on the tab — a recessed surface, a narrow form column, and a
+   running launch stated as a sentence rather than three bare fields.
+   Pulled in by `agents.css`; the form fields reuse `.profform__field`. */
+
+.launcher {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  background: var(--surface-2);
+}
+
+.launcher__lede {
+  margin: calc(-1 * var(--space-2)) 0 0;
+  max-width: 72ch;
+}
+
+.launcher__form {
+  display: grid;
+  gap: var(--space-3);
+  max-width: 520px;
+}
+
+.launcher__form > button,
+.launcher__active > button {
+  justify-self: flex-start;
+  padding: var(--space-2) var(--space-4);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: var(--accent);
+  color: var(--accent-fg);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.launcher__form > button:hover:not(:disabled),
+.launcher__active > button:hover:not(:disabled) {
+  background: color-mix(in oklab, var(--accent) 85%, var(--text));
+}
+
+.launcher__form > button:disabled,
+.launcher__active > button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.launcher__active {
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid color-mix(in oklab, var(--accent) 35%, var(--border));
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+
+/* A sentence, not a flex row: running text split into flex items grows a gap
+   at every element boundary. */
+.launcher__live {
+  margin: 0;
+  font-size: var(--text-sm);
+}
+
+.launcher__dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: var(--space-2);
+  border-radius: 50%;
+  background: var(--accent);
+  transform: translateY(-1px);
+}
+
+.launcher__facts {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 2px var(--space-3);
+  margin: 0;
+  font-size: var(--text-xs);
+}
+
+.launcher__facts dt {
+  color: var(--faint);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 0.68rem;
+  align-self: center;
+}
+
+.launcher__facts dd {
+  margin: 0;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}

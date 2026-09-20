@@ -7,6 +7,13 @@
   align-items: start;
 }
 
+/* The studio sits to the right of the shared session sidebar
+   (components/session-sidebar.css), and takes whatever is left. */
+.session-page > .image {
+  flex: 1;
+  min-width: 0;
+}
+
 .image__form {
   align-self: start;
 }
@@ -107,13 +114,6 @@
 .imgform__presets {
   display: flex;
   flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-2);
-}
-
-/* The session picker with its `?` hint beside it. */
-.imgform__session {
-  display: flex;
   align-items: center;
   gap: var(--space-2);
 }
