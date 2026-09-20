@@ -16,12 +16,14 @@ type Props = {
   error: string | null;
   selectedId: string | null;
   onSelect: (modelId: string) => void;
+  /** Opens the confirmation for removing this LoRA from the library. */
+  onDelete: (lora: LoraSummary) => void;
 };
 
 /** "Your LoRAs": every library LoRA with what its lineage adds up to, newest
  *  first. Picking one opens its history below; the row's name button carries
  *  the pressed state so a keyboard user hears which one is open. */
-export function LoraList({ loras, isLoading, error, selectedId, onSelect }: Props) {
+export function LoraList({ loras, isLoading, error, selectedId, onSelect, onDelete }: Props) {
   const ordered = useMemo(
     () => [...loras].sort((a, b) => b.created_at.localeCompare(a.created_at)),
     [loras],
@@ -67,6 +69,9 @@ export function LoraList({ loras, isLoading, error, selectedId, onSelect }: Prop
               <th scope="col" className="loralist__num">
                 Images
               </th>
+              <th scope="col">
+                <span className="visually-hidden">Actions</span>
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -92,6 +97,16 @@ export function LoraList({ loras, isLoading, error, selectedId, onSelect }: Prop
                   <td className="loralist__num numeric">{l.runs}</td>
                   <td className="loralist__num numeric">{l.total_steps.toLocaleString()}</td>
                   <td className="loralist__num numeric">{formatCount(l.total_images)}</td>
+                  <td>
+                    <button
+                      type="button"
+                      className="chip loralist__del"
+                      aria-label={`Delete ${l.name} from the library`}
+                      onClick={() => onDelete(l)}
+                    >
+                      Delete…
+                    </button>
+                  </td>
                 </tr>
               );
             })}

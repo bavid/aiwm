@@ -9,7 +9,16 @@ import {
   useTrainingProfiles,
   useTrainingRuns,
 } from "../../lib/hooks";
-import type { LoraLineage, LoraSummary, TrainingProfile, TrainingRun } from "../../lib/ipc";
+import { ConfirmDialog } from "../../components/ConfirmDialog";
+import { humanize } from "../../lib/errors";
+import {
+  deleteModel,
+  type LoraLineage,
+  type LoraSummary,
+  type TrainingProfile,
+  type TrainingRun,
+} from "../../lib/ipc";
+import { formatBytes } from "../../lib/units";
 import { LoraHistory } from "./LoraHistory";
 import { LoraList } from "./LoraList";
 import { NewRunForm, type RunSeed } from "./NewRunForm";
@@ -68,6 +77,30 @@ export function Training({ pendingDatasetId, onPendingDatasetConsumed, onTestLor
   const [seed, setSeed] = useState<RunSeed | null>(null);
   const [selectedLoraId, setSelectedLoraId] = useState<string | null>(null);
   const { data: lineage, error: lineageError } = useLoraLineage(selectedLoraId);
+  /** The LoRA whose delete confirmation is open, plus that dialog's state. */
+  const [deleteLora, setDeleteLora] = useState<LoraSummary | null>(null);
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+
+  /** Remove a LoRA from the library. The core refuses while a run still
+   *  continues from it (migration 0020) — that refusal is shown verbatim in the
+   *  dialog and the LoRA stays. */
+  async function confirmDeleteLora() {
+    if (!deleteLora) return;
+    setDeleteBusy(true);
+    setDeleteError(null);
+    try {
+      await deleteModel(deleteLora.model_id);
+      if (selectedLoraId === deleteLora.model_id) setSelectedLoraId(null);
+      setDeleteLora(null);
+      refetchLoras();
+      refetchRuns();
+    } catch (e) {
+      setDeleteError(humanize(e));
+    } finally {
+      setDeleteBusy(false);
+    }
+  }
 
   useEffect(() => {
     if (!pendingDatasetId) return;
@@ -175,7 +208,29 @@ export function Training({ pendingDatasetId, onPendingDatasetConsumed, onTestLor
         error={lorasError}
         selectedId={selectedLoraId}
         onSelect={(id) => setSelectedLoraId((cur) => (cur === id ? null : id))}
+        onDelete={(lora) => {
+          setDeleteError(null);
+          setDeleteLora(lora);
+        }}
       />
+
+      <ConfirmDialog
+        isOpen={deleteLora !== null}
+        title={`Delete “${deleteLora?.name ?? ""}”?`}
+        confirmLabel="Delete"
+        tone="danger"
+        isBusy={deleteBusy}
+        error={deleteError}
+        onConfirm={confirmDeleteLora}
+        onCancel={() => setDeleteLora(null)}
+      >
+        <p>
+          This removes the LoRA from the library and deletes its file
+          {deleteLora ? ` (${formatBytes(deleteLora.size_bytes)})` : ""} from disk. Runs that used
+          it keep their history, but they can no longer be continued from it.
+        </p>
+        <p className="muted">Training runs, datasets and your source media are not touched.</p>
+      </ConfirmDialog>
 
       {selectedLora && (
         <LoraHistory
