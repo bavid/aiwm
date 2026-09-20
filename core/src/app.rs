@@ -200,7 +200,7 @@ impl App {
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty());
         let registry = Arc::new(Registry::new(
-            Box::new(HuggingFaceSource::new()?.with_token(hf_token)),
+            Box::new(HuggingFaceSource::new()?.with_token(hf_token.clone())),
             paths.cache_dir().join("registry"),
             offline.clone(),
         ));
@@ -210,7 +210,8 @@ impl App {
             .filter(|s| !s.is_empty());
         let civitai_registry = Arc::new(Registry::new(
             Box::new(
-                CivitaiSource::for_front_door(config.civitai.front_door)?.with_token(civitai_token),
+                CivitaiSource::for_front_door(config.civitai.front_door)?
+                    .with_token(civitai_token.clone()),
             ),
             paths.cache_dir().join("civitai_registry"),
             offline.clone(),
@@ -267,12 +268,20 @@ impl App {
             )
             .with_auto_preference(auto_pref),
         );
-        let downloads = Arc::new(DownloadManager::new(
-            db.clone(),
-            config.store_path.clone(),
-            paths.downloads_dir(),
-            offline.clone(),
-        ));
+        let downloads = Arc::new(
+            DownloadManager::new(
+                db.clone(),
+                config.store_path.clone(),
+                paths.downloads_dir(),
+                offline.clone(),
+            )
+            // The same keys the registry sources use: searching is anonymous,
+            // but a gated file's download answers 401 without one.
+            .with_tokens(crate::download::HostTokens {
+                civitai: civitai_token,
+                huggingface: hf_token,
+            }),
+        );
 
         // The training runner, its startup recovery and its poller, in that
         // order and after the job engine's own recovery in [`Self::seed`]: a
