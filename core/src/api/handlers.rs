@@ -3498,6 +3498,7 @@ mod tests {
             format: RemoteFormat::Gguf,
             nsfw: false,
             preview_image_url: None,
+            previews: Vec::new(),
             allow_commercial_use: vec![],
             model_kind_hint: None,
             base_model_family: None,

@@ -1,5 +1,6 @@
 import { useEffect, useId, useMemo, useState } from "react";
 import { HelpHint } from "../../components/HelpHint";
+import { Lightbox } from "../../components/Lightbox";
 import { useCivitaiSearch, useModels, useRegistrySearch } from "../../lib/hooks";
 import {
   cancelJob,
@@ -17,6 +18,7 @@ import {
   type RegistryDetails,
   type RegistrySearchParams,
   type RemoteModel,
+  type RemotePreview,
 } from "../../lib/ipc";
 import { filterDisplayTags } from "../../lib/tags";
 import { FileList } from "./FileList";
@@ -563,19 +565,82 @@ function CivitaiSearch({ onUseType }: { onUseType: (t: ModelType) => void }) {
 
       <ul className="discover__results">
         {result?.data.map((m) => (
-          <CivitaiResultCard key={m.id} model={m} onUseType={onUseType} />
+          <CivitaiResultCard key={m.id} model={m} onUseType={onUseType} showNsfw={nsfw} />
         ))}
       </ul>
     </>
   );
 }
 
+/** A result row's sample gallery: the strip stays closed until asked for, so
+ *  opening the Discover tab still loads one thumbnail per row and not a dozen.
+ *  Samples rated above `1` are Civitai's own "spicier than the model's own
+ *  flag" marker and stay hidden unless the search is already showing adult
+ *  content. Clicking one opens the shared Lightbox, arrows included. */
+function PreviewStrip({ previews, showNsfw }: { previews: RemotePreview[]; showNsfw: boolean }) {
+  const [open, setOpen] = useState(false);
+  const [at, setAt] = useState<number | null>(null);
+
+  const shown = showNsfw ? previews : previews.filter((p) => p.nsfw_level <= 1);
+  const hidden = previews.length - shown.length;
+  if (previews.length <= 1) return null;
+
+  const current = at !== null ? shown[at] : null;
+
+  return (
+    <div className="discover__gallery">
+      <button type="button" className="chip" aria-expanded={open} onClick={() => setOpen(!open)}>
+        {open ? "Hide previews" : `Previews (${shown.length})`}
+      </button>
+      {hidden > 0 && (
+        <span className="muted">
+          {hidden} hidden — tick “Show NSFW” to include {hidden === 1 ? "it" : "them"}
+        </span>
+      )}
+      {open && (
+        <ul className="discover__strip">
+          {shown.map((p, i) => (
+            <li key={p.url}>
+              <button
+                type="button"
+                className="discover__thumb"
+                aria-label={`Open preview ${i + 1} of ${shown.length}`}
+                onClick={() => setAt(i)}
+              >
+                {p.is_video ? (
+                  <video src={p.url} muted playsInline preload="metadata" width={72} height={72} />
+                ) : (
+                  <img src={p.url} alt="" width={72} height={72} loading="lazy" />
+                )}
+                {p.is_video && <span className="discover__play">▶</span>}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      {current && (
+        <Lightbox
+          kind={current.is_video ? "video" : "image"}
+          src={current.url}
+          caption={`Preview ${(at ?? 0) + 1} of ${shown.length}`}
+          onClose={() => setAt(null)}
+          onPrev={at !== null && at > 0 ? () => setAt(at - 1) : undefined}
+          onNext={at !== null && at < shown.length - 1 ? () => setAt(at + 1) : undefined}
+        />
+      )}
+    </div>
+  );
+}
+
 function CivitaiResultCard({
   model,
   onUseType,
+  showNsfw,
 }: {
   model: RemoteModel;
   onUseType: (t: ModelType) => void;
+  /** Whether the search that produced this row is showing adult content. */
+  showNsfw: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [details, setDetails] = useState<RegistryDetails | null>(null);
@@ -634,6 +699,8 @@ function CivitaiResultCard({
           </div>
         )}
         <DiscoverTags tags={model.tags} />
+
+        <PreviewStrip previews={model.previews} showNsfw={showNsfw} />
 
         {open && (
           <div className="discover__files">

@@ -58,7 +58,7 @@ use serde_json::Value;
 
 use super::{
     Gated, ModelSource, RegistryStatus, RemoteFile, RemoteFormat, RemoteModel, RemoteModelDetails,
-    SearchQuery, SearchSort,
+    RemotePreview, SearchQuery, SearchSort, MAX_PREVIEWS,
 };
 use crate::config::CivitaiFrontDoor;
 use crate::db::now_rfc3339;
@@ -317,6 +317,7 @@ fn parse_model_summary(v: &Value) -> Option<RemoteModel> {
     let id = v.get("id").and_then(Value::as_u64)?.to_string();
     let versions = v.get("modelVersions").and_then(Value::as_array);
     let primary = versions.and_then(|a| a.first());
+    let previews = parse_previews(primary);
 
     let tags: Vec<String> = v
         .get("tags")
@@ -376,15 +377,38 @@ fn parse_model_summary(v: &Value) -> Option<RemoteModel> {
         precision: None,
         format: primary.map(format_of_version).unwrap_or_default(),
         nsfw: v.get("nsfw").and_then(Value::as_bool).unwrap_or(false),
-        preview_image_url: primary
-            .and_then(|p| p.get("images"))
-            .and_then(Value::as_array)
-            .and_then(|a| a.first())
-            .and_then(|img| str_field(img, "url")),
+        preview_image_url: previews.first().map(|p| p.url.clone()),
+        previews,
         allow_commercial_use,
         model_kind_hint: str_field(v, "type"),
         base_model_family: base_model_family_of(v, primary),
     })
+}
+
+/// The primary version's sample gallery, capped at [`MAX_PREVIEWS`].
+///
+/// An entry without a `url` is dropped rather than carried as an empty string:
+/// the client would render a broken tile for it. `type` is Civitai's own
+/// `"image"` / `"video"`; anything else is treated as an image, which is the
+/// harmless direction (an `<img>` that fails to load shows nothing, whereas a
+/// `<video>` element for a still would show a dead player).
+fn parse_previews(primary: Option<&Value>) -> Vec<RemotePreview> {
+    primary
+        .and_then(|p| p.get("images"))
+        .and_then(Value::as_array)
+        .map(|a| {
+            a.iter()
+                .filter_map(|img| {
+                    Some(RemotePreview {
+                        url: str_field(img, "url")?,
+                        is_video: str_field(img, "type").as_deref() == Some("video"),
+                        nsfw_level: img.get("nsfwLevel").and_then(Value::as_i64).unwrap_or(0),
+                    })
+                })
+                .take(MAX_PREVIEWS)
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// The model-level `baseModels` facet (joined), falling back to the primary
@@ -695,5 +719,54 @@ mod tests {
         assert_eq!(normalize_precision("fp32"), "F32");
         assert_eq!(normalize_precision("fp8"), "FP8");
         assert_eq!(normalize_precision("nf4"), "NF4");
+    }
+
+    #[test]
+    fn the_gallery_carries_every_sample_capped_with_its_kind_and_rating() {
+        // Shaped like a real response (verified 2026-09-20: a popular model's
+        // primary version carries 15–20 images, `type` is "image" or "video",
+        // `nsfwLevel` 1 = safe).
+        let images: Vec<Value> = (0..MAX_PREVIEWS + 5)
+            .map(|i| {
+                serde_json::json!({
+                    "url": format!("https://image.civitai.com/x/{i}.jpeg"),
+                    "type": if i == 1 { "video" } else { "image" },
+                    "nsfwLevel": if i == 2 { 4 } else { 1 },
+                })
+            })
+            .collect();
+        let primary = serde_json::json!({ "images": images });
+
+        let previews = parse_previews(Some(&primary));
+
+        assert_eq!(previews.len(), MAX_PREVIEWS, "capped, in order");
+        assert_eq!(previews[0].url, "https://image.civitai.com/x/0.jpeg");
+        assert!(!previews[0].is_video);
+        assert!(
+            previews[1].is_video,
+            "a video sample is flagged, not dropped"
+        );
+        assert_eq!(previews[2].nsfw_level, 4, "the per-image rating is carried");
+    }
+
+    #[test]
+    fn a_sample_without_a_url_is_dropped_and_a_model_without_images_has_none() {
+        let primary = serde_json::json!({
+            "images": [
+                { "type": "image" },
+                { "url": "https://image.civitai.com/x/ok.jpeg" },
+            ]
+        });
+
+        let previews = parse_previews(Some(&primary));
+
+        assert_eq!(previews.len(), 1, "the entry with no url is dropped");
+        assert_eq!(previews[0].url, "https://image.civitai.com/x/ok.jpeg");
+        assert_eq!(
+            previews[0].nsfw_level, 0,
+            "an absent rating is not invented"
+        );
+        assert!(parse_previews(None).is_empty());
+        assert!(parse_previews(Some(&serde_json::json!({}))).is_empty());
     }
 }

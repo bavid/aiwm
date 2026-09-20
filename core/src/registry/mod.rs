@@ -58,6 +58,26 @@ pub enum RemoteFormat {
     Other,
 }
 
+/// How many sample items of a model's gallery a search result carries. The
+/// primary version of a popular Civitai model has 15–20; more than this adds
+/// response size for a strip nobody scrolls that far.
+pub const MAX_PREVIEWS: usize = 12;
+
+/// One item of a model's sample gallery.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RemotePreview {
+    pub url: String,
+    /// Civitai serves short mp4 clips as samples for video models, so a
+    /// gallery is not all `<img>`.
+    #[serde(default)]
+    pub is_video: bool,
+    /// Civitai's own rating for this single image, `1` = safe. A model whose
+    /// own `nsfw` flag is false can still carry spicier samples, so the client
+    /// hides anything above `1` unless the user asked to see adult content.
+    #[serde(default)]
+    pub nsfw_level: i64,
+}
+
 /// One search hit — enough for a discovery card without a second call.
 ///
 /// Shared by every [`ModelSource`]. A source that has no concept of a given
@@ -111,8 +131,17 @@ pub struct RemoteModel {
     pub nsfw: bool,
     /// A representative preview image (Civitai's first sample image on the
     /// primary version). `None` when the source has none (Hugging Face).
+    /// The same url as `previews[0].url` when there is one — kept as its own
+    /// field because a result row shows exactly one thumbnail until the user
+    /// asks for the rest.
     #[serde(default)]
     pub preview_image_url: Option<String>,
+    /// The primary version's sample gallery, in the source's own order and
+    /// capped at [`MAX_PREVIEWS`]. Empty when the source has none. Nothing is
+    /// fetched to build this — these are urls the search response already
+    /// carried; the client decides which of them it ever loads.
+    #[serde(default)]
+    pub previews: Vec<RemotePreview>,
     /// Civitai's `allowCommercialUse` flags (e.g. `["Image", "Sell"]`) —
     /// empty when the source has no such concept. This, not `license`, is
     /// how a Civitai model's commercial terms are surfaced: Civitai has no
@@ -397,6 +426,7 @@ mod tests {
             format: RemoteFormat::Gguf,
             nsfw: false,
             preview_image_url: None,
+            previews: Vec::new(),
             allow_commercial_use: vec![],
             model_kind_hint: None,
             base_model_family: None,
