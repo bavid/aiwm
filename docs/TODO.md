@@ -2277,6 +2277,87 @@ App, automatische Screenshots (laut Spec nicht in diesem Plan).
   der Rest der App; Zahlen (Dauer, VRAM) aus den dokumentierten Messungen in
   dieser Datei übernehmen, nicht schätzen.
 
+## PRIO 1 — Bug (2026-09-20): LoRAs sind aus der UI nicht löschbar
+
+**Meldung des Nutzers:** „i cant delete 'your LoRAs' myrender v2 v3 is
+undeletable from UI".
+
+**Ursache (verifiziert):** `deleteModel` (`ui/src/lib/ipc.ts:711`) wird genau an
+**einer** Stelle aufgerufen: `ui/src/features/models/StoragePanel.tsx:132`, also
+im Speicher-Report des Models-Tabs. Weder die Model-Library-Tabelle
+(`features/models/Models.tsx`) noch die neue LoRA-Übersicht aus Plan 11
+(`features/training/LoraList.tsx` / `LoraHistory.tsx`) hat eine Löschen-Aktion.
+Der Core kann es längst: `core/src/model/delete.rs::delete_model` (Route
+`DELETE /models/{id}`, Tauri `delete_model`) inklusive der Schutzregel „eine
+LoRA, aus der ein noch nicht beendeter Lauf weitertrainiert, bleibt"
+(Migration 0020, `list_active_for_init_lora`). Für `myrender-v2`/`-v3` greift
+diese Regel nicht (der Lauf `01a0bab4…` ist `completed`), sie wären also
+löschbar — es fehlt nur der Knopf.
+
+**Zu tun:** Löschen-Aktion in der LoRA-Übersicht (Liste und Historien-Panel) und
+in der Model-Library-Tabelle; Bestätigungsdialog (`components/ConfirmDialog`,
+tone danger) mit Name, Größe und dem Hinweis, dass die Datei wirklich von der
+Platte verschwindet; die Absage des Cores (z. B. „… ist die LoRA, aus der … noch
+weitertrainiert") als `role="alert"` anzeigen; nach dem Löschen Liste und
+Lineage neu laden. Beachten: eine gelöschte Eltern-LoRA lässt die Lineage der
+Kinder mit `init_lora_model_id = NULL` zurück — die Historie muss das als
+„Eltern-LoRA gelöscht" darstellen statt zu behaupten, der Lauf sei von null
+gestartet. Tooltip/Hilfe-Eintrag (`ui/src/help/training.ts`) ergänzen.
+
+## Video-Training & Bild→Video mit eigenen Modellen (Backlog, User-Wunsch 2026-09-20)
+
+- **Eigene Video-Daten trainieren.** Heute kann die Dataset-Pipeline schon
+  `mode: clips` (ganze Videos statt Einzelbilder, `min_clip_secs`,
+  `max_frames_per_clip`) und der Trainer hat ein Profil `wan22_5b`
+  (`core/src/training/profile.rs`) — was fehlt, ist der geprüfte Weg
+  Ende-zu-Ende: welches Basismodell, welche Auflösung/Länge pro Clip, wie viel
+  VRAM auf 16 GB wirklich geht, ob ai-toolkit (`e65c4d0`) für Wan 2.2 5B
+  dieselbe Config-Form nutzt wie für Bildmodelle. **Erst messen, nicht raten:**
+  ein echter kurzer Lauf mit 1–2 Clips, Zeit/VRAM protokollieren, dann die
+  Presets (Fast/Balanced/Thorough) für Video mit echten Zahlen belegen.
+- **Bild → Video (I2V).** Der Video-Tab hat bereits ein „Startbild" (typed file
+  picker, `features/video/Video.tsx`); gewünscht ist der ausdrückliche
+  I2V-Ablauf: ein Bild rein, Bewegung/Länge/Auflösung wählen, Video raus —
+  entweder mit einem Modell aus dem Katalog **oder mit einer selbst trainierten
+  LoRA/einem eigenen Modell**. Zu klären: welche I2V-Modelle auf 16 GB laufen
+  (Wan 2.2 I2V? SVD?), welcher ComfyUI-Workflow dafür nötig ist (die
+  Workflow-Engine aus Plan 3 kann Templates), und wie eine eigene Video-LoRA im
+  Workflow eingehängt wird.
+- **Mehrere LoRAs gleichzeitig.** Für Bilder gibt es den LoRA-Stack mit
+  Stärke-Regler pro Eintrag (`ui/src/components/LoraPicker.tsx`, umgesetzt
+  2026-09-16). Gewünscht: dasselbe für **Video** (und für I2V), also mehrere
+  LoRAs pro Lauf mit eigener Stärke, inklusive der Warnung, wenn die Summe der
+  Stärken das Bild „überfährt".
+
+## Civitai-Spiegel `civitai.red` als Modellquelle (Backlog, User-Wunsch 2026-09-20)
+
+- **Wunsch:** `https://civitai.red/` als zusätzliche Quelle im Discover-Tab
+  neben dem bestehenden Civitai-Register (`core/src/registry/civitai.rs`).
+  Inhalte sind laut Nutzer nach einem **Discord-Login** sichtbar.
+- **Vor jeder Zeile Code zu klären (nicht raten):** Ist `civitai.red` ein
+  Spiegel/Proxy von Civitai mit derselben API-Form, oder eine eigene Seite?
+  Gibt es eine dokumentierte API oder nur HTML? Welche Lizenz-/Nutzungsregeln
+  gelten? **Discord-OAuth in einer Desktop-App** heißt: ein Browser-Fenster für
+  den Login, ein Token, das sicher liegen muss (nie im Klartext in der
+  Konfiguration, wie `HF_TOKEN` heute in einer eigenen Datei) — und es heißt
+  ausdrücklich **nicht**, dass die App Zugangsdaten selbst entgegennimmt oder
+  speichert. Wenn die Seite keinen sauberen API-/OAuth-Weg anbietet, ist die
+  ehrliche Antwort „nicht umsetzbar, ohne die Seite zu scrapen" — dann lieber
+  ein Import-Weg „Datei von Hand heruntergeladen → in die Library aufnehmen"
+  (den es schon gibt) statt eine brüchige Scraper-Anbindung.
+- Offline-Grundsatz bleibt: jede Netzaktion hinter dem Offline-Gate, jede Datei
+  mit echtem sha256 gepinnt.
+
+## Discover-Tab: mehr Vorschauen (Backlog, User-Wunsch 2026-09-20)
+
+- Mehr Vorschau-Bilder pro Modell in der Modell-Suche (heute zeigt
+  `features/models/Discover.tsx` je Treffer wenige/keine), z. B. eine kleine
+  Galerie mit Blättern, Klick auf groß (Lightbox gibt es schon), und die
+  Vorschauen von Civitai/HF **erst auf Anfrage** laden (Offline-Gate, kein
+  automatischer Netz-Traffic beim Öffnen des Tabs). Größenbudget beachten:
+  Vorschauen nie in den Modell-Store schreiben, sondern in den Cache-Ordner
+  (`cache_dir`), damit die Cleanup-Seite sie aufräumen kann.
+
 ## Offen / später zu entscheiden
 - App-Selbst-Update offline (manueller Installer + Signaturprüfung angenommen)
 - Parallele Jobs: Policy verfeinern (klein-LLM + Upscale gleichzeitig)
