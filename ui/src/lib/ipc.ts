@@ -752,6 +752,9 @@ export interface RegistryStatus {
   rate_limited_secs: number | null;
   token_set: boolean;
   cache_entries: number;
+  /** The host this source talks to, e.g. `https://civitai.red` — link a
+   *  result to the front door the app actually uses. */
+  base_url: string;
 }
 export const registryStatus = () => invoke<RegistryStatus>("registry_status");
 /** Set (blank clears) the Hugging Face token — a machine-local file, never in

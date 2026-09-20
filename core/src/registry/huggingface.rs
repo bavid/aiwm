@@ -197,6 +197,7 @@ impl ModelSource for HuggingFaceSource {
             rate_limited_secs,
             token_set: self.token.is_some(),
             cache_entries: 0,
+            base_url: self.base.clone(),
         }
     }
 

@@ -300,6 +300,11 @@ pub struct RegistryStatus {
     pub token_set: bool,
     /// JSON entries in the disposable cache.
     pub cache_entries: u64,
+    /// The host this source talks to, e.g. `"https://civitai.red"` — so the UI
+    /// can link a result to the front door the app is actually using instead
+    /// of guessing one. Empty for a source with a single fixed host.
+    #[serde(default)]
+    pub base_url: String,
 }
 
 /// A [`ModelSource`] plus the disposable TTL cache and the offline switch.
