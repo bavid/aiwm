@@ -460,6 +460,23 @@ const CIVITAI_TYPES: { value: string; label: string }[] = [
   { value: "LORA", label: "LoRAs" },
 ];
 
+/** A pasted model link — or a bare model id — goes straight to that model
+ *  instead of through the search.
+ *
+ *  Civitai's `query` is name-matching, not full-text: measured 2026-09-20,
+ *  "Realism by Stable Yogi Krea2" (id 2786499) is the 4th hit for `realism`
+ *  but is nowhere in the first 20 for `krea`, and the API answers one page at
+ *  a time. Its own id answers instantly, and a link is what you have in hand
+ *  when you found the model in a browser. Both hosts are accepted, with or
+ *  without the `?modelVersionId=` the site appends. */
+const CIVITAI_LINK = /civitai\.(?:com|red)\/models\/(\d+)/i;
+const directModelId = (query: string): string | null => {
+  const q = query.trim();
+  const fromLink = CIVITAI_LINK.exec(q);
+  if (fromLink) return fromLink[1];
+  return /^\d{3,}$/.test(q) ? q : null;
+};
+
 const CIVITAI_SORTS: { value: NonNullable<CivitaiSearchParams["sort"]>; label: string }[] = [
   { value: "downloads", label: "Most downloaded" },
   { value: "likes", label: "Highest rated" },
@@ -498,11 +515,32 @@ function CivitaiSearch({ onUseType }: { onUseType: (t: ModelType) => void }) {
   const nsfwId = useId();
 
   const trimmed = query.trim();
+  const linkedId = directModelId(trimmed);
+  const [linked, setLinked] = useState<RegistryDetails | null>(null);
+  const [linkedError, setLinkedError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!linkedId) {
+      setLinked(null);
+      setLinkedError(null);
+      return;
+    }
+    let alive = true;
+    setLinked(null);
+    setLinkedError(null);
+    civitaiModel(linkedId)
+      .then((d) => alive && setLinked(d))
+      .catch((e) => alive && setLinkedError(e instanceof Error ? e.message : String(e)));
+    return () => {
+      alive = false;
+    };
+  }, [linkedId]);
+
   const searchParams = useMemo<CivitaiSearchParams>(
     () => ({ q: trimmed || undefined, types, sort, nsfw, limit: 20 }),
     [trimmed, types, sort, nsfw],
   );
-  const { result, error, loading } = useCivitaiSearch(searchParams, true);
+  const { result, error, loading } = useCivitaiSearch(searchParams, !linkedId);
   const note = result ? freshnessNote(result.freshness, "Civitai") : null;
 
   const toggleType = (t: string) =>
@@ -516,7 +554,7 @@ function CivitaiSearch({ onUseType }: { onUseType: (t: ModelType) => void }) {
           className="discover__search"
           aria-label="Search Civitai"
           value={query}
-          placeholder="pony, realistic, anime style…"
+          placeholder="pony, realistic, anime style… or paste a model link"
           spellCheck={false}
           onChange={(e) => setQuery(e.target.value)}
         />
@@ -553,20 +591,46 @@ function CivitaiSearch({ onUseType }: { onUseType: (t: ModelType) => void }) {
         <HelpHint area="models" setting="nsfw" describes={nsfwId} />
       </div>
 
-      {loading && !result && <p className="muted">Searching…</p>}
-      {error && <p className="import__err">{error}</p>}
-      {note && <p className="discover__stale">{note}</p>}
-      {types.length === 0 && (
-        <p className="muted">Pick at least one type (Checkpoints / LoRAs) to search.</p>
-      )}
-      {result && result.data.length === 0 && !loading && types.length > 0 && (
-        <p className="muted">No models match — try a broader term or turn on “Show NSFW”.</p>
+      {linkedId ? (
+        <>
+          <p className="muted">
+            Showing model {linkedId} from the link you pasted — the type and sort above do not
+            apply to it.
+          </p>
+          {linkedError && <p className="import__err">{linkedError}</p>}
+          {!linked && !linkedError && <p className="muted">Loading that model…</p>}
+        </>
+      ) : (
+        <>
+          {loading && !result && <p className="muted">Searching…</p>}
+          {error && <p className="import__err">{error}</p>}
+          {note && <p className="discover__stale">{note}</p>}
+          {types.length === 0 && (
+            <p className="muted">Pick at least one type (Checkpoints / LoRAs) to search.</p>
+          )}
+          {result && result.data.length === 0 && !loading && types.length > 0 && (
+            <p className="muted">
+              No models match — try a broader term, turn on “Show NSFW”, or paste the model’s
+              link from Civitai. Search matches names and shows the first 20 hits, so a model
+              can sit just outside them.
+            </p>
+          )}
+        </>
       )}
 
       <ul className="discover__results">
-        {result?.data.map((m) => (
-          <CivitaiResultCard key={m.id} model={m} onUseType={onUseType} showNsfw={nsfw} />
-        ))}
+        {linkedId
+          ? linked && (
+              <CivitaiResultCard
+                key={linked.id}
+                model={linked}
+                onUseType={onUseType}
+                showNsfw={nsfw}
+              />
+            )
+          : result?.data.map((m) => (
+              <CivitaiResultCard key={m.id} model={m} onUseType={onUseType} showNsfw={nsfw} />
+            ))}
       </ul>
     </>
   );
