@@ -29,6 +29,14 @@
   grid-column: 1 / -1;
 }
 
+/* A grid item may grow past its track unless it is told it may shrink, and
+   the library table's cells do not wrap — so the card grew to the table's
+   full width and took the whole page into a horizontal scroll with it. With
+   this the table scrolls inside `.model-table__scroll`, where it belongs. */
+.models-sections > * {
+  min-width: 0;
+}
+
 /* Brief highlight so "Set import type" (clicked from the catalog, further up
    the page) has a visible effect after scrolling the form into view. */
 .models__flash .card {
