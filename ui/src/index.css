@@ -248,6 +248,28 @@ button {
   height: 100%;
   overflow-y: auto;
   padding: var(--space-5) var(--space-6) var(--space-6);
+  /* Every tab lives in its own always-mounted wrapper (App.tsx). Without a
+     column here those wrappers are only as tall as their content, so a page
+     that wants the full height — a chat, whose composer belongs at the bottom
+     — collapsed upwards and put its input under the greeting instead. */
+  display: flex;
+  flex-direction: column;
+}
+
+/* `1 0 auto`: at least the full height, and still free to grow with a long
+   page (Settings, the model tables) so `.main` keeps scrolling as before. */
+.main > div:not([hidden]) {
+  flex: 1 0 auto;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+/* A tab's own root fills that wrapper, so `height: 100%` inside a page still
+   means "the viewport", not "as tall as my text". */
+.main > div:not([hidden]) > * {
+  flex: 1 0 auto;
+  min-height: 0;
 }
 
 .status-dot {
