@@ -14,21 +14,21 @@ Rules: explicit-pathspec commits, never `git add -A`, never bare `git stash`, ne
 
 ### Task 1: Content model + HelpHint + Help tab skeleton + Dataset/Training content
 
-- [ ] `ui/src/help/types.ts` (`HelpArea`, `HelpTopic`, `HelpSetting`, `HelpBlock`), `ui/src/help/index.ts` (registry, `findSetting(area, key)`, `searchHelp(query)`), `ui/src/help/dataset.ts`, `ui/src/help/training.ts` with complete content for every control listed in the spec (each `HelpSetting` has non-empty `what/why/effect/benefit`, pitfalls where known, `measured` with date where a number exists).
-- [ ] `ui/src/components/HelpHint.tsx` (+ css): `?` button, `aria-expanded`/`aria-controls`, `describes` prop → `aria-describedby` with the `what` line while collapsed, Escape closes, "More in Help" → `onOpenHelp(area, key)`; no hover-only behaviour.
-- [ ] `ui/src/features/help/Help.tsx` (+ css): tab `help` in `App.tsx` `TABS`; `SectionNav` per area; search box filtering topics/settings with highlighted matches; `helpFocus` lifted state in `App.tsx` (scroll + highlight target); `ShortcutsHelp` gets an "Open Help" button; `CommandPalette` gains a "Help" group and its `TAB_ENTRIES` completed.
-- [ ] Wire `HelpHint` into `PrepForm.tsx`, `Dataset.tsx` (trigger word), `HousekeepingPanel.tsx`, `ExportCard.tsx`, `RejectionChips`/`CurationColumn` (discard reasons), `ConceptsPanel`, `LearnSets`, `NewRunForm.tsx`, `FineTune.tsx`, `Preflight.tsx`, `RunCard.tsx`, `LoraList/LoraHistory`.
-- [ ] `ui/scripts/check-help.mjs` + `pnpm lint:help` wired into `pnpm lint`: every hint key resolves, every area has ≥1 topic, no empty fields.
-- [ ] Live-verify in the dev preview (keyboard-only hint open/close, `aria-describedby` toggling, search, deep link, palette). Commit `feat(ui): in-app Help tab and accessible hints for datasets and training`.
+- [x] `ui/src/help/types.ts` (`HelpArea`, `HelpTopic`, `HelpSetting`, `HelpBlock`), `ui/src/help/index.ts` (registry, `findSetting(area, key)`, `searchHelp(query)`), `ui/src/help/dataset.ts`, `ui/src/help/training.ts` with complete content for every control listed in the spec (each `HelpSetting` has non-empty `what/why/effect/benefit`, pitfalls where known, `measured` with date where a number exists).
+- [x] `ui/src/components/HelpHint.tsx` (+ css): `?` button, `aria-expanded`/`aria-controls`, `describes` prop → `aria-describedby` with the `what` line while collapsed, Escape closes, "More in Help" → `onOpenHelp(area, key)`; no hover-only behaviour.
+- [x] `ui/src/features/help/Help.tsx` (+ css): tab `help` in `App.tsx` `TABS`; `SectionNav` per area; search box filtering topics/settings with highlighted matches; `helpFocus` lifted state in `App.tsx` (scroll + highlight target); `ShortcutsHelp` gets an "Open Help" button; `CommandPalette` gains a "Help" group and its `TAB_ENTRIES` completed.
+- [x] Wire `HelpHint` into `PrepForm.tsx`, `Dataset.tsx` (trigger word), `HousekeepingPanel.tsx`, `ExportCard.tsx`, `RejectionChips`/`CurationColumn` (discard reasons), `ConceptsPanel`, `LearnSets`, `NewRunForm.tsx`, `FineTune.tsx`, `Preflight.tsx`, `RunCard.tsx`, `LoraList/LoraHistory`.
+- [x] `ui/scripts/check-help.mjs` + `pnpm lint:help` wired into `pnpm lint`: every hint key resolves, every area has ≥1 topic, no empty fields.
+- [x] Live-verify in the dev preview (keyboard-only hint open/close, `aria-describedby` toggling, search, deep link, palette). Commit `feat(ui): in-app Help tab and accessible hints for datasets and training`.
 
 ### Task 2: Remaining areas + `title=` cleanup
 
-- [ ] Content for Getting started, Dashboard, Chat/Personas, Image (Hi-Res-Fix, LoRA stack), Video, Upscale, Voice, Stories, Jobs, Agents, Models/Discover (fit badge, captioner installs), Benchmark, Diagnostics, Settings (data locations, retention, cleanup), Shortcuts — each with purpose, flow, settings, disk/GPU effects, limits, measured numbers where they exist.
-- [ ] Hints on the non-obvious controls of those tabs; replace `title=`-only icon buttons in Chat/Discover/Image/FrameCard/Dashboard/FileList/SelectionBar with accessible names (+ hint where meaning is non-obvious).
-- [ ] Live-verify; commit `feat(ui): help content and hints for every tab`.
+- [x] Content for Getting started, Dashboard, Chat/Personas, Image (Hi-Res-Fix, LoRA stack), Video, Upscale, Voice, Stories, Jobs, Agents, Models/Discover (fit badge, captioner installs), Benchmark, Diagnostics, Settings (data locations, retention, cleanup), Shortcuts — each with purpose, flow, settings, disk/GPU effects, limits, measured numbers where they exist.
+- [x] Hints on the non-obvious controls of those tabs; replace `title=`-only icon buttons in Chat/Discover/Image/FrameCard/Dashboard/FileList/SelectionBar with accessible names (+ hint where meaning is non-obvious).
+- [x] Live-verify; commit `feat(ui): help content and hints for every tab`.
 
 ### Task 3: Review + docs
 
-- [ ] Whole-branch review (react-reviewer + a11y pass); fix rounds.
-- [ ] `docs/TODO.md` ✅ entry (what shipped, what is deferred); commit `docs(help): in-app help shipped`.
+- [x] Whole-branch review (react-reviewer + a11y pass); fix rounds.
+- [x] `docs/TODO.md` ✅ entry (what shipped, what is deferred); commit `docs(help): in-app help shipped`.
 - [ ] Hand back: controller gates → merge `--no-ff` → push.
