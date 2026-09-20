@@ -8,6 +8,10 @@
   box-shadow: 0 24px 64px color-mix(in oklab, black 35%, transparent);
 }
 
+.confirm[data-size="wide"] {
+  width: min(720px, calc(100vw - 2 * var(--space-4)));
+}
+
 .confirm::backdrop {
   background: color-mix(in oklab, var(--bg) 55%, black 30%);
   backdrop-filter: blur(2px);

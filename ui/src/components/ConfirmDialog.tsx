@@ -9,6 +9,8 @@ type Props = {
   /** `danger` paints the confirm button in the warning colour — for
    *  deletions that cannot be undone. */
   tone?: "danger" | "default";
+  /** `wide` for a dialog whose body is a list (the cleanup preview). */
+  size?: "default" | "wide";
   isBusy?: boolean;
   /** Shown inside the dialog, e.g. a refusal from the core, verbatim. */
   error?: string | null;
@@ -25,6 +27,7 @@ export function ConfirmDialog({
   children,
   confirmLabel,
   tone = "default",
+  size = "default",
   isBusy = false,
   error = null,
   onConfirm,
@@ -52,6 +55,7 @@ export function ConfirmDialog({
     <dialog
       ref={ref}
       className="confirm"
+      data-size={size}
       aria-labelledby={titleId}
       aria-describedby={bodyId}
       onClose={() => {

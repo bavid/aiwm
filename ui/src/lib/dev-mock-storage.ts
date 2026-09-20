@@ -137,6 +137,9 @@ const GROUP_FOLDER: Record<string, string> = {
 let CLEANUP_GROUPS: MockGroup[] | null = null;
 /** The cleanup history, newest first. */
 const CLEANUP_LOG: AnyRecord[] = [];
+/** A finished run the scan offers, then "continued" before the apply: the
+ *  core refuses the whole request for it. */
+const BUSY_RUN_ID = "run-c";
 
 function cleanupGroups(): MockGroup[] {
   if (!CLEANUP_GROUPS) CLEANUP_GROUPS = buildCleanupGroups();
@@ -187,6 +190,14 @@ export async function mockCleanupApply(body: AnyRecord): Promise<AnyRecord> {
   for (const s of selections) {
     if (!GROUP_KEYS.includes(String(s.group))) {
       throw new Error(`configuration error: unknown cleanup group "${String(s.group)}"`);
+    }
+    // Like the core's `refuse_if_busy`: a run that was continued since the
+    // scan refuses the whole request, dry run included, and deletes nothing.
+    const ids = Array.isArray(s.entry_ids) ? s.entry_ids.map(String) : [];
+    if (s.group === "finished_runs" && ids.includes(BUSY_RUN_ID)) {
+      throw new Error(
+        'configuration error: training run "night-v1" is running \u2014 wait for it to finish or cancel it first',
+      );
     }
   }
   await new Promise((resolve) => setTimeout(resolve, MEASURE_DELAY_MS));
@@ -279,6 +290,7 @@ function buildCleanupGroups(): MockGroup[] {
     group("finished_runs", "Finished training runs", [
       entry("run-a", "portrait-style-v1 — whole folder", 41, 6_200_000_000, ["E:\\AI\\data\\training\\run-a", 'the result LoRA "portrait-style-v1" is in the library']),
       entry("run-b", "street-v2 — checkpoints, optimizer state, samples and log", 26, 3_100_000_000, ["street-v2_000000250.safetensors", "street-v2_000000500.safetensors", "optimizer.pt", "train.log", "… and 22 more"]),
+      entry(BUSY_RUN_ID, "night-v1 — checkpoints, optimizer state, samples and log", 9, 1_400_000_000, ["night-v1_000000250.safetensors", "optimizer.pt", "train.log", "… and 6 more"]),
     ]),
     group("caches", "Caches and leftovers", [
       entry("cache", "Registry and runtime caches", 640, 320_000_000, ["E:\\AI\\data\\cache"]),

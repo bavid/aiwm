@@ -4,8 +4,7 @@ import type { HelpSetting, HelpTopic } from "./types.ts";
  *  scheduler budget and Auto preference, llama.cpp and ComfyUI options,
  *  tokens and the local API, offline mode, backup. Facts from
  *  `features/settings/Settings.tsx`, `DataLocations.tsx`, `BackupCard.tsx`,
- *  `lib/ipc.ts` and `docs/TODO.md` (2026-09-16, 2026-09-19). The Cleanup
- *  page is mentioned only as planned. */
+ *  `Cleanup.tsx`, `lib/ipc.ts` and `docs/TODO.md` (2026-09-16, 2026-09-19). */
 
 const GENERAL_SETTINGS: readonly HelpSetting[] = [
   {
@@ -24,7 +23,7 @@ const STORAGE_SETTINGS: readonly HelpSetting[] = [
     label: "Data locations",
     what: "Every folder the app writes to — generated media, dataset work folders, training runs, the model store, runtime installs, cache, download staging — with its size, file count, its drive's free space, an Open folder button, and (where configurable) a custom folder.",
     why: "Video, datasets and training fill drives; moving a location to a bigger drive is the fix.",
-    effect: "A custom folder applies after Save and a restart. Existing data stays where it is; new datasets, runs and outputs go to the new folder. Blank means the portable default next to the app (the model store always has a path). \"Refresh sizes\" walks the folders again — a recursive walk, so it is on demand, not on a timer. A planned Cleanup page will list what the app itself generated and could be removed; today, deletion happens per dataset (Housekeeping), per run (Delete + purge), per output (retention), and per model (Storage).",
+    effect: "A custom folder applies after Save and a restart. Existing data stays where it is; new datasets, runs and outputs go to the new folder. Blank means the portable default next to the app (the model store always has a path). \"Refresh sizes\" walks the folders again — a recursive walk, so it is on demand, not on a timer. The Cleanup section lists what the app itself generated and could be removed; deleting a model happens under Models → Maintenance.",
     benefit: "See where the gigabytes are and move them without moving the app.",
     pitfalls: "Only new work goes to the new folder; the old folder keeps what it has. Windows paths are compared case-insensitively.",
     measured: "2026-09-19: a dataset prep with a custom \"Store frames in\" folder wrote all 1,368 files (1,173,444,536 B) under <folder>\\<job id> in 296.6 s while the default datasets folder stayed empty.",
@@ -53,6 +52,18 @@ const STORAGE_SETTINGS: readonly HelpSetting[] = [
     why: "You do not have to wait for the next start.",
     effect: "Reads config.toml fresh — an unsaved edit above is not what runs; Save first. Disabled while both limits are 0.",
     benefit: "Free the space when you need it.",
+  },
+];
+
+const CLEANUP_SETTINGS: readonly HelpSetting[] = [
+  {
+    key: "cleanup-page",
+    label: "Cleanup",
+    what: "Scan finds what the app itself generated and could remove, grouped: generated media beyond the retention rule or without a job, discarded dataset frames, dataset work folders no dataset claims, frame entries whose files are missing, finished training runs' work folders, caches and leftovers, logs older than 30 days, database backups. Each group shows its files and size; pick whole groups or single entries, Preview lists the exact files, Delete removes them.",
+    why: "Renders, curation and training leave gigabytes behind in places you would have to know about; one page finds them all and says what each is.",
+    effect: "Scan only reads (a recursive walk of the app's folders — on demand, never on a timer). Preview is a dry run: nothing is deleted. Delete goes through the same guards as a dataset's Housekeeping and a run's purge, best-effort per file with the skipped ones listed and why, then scans again and writes the Cleanup history. Frame entries whose files are missing free no space; removing them clears broken thumbnails.",
+    benefit: "See where the space went and get it back in two clicks, with a list of exactly what left.",
+    pitfalls: "Deleted files are gone. Never listed: models and the model store, runtimes, library LoRAs, voice identities, your source media, and anything a running or paused job, run or download still needs — the Protected list says what was held back and why. While a selected dataset, run or download is busy the whole request is refused, also for a preview; nothing is deleted then and the selection stays. A finished run's whole folder is offered only when its result LoRA is in the library; otherwise only checkpoints, optimizer state, samples and the log.",
   },
 ];
 
@@ -219,7 +230,7 @@ export const SETTINGS_TOPICS: readonly HelpTopic[] = [
     id: "purpose",
     area: "settings",
     title: "What the Settings tab is for",
-    summary: "Everything in config.toml, in six sections: General, Storage & data, Performance, Runtimes, Network & API, Backup. Each card says whether it applies instantly, on the next model load, live, or after a restart.",
+    summary: "Everything in config.toml, in seven sections: General, Storage & data, Cleanup, Performance, Runtimes, Network & API, Backup. Each card says whether it applies instantly, on the next model load, live, or after a restart.",
     body: [
       {
         kind: "p",
@@ -239,14 +250,27 @@ export const SETTINGS_TOPICS: readonly HelpTopic[] = [
     id: "storage",
     area: "settings",
     title: "Storage & data",
-    summary: "Where every folder is and how big; retention for generated media; the planned Cleanup page.",
+    summary: "Where every folder is and how big; retention for generated media.",
     body: [
       {
         kind: "p",
-        text: "Data locations measure and move; the Generated media card prunes. Deleting other generated data lives where it was made: a dataset's Housekeeping (clean up discarded frames, delete the dataset), a training run's Delete + purge, a model's Delete under Models → Maintenance. A single Cleanup page that lists all of it with sizes, a preview of what would be freed and a log is planned and not built yet.",
+        text: "Data locations measure and move; the Generated media card prunes. Deleting generated data also lives where it was made: a dataset's Housekeeping (clean up discarded frames, delete the dataset), a training run's Delete + purge, a model's Delete under Models → Maintenance. The Cleanup section lists all of it with sizes, previews what would be freed and keeps a history.",
       },
     ],
     settings: STORAGE_SETTINGS,
+  },
+  {
+    id: "cleanup",
+    area: "settings",
+    title: "Cleanup",
+    summary: "Find what the app generated and could remove, preview the exact files, delete behind a confirmation, and see the history.",
+    body: [
+      {
+        kind: "p",
+        text: "Nothing is scanned until you press Scan, and nothing is deleted until you press Delete in the preview. The page calls the same functions as the dataset's Housekeeping and a run's Delete + purge, so the same guards apply: never source files, never outside the app's own folders, never links, never a busy dataset or run.",
+      },
+    ],
+    settings: CLEANUP_SETTINGS,
   },
   {
     id: "performance",

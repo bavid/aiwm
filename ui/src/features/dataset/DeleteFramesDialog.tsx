@@ -1,4 +1,4 @@
-import { ConfirmDialog } from "./ConfirmDialog";
+import { ConfirmDialog } from "../../components/ConfirmDialog";
 import { framesLabel } from "./curation";
 
 /** What the curator is about to delete, counted when the dialog opens. */

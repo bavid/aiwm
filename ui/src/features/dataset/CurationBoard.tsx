@@ -38,7 +38,7 @@ import { formatBytes } from "./format";
 import { RejectionChips } from "./RejectionChips";
 import { SelectionBar } from "./SelectionBar";
 import { SelectionToolbar, type AssignState } from "./SelectionToolbar";
-import { SkippedFiles } from "./SkippedFiles";
+import { SkippedFiles } from "../../components/SkippedFiles";
 import { useFrameSelection } from "./useFrameSelection";
 import { useOptimisticFrames } from "./useOptimisticFrames";
 import "./curation.css";

@@ -32,7 +32,7 @@ import { formatBytes } from "./format";
 import { HousekeepingPanel } from "./HousekeepingPanel";
 import { LearnSets } from "./LearnSets";
 import { PrepForm } from "./PrepForm";
-import { SkippedFiles } from "./SkippedFiles";
+import { SkippedFiles } from "../../components/SkippedFiles";
 import { tokenWarning } from "./tokens";
 import "./dataset.css";
 
