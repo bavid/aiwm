@@ -33,12 +33,19 @@ export function ShortcutsHelp({ onOpenHelp }: { onOpenHelp: () => void }) {
   if (!open) return null;
 
   return (
-    <div className="cmdk__backdrop" onClick={() => setOpen(false)}>
+    // Presentational: a click on the backdrop itself closes; Escape is
+    // handled by the window listener above.
+    <div
+      className="cmdk__backdrop"
+      role="presentation"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) setOpen(false);
+      }}
+    >
       <div
         className="cmdk"
         role="dialog"
         aria-label="Keyboard shortcuts"
-        onClick={(e) => e.stopPropagation()}
         style={{ maxHeight: "none" }}
       >
         <div className="cmdk__group" style={{ padding: "var(--space-4) var(--space-4) 0" }}>

@@ -406,7 +406,7 @@ export function ImageStudio({ prefill = null, onPrefillConsumed }: Props = {}) {
             <img
               className="startframe__thumb"
               src={imageOutputUrl(about.core_api_port, sourceImage)}
-              alt="image to edit"
+              alt="The source this prompt will edit"
               loading="lazy"
             />
           )}

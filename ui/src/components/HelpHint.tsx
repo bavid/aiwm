@@ -149,6 +149,9 @@ export function HelpHint({ area, setting, describes }: Props) {
   };
 
   const panel = (
+    // The panel only catches Escape bubbling from its own "More in Help"
+    // button; it is not itself a control (jsx-a11y's documented exception).
+    // eslint-disable-next-line jsx-a11y/no-static-element-interactions
     <div
       ref={panelRef}
       id={panelId}
@@ -195,7 +198,7 @@ export function HelpHint({ area, setting, describes }: Props) {
   );
 
   return (
-    <span className="helphint" onKeyDown={onKeyDown}>
+    <span className="helphint">
       <button
         ref={buttonRef}
         type="button"
@@ -205,6 +208,7 @@ export function HelpHint({ area, setting, describes }: Props) {
         aria-controls={panelId}
         aria-details={open ? panelId : undefined}
         onClick={() => setOpen((v) => !v)}
+        onKeyDown={onKeyDown}
       >
         <span aria-hidden="true">?</span>
       </button>

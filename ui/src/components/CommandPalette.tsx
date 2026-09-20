@@ -133,13 +133,16 @@ export function CommandPalette({
   let lastGroup: string | null = null;
 
   return (
-    <div className="cmdk__backdrop" onClick={() => setOpen(false)}>
-      <div
-        className="cmdk"
-        role="dialog"
-        aria-label="Command palette"
-        onClick={(e) => e.stopPropagation()}
-      >
+    // Presentational: a click on the backdrop itself closes; Escape is
+    // handled by the window listener above.
+    <div
+      className="cmdk__backdrop"
+      role="presentation"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) setOpen(false);
+      }}
+    >
+      <div className="cmdk" role="dialog" aria-label="Command palette">
         <input
           ref={inputRef}
           className="cmdk__input"

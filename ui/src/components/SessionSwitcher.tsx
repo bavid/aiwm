@@ -136,7 +136,11 @@ export function SessionSwitcher({ capability, activeId, onChange }: SessionSwitc
 
   return (
     <div className="session-switcher">
-      <select value={activeId ?? ""} onChange={(e) => onChange(e.target.value || null)}>
+      <select
+        aria-label="Session"
+        value={activeId ?? ""}
+        onChange={(e) => onChange(e.target.value || null)}
+      >
         <option value="">Ungrouped</option>
         {active.map((s) => (
           <option key={s.id} value={s.id}>

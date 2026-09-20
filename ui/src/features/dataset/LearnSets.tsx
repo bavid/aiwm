@@ -270,14 +270,9 @@ export function LearnSets({
 
   return (
     // Focusable so the set shortcuts have somewhere to land; every action is
-    // also reachable as a real button below.
-    <div
-      className="card learn"
-      tabIndex={0}
-      onKeyDown={onKeyDown}
-      role="group"
-      aria-label="Guided concept sets"
-    >
+    // also reachable as a real button below (jsx-a11y's container exception).
+    // eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions, jsx-a11y/no-noninteractive-tabindex
+    <div className="card learn" tabIndex={0} onKeyDown={onKeyDown} role="group" aria-label="Guided concept sets">
       <div className="learn__main">
         <div className="learn__header">
           <div>

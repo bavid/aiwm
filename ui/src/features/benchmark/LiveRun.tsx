@@ -99,14 +99,10 @@ export function LiveRun({ detail, total, suite, modelName }: Props) {
       {job.error_text && <p className="bench__err">{job.error_text}</p>}
 
       {/* Focusable so the trail can be scrolled with the keyboard alone -- it
-          is a scroll container with no other focusable content in it. */}
-      <ol
-        className="bench__trail"
-        ref={trailRef}
-        onScroll={onTrailScroll}
-        tabIndex={0}
-        aria-label="Engine events"
-      >
+          is a scroll container with no other focusable content in it (a
+          keyboard-reachable scroll region is what WCAG 2.1.1 asks for). */}
+      {/* eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex */}
+      <ol className="bench__trail" ref={trailRef} onScroll={onTrailScroll} tabIndex={0} aria-label="Engine events">
         {/* Keyed by position: the trail is append-only, and event timestamps
             are not unique (several passes can land inside one second). */}
         {events.map((e, i) => (

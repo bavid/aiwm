@@ -54,29 +54,27 @@ export function JobNotifications({ onNavigate }: { onNavigate: (tab: string) => 
   return (
     <div className="toaststack" aria-live="polite">
       {toasts.map((t) => (
-        <div
-          key={t.id}
-          className="toast"
-          data-state={t.job.state}
-          onClick={() => {
-            onNavigate("jobs");
-            dismiss(t.id);
-          }}
-        >
-          <div className="toast__body">
+        <div key={t.id} className="toast" data-state={t.job.state}>
+          {/* The body is the real control (opens the Jobs tab), so it is a
+              button; the dismiss button sits beside it, not inside it. */}
+          <button
+            type="button"
+            className="toast__body"
+            onClick={() => {
+              onNavigate("jobs");
+              dismiss(t.id);
+            }}
+          >
             <span className="toast__title">
               {t.job.job_type} {t.job.state === "completed" ? "finished" : t.job.state}
             </span>
             {t.job.model_id && <span className="toast__sub">{t.job.model_id}</span>}
             {t.job.error_text && <span className="toast__sub">{t.job.error_text}</span>}
-          </div>
+          </button>
           <button
             type="button"
             className="toast__close"
-            onClick={(e) => {
-              e.stopPropagation();
-              dismiss(t.id);
-            }}
+            onClick={() => dismiss(t.id)}
             aria-label="Dismiss"
           >
             ×

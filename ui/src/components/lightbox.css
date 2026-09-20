@@ -19,7 +19,17 @@
   }
 }
 
+/* The click-to-close surface: fills the dialog, painted under the stage
+   (which is positioned above it) and the fixed close/nav buttons (later in
+   the tree, so they paint on top). */
+.lightbox__backdrop {
+  position: absolute;
+  inset: 0;
+}
+
 .lightbox__stage {
+  position: relative;
+  z-index: 1;
   margin: 0;
   display: flex;
   flex-direction: column;

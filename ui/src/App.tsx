@@ -288,7 +288,8 @@ export default function App() {
             </div>
           </div>
 
-          <nav className="navgroup" role="tablist" aria-label="Views">
+          {/* A tablist, not a <nav>: the aside is already the landmark. */}
+          <div className="navgroup" role="tablist" aria-label="Views">
             {TABS.map((t) => (
               <button
                 key={t.id}
@@ -301,7 +302,7 @@ export default function App() {
                 <span className="label">{t.label}</span>
               </button>
             ))}
-          </nav>
+          </div>
 
           <div className="sidebar__spacer" />
 

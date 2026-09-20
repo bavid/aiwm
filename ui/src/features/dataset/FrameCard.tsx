@@ -143,12 +143,26 @@ export const FrameCard = memo(function FrameCard({
           if (e.target === e.currentTarget) onFocusCard(frame);
         }}
       >
+        {/* The pointer target of the card: click / Ctrl-click / Shift-click
+            and the drag handle. Its keyboard counterpart is the gridcell
+            above (Space toggles, the column moves focus), so the handlers
+            here are pointer-only by design. */}
+        {/* eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-static-element-interactions */}
         <div
           className="framecard__thumb"
           data-empty={!hasThumb}
           data-drag-handle
           draggable
-          onClick={(e) => onSelectClick(frame, modifiersOf(e))}
+          // Compact view has no caption field, so the thumbnail's hover text
+          // is the quick caption preview while sorting. Supplementary only:
+          // the image's alt and the detailed view carry the same caption for
+          // keyboard and screen-reader users.
+          title={isCompact ? frame.caption || frame.tag : undefined}
+          onClick={(e) => {
+            // A click on the checkbox is its own toggle, not a card click.
+            if ((e.target as HTMLElement).closest(".framecard__select")) return;
+            onSelectClick(frame, modifiersOf(e));
+          }}
           onDragStart={(e) => onDragStart(frame, e)}
           onDragEnd={onDragEnd}
         >
@@ -157,7 +171,7 @@ export const FrameCard = memo(function FrameCard({
           {hasThumb && (
             <img src={imageUrl} alt={frame.caption || frame.tag} loading="lazy" draggable={false} />
           )}
-          <label className="framecard__select" onClick={(e) => e.stopPropagation()}>
+          <label className="framecard__select">
             <input
               type="checkbox"
               checked={isSelected}
