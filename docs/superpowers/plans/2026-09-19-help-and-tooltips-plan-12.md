@@ -31,4 +31,4 @@ Rules: explicit-pathspec commits, never `git add -A`, never bare `git stash`, ne
 
 - [x] Whole-branch review (react-reviewer + a11y pass); fix rounds.
 - [x] `docs/TODO.md` ✅ entry (what shipped, what is deferred); commit `docs(help): in-app help shipped`.
-- [ ] Hand back: controller gates → merge `--no-ff` → push.
+- [x] Hand back: controller gates (UI typecheck/lint/build green; no core changes) → merge `--no-ff` → push.
