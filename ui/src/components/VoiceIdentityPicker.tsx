@@ -18,7 +18,7 @@ interface VoiceIdentityPickerProps {
  *  transcript, set up once under a name (e.g. "Old Man Gareth") and reused
  *  across many narration calls -- or falls back to `null` for the caller's
  *  own free-text, seed-only identity. Self-contained fetch/create/delete,
- *  mirroring `SessionSwitcher`'s shape.
+ *  self-contained the way the session sidebar is.
  *
  *  The file picker below is real only inside a Tauri window
  *  (`@tauri-apps/plugin-dialog`); in the browser dev preview it silently

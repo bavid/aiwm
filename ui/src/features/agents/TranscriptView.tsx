@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useId, useState } from "react";
 import type { PermissionDecision } from "../../lib/ipc";
 import {
   approvalDomId,
@@ -57,6 +57,9 @@ export function TranscriptBlock({
 
 function ToolCard({ block }: { block: ToolBlock }) {
   const [expanded, setExpanded] = useState(false);
+  /** Names the output block the fold button controls, so a screen reader can
+   *  follow the disclosure rather than only hear that it toggled. */
+  const outId = useId();
   const lines = block.output ? block.output.split("\n") : [];
   const foldable = lines.length > PREVIEW_LINES;
   const shown = foldable && !expanded ? lines.slice(0, PREVIEW_LINES).join("\n") : block.output;
@@ -75,7 +78,7 @@ function ToolCard({ block }: { block: ToolBlock }) {
       {block.command && <pre className="tool__cmd">{block.command}</pre>}
       {block.output && (
         <>
-          <pre className="tool__out" data-folded={foldable && !expanded}>
+          <pre id={outId} className="tool__out" data-folded={foldable && !expanded}>
             {shown}
           </pre>
           {foldable && (
@@ -83,6 +86,7 @@ function ToolCard({ block }: { block: ToolBlock }) {
               type="button"
               className="tool__more"
               aria-expanded={expanded}
+              aria-controls={outId}
               onClick={() => setExpanded((v) => !v)}
             >
               {expanded
