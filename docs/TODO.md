@@ -2404,6 +2404,38 @@ Hinweis auf das versteckte; aufgeklappt 3 Kacheln inkl. ▶ beim Video; Lightbox
 mit „Preview 1 of 3" → Next → beim Video ein `<video>`-Element und kein
 „Next" mehr; nach „Show NSFW" 4 Kacheln und kein Hinweis mehr.
 
+### Nachtrag: „Ich finde ein Modell nicht, obwohl NSFW an ist" (2026-09-20)
+
+Gemeldet mit `https://civitai.red/models/2786499/realism-by-stable-yogi-krea2`
+(ein Checkpoint). **Gemessen statt geraten**, unangemeldet gegen beide Hosts:
+
+- `GET /api/v1/models/2786499` → **HTTP 200**, „Realism by Stable Yogi Krea2",
+  Typ Checkpoint, `nsfw: false`, `availability: Public`, 34.575 Downloads. Das
+  Modell ist also über die API erreichbar, und es ist **nicht** als NSFW
+  markiert — der NSFW-Schalter war nie die Ursache.
+- Mit den exakten Parametern der App (`types=Checkpoint&types=LORA&
+  sort=Most Downloaded&nsfw=true&limit=20`): bei `query=realism` steht es auf
+  **Platz 4**, bei `query=stable yogi` ebenfalls drin — aber bei `query=krea`
+  ist es **nicht unter den ersten 20**, obwohl „Krea2" im Namen steht.
+
+**Ursache:** Civitais `query` ist eine Namens-Suche, keine Volltextsuche, und
+die API liefert **eine Seite** (`metadata.nextCursor`/`nextPage` gibt es, die
+App nutzt sie nicht). Wer den genauen Namen nicht trifft, sieht das Modell
+nicht — unabhängig von NSFW.
+
+**Umgesetzt:** in das Suchfeld darf jetzt auch ein **Modell-Link oder eine
+Modell-ID** (beide Hosts, `?modelVersionId=` egal). Dann wird genau dieses
+Modell direkt über `GET /models/{id}` geholt und angezeigt, mit dem Hinweis,
+dass Typ- und Sortier-Filter dafür nicht gelten. Die „nichts gefunden"-Meldung
+sagt jetzt außerdem, dass nur die ersten 20 Namenstreffer erscheinen.
+Live geprüft: voller `civitai.red`-Link mit Versions-Parameter → genau dieses
+Modell; blanke ID ebenso; Text wieder eingeben → normale Suche.
+
+**Offen:** echtes Blättern („Load more" über `nextCursor`) — dafür müssen
+`SearchQuery`, der Cache-Schlüssel und die HF-Quelle den Cursor mitführen, das
+ist mehr als ein UI-Knopf. Ebenso offen: der Link im Trefferkopf zeigt fest auf
+`civitai.com`; er sollte der eingestellten Haustür folgen.
+
 **Offen (bewusst nicht gebaut):** die Vorschauen lokal im `cache_dir`
 zwischenspeichern. Heute lädt sie der Browser direkt von Civitais CDN — damit
 liegt nichts auf der Platte, was die Cleanup-Seite aufräumen müsste. Ein
