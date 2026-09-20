@@ -1667,6 +1667,15 @@ export type Freshness =
  *  for Hugging Face, `GET /civitai/search` for Civitai). A field a given
  *  source has no concept of stays at its neutral default rather than being
  *  fabricated — see each field's comment for which source(s) populate it. */
+/** One sample of a model's gallery. `nsfw_level` is Civitai's own per-image
+ *  rating (1 = safe): a model that is not flagged NSFW can still carry spicier
+ *  samples, so anything above 1 stays hidden unless "Show NSFW" is on. */
+export interface RemotePreview {
+  url: string;
+  is_video: boolean;
+  nsfw_level: number;
+}
+
 export interface RemoteModel {
   /** Hugging Face: `owner/repo`. Civitai: the numeric model id, as a string. */
   id: string;
@@ -1699,6 +1708,10 @@ export interface RemoteModel {
   nsfw: boolean;
   /** A representative preview image (Civitai only). */
   preview_image_url: string | null;
+  /** The primary version's sample gallery (Civitai), capped server-side at 12;
+   *  empty for a source without one. Nothing is loaded until the row's
+   *  "Previews" button is pressed. */
+  previews: RemotePreview[];
   /** Civitai's `allowCommercialUse` flags (e.g. `["Image", "Sell"]`) — this,
    *  not `license`, is Civitai's real commercial-terms signal. Empty for
    *  Hugging Face. */

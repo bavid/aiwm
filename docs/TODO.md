@@ -2377,15 +2377,37 @@ sha256-Pinning gelten unverändert für jeden Download.
 jugendfreie Treffer beschränkt (heute tut sie es nicht), sollte die App das
 erkennen und auf die rote Tür hinweisen, statt leere Ergebnisse zu zeigen.
 
-## Discover-Tab: mehr Vorschauen (Backlog, User-Wunsch 2026-09-20)
+## Discover-Tab: mehr Vorschauen — ✅ umgesetzt (2026-09-20)
 
-- Mehr Vorschau-Bilder pro Modell in der Modell-Suche (heute zeigt
-  `features/models/Discover.tsx` je Treffer wenige/keine), z. B. eine kleine
-  Galerie mit Blättern, Klick auf groß (Lightbox gibt es schon), und die
-  Vorschauen von Civitai/HF **erst auf Anfrage** laden (Offline-Gate, kein
-  automatischer Netz-Traffic beim Öffnen des Tabs). Größenbudget beachten:
-  Vorschauen nie in den Modell-Store schreiben, sondern in den Cache-Ordner
-  (`cache_dir`), damit die Cleanup-Seite sie aufräumen kann.
+Bisher zeigte jede Trefferzeile genau ein 72-px-Bild, obwohl die Suchantwort
+schon die ganze Galerie mitliefert (gemessen: die Primärversion eines
+populären Modells hat 15–20 Einträge).
+
+**Umgesetzt:** `RemoteModel.previews: Vec<RemotePreview { url, is_video,
+nsfw_level }>`, serverseitig auf `MAX_PREVIEWS = 12` gedeckelt und aus der
+vorhandenen Antwort geparst — **kein zusätzlicher Netz-Aufruf**. In der Zeile
+ein Knopf „Previews (N)", der einen Streifen mit Thumbnails aufklappt; Klick
+öffnet die vorhandene Lightbox mit ←/→. Video-Samples (Civitai liefert für
+Video-Modelle kurze MP4s) werden als `<video>` gerendert und im Streifen mit
+einem ▶-Zeichen markiert, nicht weggelassen.
+
+**Jugendschutz-Detail, bewusst so:** Civitai bewertet **jedes einzelne Bild**
+(`nsfwLevel`, 1 = harmlos). Ein Modell ohne NSFW-Flag kann trotzdem deutlichere
+Samples haben. Der Streifen zeigt deshalb nur Stufe ≤ 1, solange „Show NSFW"
+aus ist, und sagt ehrlich „N hidden — tick 'Show NSFW' to include them".
+
+**Geladen wird erst auf Anfrage:** zu ist der Streifen, also lädt eine Suche
+weiterhin ein Thumbnail pro Zeile und nicht ein Dutzend.
+
+Live geprüft (Dev-Mock): „Previews (3)" bei 4 Samples mit einem der Stufe 4,
+Hinweis auf das versteckte; aufgeklappt 3 Kacheln inkl. ▶ beim Video; Lightbox
+mit „Preview 1 of 3" → Next → beim Video ein `<video>`-Element und kein
+„Next" mehr; nach „Show NSFW" 4 Kacheln und kein Hinweis mehr.
+
+**Offen (bewusst nicht gebaut):** die Vorschauen lokal im `cache_dir`
+zwischenspeichern. Heute lädt sie der Browser direkt von Civitais CDN — damit
+liegt nichts auf der Platte, was die Cleanup-Seite aufräumen müsste. Ein
+lokaler Cache lohnt erst, wenn dieselben Treffer oft wiederkommen.
 
 ## Offen / später zu entscheiden
 - App-Selbst-Update offline (manueller Installer + Signaturprüfung angenommen)

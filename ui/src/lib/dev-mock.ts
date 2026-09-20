@@ -1381,6 +1381,12 @@ const CIVITAI_DISCOVER_MODELS: AnyRecord[] = [
     tags: ["western art", "base model", "anime"], param_count: null, arch: null, ctx_max: null,
     precision: null, format: "safetensors", nsfw: false,
     preview_image_url: "https://placehold.co/144x144/2a2540/e8e3ff?text=Pony+V6",
+    previews: [
+      { url: "https://placehold.co/144x144/2a2540/e8e3ff?text=Pony+V6", is_video: false, nsfw_level: 1 },
+      { url: "https://placehold.co/144x144/32204a/e8e3ff?text=Sample+2", is_video: false, nsfw_level: 1 },
+      { url: "https://placehold.co/144x144/3a1f3f/e8e3ff?text=Clip", is_video: true, nsfw_level: 1 },
+      { url: "https://placehold.co/144x144/4a1f2a/ffe3e8?text=Spicy", is_video: false, nsfw_level: 4 },
+    ],
     allow_commercial_use: ["Image", "RentCivit"], model_kind_hint: "Checkpoint",
     base_model_family: "Pony, SD 1.5",
   },
@@ -1392,6 +1398,10 @@ const CIVITAI_DISCOVER_MODELS: AnyRecord[] = [
     tags: ["detailed", "enhancer"], param_count: null, arch: null, ctx_max: null,
     precision: null, format: "safetensors", nsfw: false,
     preview_image_url: "https://placehold.co/144x144/1f2a24/d8ffe8?text=Detail",
+    previews: [
+      { url: "https://placehold.co/144x144/1f2a24/d8ffe8?text=Detail", is_video: false, nsfw_level: 1 },
+      { url: "https://placehold.co/144x144/24301f/d8ffe8?text=Sample+2", is_video: false, nsfw_level: 1 },
+    ],
     allow_commercial_use: ["Image"], model_kind_hint: "LORA", base_model_family: "SD 1.5",
   },
   {
@@ -1400,7 +1410,7 @@ const CIVITAI_DISCOVER_MODELS: AnyRecord[] = [
     last_modified: "2024-01-01T00:00:00.000Z", pipeline_tag: null, library_name: null,
     gated: "no", license: null, base_model: null,
     tags: [], param_count: null, arch: null, ctx_max: null,
-    precision: null, format: "safetensors", nsfw: false, preview_image_url: null,
+    precision: null, format: "safetensors", nsfw: false, preview_image_url: null, previews: [],
     allow_commercial_use: [], model_kind_hint: "Checkpoint", base_model_family: "SD 1.5",
   },
   {
@@ -1409,7 +1419,7 @@ const CIVITAI_DISCOVER_MODELS: AnyRecord[] = [
     last_modified: "2024-01-01T00:00:00.000Z", pipeline_tag: null, library_name: null,
     gated: "no", license: null, base_model: null,
     tags: ["nsfw"], param_count: null, arch: null, ctx_max: null,
-    precision: null, format: "safetensors", nsfw: true, preview_image_url: null,
+    precision: null, format: "safetensors", nsfw: true, preview_image_url: null, previews: [],
     allow_commercial_use: [], model_kind_hint: "Checkpoint", base_model_family: "SD 1.5",
   },
 ];

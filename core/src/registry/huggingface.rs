@@ -348,6 +348,7 @@ fn parse_model(v: &Value) -> Option<RemoteModel> {
         // Hugging Face has none of these Civitai-only concepts.
         nsfw: false,
         preview_image_url: None,
+        previews: Vec::new(),
         allow_commercial_use: Vec::new(),
         model_kind_hint: None,
         base_model_family: None,
