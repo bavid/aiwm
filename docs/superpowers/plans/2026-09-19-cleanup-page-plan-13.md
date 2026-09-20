@@ -31,7 +31,7 @@ Rules: TDD with observed RED; no `unsafe`; no `unwrap/expect` in production; exp
 ### Task 4: Real run + docs
 
 - [x] DB backup; real daemon; `GET /cleanup/scan` on the user's data — record every group with sizes and the protected list; apply ONLY on entries created by this session's own earlier test runs (e.g. Plan 11's continue run work folder is NOT one of them — it is the user's lineage; leave it) or nothing; report honestly. `docs/TODO.md` ✅ entry; commit `docs(cleanup): Cleanup page shipped, measured`.
-- [ ] Hand back: whole-branch review → controller gates → merge `--no-ff` → push.
+- [x] Hand back: whole-branch review (approved) → controller gates (1415 lib tests, UI clean) → merge `--no-ff` → push.
 
 ## Measured
 
