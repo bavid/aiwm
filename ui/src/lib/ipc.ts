@@ -640,6 +640,72 @@ export interface CleanupReport {
  *  (the Cleanup page's "Scan" button), never on a timer. Reports only;
  *  nothing is deleted. */
 export const cleanupScan = () => invoke<CleanupReport>("cleanup_scan");
+
+/** The entries of one group to apply — the scan's ids. An id the scan does
+ *  not (or no longer) offer is skipped with reason `not_offered`. */
+export interface CleanupSelection {
+  group: CleanupGroupKey | string;
+  entry_ids: string[];
+}
+
+/** `POST /cleanup/apply`'s body. `dry_run: true` lists exactly what would
+ *  go and deletes nothing. */
+export interface CleanupApplyRequest {
+  selections: CleanupSelection[];
+  dry_run: boolean;
+}
+
+/** One entry's outcome. In a dry run `files`/`bytes`/`rows` are what would
+ *  go and `paths` the exact files; after a real run, what went. */
+export interface CleanupEntryResult {
+  group: CleanupGroupKey | string;
+  id: string;
+  label: string;
+  files: number;
+  bytes: number;
+  rows: number;
+  skipped: SkippedFile[];
+  paths: string[];
+}
+
+/** What an apply did — or, in a dry run, would do. */
+export interface CleanupApplyResult {
+  dry_run: boolean;
+  deleted_files: number;
+  freed_bytes: number;
+  removed_rows: number;
+  /** Every skip of every entry, with its reason. */
+  skipped: SkippedFile[];
+  entries: CleanupEntryResult[];
+}
+
+/** Apply a selection from the scan through the existing deletion gates —
+ *  or, with `dry_run`, preview it. The whole request is refused (an
+ *  error, nothing deleted) while a selected dataset is busy, a selected
+ *  run has not finished or a selected download is still going; within a
+ *  group each entry is best-effort with skip reasons. Only a real run
+ *  writes the cleanup history. */
+export const cleanupApply = (req: CleanupApplyRequest) =>
+  invoke<CleanupApplyResult>("cleanup_apply", { body: req });
+
+/** One line of the cleanup history (`GET /cleanup/log`). */
+export interface CleanupLogEntry {
+  id: string;
+  /** RFC 3339, UTC. */
+  ts: string;
+  group_key: CleanupGroupKey | string;
+  entry_id: string;
+  entry_label: string;
+  deleted_files: number;
+  freed_bytes: number;
+  removed_rows: number;
+  skipped_count: number;
+  /** Skip reasons and a capped path list. */
+  detail: { skipped?: SkippedFile[]; paths?: string[] };
+}
+
+/** The newest cleanup history rows, newest first (the page shows 20). */
+export const cleanupLog = (limit = 20) => invoke<CleanupLogEntry[]>("cleanup_log", { limit });
 /** Delete a model — its file, links and DB rows. Permanent; refused while
  *  the model is loaded. */
 export const deleteModel = (id: string) => invoke<DeleteOutcome>("delete_model", { id });

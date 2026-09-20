@@ -19,6 +19,8 @@ import {
 import {
   checkPrepDataDir,
   checkRunDataDir,
+  mockCleanupApply,
+  mockCleanupLog,
   mockCleanupScan,
   mockDialogOpen,
   mockStorageLocations,
@@ -2389,6 +2391,10 @@ export function installDevMock(): void {
         return mockStorageLocations();
       case "cleanup_scan":
         return mockCleanupScan();
+      case "cleanup_apply":
+        return mockCleanupApply((a.body ?? {}) as AnyRecord);
+      case "cleanup_log":
+        return mockCleanupLog(typeof a.limit === "number" ? a.limit : 20);
       case "delete_model": {
         const i = MODELS.findIndex((m) => m.id === a.id);
         if (i < 0) throw new Error(`model ${a.id} is not in the library`);

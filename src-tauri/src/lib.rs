@@ -1037,6 +1037,27 @@ async fn cleanup_scan(
     to_ipc(handlers::cleanup_scan(&app).await)
 }
 
+/// `POST /cleanup/apply`'s Tauri counterpart — delete the selected scan
+/// entries through the existing gates, or with `dry_run` list exactly what
+/// would go (Plan 13). Only a real run writes the cleanup log.
+#[tauri::command]
+async fn cleanup_apply(
+    app: tauri::State<'_, Arc<App>>,
+    body: aiwm_core::cleanup::ApplyRequest,
+) -> Result<aiwm_core::cleanup::ApplyResult, String> {
+    to_ipc(handlers::cleanup_apply(&app, body).await)
+}
+
+/// `GET /cleanup/log`'s Tauri counterpart — the newest cleanup history
+/// rows, newest first (Plan 13).
+#[tauri::command]
+async fn cleanup_log(
+    app: tauri::State<'_, Arc<App>>,
+    limit: Option<i64>,
+) -> Result<Vec<aiwm_core::db::CleanupLogEntry>, String> {
+    to_ipc(handlers::cleanup_log(&app, limit).await)
+}
+
 /// `POST /outputs/cleanup`'s Tauri counterpart — apply the configured output
 /// retention policy right now (the Settings "Clean up now" button).
 #[tauri::command]
@@ -1314,6 +1335,8 @@ fn try_run() -> anyhow::Result<()> {
             storage_report,
             storage_locations,
             cleanup_scan,
+            cleanup_apply,
+            cleanup_log,
             cleanup_outputs,
             delete_model,
             unload_model,

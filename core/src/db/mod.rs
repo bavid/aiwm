@@ -6,6 +6,7 @@
 
 mod agents;
 mod bench;
+mod cleanup_log;
 mod dataset;
 mod dataset_concepts;
 mod datasets;
@@ -23,6 +24,7 @@ mod voice_identities;
 
 pub use agents::{Agent, AgentRepo, AgentSession, AgentSessionEvent, AgentSessionState, NewAgent};
 pub use bench::{BenchRepo, Benchmark, NewBenchmark};
+pub use cleanup_log::{CleanupLogEntry, CleanupLogRepo, NewCleanupLogEntry};
 pub use dataset::{DatasetFrame, DatasetFrameRepo, NewDatasetFrame};
 pub use dataset_concepts::{ConceptRepo, DatasetConcept, NewConcept};
 pub use datasets::{Dataset, DatasetMode, DatasetRepo, NewDataset};
@@ -179,6 +181,10 @@ impl Database {
 
     pub fn training_runs(&self) -> TrainingRunRepo<'_> {
         TrainingRunRepo::new(&self.pool)
+    }
+
+    pub fn cleanup_log(&self) -> CleanupLogRepo<'_> {
+        CleanupLogRepo::new(&self.pool)
     }
 
     /// The raw pool, for crate-internal tests that need to set up state no repo

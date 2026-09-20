@@ -30,7 +30,7 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::db::{Database, Dataset, DatasetFrame, DatasetMode};
 use crate::{CoreError, Result};
@@ -80,7 +80,7 @@ pub struct DataRoots {
 
 /// A file a deletion left alone, and why (one of the `SKIP_*` constants;
 /// `"error: …"` when deleting it failed).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SkippedFile {
     pub path: String,
     pub reason: String,
@@ -388,6 +388,54 @@ pub async fn cleanup(
         deleted_files: s.deleted_files,
         skipped_files: s.skipped_files,
     }))
+}
+
+/// What a [`cleanup`] would delete, file by file — the guard's verdicts
+/// over the discarded frames, for the Settings Cleanup page's preview.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DiscardedPlan {
+    /// Discarded rows (excluded or rejected) a cleanup removes.
+    pub frames: u64,
+    /// The files it deletes — canonical path and size, each once. Fewer than
+    /// `frames` when the guard keeps some or files are already gone.
+    pub files: Vec<(PathBuf, u64)>,
+}
+
+/// The exact files and rows [`cleanup`] would delete right now, judged by
+/// the same guard (kept frames' files never included). Measures only; the
+/// busy check is the caller's ([`busy_reason`]). `None` for an unknown
+/// dataset.
+pub async fn discarded_plan(
+    db: &Database,
+    roots: &DataRoots,
+    dataset_id: &str,
+) -> Result<Option<DiscardedPlan>> {
+    let Some(snap) = snapshot(db, dataset_id).await? else {
+        return Ok(None);
+    };
+    let roots = roots.clone();
+    blocking(move || {
+        let (discarded, staying): (Vec<&DatasetFrame>, Vec<&DatasetFrame>) =
+            snap.frames.iter().partition(|f| is_discarded(f));
+        let staying: Vec<&str> = staying.iter().map(|f| f.frame_path.as_str()).collect();
+        let guard = Guard::build(&roots, &snap).keeping(&staying);
+        let mut seen = HashSet::new();
+        let files = discarded
+            .iter()
+            .filter_map(|f| match guard.check(Path::new(&f.frame_path)) {
+                Verdict::Delete { path, bytes } => {
+                    seen.insert(path.clone()).then_some((path, bytes))
+                }
+                Verdict::Missing | Verdict::Skip(_) => None,
+            })
+            .collect();
+        DiscardedPlan {
+            frames: discarded.len() as u64,
+            files,
+        }
+    })
+    .await
+    .map(Some)
 }
 
 /// One dedup at a time: its decoding already uses up to eight threads, and

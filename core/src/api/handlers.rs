@@ -1296,6 +1296,37 @@ pub async fn cleanup_scan(app: &App) -> Result<crate::cleanup::CleanupReport> {
     crate::cleanup::scan::report(&app.db, &ctx).await
 }
 
+/// `POST /cleanup/apply` — delete the selected scan entries through the
+/// existing gates, or with `dry_run` list exactly what would go (Plan 13).
+/// The retention rule is read fresh, like [`cleanup_scan`]. A busy dataset,
+/// an unfinished run or an active download among the selections refuses the
+/// whole request before anything is deleted; only a real run writes the
+/// cleanup log.
+pub async fn cleanup_apply(
+    app: &App,
+    req: crate::cleanup::ApplyRequest,
+) -> Result<crate::cleanup::ApplyResult> {
+    let cfg = Config::read_from(&app.paths)?;
+    let ctx = crate::cleanup::scan::ScanContext {
+        paths: app.paths.clone(),
+        store: app.config.store_path.clone(),
+        policy: cfg.retention.to_policy(),
+    };
+    crate::cleanup::apply::apply(&app.db, &ctx, req).await
+}
+
+/// Rows `GET /cleanup/log` returns when the caller names no limit — the
+/// page's "Cleanup history".
+pub const DEFAULT_CLEANUP_LOG_LIMIT: i64 = 20;
+
+/// `GET /cleanup/log` — the newest cleanup history rows, newest first.
+pub async fn cleanup_log(app: &App, limit: Option<i64>) -> Result<Vec<crate::db::CleanupLogEntry>> {
+    app.db
+        .cleanup_log()
+        .list(limit.unwrap_or(DEFAULT_CLEANUP_LOG_LIMIT))
+        .await
+}
+
 /// Delete one model — its file, its runtime links, and its DB rows. Refused
 /// while the model is loaded. **Permanent** (the caller confirms).
 pub async fn delete_model(app: &App, id: &str) -> Result<crate::model::DeleteOutcome> {

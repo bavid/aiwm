@@ -144,6 +144,13 @@ fn missing_rows(inv: &Inventory) -> (Vec<CleanupEntry>, Vec<ProtectedNote>) {
     (entries, notes)
 }
 
+/// The one "missing" rule, shared with the apply's row removal: a non-empty
+/// absolute path the disk reports as not found *while its drive is
+/// connected* (see [`file_state`]).
+pub(in crate::cleanup) fn is_missing(frame_path: &str) -> bool {
+    matches!(file_state(frame_path), FileState::Missing)
+}
+
 /// What the disk says about a frame row's file, as far as "missing" goes.
 enum FileState {
     /// The drive is there, the file is not.

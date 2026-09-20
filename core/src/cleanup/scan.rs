@@ -15,10 +15,12 @@
 //! never follows a link or junction (the walks are `locations::walk`'s), and
 //! treats an unreadable entry as "skipped", never as a failure.
 
-mod caches;
-mod datasets;
+// The selection rules (which files a group offers) are shared with
+// `super::apply`, which re-runs them right before deleting.
+pub(super) mod caches;
+pub(super) mod datasets;
 mod media;
-mod runs;
+pub(super) mod runs;
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -440,4 +442,4 @@ pub(super) fn date_of(modified: Option<OffsetDateTime>) -> String {
 #[cfg(test)]
 mod never_tests;
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

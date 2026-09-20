@@ -8,7 +8,7 @@
 //! date. A folder offered as a whole (cache, a staging folder, the pending
 //! import) is refused when it is, or holds, another app folder.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use time::{Duration, OffsetDateTime};
@@ -19,10 +19,10 @@ use super::{
 };
 
 /// Log files older than this are offered.
-pub(super) const OLD_LOG_DAYS: i64 = 30;
+pub(in crate::cleanup) const OLD_LOG_DAYS: i64 = 30;
 /// A ComfyUI scratch file younger than this may still be in use.
 pub(super) const COMFYUI_LEFTOVER_MIN_AGE: Duration = Duration::hours(1);
-const COMFYUI_SCRATCH: [&str; 3] = ["input", "temp", "output"];
+pub(in crate::cleanup) const COMFYUI_SCRATCH: [&str; 3] = ["input", "temp", "output"];
 
 pub(super) fn groups(
     ctx: &ScanContext,
@@ -139,22 +139,7 @@ fn comfyui_leftovers(ctx: &ScanContext, inv: &Inventory, now: OffsetDateTime) ->
     COMFYUI_SCRATCH
         .iter()
         .filter_map(|sub| {
-            let dir = base.join(sub);
-            let leftovers: Vec<FileInfo> = walk_files(&dir)
-                .into_iter()
-                .filter(|f| {
-                    f.modified
-                        .is_some_and(|m| now - m >= COMFYUI_LEFTOVER_MIN_AGE)
-                })
-                .filter(|f| {
-                    let stem = f
-                        .path
-                        .file_stem()
-                        .map(|s| s.to_string_lossy().into_owned())
-                        .unwrap_or_default();
-                    !active.contains(stem.as_str())
-                })
-                .collect();
+            let leftovers = comfyui_leftover_files(&base.join(sub), &active, now);
             (!leftovers.is_empty()).then(|| CleanupEntry {
                 id: format!("comfyui:{sub}"),
                 label: format!("ComfyUI {sub} leftovers"),
@@ -167,8 +152,35 @@ fn comfyui_leftovers(ctx: &ScanContext, inv: &Inventory, now: OffsetDateTime) ->
         .collect()
 }
 
+/// The files under one ComfyUI scratch folder that are leftovers: older
+/// than [`COMFYUI_LEFTOVER_MIN_AGE`] and not staged by an unfinished job
+/// (`active` holds those jobs' ids; a staged file is `<job_id>.<ext>`).
+/// Shared with the apply, which re-computes it with fresh job states right
+/// before deleting.
+pub(in crate::cleanup) fn comfyui_leftover_files(
+    dir: &Path,
+    active: &HashSet<&str>,
+    now: OffsetDateTime,
+) -> Vec<FileInfo> {
+    walk_files(dir)
+        .into_iter()
+        .filter(|f| {
+            f.modified
+                .is_some_and(|m| now - m >= COMFYUI_LEFTOVER_MIN_AGE)
+        })
+        .filter(|f| {
+            let stem = f
+                .path
+                .file_stem()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            !active.contains(stem.as_str())
+        })
+        .collect()
+}
+
 /// Regular files directly in `dir` (never through a link), by name.
-fn flat_files(dir: &Path) -> Vec<FileInfo> {
+pub(in crate::cleanup) fn flat_files(dir: &Path) -> Vec<FileInfo> {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return Vec::new();
     };
@@ -199,17 +211,7 @@ fn old_logs(ctx: &ScanContext, now: OffsetDateTime) -> (Vec<CleanupEntry>, Vec<P
             vec![note(format!("Logs {}", display(&dir)), why)],
         );
     }
-    let files = flat_files(&dir);
-    let newest = files
-        .iter()
-        .max_by_key(|f| (f.modified, f.path.clone()))
-        .map(|f| f.path.clone());
-    let cutoff = now - Duration::days(OLD_LOG_DAYS);
-    let old: Vec<&FileInfo> = files
-        .iter()
-        .filter(|f| Some(&f.path) != newest.as_ref())
-        .filter(|f| f.modified.is_some_and(|m| m < cutoff))
-        .collect();
+    let old = old_log_candidates(&dir, now);
     if old.is_empty() {
         return (Vec::new(), Vec::new());
     }
@@ -222,6 +224,23 @@ fn old_logs(ctx: &ScanContext, now: OffsetDateTime) -> (Vec<CleanupEntry>, Vec<P
         detail: capped(old.iter().map(|f| file_name(&f.path))),
     };
     (vec![entry], Vec::new())
+}
+
+/// The log files older than [`OLD_LOG_DAYS`] — never the newest one
+/// (today's, or the only one there is). Shared with the apply, which
+/// re-computes it right before deleting: the newest log is never in it.
+pub(in crate::cleanup) fn old_log_candidates(dir: &Path, now: OffsetDateTime) -> Vec<FileInfo> {
+    let files = flat_files(dir);
+    let newest = files
+        .iter()
+        .max_by_key(|f| (f.modified, f.path.clone()))
+        .map(|f| f.path.clone());
+    let cutoff = now - Duration::days(OLD_LOG_DAYS);
+    files
+        .into_iter()
+        .filter(|f| Some(&f.path) != newest.as_ref())
+        .filter(|f| f.modified.is_some_and(|m| m < cutoff))
+        .collect()
 }
 
 /// Every file in the exports folder, one entry each, dated.

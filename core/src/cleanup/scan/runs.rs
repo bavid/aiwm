@@ -71,7 +71,11 @@ pub(super) fn group(ctx: &ScanContext, inv: &Inventory) -> (CleanupGroup, Vec<Pr
             ));
             continue;
         }
-        match library_copy(ctx, inv, run, &dir) {
+        let model = run
+            .result_model_id
+            .as_deref()
+            .and_then(|id| inv.result_models.get(id));
+        match library_copy(ctx, model, &dir) {
             Some(model_name) => entries.push(whole_folder(run, &dir, &model_name)),
             None => {
                 let (entry, protected) = partial(run, &dir);
@@ -85,14 +89,15 @@ pub(super) fn group(ctx: &ScanContext, inv: &Inventory) -> (CleanupGroup, Vec<Pr
 
 /// The name of the library model that holds this run's result — only when
 /// its file exists and lies outside the run folder (a row pointing into the
-/// folder would make the folder the only copy).
-fn library_copy(
+/// folder would make the folder the only copy). `model` is the row the
+/// run's `result_model_id` names, when there is one. Shared with the apply:
+/// the same decision says whether the whole folder may go.
+pub(in crate::cleanup) fn library_copy(
     ctx: &ScanContext,
-    inv: &Inventory,
-    run: &crate::db::TrainingRun,
+    model: Option<&crate::db::Model>,
     dir: &Path,
 ) -> Option<String> {
-    let model = inv.result_models.get(run.result_model_id.as_deref()?)?;
+    let model = model?;
     let file = Path::new(&model.file_path);
     if model.file_path.is_empty() || !file.is_absolute() {
         return None;
@@ -125,17 +130,7 @@ fn whole_folder(run: &crate::db::TrainingRun, dir: &Path, model_name: &str) -> C
 /// final checkpoint (the unsuffixed save, else the highest-numbered one) is
 /// protected as the only copy of the result.
 fn partial(run: &crate::db::TrainingRun, dir: &Path) -> (Option<CleanupEntry>, Vec<ProtectedNote>) {
-    let files = walk_files(dir);
-    let final_checkpoint: Option<PathBuf> = files
-        .iter()
-        .filter_map(|f| checkpoint_step(&file_name(&f.path), &run.name).map(|rank| (rank, f)))
-        .max_by_key(|(rank, _)| *rank)
-        .map(|(_, f)| f.path.clone());
-    let deletable: Vec<&FileInfo> = files
-        .iter()
-        .filter(|f| Some(&f.path) != final_checkpoint.as_ref())
-        .filter(|f| is_disposable(&f.path, dir, &run.name))
-        .collect();
+    let (deletable, final_checkpoint) = disposable_files(run, dir);
     let notes = final_checkpoint
         .iter()
         .map(|p| {
@@ -160,6 +155,30 @@ fn partial(run: &crate::db::TrainingRun, dir: &Path) -> (Option<CleanupEntry>, V
         detail: capped(deletable.iter().map(|f| file_name(&f.path))),
     };
     (Some(entry), notes)
+}
+
+/// The files of a finished run's folder that may go without a library copy
+/// — every disposable file (see [`is_disposable`]) except the final
+/// checkpoint — and that final checkpoint (the unsuffixed save, else the
+/// highest-numbered one), which is the only copy of the result. Shared with
+/// the apply, which re-computes it right before deleting: the final
+/// checkpoint is never in the first list.
+pub(in crate::cleanup) fn disposable_files(
+    run: &crate::db::TrainingRun,
+    dir: &Path,
+) -> (Vec<FileInfo>, Option<PathBuf>) {
+    let files = walk_files(dir);
+    let final_checkpoint: Option<PathBuf> = files
+        .iter()
+        .filter_map(|f| checkpoint_step(&file_name(&f.path), &run.name).map(|rank| (rank, f)))
+        .max_by_key(|(rank, _)| *rank)
+        .map(|(_, f)| f.path.clone());
+    let deletable = files
+        .into_iter()
+        .filter(|f| Some(&f.path) != final_checkpoint.as_ref())
+        .filter(|f| is_disposable(&f.path, dir, &run.name))
+        .collect();
+    (deletable, final_checkpoint)
 }
 
 /// A checkpoint of this run, `optimizer.pt`, anything under a `samples`

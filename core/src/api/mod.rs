@@ -228,6 +228,107 @@ mod tests {
         let _: crate::cleanup::CleanupReport = serde_json::from_value(body).unwrap();
     }
 
+    /// Plan 13: `POST /cleanup/apply` previews (`dry_run`, the default)
+    /// without deleting, deletes on a real run and answers with the result
+    /// shape, `GET /cleanup/log` lists the row the real run wrote, and an
+    /// unknown group is a 400.
+    #[tokio::test]
+    async fn cleanup_apply_and_log_over_http() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = crate::AppPaths::rooted(tmp.path().join("data"));
+        std::fs::create_dir_all(paths.root()).unwrap();
+        let store = tmp.path().join("models");
+        std::fs::write(
+            paths.config_file(),
+            format!("store_path = {:?}\n", store.display().to_string()),
+        )
+        .unwrap();
+        let app = Arc::new(App::load(paths).await.unwrap());
+        let backup = app.paths.exports_dir().join("b.zip");
+        std::fs::create_dir_all(app.paths.exports_dir()).unwrap();
+        std::fs::write(&backup, b"zip").unwrap();
+        let server = ApiServer::bind(app.clone(), SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
+            .await
+            .unwrap();
+        let base = format!("http://{}", server.addr);
+        let client = reqwest::Client::new();
+        let selection = serde_json::json!({
+            "selections": [{ "group": "db_backups", "entry_ids": ["b.zip"] }]
+        });
+
+        // The default is a dry run: nothing goes.
+        let resp = client
+            .post(format!("{base}/cleanup/apply"))
+            .json(&selection)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        let body: serde_json::Value = resp.json().await.unwrap();
+        assert_eq!(body["dry_run"], true);
+        assert_eq!(body["deleted_files"], 1);
+        assert_eq!(body["freed_bytes"], 3);
+        assert_eq!(body["entries"][0]["id"], "b.zip");
+        assert!(body["entries"][0]["paths"][0]
+            .as_str()
+            .unwrap()
+            .ends_with("b.zip"));
+        assert!(backup.is_file(), "a dry run deletes nothing");
+        let _: crate::cleanup::ApplyResult = serde_json::from_value(body).unwrap();
+        let log: serde_json::Value = client
+            .get(format!("{base}/cleanup/log?limit=20"))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(log.as_array().unwrap().len(), 0, "a dry run is not logged");
+
+        // A real run deletes and logs.
+        let mut real = selection.clone();
+        real["dry_run"] = serde_json::json!(false);
+        let body: serde_json::Value = client
+            .post(format!("{base}/cleanup/apply"))
+            .json(&real)
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(body["dry_run"], false);
+        assert_eq!(body["deleted_files"], 1);
+        assert!(!backup.exists());
+        let log: serde_json::Value = client
+            .get(format!("{base}/cleanup/log?limit=20"))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let rows = log.as_array().unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["group_key"], "db_backups");
+        assert_eq!(rows[0]["entry_id"], "b.zip");
+        assert_eq!(rows[0]["freed_bytes"], 3);
+        assert!(rows[0]["ts"].as_str().unwrap().contains('T'));
+        let _: Vec<crate::db::CleanupLogEntry> = serde_json::from_value(log).unwrap();
+
+        // An unknown group is the client's mistake.
+        let resp = client
+            .post(format!("{base}/cleanup/apply"))
+            .json(&serde_json::json!({
+                "selections": [{ "group": "models", "entry_ids": ["x"] }],
+                "dry_run": true
+            }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 400);
+    }
+
     #[tokio::test]
     async fn about_is_identical_over_the_handler_and_http() {
         let (app, _tmp) = test_app().await;

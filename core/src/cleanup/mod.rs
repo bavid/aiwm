@@ -5,10 +5,12 @@
 //! Everything here only *reports*. Deleting a model is [`crate::model::delete_model`],
 //! always a confirmed user action.
 
+pub mod apply;
 pub mod locations;
 pub mod outputs;
 pub mod scan;
 
+pub use apply::{ApplyRequest, ApplyResult, EntryResult, Selection};
 pub(crate) use locations::is_reparse_point;
 pub use locations::StorageLocation;
 pub use outputs::{RetentionPolicy, SweepResult};

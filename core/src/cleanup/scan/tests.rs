@@ -11,15 +11,15 @@ use crate::db::{
 };
 use crate::orchestrator::JobState;
 
-pub(super) struct Fx {
-    pub(super) tmp: tempfile::TempDir,
-    pub(super) db: Database,
-    pub(super) ctx: ScanContext,
+pub(crate) struct Fx {
+    pub(crate) tmp: tempfile::TempDir,
+    pub(crate) db: Database,
+    pub(crate) ctx: ScanContext,
 }
 
 /// `<tmp>/data` as the app's data dir (so `AppPaths` derives every folder),
 /// `<tmp>/models` as the store, `<tmp>/src` as a source folder, no retention.
-pub(super) async fn fixture() -> Fx {
+pub(crate) async fn fixture() -> Fx {
     let tmp = tempfile::tempdir().unwrap();
     let db = Database::connect_in_memory().await.unwrap();
     let paths = AppPaths::rooted(tmp.path().join("data"));
@@ -39,11 +39,11 @@ pub(super) async fn fixture() -> Fx {
 
 /// Write `bytes` zero bytes at `path` (folders created), last modified
 /// `age_days` ago.
-pub(super) fn touch(path: &Path, bytes: usize, age_days: u64) {
+pub(crate) fn touch(path: &Path, bytes: usize, age_days: u64) {
     touch_secs(path, bytes, age_days * 86_400)
 }
 
-pub(super) fn touch_secs(path: &Path, bytes: usize, age_secs: u64) {
+pub(crate) fn touch_secs(path: &Path, bytes: usize, age_secs: u64) {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).unwrap();
     }
@@ -54,20 +54,20 @@ pub(super) fn touch_secs(path: &Path, bytes: usize, age_secs: u64) {
 }
 
 impl Fx {
-    pub(super) fn paths(&self) -> &AppPaths {
+    pub(crate) fn paths(&self) -> &AppPaths {
         &self.ctx.paths
     }
 
-    pub(super) fn source_dir(&self) -> PathBuf {
+    pub(crate) fn source_dir(&self) -> PathBuf {
         self.tmp.path().join("src")
     }
 
-    pub(super) async fn scan(&self) -> CleanupReport {
+    pub(crate) async fn scan(&self) -> CleanupReport {
         report(&self.db, &self.ctx).await.unwrap()
     }
 
     /// A job walked to `state`, with `output_path` recorded on the way.
-    pub(super) async fn job(&self, state: JobState, output_path: Option<&Path>) -> String {
+    pub(crate) async fn job(&self, state: JobState, output_path: Option<&Path>) -> String {
         let id = self
             .db
             .jobs()
@@ -99,7 +99,7 @@ impl Fx {
 
     /// A dataset whose prep job is `job_id` (finished unless told
     /// otherwise), source folder `<tmp>/src`.
-    pub(super) async fn dataset(&self, name: &str, job_id: &str) -> Dataset {
+    pub(crate) async fn dataset(&self, name: &str, job_id: &str) -> Dataset {
         self.db
             .datasets()
             .create(NewDataset {
@@ -115,7 +115,7 @@ impl Fx {
 
     /// A frame row of `dataset` at `path` (the file written with `bytes`
     /// when `Some`), rejected with `reason` and/or excluded.
-    pub(super) async fn frame(
+    pub(crate) async fn frame(
         &self,
         dataset: &Dataset,
         path: &Path,
@@ -158,7 +158,7 @@ impl Fx {
 
     /// A training run in `state` whose folder is `work_dir` (the folder is
     /// not created here).
-    pub(super) async fn run(&self, name: &str, state: RunState, work_dir: &Path) -> TrainingRun {
+    pub(crate) async fn run(&self, name: &str, state: RunState, work_dir: &Path) -> TrainingRun {
         let run = self
             .db
             .training_runs()
@@ -199,7 +199,7 @@ impl Fx {
     /// A completed run's folder as ai-toolkit leaves it: two numbered
     /// checkpoints, the final unsuffixed one, optimizer state, two samples,
     /// the log and the config. Returns the folder.
-    pub(super) fn run_folder(&self, run_id: &str, name: &str) -> PathBuf {
+    pub(crate) fn run_folder(&self, run_id: &str, name: &str) -> PathBuf {
         let dir = self.paths().training_dir().join(run_id);
         let out = dir.join("output").join(name);
         touch(&out.join(format!("{name}_000000200.safetensors")), 200, 3);
@@ -223,7 +223,7 @@ impl Fx {
 
     /// A library model row whose file is `path` (written when `bytes` is
     /// `Some`).
-    pub(super) async fn model(&self, name: &str, path: &Path, bytes: Option<usize>) -> Model {
+    pub(crate) async fn model(&self, name: &str, path: &Path, bytes: Option<usize>) -> Model {
         if let Some(bytes) = bytes {
             touch(path, bytes, 1);
         }
@@ -243,7 +243,7 @@ impl Fx {
 
     /// A download row in `state`, staged under the app's downloads folder
     /// with one partial file. Returns its id (= its staging folder name).
-    pub(super) async fn download(&self, state: DownloadState) -> String {
+    pub(crate) async fn download(&self, state: DownloadState) -> String {
         let staging = self.paths().downloads_dir();
         let d = self
             .db
@@ -268,25 +268,25 @@ impl Fx {
     }
 }
 
-pub(super) fn group_of<'a>(r: &'a CleanupReport, key: &str) -> &'a CleanupGroup {
+pub(crate) fn group_of<'a>(r: &'a CleanupReport, key: &str) -> &'a CleanupGroup {
     r.groups
         .iter()
         .find(|g| g.key == key)
         .unwrap_or_else(|| panic!("no group {key}"))
 }
 
-pub(super) fn entry_ids(g: &CleanupGroup) -> Vec<&str> {
+pub(crate) fn entry_ids(g: &CleanupGroup) -> Vec<&str> {
     g.entries.iter().map(|e| e.id.as_str()).collect()
 }
 
-pub(super) fn has_note(r: &CleanupReport, what: &str, reason: &str) -> bool {
+pub(crate) fn has_note(r: &CleanupReport, what: &str, reason: &str) -> bool {
     r.protected
         .iter()
         .any(|n| n.what.contains(what) && n.reason.contains(reason))
 }
 
 /// Nothing in any entry (id, label, detail) mentions `needle`.
-pub(super) fn assert_never_listed(r: &CleanupReport, needle: &str) {
+pub(crate) fn assert_never_listed(r: &CleanupReport, needle: &str) {
     for g in &r.groups {
         for e in &g.entries {
             let text = format!("{} {} {}", e.id, e.label, e.detail.join(" "));
