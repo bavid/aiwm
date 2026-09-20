@@ -1027,6 +1027,16 @@ async fn storage_locations(
     to_ipc(handlers::storage_locations(&app).await)
 }
 
+/// `GET /cleanup/scan`'s Tauri counterpart — what the app generated and
+/// could remove, grouped and sized, plus what is protected (Plan 13).
+/// Reports only; nothing is deleted.
+#[tauri::command]
+async fn cleanup_scan(
+    app: tauri::State<'_, Arc<App>>,
+) -> Result<aiwm_core::cleanup::CleanupReport, String> {
+    to_ipc(handlers::cleanup_scan(&app).await)
+}
+
 /// `POST /outputs/cleanup`'s Tauri counterpart — apply the configured output
 /// retention policy right now (the Settings "Clean up now" button).
 #[tauri::command]
@@ -1303,6 +1313,7 @@ fn try_run() -> anyhow::Result<()> {
             upgrade_check,
             storage_report,
             storage_locations,
+            cleanup_scan,
             cleanup_outputs,
             delete_model,
             unload_model,

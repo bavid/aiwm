@@ -64,6 +64,36 @@ const LOCATIONS: Record<string, Meta> = {
     field: null,
     aboutPath: null,
   },
+  logs: {
+    label: "Logs",
+    what: "One log file per day. Older ones can go from the Cleanup page.",
+    field: null,
+    aboutPath: null,
+  },
+  exports: {
+    label: "Backups",
+    what: "Database and settings backups you exported. Yours to keep or remove.",
+    field: null,
+    aboutPath: null,
+  },
+  voice_identities: {
+    label: "Voice identities",
+    what: "Reference clips of saved voices — your own assets, never cleaned up.",
+    field: null,
+    aboutPath: null,
+  },
+  comfyui_data: {
+    label: "ComfyUI scratch",
+    what: "Staged inputs, previews and finished renders before they land in outputs.",
+    field: null,
+    aboutPath: null,
+  },
+  pending_import: {
+    label: "Pending import",
+    what: "A backup waiting to be applied at the next start. Usually empty.",
+    field: null,
+    aboutPath: null,
+  },
 };
 
 const ORDER = Object.keys(LOCATIONS);

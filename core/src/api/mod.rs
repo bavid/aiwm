@@ -174,6 +174,60 @@ mod tests {
         assert!(server.addr.ip().is_loopback());
     }
 
+    /// Plan 13: `GET /cleanup/scan` answers 200 with the report shape —
+    /// every group key in order (empty on a fresh data dir), a parseable
+    /// `scanned_at`, and the fixed protected notes. The store is pointed
+    /// into the temp dir so the scan's path checks never look at a real one.
+    #[tokio::test]
+    async fn cleanup_scan_over_http_has_the_report_shape() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = crate::AppPaths::rooted(tmp.path().join("data"));
+        std::fs::create_dir_all(paths.root()).unwrap();
+        let store = tmp.path().join("models");
+        std::fs::write(
+            paths.config_file(),
+            format!("store_path = {:?}\n", store.display().to_string()),
+        )
+        .unwrap();
+        let app = Arc::new(App::load(paths).await.unwrap());
+        std::fs::create_dir_all(app.paths.exports_dir()).unwrap();
+        std::fs::write(app.paths.exports_dir().join("b.zip"), b"zip").unwrap();
+        let server = ApiServer::bind(app.clone(), SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
+            .await
+            .unwrap();
+
+        let resp = reqwest::get(format!("http://{}/cleanup/scan", server.addr))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        let body: serde_json::Value = resp.json().await.unwrap();
+
+        let keys: Vec<&str> = body["groups"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|g| g["key"].as_str().unwrap())
+            .collect();
+        assert_eq!(keys, crate::cleanup::scan::GROUP_KEYS);
+        assert!(body["scanned_at"].as_str().unwrap().contains('T'));
+        let backups = &body["groups"][8];
+        assert_eq!(backups["key"], "db_backups");
+        assert_eq!(backups["entries"][0]["id"], "b.zip");
+        assert_eq!(backups["total_bytes"], 3);
+        for g in body["groups"].as_array().unwrap() {
+            for field in ["key", "label", "entries", "total_files", "total_bytes"] {
+                assert!(!g[field].is_null(), "group field {field}");
+            }
+        }
+        let protected = body["protected"].as_array().unwrap();
+        assert!(protected
+            .iter()
+            .any(|n| n["what"].as_str().unwrap().contains("Model store")));
+        assert!(protected.iter().all(|n| n["reason"].is_string()));
+        // And it deserializes back to the report type.
+        let _: crate::cleanup::CleanupReport = serde_json::from_value(body).unwrap();
+    }
+
     #[tokio::test]
     async fn about_is_identical_over_the_handler_and_http() {
         let (app, _tmp) = test_app().await;

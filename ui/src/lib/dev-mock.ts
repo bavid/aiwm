@@ -19,6 +19,7 @@ import {
 import {
   checkPrepDataDir,
   checkRunDataDir,
+  mockCleanupScan,
   mockDialogOpen,
   mockStorageLocations,
 } from "./dev-mock-storage";
@@ -2386,6 +2387,8 @@ export function installDevMock(): void {
       }
       case "storage_locations":
         return mockStorageLocations();
+      case "cleanup_scan":
+        return mockCleanupScan();
       case "delete_model": {
         const i = MODELS.findIndex((m) => m.id === a.id);
         if (i < 0) throw new Error(`model ${a.id} is not in the library`);

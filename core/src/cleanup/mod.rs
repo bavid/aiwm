@@ -7,9 +7,12 @@
 
 pub mod locations;
 pub mod outputs;
+pub mod scan;
 
+pub(crate) use locations::is_reparse_point;
 pub use locations::StorageLocation;
 pub use outputs::{RetentionPolicy, SweepResult};
+pub use scan::{CleanupEntry, CleanupGroup, CleanupReport, ProtectedNote};
 
 use std::cmp::Reverse;
 use std::collections::BTreeMap;

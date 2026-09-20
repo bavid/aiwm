@@ -1274,11 +1274,26 @@ pub async fn storage_report(app: &App) -> Result<crate::cleanup::StorageReport> 
 }
 
 /// `GET /storage/locations` — every folder the app writes to (outputs,
-/// datasets, training, the model store, runtimes, cache, downloads staging),
-/// each with its size on disk, free/total space on its volume, and whether
-/// it can be pointed elsewhere in Settings (Plan 10).
+/// datasets, training, the model store, runtimes, cache, downloads staging,
+/// logs, backups, voice identities, ComfyUI scratch, pending import), each
+/// with its size on disk, free/total space on its volume, and whether it
+/// can be pointed elsewhere in Settings (Plan 10, Plan 13).
 pub async fn storage_locations(app: &App) -> Result<Vec<crate::cleanup::StorageLocation>> {
     crate::cleanup::locations::report(&app.paths, &app.config.store_path).await
+}
+
+/// `GET /cleanup/scan` — what the app generated and could remove, grouped
+/// with counts and sizes, plus what was deliberately not offered (Plan 13).
+/// Reports only. Reads `config.toml` fresh for the retention rule, like
+/// [`cleanup_outputs`], so a policy just saved applies without a restart.
+pub async fn cleanup_scan(app: &App) -> Result<crate::cleanup::CleanupReport> {
+    let cfg = Config::read_from(&app.paths)?;
+    let ctx = crate::cleanup::scan::ScanContext {
+        paths: app.paths.clone(),
+        store: app.config.store_path.clone(),
+        policy: cfg.retention.to_policy(),
+    };
+    crate::cleanup::scan::report(&app.db, &ctx).await
 }
 
 /// Delete one model — its file, its runtime links, and its DB rows. Refused
@@ -3114,6 +3129,92 @@ mod tests {
 
         let err = clean_audio(&app, &job.id).await.unwrap_err();
         assert!(err.to_string().contains("only narration clips"), "{err}");
+    }
+
+    /// Plan 13: the scan handler reads the retention rule fresh from
+    /// `config.toml` (like `cleanup_outputs`), so a policy just saved shows
+    /// up in `media_retention` without a restart — and it never deletes.
+    #[tokio::test]
+    async fn cleanup_scan_reads_the_saved_retention_policy_and_deletes_nothing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = crate::AppPaths::rooted(tmp.path().join("data"));
+        std::fs::create_dir_all(paths.root()).unwrap();
+        let store = tmp.path().join("models");
+        std::fs::write(
+            paths.config_file(),
+            format!("store_path = {:?}\n", store.display().to_string()),
+        )
+        .unwrap();
+        let app = crate::App::load(paths).await.unwrap();
+        let outputs = app.paths.outputs_dir();
+        std::fs::create_dir_all(&outputs).unwrap();
+        let old_file = outputs.join("job-old.png");
+        std::fs::write(&old_file, b"stale bytes").unwrap();
+        let ancient = std::time::SystemTime::now() - std::time::Duration::from_secs(90 * 86_400);
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&old_file)
+            .unwrap()
+            .set_modified(ancient)
+            .unwrap();
+        let job = app.db.jobs().insert(NewJob::new("image")).await.unwrap();
+        for next in [
+            crate::orchestrator::JobState::Scheduled,
+            crate::orchestrator::JobState::Preparing,
+            crate::orchestrator::JobState::Running,
+            crate::orchestrator::JobState::Post,
+            crate::orchestrator::JobState::Completed,
+        ] {
+            app.db
+                .jobs()
+                .set_state(
+                    &job.id,
+                    next,
+                    crate::db::JobPatch {
+                        output_path: Some(old_file.to_string_lossy().into_owned()),
+                        ..Default::default()
+                    },
+                )
+                .await
+                .unwrap();
+        }
+
+        let before = cleanup_scan(&app).await.unwrap();
+        let retention = |r: &crate::cleanup::CleanupReport| {
+            r.groups
+                .iter()
+                .find(|g| g.key == "media_retention")
+                .unwrap()
+                .entries
+                .len()
+        };
+        assert_eq!(retention(&before), 0, "no policy saved yet");
+
+        let mut cfg = config(&app).unwrap();
+        cfg.retention = crate::config::RetentionConfig {
+            max_age_days: 30,
+            max_total_mb: 0,
+        };
+        save_config(
+            &app,
+            ConfigUpdate {
+                store_path: cfg.store_path.display().to_string(),
+                offline_mode: cfg.offline_mode,
+                vram_budget_mb: cfg.vram_budget_mb,
+                llama: cfg.llama,
+                comfyui: cfg.comfyui,
+                models: cfg.models,
+                paths: crate::api::dto::PathsUpdateDto::default(),
+                retention: cfg.retention,
+            },
+        )
+        .await
+        .unwrap();
+
+        let after = cleanup_scan(&app).await.unwrap();
+        assert_eq!(retention(&after), 1);
+        assert!(old_file.exists(), "a scan never deletes");
+        assert_eq!(after.groups.len(), 9);
     }
 
     #[tokio::test]

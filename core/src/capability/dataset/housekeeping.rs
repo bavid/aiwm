@@ -39,8 +39,10 @@ use super::{dataset_err, filter};
 
 mod dedup_plan;
 mod guard;
+mod unclaimed;
 use dedup_plan::plan_dedup;
 use guard::{skipped, Guard, Snapshot, Verdict};
+pub use unclaimed::{unclaimed_work_folders, UnclaimedFolders};
 
 /// Default Hamming distance for the dataset-wide dedup — the same one the
 /// per-source duplicate filter uses.
@@ -109,6 +111,9 @@ pub struct DatasetUsage {
     /// Excluded + rejected frames, and the bytes a cleanup would free.
     pub discarded_frames: u64,
     pub discarded_bytes: u64,
+    /// The discarded frames' files a cleanup would actually delete (fewer
+    /// than `discarded_frames` when the guard keeps some, or files share).
+    pub discarded_files: u64,
 }
 
 /// `DELETE /datasets/{id}`.
@@ -214,11 +219,11 @@ pub async fn usage(
         let export_app_owned = guard.export_dir.is_some();
         // A cleanup keeps every non-discarded frame; without discarded frames
         // there is nothing to check.
-        let discarded_bytes = if discarded.is_empty() {
-            0
+        let (discarded_files, discarded_bytes) = if discarded.is_empty() {
+            (0, 0)
         } else {
             let staying: Vec<&str> = staying.iter().map(|f| f.frame_path.as_str()).collect();
-            deletable_totals(&guard.keeping(&staying), discarded.into_iter()).1
+            deletable_totals(&guard.keeping(&staying), discarded.into_iter())
         };
         DatasetUsage {
             work_dir,
@@ -230,6 +235,7 @@ pub async fn usage(
             export_app_owned,
             discarded_frames,
             discarded_bytes,
+            discarded_files,
         }
     })
     .await
@@ -490,12 +496,24 @@ async fn snapshot(db: &Database, dataset_id: &str) -> Result<Option<Snapshot>> {
 /// Refuse while a training run of the dataset or its prep job is not
 /// finished. See the module docs for the accepted race.
 async fn refuse_if_busy(db: &Database, dataset: &Dataset) -> Result<()> {
+    match busy_reason(db, dataset).await? {
+        Some(why) => Err(CoreError::Config(why)),
+        None => Ok(()),
+    }
+}
+
+/// Why the dataset's files must be left alone right now — a training run of
+/// it has not finished, or its prep job is still writing frames — or `None`
+/// when housekeeping may touch it. The one "busy" rule, shared by every
+/// deletion here and by the cleanup scan (which lists nothing of a busy
+/// dataset).
+pub async fn busy_reason(db: &Database, dataset: &Dataset) -> Result<Option<String>> {
     let runs = db
         .training_runs()
         .list_active_for_dataset(&dataset.id)
         .await?;
     if let Some(run) = runs.first() {
-        return Err(CoreError::Config(format!(
+        return Ok(Some(format!(
             "dataset \"{}\" is in use by training run \"{}\" ({}) \u{2014} wait for it to \
              finish or cancel it first",
             dataset.name,
@@ -506,7 +524,7 @@ async fn refuse_if_busy(db: &Database, dataset: &Dataset) -> Result<()> {
     if let Some(job_id) = dataset.prep_job_id.as_deref() {
         if let Some(job) = db.jobs().get(job_id).await? {
             if !job.state.is_terminal() {
-                return Err(CoreError::Config(format!(
+                return Ok(Some(format!(
                     "dataset \"{}\" is still being prepared (job {job_id} is {}) \u{2014} wait \
                      for it to finish or cancel it first",
                     dataset.name,
@@ -515,7 +533,7 @@ async fn refuse_if_busy(db: &Database, dataset: &Dataset) -> Result<()> {
             }
         }
     }
-    Ok(())
+    Ok(None)
 }
 
 /// Files of the frames in `targets`, then their rows.

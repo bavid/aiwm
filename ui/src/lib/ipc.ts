@@ -548,7 +548,8 @@ export const storageReport = () => invoke<StorageReport>("storage_report");
  *  measured on disk (Plan 10). */
 export interface StorageLocation {
   /** Stable id: `outputs` | `datasets` | `training` | `models` | `runtimes`
-   *  | `cache` | `downloads`. */
+   *  | `cache` | `downloads` | `logs` | `exports` | `voice_identities`
+   *  | `comfyui_data` | `pending_import`. */
   key: string;
   /** Short human label for the Settings UI. */
   label: string;
@@ -579,6 +580,66 @@ export interface SweepResult {
  *  the Settings "Clean up now" button. A no-op (`deleted_files: 0`) when no
  *  policy is configured (both fields `0`); save one via `saveConfig` first. */
 export const cleanupOutputs = () => invoke<SweepResult>("cleanup_outputs");
+
+// --- cleanup scan (Plan 13) --------------------------------------------
+
+/** Group keys of `GET /cleanup/scan`, in display order. */
+export type CleanupGroupKey =
+  | "media_retention"
+  | "media_orphans"
+  | "discarded_frames"
+  | "unclaimed_dataset_folders"
+  | "missing_frame_rows"
+  | "finished_runs"
+  | "caches"
+  | "old_logs"
+  | "db_backups";
+
+/** One selectable item of a cleanup group: a file, a dataset, a run, a
+ *  folder. `id` is stable within its group (a file name, a dataset or run
+ *  id, a folder name) — what a later apply names. */
+export interface CleanupEntry {
+  id: string;
+  label: string;
+  /** Files that would be deleted. */
+  files: number;
+  bytes: number;
+  /** Database rows that would be removed (frame rows), else 0. */
+  rows: number;
+  /** A few lines for the expanded entry (paths, dates, names) — capped. */
+  detail: string[];
+}
+
+/** One kind of removable content — present even when empty. */
+export interface CleanupGroup {
+  key: CleanupGroupKey | string;
+  label: string;
+  entries: CleanupEntry[];
+  total_files: number;
+  total_bytes: number;
+}
+
+/** Something a user might expect to see offered, and why it is not. */
+export interface ProtectedNote {
+  what: string;
+  reason: string;
+}
+
+/** `GET /cleanup/scan` — what the app generated and could remove, grouped,
+ *  plus what was deliberately not offered. Models, runtimes, voice
+ *  identities, source media and anything a running job, run or download
+ *  needs are never in `groups`. */
+export interface CleanupReport {
+  /** RFC 3339, when the scan ran. */
+  scanned_at: string;
+  groups: CleanupGroup[];
+  protected: ProtectedNote[];
+}
+
+/** Scan for removable content. Walks every app folder — call it on demand
+ *  (the Cleanup page's "Scan" button), never on a timer. Reports only;
+ *  nothing is deleted. */
+export const cleanupScan = () => invoke<CleanupReport>("cleanup_scan");
 /** Delete a model — its file, links and DB rows. Permanent; refused while
  *  the model is loaded. */
 export const deleteModel = (id: string) => invoke<DeleteOutcome>("delete_model", { id });
