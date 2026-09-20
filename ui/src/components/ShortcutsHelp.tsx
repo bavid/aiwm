@@ -12,8 +12,9 @@ const isTypingTarget = (el: EventTarget | null) =>
   el instanceof HTMLElement && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable);
 
 /** A "?" overlay listing keyboard shortcuts -- discoverability for the
- *  command palette and anything else that only exists as a key combo. */
-export function ShortcutsHelp() {
+ *  command palette and anything else that only exists as a key combo. Also
+ *  the way to the Help tab for someone who pressed `?` looking for help. */
+export function ShortcutsHelp({ onOpenHelp }: { onOpenHelp: () => void }) {
   const [open, setOpen] = useState(false);
 
   useEffect(() => {
@@ -32,12 +33,19 @@ export function ShortcutsHelp() {
   if (!open) return null;
 
   return (
-    <div className="cmdk__backdrop" onClick={() => setOpen(false)}>
+    // Presentational: a click on the backdrop itself closes; Escape is
+    // handled by the window listener above.
+    <div
+      className="cmdk__backdrop"
+      role="presentation"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) setOpen(false);
+      }}
+    >
       <div
         className="cmdk"
         role="dialog"
         aria-label="Keyboard shortcuts"
-        onClick={(e) => e.stopPropagation()}
         style={{ maxHeight: "none" }}
       >
         <div className="cmdk__group" style={{ padding: "var(--space-4) var(--space-4) 0" }}>
@@ -53,6 +61,18 @@ export function ShortcutsHelp() {
             </li>
           ))}
         </ul>
+        <div style={{ padding: "0 var(--space-4) var(--space-4)" }}>
+          <button
+            type="button"
+            className="chip"
+            onClick={() => {
+              setOpen(false);
+              onOpenHelp();
+            }}
+          >
+            Open Help
+          </button>
+        </div>
       </div>
     </div>
   );

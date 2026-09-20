@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useId, useState } from "react";
+import { HelpHint } from "../../components/HelpHint";
 import { useAgentRuntimes } from "../../lib/hooks";
 import { createAgent, installHermes, type AgentInstallStatus } from "../../lib/ipc";
 
@@ -25,6 +26,12 @@ export function NewProfileForm({
   const [allowed, setAllowed] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const ids = useId();
+  const nameId = `${ids}-name`;
+  const runtimeId = `${ids}-runtime`;
+  const modelFieldId = `${ids}-model`;
+  const workspaceId = `${ids}-workspace`;
+  const allowedId = `${ids}-allowed`;
 
   const rt = (runtimes ?? []).find((r) => r.id === adapter);
   const rtInstalled = rt?.installed ?? adapter === "opencode";
@@ -68,19 +75,25 @@ export function NewProfileForm({
 
   return (
     <form className="profform" onSubmit={submit}>
-      <label className="profform__field">
-        <span>Name</span>
+      <div className="profform__field">
+        <span>
+          <label htmlFor={nameId}>Name</label>
+        </span>
         <input
+          id={nameId}
           type="text"
           value={name}
           onChange={(e) => setName(e.target.value)}
           placeholder="Repo coder"
         />
-      </label>
+      </div>
 
-      <label className="profform__field">
-        <span>Runtime</span>
-        <select value={adapter} onChange={(e) => setAdapter(e.target.value)}>
+      <div className="profform__field">
+        <span>
+          <label htmlFor={runtimeId}>Runtime</label>
+          <HelpHint area="agents" setting="runtime" describes={runtimeId} />
+        </span>
+        <select id={runtimeId} value={adapter} onChange={(e) => setAdapter(e.target.value)}>
           {(runtimes ?? [{ id: "opencode", installed: true }]).map((r) => (
             <option key={r.id} value={r.id}>
               {RUNTIME_LABEL[r.id] ?? r.id}
@@ -88,12 +101,15 @@ export function NewProfileForm({
             </option>
           ))}
         </select>
-      </label>
+      </div>
       {!rtInstalled && rt && <RuntimeSetup runtime={rt} />}
 
-      <label className="profform__field">
-        <span>Coding model</span>
-        <select value={modelId} onChange={(e) => setModelId(e.target.value)}>
+      <div className="profform__field">
+        <span>
+          <label htmlFor={modelFieldId}>Coding model</label>
+          <HelpHint area="agents" setting="coding-model" describes={modelFieldId} />
+        </span>
+        <select id={modelFieldId} value={modelId} onChange={(e) => setModelId(e.target.value)}>
           <option value="auto">Auto — most-recently-used “coding” model</option>
           {codingModels.map((m) => (
             <option key={m.id} value={m.id}>
@@ -101,7 +117,7 @@ export function NewProfileForm({
             </option>
           ))}
         </select>
-      </label>
+      </div>
       {codingModels.length === 0 && (
         <p className="muted">
           No model has the “coding” role yet — import a coding GGUF (e.g. Qwen2.5-Coder for
@@ -109,27 +125,35 @@ export function NewProfileForm({
         </p>
       )}
 
-      <label className="profform__field">
-        <span>Workspace folder</span>
+      <div className="profform__field">
+        <span>
+          <label htmlFor={workspaceId}>Workspace folder</label>
+          <HelpHint area="agents" setting="workspace" describes={workspaceId} />
+        </span>
         <input
+          id={workspaceId}
           type="text"
           value={workspace}
           onChange={(e) => setWorkspace(e.target.value)}
           placeholder="E:\\projects\\my-repo"
           spellCheck={false}
         />
-      </label>
+      </div>
 
-      <label className="profform__field">
-        <span>Extra read-only folders (optional, comma-separated)</span>
+      <div className="profform__field">
+        <span>
+          <label htmlFor={allowedId}>Extra read-only folders (optional, comma-separated)</label>
+          <HelpHint area="agents" setting="extra-folders" describes={allowedId} />
+        </span>
         <input
+          id={allowedId}
           type="text"
           value={allowed}
           onChange={(e) => setAllowed(e.target.value)}
           placeholder="E:\\shared\\lib"
           spellCheck={false}
         />
-      </label>
+      </div>
 
       <p className="muted">
         The agent may run shell commands and edit files — every command and every edit asks for

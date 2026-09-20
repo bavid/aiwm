@@ -1,4 +1,5 @@
 import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { HelpHint } from "../../components/HelpHint";
 import { useAbout, useFeaturedModels, useModelStacks } from "../../lib/hooks";
 import {
   enqueueDownload,
@@ -132,7 +133,8 @@ export function Catalog({ tab, onTabChange, focusRequest, onUseType }: CatalogPr
         <span className="card__sub">
           {about
             ? `fit-checked against your ~${formatGiB(about.vram_budget_mb, 0)} VRAM budget`
-            : "what to install, and for what"}
+            : "what to install, and for what"}{" "}
+          <HelpHint area="models" setting="fit-badge" />
         </span>
       </header>
 
@@ -159,7 +161,15 @@ export function Catalog({ tab, onTabChange, focusRequest, onUseType }: CatalogPr
         ))}
       </div>
       <div role="tabpanel" id={panelId} aria-labelledby={tabId(tab)}>
-        <p className="muted">{active.blurb}</p>
+        <p className="muted">
+          {active.blurb}
+          {tab === "training" && (
+            <>
+              {" "}
+              <HelpHint area="models" setting="captioner-stacks" />
+            </>
+          )}
+        </p>
 
         {loading && <p className="muted">Loading…</p>}
         {!loading && isStackTab && (stackRows?.length ?? 0) === 0 && (
@@ -272,6 +282,7 @@ function KnownRow({
 function StackCard({ stack, onUseType }: { stack: ModelStack; onUseType: (t: ModelType) => void }) {
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<"idle" | "queued" | "error">("idle");
+  const downloadAllId = useId();
 
   const totalBytes = stack.members.reduce((sum, m) => sum + m.size_bytes, 0);
   const fit = stack.fit;
@@ -321,7 +332,12 @@ function StackCard({ stack, onUseType }: { stack: ModelStack; onUseType: (t: Mod
       </ul>
 
       <div className="stackcard__actions">
-        <button type="button" onClick={downloadAll} disabled={busy || status === "queued"}>
+        <button
+          id={downloadAllId}
+          type="button"
+          onClick={downloadAll}
+          disabled={busy || status === "queued"}
+        >
           {status === "queued"
             ? `Queued all ${stack.members.length} ✓`
             : status === "error"
@@ -330,6 +346,7 @@ function StackCard({ stack, onUseType }: { stack: ModelStack; onUseType: (t: Mod
                 ? "Queuing…"
                 : `Download entire stack (${stack.members.length} file${stack.members.length > 1 ? "s" : ""})`}
         </button>
+        <HelpHint area="models" setting="stack" describes={downloadAllId} />
       </div>
     </section>
   );

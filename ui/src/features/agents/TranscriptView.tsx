@@ -54,9 +54,9 @@ export function TranscriptBlock({
             type="button"
             disabled={answered}
             onClick={() => onAnswer(block.id, "allow_always")}
-            title={`Always allow: ${block.always}`}
           >
             Always
+            <span className="visually-hidden"> — always allow: {block.always}</span>
           </button>
         )}
         <button

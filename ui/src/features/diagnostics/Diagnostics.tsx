@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
+import { HelpHint } from "../../components/HelpHint";
 import {
   useAbout,
   useExternalEngines,
@@ -28,6 +29,7 @@ export function Diagnostics() {
   const { data: registry } = useRegistryStatus();
   const about = useAbout();
   const logRef = useRef<HTMLPreElement>(null);
+  const copyId = useId();
   const detailOf = (id: string) => runtimes?.find((r) => r.id === id)?.detail ?? null;
   const gpu = telemetry?.gpu;
   const processes = gpu?.state === "available" ? gpu.processes : [];
@@ -59,9 +61,10 @@ export function Diagnostics() {
       <section className="card">
         <header className="card__head">
           <h2>Environment</h2>
-          <button type="button" className="diag__copy" onClick={copyEnvironment}>
+          <button id={copyId} type="button" className="diag__copy" onClick={copyEnvironment}>
             Copy
           </button>
+          <HelpHint area="diagnostics" setting="environment-copy" describes={copyId} />
         </header>
         <dl className="kv numeric">
           <dt>core</dt>
@@ -133,7 +136,8 @@ export function Diagnostics() {
           <span className="card__sub">
             {gpu?.state === "available"
               ? `${gpu.vram_used_mb} / ${gpu.vram_total_mb} MB in use`
-              : ""}
+              : ""}{" "}
+            <HelpHint area="diagnostics" setting="gpu-processes" />
           </span>
         </header>
         {gpu?.state !== "available" ? (
@@ -157,7 +161,9 @@ export function Diagnostics() {
       <section className="card">
         <header className="card__head">
           <h2>Model registry</h2>
-          <span className="card__sub">{registry?.source_id ?? "…"}</span>
+          <span className="card__sub">
+            {registry?.source_id ?? "…"} <HelpHint area="diagnostics" setting="registry" />
+          </span>
         </header>
         <dl className="kv numeric">
           <dt>last fetch</dt>
@@ -178,7 +184,9 @@ export function Diagnostics() {
       <section className="card card--wide">
         <header className="card__head">
           <h2>Log</h2>
-          <span className="card__sub">{about ? "aiwm.log" : ""}</span>
+          <span className="card__sub">
+            {about ? "aiwm.log" : ""} <HelpHint area="diagnostics" setting="log" />
+          </span>
         </header>
         <pre className="log" ref={logRef}>
           {logs?.join("\n") ?? "…"}
@@ -221,6 +229,7 @@ function ToolUpdatesCard() {
   const [results, setResults] = useState<ToolVersionCheck[] | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const checkId = useId();
 
   const check = async () => {
     setBusy(true);
@@ -238,9 +247,10 @@ function ToolUpdatesCard() {
     <section className="card">
       <header className="card__head">
         <h2>Tool updates</h2>
-        <button type="button" className="diag__copy" onClick={check} disabled={busy}>
+        <button id={checkId} type="button" className="diag__copy" onClick={check} disabled={busy}>
           {busy ? "Checking…" : "Check for updates"}
         </button>
+        <HelpHint area="diagnostics" setting="tool-updates" describes={checkId} />
       </header>
       {results ? (
         <table className="rt">
@@ -278,6 +288,7 @@ function ExternalEngineCard({ llama }: { llama: RuntimeStatus | undefined }) {
   const [customModel, setCustomModel] = useState("");
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
+  const vramId = useId();
 
   const attachedModelId = llama?.loaded_models[0]?.model_id ?? null;
   const isExternal = llama?.detail?.startsWith("attached to") ?? false;
@@ -322,7 +333,9 @@ function ExternalEngineCard({ llama }: { llama: RuntimeStatus | undefined }) {
     <section className="card">
       <header className="card__head">
         <h2>Bring your own engine</h2>
-        <span className="card__sub">attaches, doesn't install</span>
+        <span className="card__sub">
+          attaches, doesn't install <HelpHint area="diagnostics" setting="byo-engine" />
+        </span>
       </header>
       <p className="muted">
         Already running Ollama or LM Studio? Attach it instead of a self-managed
@@ -361,18 +374,22 @@ function ExternalEngineCard({ llama }: { llama: RuntimeStatus | undefined }) {
         <p className="muted">Nothing found on the usual ports (Ollama :11434, LM Studio :1234).</p>
       )}
 
-      <label className="set-field">
+      <div className="set-field">
         <span>
-          VRAM estimate (MB) — used for the scheduler's budget math, since AIWM can't
-          inspect a process it doesn't manage
+          <label htmlFor={vramId}>
+            VRAM estimate (MB) — used for the scheduler's budget math, since AIWM can't
+            inspect a process it doesn't manage
+          </label>
+          <HelpHint area="diagnostics" setting="byo-vram" describes={vramId} />
         </span>
         <input
+          id={vramId}
           type="text"
           inputMode="numeric"
           value={vramMb}
           onChange={(e) => setVramMb(e.target.value)}
         />
-      </label>
+      </div>
 
       <details>
         <summary className="muted">Attach a custom address (127.0.0.1 only)</summary>
@@ -415,6 +432,7 @@ function UnloadAllButton({
 }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const buttonId = useId();
   const modelIds = (runtimes ?? []).flatMap((r) => r.loaded_models.map((m) => m.model_id));
 
   const click = async () => {
@@ -436,14 +454,15 @@ function UnloadAllButton({
   return (
     <span className="diag__unload-wrap">
       <button
+        id={buttonId}
         type="button"
         className="diag__unload-btn"
         onClick={click}
         disabled={busy || modelIds.length === 0}
-        title="Free every resident model's VRAM/RAM right now"
       >
         {busy ? "Unloading…" : "Unload all models"}
       </button>
+      <HelpHint area="diagnostics" setting="unload-all" describes={buttonId} />
       {err && <span className="diag__unload-err">{err}</span>}
     </span>
   );
@@ -465,6 +484,7 @@ type RuntimeSetupProps = {
 function RuntimeSetup({ detail, label, sizeHint, install }: RuntimeSetupProps) {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const buttonId = useId();
   const installing = isInstalling(detail);
   const actionable = detail === "not installed" || (detail?.startsWith("setup failed") ?? false);
 
@@ -489,9 +509,10 @@ function RuntimeSetup({ detail, label, sizeHint, install }: RuntimeSetupProps) {
 
   return (
     <div className="rt-setup">
-      <button type="button" onClick={start} disabled={busy || installing}>
+      <button id={buttonId} type="button" onClick={start} disabled={busy || installing}>
         {installing ? "Setting up…" : busy ? "Starting…" : `Set up ${label}`}
       </button>
+      <HelpHint area="diagnostics" setting="runtime-setup" describes={buttonId} />
       {installing && detail && <span className="muted">{detail}</span>}
       {message && <span className="muted">{message}</span>}
     </div>

@@ -122,13 +122,15 @@ export function CompareModels({
   };
 
   return (
-    <div className="cmdk__backdrop" onClick={onClose}>
-      <div
-        className="compare"
-        role="dialog"
-        aria-label="Compare models"
-        onClick={(e) => e.stopPropagation()}
-      >
+    // Presentational: a click on the backdrop itself closes.
+    <div
+      className="cmdk__backdrop"
+      role="presentation"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <div className="compare" role="dialog" aria-label="Compare models">
         <div className="compare__head">
           <h2>Compare models</h2>
           <button type="button" className="job-cancel" onClick={onClose}>

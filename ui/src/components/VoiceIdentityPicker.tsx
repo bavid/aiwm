@@ -1,7 +1,8 @@
-import { useState } from "react";
+import { useId, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useVoiceIdentities } from "../lib/hooks";
 import { createVoiceIdentity, deleteVoiceIdentity } from "../lib/ipc";
+import { HelpHint } from "./HelpHint";
 import "./voice-identity-picker.css";
 
 interface VoiceIdentityPickerProps {
@@ -9,6 +10,8 @@ interface VoiceIdentityPickerProps {
    *  back to its own free-text, seed-only narrator identity). */
   value: string | null;
   onChange: (id: string | null) => void;
+  /** The select's id, so the caller's label and hint can point at it. */
+  selectId?: string;
 }
 
 /** Picks a saved Dia voice-cloning identity -- a reference clip + its own
@@ -20,7 +23,7 @@ interface VoiceIdentityPickerProps {
  *  The file picker below is real only inside a Tauri window
  *  (`@tauri-apps/plugin-dialog`); in the browser dev preview it silently
  *  no-ops, same as Video's "Browse…" for a start frame. */
-export function VoiceIdentityPicker({ value, onChange }: VoiceIdentityPickerProps) {
+export function VoiceIdentityPicker({ value, onChange, selectId }: VoiceIdentityPickerProps) {
   const { data: identities, refetch } = useVoiceIdentities();
   const [creating, setCreating] = useState(false);
   const [name, setName] = useState("");
@@ -28,6 +31,10 @@ export function VoiceIdentityPicker({ value, onChange }: VoiceIdentityPickerProp
   const [transcript, setTranscript] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const ids = useId();
+  const nameId = `${ids}-name`;
+  const clipId = `${ids}-clip`;
+  const transcriptId = `${ids}-transcript`;
 
   const current = (identities ?? []).find((v) => v.id === value) ?? null;
 
@@ -90,20 +97,27 @@ export function VoiceIdentityPicker({ value, onChange }: VoiceIdentityPickerProp
   if (creating) {
     return (
       <div className="voice-identity-picker voice-identity-picker--editing">
-        <label className="voice-identity-picker__field">
-          <span>Name</span>
+        <div className="voice-identity-picker__field">
+          <span>
+            <label htmlFor={nameId}>Name</label>
+          </span>
           <input
+            id={nameId}
             autoFocus
             value={name}
             onChange={(e) => setName(e.target.value)}
             placeholder="Old Man Gareth"
             spellCheck={false}
           />
-        </label>
-        <label className="voice-identity-picker__field">
-          <span>Reference clip</span>
+        </div>
+        <div className="voice-identity-picker__field">
+          <span>
+            <label htmlFor={clipId}>Reference clip</label>
+            <HelpHint area="voice" setting="reference-clip" describes={clipId} />
+          </span>
           <div className="voice-identity-picker__browse">
             <input
+              id={clipId}
               value={audioPath}
               onChange={(e) => setAudioPath(e.target.value)}
               placeholder="A short (5–15s), clean, single-speaker clip"
@@ -113,17 +127,21 @@ export function VoiceIdentityPicker({ value, onChange }: VoiceIdentityPickerProp
               Browse…
             </button>
           </div>
-        </label>
-        <label className="voice-identity-picker__field">
-          <span>Transcript (exactly what that clip says)</span>
+        </div>
+        <div className="voice-identity-picker__field">
+          <span>
+            <label htmlFor={transcriptId}>Transcript (exactly what that clip says)</label>
+            <HelpHint area="voice" setting="transcript" describes={transcriptId} />
+          </span>
           <textarea
+            id={transcriptId}
             value={transcript}
             onChange={(e) => setTranscript(e.target.value)}
             rows={2}
             spellCheck
             placeholder="Transcribe the reference clip's words, verbatim"
           />
-        </label>
+        </div>
         {error && <p className="voice-identity-picker__err">{error}</p>}
         <div className="voice-identity-picker__actions">
           <button type="button" className="voiceform__go" onClick={save} disabled={!canSave}>
@@ -139,7 +157,7 @@ export function VoiceIdentityPicker({ value, onChange }: VoiceIdentityPickerProp
 
   return (
     <div className="voice-identity-picker">
-      <select value={value ?? ""} onChange={(e) => onChange(e.target.value || null)}>
+      <select id={selectId} value={value ?? ""} onChange={(e) => onChange(e.target.value || null)}>
         <option value="">Free-text identity (seed only)</option>
         {(identities ?? []).map((v) => (
           <option key={v.id} value={v.id}>
@@ -151,7 +169,7 @@ export function VoiceIdentityPicker({ value, onChange }: VoiceIdentityPickerProp
         type="button"
         className="voice-identity-picker__icon"
         onClick={startCreate}
-        title="Save a new voice from a reference clip"
+        aria-label="Save a new voice from a reference clip"
       >
         +
       </button>
@@ -160,7 +178,7 @@ export function VoiceIdentityPicker({ value, onChange }: VoiceIdentityPickerProp
           type="button"
           className="voice-identity-picker__icon voice-identity-picker__icon--danger"
           onClick={removeCurrent}
-          title="Delete this saved voice"
+          aria-label={`Delete the saved voice ${current.name}`}
         >
           ×
         </button>

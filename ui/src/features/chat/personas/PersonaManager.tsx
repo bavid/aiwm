@@ -197,6 +197,7 @@ export function PersonaManager({
   return createPortal(
     <div
       className="cmdk__backdrop"
+      role="presentation"
       onMouseDown={(e) => {
         // Only a press that starts *on* the backdrop closes: a drag that began
         // inside the dialog (selecting prompt text) must not.

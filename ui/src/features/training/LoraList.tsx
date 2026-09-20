@@ -1,4 +1,5 @@
 import { useMemo } from "react";
+import { HelpHint } from "../../components/HelpHint";
 import type { LoraSummary } from "../../lib/ipc";
 import { formatBytes } from "../../lib/units";
 import { formatCount, formatWhen } from "./format";
@@ -29,7 +30,10 @@ export function LoraList({ loras, isLoading, error, selectedId, onSelect }: Prop
   return (
     <section className="card loralist" aria-labelledby="loralist-heading">
       <header className="loralist__head">
-        <h3 id="loralist-heading">Your LoRAs</h3>
+        <div className="training__headrow">
+          <h3 id="loralist-heading">Your LoRAs</h3>
+          <HelpHint area="training" setting="lora-overview" />
+        </div>
         <p className="loralist__guidance">{DATA_GUIDANCE}</p>
       </header>
 

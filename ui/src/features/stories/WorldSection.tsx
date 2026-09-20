@@ -1,4 +1,5 @@
-import { useState, type ReactNode } from "react";
+import { useId, useState, type ReactNode } from "react";
+import { HelpHint } from "../../components/HelpHint";
 import {
   createLocation,
   createNpc,
@@ -57,6 +58,7 @@ function LocationsPanel({
   // Same "edit icon on the row opens an inline form" pattern as the
   // character roster (CharactersSection). One location edits at a time.
   const [editingId, setEditingId] = useState<string | null>(null);
+  const ids = useId();
 
   const create = async () => {
     const name = draft.name.trim();
@@ -124,14 +126,10 @@ function LocationsPanel({
                 {loc.description && <p className="muted">{loc.description}</p>}
                 <div className="tile__actions">
                   <button
+                    id={`${ids}-gen-${loc.id}`}
                     type="button"
                     onClick={() => generateReference(loc)}
                     disabled={generatingId === loc.id}
-                    title={
-                      loc.reference_job_id
-                        ? "Anchored to the current reference image for a consistent look"
-                        : undefined
-                    }
                   >
                     {generatingId === loc.id
                       ? "Generating…"
@@ -139,6 +137,11 @@ function LocationsPanel({
                         ? "Regenerate (anchored)"
                         : "Generate reference"}
                   </button>
+                  <HelpHint
+                    area="stories"
+                    setting="location-reference"
+                    describes={`${ids}-gen-${loc.id}`}
+                  />
                   <button
                     type="button"
                     className="tile__delete"
@@ -302,6 +305,7 @@ function NpcsPanel({
                     <button
                       type="button"
                       className="tile__delete"
+                      aria-label={`Delete ${npc.name}`}
                       onClick={() =>
                         window.confirm(`Delete "${npc.name}"?`) && deleteNpc(npc.id).then(onChanged)
                       }

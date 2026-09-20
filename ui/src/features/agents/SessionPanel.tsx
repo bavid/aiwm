@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { HelpHint } from "../../components/HelpHint";
 import {
   agentSessionDetail,
   agentSessionMessage,
@@ -65,10 +66,13 @@ export function SessionPanel({
       <section className="card agents__session">
         <header className="card__head">
           <h2>Session</h2>
+          <span className="card__sub">
+            <HelpHint area="agents" setting="session" />
+          </span>
         </header>
         <p className="muted">
           Pick a profile and hit <strong>New session</strong>. The transcript, tool calls and
-          approval prompts show up here.
+          approval prompts show up here. <HelpHint area="agents" setting="approvals" />
         </p>
       </section>
     );
@@ -124,7 +128,8 @@ export function SessionPanel({
           {profileName && <span className="numeric">{profileName} · </span>}
           <span className="state" data-state={state}>
             {state.replace("_", " ")}
-          </span>
+          </span>{" "}
+          <HelpHint area="agents" setting="approvals" />
         </span>
       </header>
 

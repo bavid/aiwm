@@ -48,7 +48,10 @@
   border: 0;
 }
 
-.captioner-picker legend {
+.captioner-picker__caption {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
   margin-bottom: var(--space-1);
   padding: 0;
   font-size: var(--text-xs);

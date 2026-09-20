@@ -1,6 +1,22 @@
 import { useId, useState } from "react";
+import { HelpHint } from "../../components/HelpHint";
 import type { TrainingPresetValues } from "../../lib/ipc";
 import type { TuneDraft, TuneErrors, TuneField } from "./tune";
+
+/** The four fields' hints, spelled out so `scripts/check-help.mjs` can read
+ *  the keys as literals. */
+function FieldHint({ field, describes }: { field: TuneField; describes: string }) {
+  switch (field) {
+    case "rank":
+      return <HelpHint area="training" setting="rank" describes={describes} />;
+    case "lr":
+      return <HelpHint area="training" setting="learning-rate" describes={describes} />;
+    case "resolution":
+      return <HelpHint area="training" setting="resolution" describes={describes} />;
+    case "steps":
+      return <HelpHint area="training" setting="steps" describes={describes} />;
+  }
+}
 
 type Props = {
   value: TuneDraft;
@@ -62,8 +78,11 @@ export function FineTune({ value, onChange, errors, preset, lockedRank }: Props)
           const isLocked = field === "rank" && lockedRank !== null;
           const describedBy = error ? errorId : isLocked ? noteId : undefined;
           return (
-            <label className="datasetform__field" htmlFor={fieldIds[field]} key={field}>
-              <span>{label}</span>
+            <div className="datasetform__field" key={field}>
+              <span>
+                <label htmlFor={fieldIds[field]}>{label}</label>
+                <FieldHint field={field} describes={fieldIds[field]} />
+              </span>
               <input
                 id={fieldIds[field]}
                 type="number"
@@ -86,7 +105,7 @@ export function FineTune({ value, onChange, errors, preset, lockedRank }: Props)
                   Rank {lockedRank} — fixed by the LoRA you continue from
                 </em>
               )}
-            </label>
+            </div>
           );
         })}
       </div>

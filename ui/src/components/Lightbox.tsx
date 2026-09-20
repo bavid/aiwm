@@ -32,7 +32,10 @@ export function Lightbox({
   }, [onClose, onPrev, onNext]);
 
   return createPortal(
-    <div className="lightbox" role="dialog" aria-modal="true" onClick={onClose}>
+    <div className="lightbox" role="dialog" aria-modal="true">
+      {/* The click-to-close surface, behind the stage and the buttons; the
+          dialog itself carries no handler. Escape is the window listener. */}
+      <div className="lightbox__backdrop" role="presentation" onClick={onClose} />
       <button type="button" className="lightbox__close" aria-label="Close" onClick={onClose}>
         ×
       </button>
@@ -41,15 +44,12 @@ export function Lightbox({
           type="button"
           className="lightbox__nav lightbox__nav--prev"
           aria-label="Previous"
-          onClick={(e) => {
-            e.stopPropagation();
-            onPrev();
-          }}
+          onClick={onPrev}
         >
           ‹
         </button>
       )}
-      <figure className="lightbox__stage" onClick={(e) => e.stopPropagation()}>
+      <figure className="lightbox__stage">
         {kind === "image" ? (
           <img src={src} alt={caption ?? ""} />
         ) : (
@@ -62,10 +62,7 @@ export function Lightbox({
           type="button"
           className="lightbox__nav lightbox__nav--next"
           aria-label="Next"
-          onClick={(e) => {
-            e.stopPropagation();
-            onNext();
-          }}
+          onClick={onNext}
         >
           ›
         </button>

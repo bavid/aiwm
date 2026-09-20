@@ -1,5 +1,6 @@
-import { useMemo, useState } from "react";
+import { useId, useMemo, useState } from "react";
 import { useAbout, useJobs, useModels, useRuntimes, useStorage, useTelemetry } from "../../lib/hooks";
+import { HelpHint } from "../../components/HelpHint";
 import { Meter } from "../../components/Meter";
 import { cancelJob, unloadModel, type Job, type JobState, type RuntimeStatus } from "../../lib/ipc";
 import { formatGiB, toGB, toGiB } from "../../lib/units";
@@ -184,7 +185,6 @@ export function Dashboard({ onNavigate }: { onNavigate: (tab: string) => void })
               className="capability"
               disabled={!c.tab}
               onClick={c.tab ? () => onNavigate(c.tab as string) : undefined}
-              title={c.tab ? `Open ${c.label}` : `Available in ${c.hint}`}
             >
               <span className="capability__label">{c.label}</span>
               <span className="capability__hint">{c.hint}</span>
@@ -222,6 +222,7 @@ function SetupChecklist({
   const [dismissed, setDismissed] = useState(
     () => window.localStorage.getItem(SETUP_DISMISSED_KEY) === "true",
   );
+  const dismissId = useId();
 
   if (dismissed || !runtimes || !models || !jobs) return null;
 
@@ -249,9 +250,10 @@ function SetupChecklist({
     <section className="card card--wide card--setup" aria-labelledby="setup-h">
       <header className="card__head">
         <h2 id="setup-h">Get set up</h2>
-        <button type="button" className="dash__jobs-link" onClick={dismiss}>
+        <button id={dismissId} type="button" className="dash__jobs-link" onClick={dismiss}>
           Dismiss
         </button>
+        <HelpHint area="dashboard" setting="setup-checklist" describes={dismissId} />
       </header>
       <ol className="setup-steps">
         {steps.map((s) => (
@@ -278,7 +280,7 @@ function UsageSparkline({ days }: { days: { label: string; date: string; count: 
   return (
     <div className="usage-bars">
       {days.map((d) => (
-        <div key={d.date} className="usage-bar" title={`${d.label}: ${d.count} job${d.count === 1 ? "" : "s"}`}>
+        <div key={d.date} className="usage-bar">
           <div className="usage-bar__track">
             <div className="usage-bar__fill" style={{ height: `${(d.count / max) * 100}%` }} />
           </div>
@@ -329,6 +331,7 @@ function ResidentList({
 function UnloadButton({ modelId, onUnloaded }: { modelId: string; onUnloaded: () => void }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const buttonId = useId();
 
   const click = async () => {
     setBusy(true);
@@ -346,14 +349,15 @@ function UnloadButton({ modelId, onUnloaded }: { modelId: string; onUnloaded: ()
   return (
     <span className="resident-row__unload">
       <button
+        id={buttonId}
         type="button"
         className="resident-row__unload-btn"
         onClick={click}
         disabled={busy}
-        title="Free this model's VRAM/RAM right now"
       >
         {busy ? "…" : "Unload"}
       </button>
+      <HelpHint area="dashboard" setting="unload" describes={buttonId} />
       {err && <span className="resident-row__unload-err">{err}</span>}
     </span>
   );

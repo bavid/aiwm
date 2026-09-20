@@ -98,6 +98,8 @@ export function PersonaMenu({
       ref={menuRef}
       className="persona-menu"
       role="menu"
+      // Focusable programmatically; the effect above moves focus to a row.
+      tabIndex={-1}
       aria-label="Persona"
       aria-describedby={sessionId ? undefined : noteId}
       onKeyDown={onKeyDown}

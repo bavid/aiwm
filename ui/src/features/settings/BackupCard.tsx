@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useId, useState } from "react";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
+import { HelpHint } from "../../components/HelpHint";
 import { exportBackup, importBackup, type ImportSummary } from "../../lib/ipc";
 
 const errText = (e: unknown) => (e instanceof Error ? e.message : String(e));
@@ -16,6 +17,9 @@ export function BackupCard() {
   const [restoring, setRestoring] = useState(false);
   const [summary, setSummary] = useState<ImportSummary | null>(null);
   const [restoreErr, setRestoreErr] = useState<string | null>(null);
+  const ids = useId();
+  const exportId = `${ids}-export`;
+  const pathId = `${ids}-path`;
 
   const runExport = async () => {
     setExporting(true);
@@ -60,6 +64,7 @@ export function BackupCard() {
 
       <div className="backup-row">
         <button
+          id={exportId}
           type="button"
           className="backup-btn"
           disabled={exporting}
@@ -67,6 +72,7 @@ export function BackupCard() {
         >
           {exporting ? "Exporting…" : "Export backup"}
         </button>
+        <HelpHint area="settings" setting="backup-export" describes={exportId} />
         {exported && (
           <span className="backup-path">
             <code>{exported}</code>
@@ -82,9 +88,15 @@ export function BackupCard() {
       </div>
       {exportErr && <p className="settings__err">{exportErr}</p>}
 
-      <label className="set-field">
-        <span>Restore from an export archive — full path to the <code>.zip</code></span>
+      <div className="set-field">
+        <span>
+          <label htmlFor={pathId}>
+            Restore from an export archive — full path to the <code>.zip</code>
+          </label>
+          <HelpHint area="settings" setting="backup-restore" describes={pathId} />
+        </span>
         <input
+          id={pathId}
           type="text"
           value={path}
           spellCheck={false}
@@ -95,7 +107,7 @@ export function BackupCard() {
             setRestoreErr(null);
           }}
         />
-      </label>
+      </div>
       <div className="backup-row">
         <button
           type="button"

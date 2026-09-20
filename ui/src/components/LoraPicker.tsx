@@ -1,4 +1,6 @@
+import { useId } from "react";
 import { type LoraParam, type Model } from "../lib/ipc";
+import { HelpHint } from "./HelpHint";
 import "./lora-picker.css";
 
 const MIN_STRENGTH = 0;
@@ -36,7 +38,10 @@ function familySupportsLora(family: string | null | undefined): boolean {
  *  family with no LoRA seam in `core::pipeline` — see
  *  `FAMILIES_WITHOUT_LORA_SEAM`. Otherwise it stays visible even with zero
  *  LoRAs imported yet, with guidance on where to get one, rather than
- *  disappearing (which would look like the feature vanished). */
+ *  disappearing (which would look like the feature vanished).
+ *
+ *  The help lives under the Image area (`lora-stack`, `lora-strength`); the
+ *  Video tab shares this picker and that text. */
 export function LoraPicker({
   models,
   family,
@@ -53,6 +58,7 @@ export function LoraPicker({
   selected: LoraParam[];
   onChange: (next: LoraParam[]) => void;
 }) {
+  const baseId = useId();
   if (!familySupportsLora(family)) return null;
 
   const loras = models.filter(
@@ -74,8 +80,10 @@ export function LoraPicker({
   };
 
   return (
-    <fieldset className="lora-picker">
-      <legend>LoRAs (optional)</legend>
+    <fieldset className="lora-picker" id={baseId}>
+      <legend>
+        LoRAs (optional) <HelpHint area="image" setting="lora-stack" describes={baseId} />
+      </legend>
       {loras.length === 0 ? (
         <p className="muted">
           No LoRAs imported yet — import a <code>.safetensors</code> LoRA (role “LoRA”) on the
@@ -84,6 +92,7 @@ export function LoraPicker({
       ) : (
         loras.map((m) => {
           const active = entryFor(m.id);
+          const strengthId = `${baseId}-strength-${m.id}`;
           return (
             <div key={m.id} className="lora-picker__item">
               <label className="lora-picker__row">
@@ -96,18 +105,23 @@ export function LoraPicker({
                 </span>
               </label>
               {active && (
-                <input
-                  type="range"
-                  className="lora-picker__strength"
-                  min={MIN_STRENGTH}
-                  max={MAX_STRENGTH}
-                  step={0.05}
-                  value={active.strength}
-                  onChange={(e) => {
-                    const n = Number(e.target.value);
-                    if (Number.isFinite(n)) setStrength(m.id, clampStrength(n));
-                  }}
-                />
+                <div className="lora-picker__strength-row">
+                  <input
+                    id={strengthId}
+                    type="range"
+                    className="lora-picker__strength"
+                    aria-label={`Strength of ${m.name}`}
+                    min={MIN_STRENGTH}
+                    max={MAX_STRENGTH}
+                    step={0.05}
+                    value={active.strength}
+                    onChange={(e) => {
+                      const n = Number(e.target.value);
+                      if (Number.isFinite(n)) setStrength(m.id, clampStrength(n));
+                    }}
+                  />
+                  <HelpHint area="image" setting="lora-strength" describes={strengthId} />
+                </div>
               )}
             </div>
           );

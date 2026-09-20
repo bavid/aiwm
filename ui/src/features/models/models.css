@@ -61,6 +61,31 @@
   color: var(--muted);
 }
 
+/* The field's caption: a `<label for>` beside its `?` hint. */
+.import__field > span {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+/* A checkbox chip or a tab strip with its `?` hint beside it. */
+.import__keep,
+.discover__sources,
+.filelist__filter {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.discover__sources {
+  display: flex;
+}
+
+.chip label {
+  cursor: pointer;
+}
+
 .import__field input[type="text"],
 .import__field select {
   padding: var(--space-2) var(--space-3);
@@ -598,6 +623,9 @@
 }
 
 .stackcard__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
   margin-top: var(--space-2);
 }
 
@@ -678,6 +706,9 @@
    (see Discover.tsx's `PlainSearch` / `AiSearch`). --- */
 
 .discover__aitoggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
   margin: 0 0 var(--space-3);
 }
 

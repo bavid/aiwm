@@ -6,6 +6,7 @@ import {
   type DatasetConcept,
   type DatasetFrame,
 } from "../../lib/ipc";
+import { HelpHint } from "../../components/HelpHint";
 import { CONCEPT_REMINDER, ConceptRow } from "./ConceptRow";
 import { fileName } from "./format";
 import { buildSets, type SetGrouping } from "./sets";
@@ -225,8 +226,11 @@ export function LearnSets({
               placeholder="Kenji"
             />
           </label>
-          <label className="datasetform__field" htmlFor={tokenId}>
-            <span>Token</span>
+          <div className="datasetform__field">
+            <span>
+              <label htmlFor={tokenId}>Token</label>
+              <HelpHint area="dataset" setting="concept" describes={tokenId} />
+            </span>
             <input
               id={tokenId}
               type="text"
@@ -235,7 +239,7 @@ export function LearnSets({
               placeholder="kenji_xy"
               className="concepts__token-input"
             />
-          </label>
+          </div>
           {draftWarning && <p className="concepts__warn">{draftWarning}</p>}
           <label className="datasetform__field" htmlFor={descId}>
             <span>Description (optional)</span>
@@ -266,14 +270,9 @@ export function LearnSets({
 
   return (
     // Focusable so the set shortcuts have somewhere to land; every action is
-    // also reachable as a real button below.
-    <div
-      className="card learn"
-      tabIndex={0}
-      onKeyDown={onKeyDown}
-      role="group"
-      aria-label="Guided concept sets"
-    >
+    // also reachable as a real button below (jsx-a11y's container exception).
+    // eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions, jsx-a11y/no-noninteractive-tabindex
+    <div className="card learn" tabIndex={0} onKeyDown={onKeyDown} role="group" aria-label="Guided concept sets">
       <div className="learn__main">
         <div className="learn__header">
           <div>
@@ -286,8 +285,11 @@ export function LearnSets({
               <p className="learn__source">{fileName(current[0].source_path)}</p>
             )}
           </div>
-          <label className="datasetform__field datasetform__field--inline" htmlFor={groupingId}>
-            <span>Group</span>
+          <div className="datasetform__field datasetform__field--inline">
+            <span>
+              <label htmlFor={groupingId}>Group</label>
+              <HelpHint area="dataset" setting="learn-grouping" describes={groupingId} />
+            </span>
             <select
               id={groupingId}
               value={grouping}
@@ -296,7 +298,7 @@ export function LearnSets({
               <option value="clip">By clip</option>
               <option value="similarity">By similarity (coarse)</option>
             </select>
-          </label>
+          </div>
         </div>
 
         <p className="learn__hint">

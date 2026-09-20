@@ -4,6 +4,24 @@
   gap: var(--space-4);
 }
 
+/* The session list plus the `?` hint under it, as one column. */
+.chat-page__sidebar {
+  display: flex;
+  flex-direction: column;
+  flex: none;
+  min-height: 0;
+}
+
+.chat-page__sidebar > .chat-sidebar {
+  flex: 1;
+  min-height: 0;
+}
+
+.chat-page__sidebar-hint {
+  margin: 0;
+  padding: var(--space-2) var(--space-4) 0 0;
+}
+
 .chat-sidebar {
   width: 220px;
   flex: none;

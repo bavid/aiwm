@@ -977,9 +977,9 @@ UI-Task zusätzlich live im Browser gegen den dev-mock verifiziert.
   tausenden Frames erneut ansehen — `FrameCard` ist inzwischen memoisiert und
   `usePolled.refetch` stabil, die Virtualisierung fehlt weiterhin); die
   Prep-/Export-/Konzept-Formulare sind `<div>`s statt semantischer
-  `<form onSubmit>` (kein Enter-zum-Absenden); `ui/eslint.config.js` hat kein
+  `<form onSubmit>` (kein Enter-zum-Absenden); ~~`ui/eslint.config.js` hat kein
   `eslint-plugin-jsx-a11y` (hätte die `alt=""`-/unbeschriftete-Input-Funde
-  automatisch gefangen).
+  automatisch gefangen)~~ → ✅ mit Plan 12 (2026-09-20) eingebaut, 52 → 0 Funde.
 
 ### Teilsystem 2 — Trainings-Orchestrator: ✅ umgesetzt (2026-09-17)
 
@@ -1371,7 +1371,7 @@ ist Backlog für spätere Slices, absteigend nach Aufwand geordnet:
   **Offen:** mehrstufiger Gesprächsverlauf (der Chat schickt weiterhin nur die
   aktuelle Nachricht — siehe „Kompaktions-Records für lange Chats" oben),
   Personas für Agents/Story Studio, Import/Export, Variablen/Platzhalter im
-  Prompt, `eslint-plugin-jsx-a11y` für die neuen Dialoge.
+  Prompt (~~`eslint-plugin-jsx-a11y` für die neuen Dialoge~~ → ✅ Plan 12).
 - **Chatbot-Import (ChatGPT/Claude/Gemini-Export) → RAG statt Chat-Verlauf**
   — importierter Fremd-Verlauf wird als durchsuchbarer Kontext behandelt,
   nicht als eigene Chat-Session. Braucht AIWMs Dokument-RAG-Pipeline als
@@ -1889,8 +1889,8 @@ Noch offen aus Plan 6:
   - `core/src/model/catalog.rs` hat ~1.855 Zeilen (über der 800er-Grenze):
     aufteilen nach Medium (`catalog/image.rs`, `video.rs`, `voice.rs`,
     `training.rs`) plus `stacks.rs`, Invarianten-Tests bleiben zentral.
-  - `eslint-plugin-jsx-a11y` für die neuen Install-Buttons/Hinweise weiter
-    offen (wie schon bei früheren Plänen notiert).
+  - ~~`eslint-plugin-jsx-a11y` für die neuen Install-Buttons/Hinweise weiter
+    offen (wie schon bei früheren Plänen notiert)~~ → ✅ Plan 12 (2026-09-20).
 - ✅ (umgesetzt 2026-09-19, Plan 10 "Storage Locations"; Messung siehe unten)
   **Speicherort für Dataset- und Trainingsdaten frei wählbar (optional)** —
   User-Wunsch 2026-09-18: die App läuft auf einer 1-TB-SSD, ein
@@ -2110,6 +2110,62 @@ auf dem System liegen wieder hunderte GB, teils Nutzdaten, teils Testartefakte.
   Nichts davon ohne ausdrückliche Bestätigung löschen; Modelle bleiben.
 
 ## In-App-Dokumentation & Tooltips (Backlog, User-Wunsch 2026-09-18)
+
+**Erledigt (Plan 12 "In-App Help & Tooltips", umgesetzt 2026-09-19/20):**
+Eine typisierte Inhaltsquelle `ui/src/help/` (`HelpArea` → `HelpTopic` →
+`HelpSetting` mit *Was / Warum / Was passiert / Nutzen*, Stolperfallen und
+`measured` mit Datum aus dieser Datei — keine geschätzten Zahlen) speist
+sowohl den neuen Tab **Help** als auch die `?`-Hinweise neben den Reglern:
+**17 Bereiche, 92 Themen, 182 Einstellungen, 185 Hinweise** (Getting started,
+Dashboard, Chat inkl. Personas, Image inkl. Hi-Res-Fix und LoRA-Stack, Video,
+Upscale, Voice, Stories, Dataset, Training, Jobs, Agents, Models & Discover,
+Benchmark, Diagnostics, Settings, Shortcuts). Help-Tab: `SectionNav` je
+Bereich, Substring-Suche über Titel/Zusammenfassung/Text/alle Setting-Felder
+mit `<mark>`-Hervorhebung und `role="status"`-Trefferzahl, Deep-Links
+(`helpFocus` in `App.tsx` wie `ModelsFocus`: scrollt, blinkt, fokussiert die
+Überschrift); Ctrl+K-Palette hat eine Gruppe "Help" (alle Themen) und die
+fehlenden Tabs; das `?`-Dialogfeld hat "Open Help". Hinweis-Muster
+(`components/HelpHint.tsx`, wie das Fit-Badge): echter `<button>` mit
+`aria-expanded`/`aria-controls`, Escape schließt und gibt den Fokus zurück,
+Klick außerhalb schließt, das beschriebene Feld trägt eingeklappt ein
+`aria-describedby` auf die versteckte "Was"-Zeile und verliert es geöffnet;
+Panel als Popover; "More in Help" springt zur Einstellung. Hosts: `<label
+for>` + Hinweis als Geschwister (nie im Label), `NumField`/`StorageDirField`/
+`VoiceIdentityPicker` mit Render-Prop bzw. Ids. Alle nur-`title=`-Tooltips
+(Chat, Session-Leisten, Discover, FileList-Scan-Badges, Image, Video,
+Dashboard, Diagnostics, Voice, Stories, FrameCard, SelectionBar, Presets,
+Queue, Modellname) durch `aria-label` oder versteckten Text ersetzt; die
+Kompaktansicht des Kuratier-Grids behält den Caption-Vorschau-`title` als
+Ergänzung (Alt-Text und Detailansicht tragen dieselbe Caption).
+Konsistenzprüfung `ui/scripts/check-help.mjs` (`pnpm lint:help`, Teil von
+`pnpm lint`): jeder `<HelpHint area setting>` löst auf, jeder Bereich hat
+ein Thema, keine leeren Antwortfelder, Ids eindeutig und DOM-tauglich.
+Dazu **`eslint-plugin-jsx-a11y` 6.10.2 (recommended) in `ui/eslint.config.js`**
+— erster Lauf 52 Funde, danach 0: Backdrops der Dialoge sind
+`role="presentation"` und schließen nur bei Klick auf sich selbst (kein
+`stopPropagation` mehr im Dialog), die Lightbox hat eine eigene
+Klick-Fläche hinter Bühne und Buttons, der Job-Toast ist ein echter Button
+neben dem Schließen-Button, `PersonaMenu` ist fokussierbar, die
+Tab-Leiste ist kein `<nav>` mehr (das `<aside>` ist die Landmarke),
+`SessionSwitcher`-Select hat einen Namen; `no-autofocus` (nur Inline-Editoren
+nach Klick) und `media-has-caption` (generierte Medien ohne Spur) sind mit
+Begründung abgeschaltet, vier Container, die Tastenkürzel ihrer fokussierbaren
+Kinder auffangen (Kuratier-Board, Learn-Sets, Bench-Ereignisliste,
+Hinweis-Panel/Frame-Thumbnail), sind zeilenweise mit Begründung ausgenommen
+(die dokumentierte Container-Ausnahme des Plugins).
+**Verifiziert** (Dev-Preview, 2026-09-19/20): Help-Tab zeigt alle 17
+Bereiche; Suche "VRAM budget" → 7 Treffer über vier Bereiche; Hinweise
+(Image → Steps, Settings → Theme, Chat → Persona) öffnen, `aria-describedby`
+fällt weg, Escape schließt und fokussiert den Knopf zurück; "More in Help"
+landet auf `h4 Persona` im Chat-Bereich; ehemals nur-`title=`-Knöpfe lesen
+sich im Accessibility-Baum als `button "Swap width and height"`, `button
+"Rename General"`. Gates `pnpm typecheck` / `pnpm lint` / `pnpm build` grün.
+**Offen (Folgethemen):** (a) die Hilfetexte liegen im Haupt-Chunk (765 kB /
+233 kB gzip — unter dem 300-kB-Budget); künftig kleiner `{key, label}`-Index
+plus `import()` je Bereich beim ersten Öffnen eines Hinweises; (b)
+`CommandPalette`/`ShortcutsHelp` haben kein `aria-modal` und keine Fokusfalle
+(vorbestehend); (c) Übersetzungen, Docs-Export, Bearbeiten der Texte in der
+App, automatische Screenshots (laut Spec nicht in diesem Plan).
 
 - **Vollständige Dokumentation in der App selbst** — eine eigene Seite
   (z. B. "Help" / "Docs" im Seitenmenü), auf der **alle** Features

@@ -1,32 +1,47 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { HELP_AREA_LABEL, HELP_TOPICS } from "../help/index.ts";
+import type { OpenHelp } from "../help/HelpContext.ts";
 import { useJobs, useModels } from "../lib/hooks";
 import "./command-palette.css";
 
 type Entry = {
   id: string;
-  group: "Go to" | "Model" | "Job";
+  group: "Go to" | "Help" | "Model" | "Job";
   label: string;
   hint?: string;
   run: () => void;
 };
 
+/** Every tab, in sidebar order (`TABS` in `App.tsx`). */
 const TAB_ENTRIES: { tab: string; label: string }[] = [
   { tab: "dashboard", label: "Dashboard" },
   { tab: "chat", label: "Chat" },
   { tab: "image", label: "Image" },
   { tab: "video", label: "Video" },
+  { tab: "voice", label: "Voice" },
+  { tab: "stories", label: "Stories" },
+  { tab: "dataset", label: "Dataset" },
+  { tab: "training", label: "Training" },
   { tab: "jobs", label: "Jobs" },
   { tab: "agents", label: "Agents" },
   { tab: "models", label: "Models" },
   { tab: "benchmark", label: "Benchmark" },
   { tab: "diagnostics", label: "Diagnostics" },
   { tab: "settings", label: "Settings" },
+  { tab: "help", label: "Help" },
 ];
 
-/** Global ⌘K / Ctrl+K command palette: jump to a tab, a model (→ Models tab),
- *  or a recent job (→ Jobs tab). Pure client-side filtering over data the
- *  polling hooks already have in memory -- no new endpoints. */
-export function CommandPalette({ onNavigate }: { onNavigate: (tab: string) => void }) {
+/** Global ⌘K / Ctrl+K command palette: jump to a tab, a help topic (→ Help
+ *  tab, scrolled to it), a model (→ Models tab), or a recent job (→ Jobs
+ *  tab). Pure client-side filtering over data the polling hooks already have
+ *  in memory -- no new endpoints. */
+export function CommandPalette({
+  onNavigate,
+  onOpenHelp,
+}: {
+  onNavigate: (tab: string) => void;
+  onOpenHelp: OpenHelp;
+}) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
@@ -65,6 +80,13 @@ export function CommandPalette({ onNavigate }: { onNavigate: (tab: string) => vo
       label: t.label,
       run: () => onNavigate(t.tab),
     }));
+    const helpEntries: Entry[] = HELP_TOPICS.map((t) => ({
+      id: `help-${t.area}-${t.id}`,
+      group: "Help",
+      label: t.title,
+      hint: HELP_AREA_LABEL[t.area],
+      run: () => onOpenHelp(t.area, t.id),
+    }));
     const modelEntries: Entry[] = (models ?? []).map((m) => ({
       id: `model-${m.id}`,
       group: "Model",
@@ -79,8 +101,8 @@ export function CommandPalette({ onNavigate }: { onNavigate: (tab: string) => vo
       hint: j.state,
       run: () => onNavigate("jobs"),
     }));
-    return [...goTo, ...modelEntries, ...jobEntries];
-  }, [models, jobs, onNavigate]);
+    return [...goTo, ...helpEntries, ...modelEntries, ...jobEntries];
+  }, [models, jobs, onNavigate, onOpenHelp]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -111,17 +133,20 @@ export function CommandPalette({ onNavigate }: { onNavigate: (tab: string) => vo
   let lastGroup: string | null = null;
 
   return (
-    <div className="cmdk__backdrop" onClick={() => setOpen(false)}>
-      <div
-        className="cmdk"
-        role="dialog"
-        aria-label="Command palette"
-        onClick={(e) => e.stopPropagation()}
-      >
+    // Presentational: a click on the backdrop itself closes; Escape is
+    // handled by the window listener above.
+    <div
+      className="cmdk__backdrop"
+      role="presentation"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) setOpen(false);
+      }}
+    >
+      <div className="cmdk" role="dialog" aria-label="Command palette">
         <input
           ref={inputRef}
           className="cmdk__input"
-          placeholder="Jump to a tab, model, or job…"
+          placeholder="Jump to a tab, help topic, model, or job…"
           value={query}
           onChange={(e) => {
             setQuery(e.target.value);

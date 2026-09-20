@@ -36,6 +36,11 @@ type Props = {
   minFreeGiB: number;
   /** Why and what happens — one or two short sentences. */
   help: ReactNode;
+  /** Renders the `?` help hint next to the label; gets the input's id so the
+   *  hint can describe it. A render prop rather than `{area, setting}`, so
+   *  the caller writes the hint element itself with literal props that
+   *  `scripts/check-help.mjs` can verify. */
+  hint?: (inputId: string) => ReactNode;
 };
 
 type FreeLine = { text: string; tone: "ok" | "warn" | "muted" };
@@ -84,6 +89,7 @@ export function StorageDirField({
   locationKey,
   minFreeGiB,
   help,
+  hint,
 }: Props) {
   const inputId = useId();
   const freeId = useId();
@@ -99,6 +105,7 @@ export function StorageDirField({
         <label htmlFor={inputId} className="storedir__label">
           {label}
         </label>
+        {hint?.(inputId)}
         <span className="storedir__badge" data-custom={isCustom}>
           {isCustom ? "custom folder" : "default"}
         </span>

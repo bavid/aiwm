@@ -17,6 +17,13 @@
   gap: var(--space-2);
 }
 
+/* A control and its `?` hint, kept together when the header wraps. */
+.chat__head-group {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
 .chat__model {
   padding: var(--space-1) var(--space-2);
   border: 1px solid var(--border);

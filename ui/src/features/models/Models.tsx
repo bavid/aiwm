@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { HelpHint } from "../../components/HelpHint";
 import { SectionNav, type NavSection } from "../../components/SectionNav";
 import {
   useBenchmarks,
@@ -261,12 +262,21 @@ function ModelLibrary({ models, error }: { models: Model[] | null; error: string
                 <th>Params</th>
                 <th>Size</th>
                 <th>Ctx</th>
-                <th>VRAM est.</th>
-                <th>Score</th>
+                <th>
+                  VRAM est. <HelpHint area="models" setting="vram-estimate" />
+                </th>
+                <th>
+                  Score <HelpHint area="models" setting="score" />
+                </th>
                 <th>Tags</th>
-                <th>Roles</th>
+                <th>
+                  Roles <HelpHint area="models" setting="roles" />
+                </th>
                 <th>Runtimes</th>
-                <th />
+                <th>
+                  <span className="visually-hidden">Actions</span>{" "}
+                  <HelpHint area="models" setting="better" />
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -292,10 +302,7 @@ function ModelLibrary({ models, error }: { models: Model[] | null; error: string
                   <td className="numeric">{params(m.param_count)}</td>
                   <td className="numeric">{formatGB(m.size_bytes)}</td>
                   <td className="numeric">{ctx(m.ctx_max)}</td>
-                  <td
-                    className="numeric"
-                    title="Estimate at load — weights + KV cache / activations + runtime overhead"
-                  >
+                  <td className="numeric">
                     {m.vram_estimate_mb == null ? "—" : formatGiB(m.vram_estimate_mb)}
                   </td>
                   <td>
@@ -414,8 +421,9 @@ function NameCell({ modelId, name }: { modelId: string; name: string }) {
   }
 
   return (
-    <button type="button" className="namecell" onClick={start} title="Click to rename">
+    <button type="button" className="namecell" onClick={start}>
       {shown}
+      <span className="visually-hidden"> — rename</span>
     </button>
   );
 }
@@ -577,6 +585,10 @@ function ImportForm({
   const [keepOriginal, setKeepOriginal] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
+  const ids = useId();
+  const typeId = `${ids}-type`;
+  const pathId = `${ids}-path`;
+  const keepId = `${ids}-keep`;
 
   const isChat = modelType === "chat";
   const typeInfo = MODEL_TYPES.find((t) => t.value === modelType)!;
@@ -627,20 +639,31 @@ function ImportForm({
         <h2>Import a model</h2>
       </header>
       <form className="import" onSubmit={submit}>
-        <label className="import__field">
-          <span>Type</span>
-          <select value={modelType} onChange={(e) => setModelType(e.target.value as ModelType)}>
+        <div className="import__field">
+          <span>
+            <label htmlFor={typeId}>Type</label>
+            <HelpHint area="models" setting="import-type" describes={typeId} />
+          </span>
+          <select
+            id={typeId}
+            value={modelType}
+            onChange={(e) => setModelType(e.target.value as ModelType)}
+          >
             {MODEL_TYPES.map((t) => (
               <option key={t.value} value={t.value}>
                 {t.label} ({t.ext})
               </option>
             ))}
           </select>
-        </label>
+        </div>
 
-        <label className="import__field">
-          <span>Path to a {typeInfo.ext} file, or a download link</span>
+        <div className="import__field">
+          <span>
+            <label htmlFor={pathId}>Path to a {typeInfo.ext} file, or a download link</label>
+            <HelpHint area="models" setting="import-path" describes={pathId} />
+          </span>
           <input
+            id={pathId}
             type="text"
             value={path}
             placeholder={
@@ -651,7 +674,7 @@ function ImportForm({
             onChange={(e) => setPath(e.target.value)}
             spellCheck={false}
           />
-        </label>
+        </div>
 
         {isChat && (
           <div className="import__roles">
@@ -665,14 +688,18 @@ function ImportForm({
         )}
 
         {!isLink && (
-          <label className="chip">
-            <input
-              type="checkbox"
-              checked={keepOriginal}
-              onChange={(e) => setKeepOriginal(e.target.checked)}
-            />
-            keep the original file (copy instead of move)
-          </label>
+          <span className="import__keep">
+            <span className="chip">
+              <input
+                id={keepId}
+                type="checkbox"
+                checked={keepOriginal}
+                onChange={(e) => setKeepOriginal(e.target.checked)}
+              />
+              <label htmlFor={keepId}>keep the original file (copy instead of move)</label>
+            </span>
+            <HelpHint area="models" setting="keep-original" describes={keepId} />
+          </span>
         )}
 
         <button type="submit" disabled={busy || !trimmed}>

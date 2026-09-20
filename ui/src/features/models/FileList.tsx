@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
+import { HelpHint } from "../../components/HelpHint";
 import { enqueueDownload, type ModelType, type RegistryFile } from "../../lib/ipc";
 import { formatGB } from "../../lib/units";
 import { FitBadge } from "./FitBadge";
@@ -50,6 +51,7 @@ export function FileList({
   emptyNote: string;
 }) {
   const [hideTooBig, setHideTooBig] = useState(false);
+  const hideId = useId();
 
   if (files.length === 0) return <p className="muted">{emptyNote}</p>;
 
@@ -66,14 +68,18 @@ export function FileList({
         {/* Only offered when there is actually something to hide — an inert
             checkbox on a list where every file fits is just noise. */}
         {counts.red > 0 && (
-          <label className="chip filelist__filter">
-            <input
-              type="checkbox"
-              checked={hideTooBig}
-              onChange={(e) => setHideTooBig(e.target.checked)}
-            />
-            Hide files that won’t fit
-          </label>
+          <span className="filelist__filter">
+            <span className="chip">
+              <input
+                id={hideId}
+                type="checkbox"
+                checked={hideTooBig}
+                onChange={(e) => setHideTooBig(e.target.checked)}
+              />
+              <label htmlFor={hideId}>Hide files that won’t fit</label>
+            </span>
+            <HelpHint area="models" setting="hide-too-big" describes={hideId} />
+          </span>
         )}
       </div>
 
@@ -115,7 +121,11 @@ export function FileList({
  *  a "Danger" verdict to silently block, same as trusting a "Success"
  *  verdict to silently allow, would both mean trusting Civitai's own
  *  self-report instead of AIWM's own check. Showing the verdict lets the
- *  user make an informed choice; the guard is what actually protects them. */
+ *  user make an informed choice; the guard is what actually protects them.
+ *
+ *  What the badge means is real (visually-hidden) text, not a `title=`
+ *  tooltip — a tooltip never reaches keyboard or touch users. The full
+ *  explanation is the `scan` entry of the Models help. */
 function ScanBadge({ pickle, virus }: { pickle: string | null; virus: string | null }) {
   if (!pickle && !virus) return null;
   const issues = [
@@ -125,19 +135,21 @@ function ScanBadge({ pickle, virus }: { pickle: string | null; virus: string | n
 
   if (issues.length > 0) {
     return (
-      <span
-        className="badge badge--warn"
-        title={`Civitai's own malware scan flagged this file (${issues.join(
-          ", ",
-        )}). AIWM's own import guard still applies regardless — review before downloading.`}
-      >
-        ⚠ {issues.join(", ")}
+      <span className="badge badge--warn">
+        <span aria-hidden="true">⚠ </span>
+        {issues.join(", ")}
+        <span className="visually-hidden">
+          {" "}
+          — Civitai's own malware scan flagged this file; AIWM's import guard still applies.
+          Review before downloading.
+        </span>
       </span>
     );
   }
   return (
-    <span className="discover__scanok" title="Civitai's own malware scan: clean (pickle + virus)">
+    <span className="discover__scanok">
       scan ok
+      <span className="visually-hidden"> — Civitai's own malware scan: clean (pickle and virus)</span>
     </span>
   );
 }

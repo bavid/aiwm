@@ -119,7 +119,7 @@ export function PromptPresetPicker({
                   <button
                     type="button"
                     className="preset-picker__icon"
-                    title="Edit"
+                    aria-label={`Edit preset ${p.name}`}
                     onClick={() => startEdit(p.id, p.name, p.text)}
                   >
                     ✎
@@ -127,7 +127,7 @@ export function PromptPresetPicker({
                   <button
                     type="button"
                     className="preset-picker__icon preset-picker__icon--danger"
-                    title="Delete"
+                    aria-label={`Delete preset ${p.name}`}
                     onClick={() => remove(p.id)}
                   >
                     ×

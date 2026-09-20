@@ -562,6 +562,10 @@ export function CurationBoard({
     !drag || drag.source === column ? "none" : dropHover === column ? "hover" : "target";
 
   return (
+    // The board catches the K / D / Delete / Escape shortcuts bubbling up
+    // from its focusable cards; every one of them is also a real button in
+    // the selection bar (jsx-a11y's documented container exception).
+    // eslint-disable-next-line jsx-a11y/no-static-element-interactions
     <div className="curation" ref={boardRef} tabIndex={-1} onKeyDown={onKeyDown}>
       {frames.length > 0 && (
         <SelectionBar

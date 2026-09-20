@@ -1,4 +1,4 @@
-import { useId } from "react";
+import { useId, type ReactNode } from "react";
 import type { Captioner, ModelStack } from "../../lib/ipc";
 import { formatGiB } from "../../lib/units";
 import { StackInstall, type Unusable } from "../models/StackInstall";
@@ -129,16 +129,26 @@ export function CaptionerPicker({
   settling,
   onInstall,
   onMoreCaptioners,
+  hint,
 }: InstallProps & {
   captioners: readonly Captioner[];
   selectedId: string | null;
   onSelect: (id: string) => void;
+  /** The `?` help hint for the choice; sits next to the group's caption. */
+  hint?: ReactNode;
 }) {
   const group = useId();
+  const captionId = useId();
 
+  // A labelled radiogroup rather than fieldset/legend: the hint next to the
+  // caption is a button, and inside a <legend> its name would become part of
+  // the group's name.
   return (
-    <fieldset className="captioner-picker">
-      <legend>Describe with</legend>
+    <div className="captioner-picker" role="radiogroup" aria-labelledby={captionId}>
+      <div className="captioner-picker__caption">
+        <span id={captionId}>Describe with</span>
+        {hint}
+      </div>
       {captioners.map((c) => {
         const meta = `${c.style === "tags" ? "tags" : "prose"} · ${runsOn(c)} · ${c.license}`;
         if (c.known_issue) {
@@ -196,6 +206,6 @@ export function CaptionerPicker({
           </div>
         );
       })}
-    </fieldset>
+    </div>
   );
 }

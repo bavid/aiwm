@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { HelpHint } from "../../components/HelpHint";
 import {
   cancelDownload,
   clearFinishedDownloads,
@@ -52,7 +53,9 @@ export function Downloads() {
     <section className="card card--wide">
       <header className="card__head">
         <h2>Downloads</h2>
-        <span className="card__sub">one at a time · verified, then imported</span>
+        <span className="card__sub">
+          one at a time · verified, then imported <HelpHint area="models" setting="downloads" />
+        </span>
         {finishedCount > 0 && (
           <button type="button" className="chip" onClick={clearFinished} disabled={clearing}>
             {clearing ? "Clearing…" : `Clear finished (${finishedCount})`}

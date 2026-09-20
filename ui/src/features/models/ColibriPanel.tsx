@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { HelpHint } from "../../components/HelpHint";
 import { useRuntimes, useTelemetry } from "../../lib/hooks";
 import {
   installColibri,
@@ -36,7 +37,9 @@ export function ColibriPanel() {
     <section className="card card--wide">
       <header className="card__head">
         <h2>Colibri (large local models)</h2>
-        <span className="card__sub">{colibri?.detail ?? "not installed"}</span>
+        <span className="card__sub">
+          {colibri?.detail ?? "not installed"} <HelpHint area="models" setting="colibri" />
+        </span>
       </header>
 
       {!installed && <InstallRow />}

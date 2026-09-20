@@ -1,4 +1,5 @@
 import { useId, useState } from "react";
+import { HelpHint } from "../../components/HelpHint";
 import { openFolder, useFolderPicker } from "../../lib/browse";
 import type { AboutInfo, PathsUpdate, StorageLocation } from "../../lib/ipc";
 import { useStorageLocations } from "../../lib/storage-locations";
@@ -114,7 +115,9 @@ export function DataLocations({
     <section className="card set-group" aria-labelledby="data-locations-title">
       <header className="card__head">
         <h2 id="data-locations-title">Data locations</h2>
-        <span className="card__sub">restart to apply</span>
+        <span className="card__sub">
+          restart to apply <HelpHint area="settings" setting="data-locations" />
+        </span>
       </header>
       <div className="loc-intro">
         <p className="muted">
@@ -219,19 +222,22 @@ function LocationRow({
       </div>
 
       <div className="loc__where">
-        <code className="loc__path" title={path}>
-          {path}
-        </code>
+        <code className="loc__path">{path}</code>
         <button
           type="button"
           className="loc-btn"
           disabled={!exists}
-          title={exists ? undefined : "The folder has not been created yet"}
           aria-label={`Open folder: ${label}`}
+          aria-describedby={exists ? undefined : `${inputId}-missing`}
           onClick={() => onReveal(path)}
         >
           Open folder
         </button>
+        {!exists && (
+          <span id={`${inputId}-missing`} className="visually-hidden">
+            The folder has not been created yet.
+          </span>
+        )}
       </div>
 
       <DriveBar measured={measured} />

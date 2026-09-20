@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { HelpHint } from "../../components/HelpHint";
 import { useStorage } from "../../lib/hooks";
 import { deleteModel, type ModelDisk } from "../../lib/ipc";
 import { formatGB } from "../../lib/units";
@@ -27,12 +28,21 @@ export function StoragePanel() {
         <h2>Storage</h2>
         <span className="card__sub numeric">
           {formatGB(store_bytes)} in models
-          {volume_free_bytes != null && ` · ${formatGB(volume_free_bytes)} free on the store volume`}
+          {volume_free_bytes != null && ` · ${formatGB(volume_free_bytes)} free on the store volume`}{" "}
+          <HelpHint area="models" setting="storage" />
         </span>
       </header>
 
       {pct != null && (
-        <div className="st__bar" title={`store models take ~${pct.toFixed(1)}% of the volume`}>
+        <div
+          className="st__bar"
+          role="meter"
+          aria-label="Share of the store volume taken by models"
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={Math.round(pct)}
+          aria-valuetext={`about ${pct.toFixed(1)}% of the volume`}
+        >
           <div className="st__bar-fill" style={{ width: `${Math.min(100, pct)}%` }} />
         </div>
       )}

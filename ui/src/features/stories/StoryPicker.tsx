@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useId, useState } from "react";
+import { HelpHint } from "../../components/HelpHint";
 import { createStory, deleteStory, updateStory, type Story, type StoryBody } from "../../lib/ipc";
 
 const BLANK: StoryBody = { name: "", setting: "", art_style: "", premise: "" };
@@ -20,6 +21,7 @@ export function StoryPicker({
 }) {
   const [mode, setMode] = useState<"idle" | "creating" | "editing">("idle");
   const [draft, setDraft] = useState<StoryBody>(BLANK);
+  const selectId = useId();
 
   const current = (stories ?? []).find((s) => s.id === activeId) ?? null;
 
@@ -75,24 +77,28 @@ export function StoryPicker({
       <div className="story-picker story-picker--editing">
         <input
           autoFocus
+          aria-label="Story name"
           value={draft.name}
           onChange={(e) => setDraft({ ...draft, name: e.target.value })}
           placeholder="Story name"
           spellCheck={false}
         />
         <input
+          aria-label="Setting / era"
           value={draft.setting}
           onChange={(e) => setDraft({ ...draft, setting: e.target.value })}
           placeholder="Setting / era"
           spellCheck={false}
         />
         <input
+          aria-label="Art style"
           value={draft.art_style}
           onChange={(e) => setDraft({ ...draft, art_style: e.target.value })}
           placeholder="Art style"
           spellCheck={false}
         />
         <textarea
+          aria-label="Premise"
           value={draft.premise}
           onChange={(e) => setDraft({ ...draft, premise: e.target.value })}
           placeholder="Premise -- a paragraph or two about what this story is about"
@@ -101,7 +107,7 @@ export function StoryPicker({
         <button type="button" className="story-picker__save" onClick={save} disabled={!draft.name.trim()}>
           Save
         </button>
-        <button type="button" className="story-picker__icon" onClick={cancel} title="Cancel">
+        <button type="button" className="story-picker__icon" onClick={cancel} aria-label="Cancel">
           ×
         </button>
       </div>
@@ -110,7 +116,12 @@ export function StoryPicker({
 
   return (
     <div className="story-picker">
-      <select value={activeId ?? ""} onChange={(e) => onChange(e.target.value || null)}>
+      <select
+        id={selectId}
+        aria-label="Story"
+        value={activeId ?? ""}
+        onChange={(e) => onChange(e.target.value || null)}
+      >
         <option value="">Choose a story…</option>
         {(stories ?? []).map((s: Story) => (
           <option key={s.id} value={s.id}>
@@ -118,19 +129,25 @@ export function StoryPicker({
           </option>
         ))}
       </select>
-      <button type="button" className="story-picker__icon" onClick={startCreate} title="New story">
+      <HelpHint area="stories" setting="story" describes={selectId} />
+      <button type="button" className="story-picker__icon" onClick={startCreate} aria-label="New story">
         +
       </button>
       {current && (
         <>
-          <button type="button" className="story-picker__icon" onClick={startEdit} title="Edit story">
+          <button
+            type="button"
+            className="story-picker__icon"
+            onClick={startEdit}
+            aria-label={`Edit story ${current.name}`}
+          >
             ✎
           </button>
           <button
             type="button"
             className="story-picker__icon story-picker__icon--danger"
             onClick={remove}
-            title="Delete story"
+            aria-label={`Delete story ${current.name}`}
           >
             ×
           </button>

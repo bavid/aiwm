@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
+import { HelpHint } from "../../components/HelpHint";
 import { useCivitaiSearch, useModels, useRegistrySearch } from "../../lib/hooks";
 import {
   cancelJob,
@@ -121,6 +122,9 @@ export function Discover({ onUseType }: { onUseType: (t: ModelType) => void }) {
   const [source, setSource] = useState<DiscoverSource>("huggingface");
   const [aiMode, setAiMode] = useState(false);
   const [query, setQuery] = useState("");
+  const ids = useId();
+  const sourceGroupId = `${ids}-source`;
+  const aiModeId = `${ids}-ai`;
 
   const subtitle =
     source === "civitai"
@@ -136,27 +140,43 @@ export function Discover({ onUseType }: { onUseType: (t: ModelType) => void }) {
         <span className="card__sub">{subtitle}</span>
       </header>
 
-      <div className="catalog__tabs" role="tablist" aria-label="Discover source">
-        {SOURCES.map((s) => (
-          <button
-            key={s.value}
-            type="button"
-            role="tab"
-            aria-selected={source === s.value}
-            className={`chip ${source === s.value ? "chip--on" : ""}`}
-            onClick={() => setSource(s.value)}
-          >
-            {s.label}
-          </button>
-        ))}
+      <div className="discover__sources">
+        <div
+          id={sourceGroupId}
+          className="catalog__tabs"
+          role="tablist"
+          aria-label="Discover source"
+        >
+          {SOURCES.map((s) => (
+            <button
+              key={s.value}
+              type="button"
+              role="tab"
+              aria-selected={source === s.value}
+              className={`chip ${source === s.value ? "chip--on" : ""}`}
+              onClick={() => setSource(s.value)}
+            >
+              {s.label}
+            </button>
+          ))}
+        </div>
+        <HelpHint area="models" setting="source" describes={sourceGroupId} />
       </div>
 
       {source === "huggingface" && (
         <>
-          <label className="chip discover__aitoggle">
-            <input type="checkbox" checked={aiMode} onChange={(e) => setAiMode(e.target.checked)} />
-            Ask my local model to rank &amp; explain
-          </label>
+          <span className="discover__aitoggle">
+            <span className="chip">
+              <input
+                id={aiModeId}
+                type="checkbox"
+                checked={aiMode}
+                onChange={(e) => setAiMode(e.target.checked)}
+              />
+              <label htmlFor={aiModeId}>Ask my local model to rank &amp; explain</label>
+            </span>
+            <HelpHint area="models" setting="ai-rank" describes={aiModeId} />
+          </span>
 
           {aiMode ? (
             <AiSearch query={query} setQuery={setQuery} />
@@ -183,6 +203,9 @@ function PlainSearch({
 }) {
   const [gguf, setGguf] = useState(true);
   const [sort, setSort] = useState<NonNullable<RegistrySearchParams["sort"]>>("downloads");
+  const ids = useId();
+  const ggufId = `${ids}-gguf`;
+  const sortId = `${ids}-sort`;
 
   const trimmed = query.trim();
   const enabled = trimmed.length >= 2;
@@ -206,22 +229,35 @@ function PlainSearch({
         <input
           type="text"
           className="discover__search"
+          aria-label="Search Hugging Face"
           value={query}
           placeholder="qwen2.5 coder, flux, whisper…"
           spellCheck={false}
           onChange={(e) => setQuery(e.target.value)}
         />
-        <label className="chip">
-          <input type="checkbox" checked={gguf} onChange={(e) => setGguf(e.target.checked)} />
-          GGUF only
-        </label>
-        <select value={sort} onChange={(e) => setSort(e.target.value as typeof sort)}>
+        <span className="chip">
+          <input
+            id={ggufId}
+            type="checkbox"
+            checked={gguf}
+            onChange={(e) => setGguf(e.target.checked)}
+          />
+          <label htmlFor={ggufId}>GGUF only</label>
+        </span>
+        <HelpHint area="models" setting="gguf-only" describes={ggufId} />
+        <select
+          id={sortId}
+          aria-label="Sort"
+          value={sort}
+          onChange={(e) => setSort(e.target.value as typeof sort)}
+        >
           {SORTS.map((s) => (
             <option key={s.value} value={s.value}>
               {s.label}
             </option>
           ))}
         </select>
+        <HelpHint area="models" setting="sort" describes={sortId} />
       </div>
 
       {!enabled && recent.length > 0 && (
@@ -263,6 +299,9 @@ function AiSearch({ query, setQuery }: { query: string; setQuery: (q: string) =>
 
   const [kind, setKind] = useState<RecommendKind>("chat");
   const [reasonerId, setReasonerId] = useState("auto");
+  const ids = useId();
+  const kindId = `${ids}-kind`;
+  const reasonerFieldId = `${ids}-reasoner`;
   const [pendingId, setPendingId] = useState<string | null>(null);
   const [report, setReport] = useState<RecommendReport | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -338,22 +377,30 @@ function AiSearch({ query, setQuery }: { query: string; setQuery: (q: string) =>
         <input
           type="text"
           className="discover__search"
+          aria-label="What are you looking for"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           placeholder="e.g. realistic uncensored nsfw, or best local coding model"
           spellCheck
         />
-        <select value={kind} onChange={(e) => setKind(e.target.value as RecommendKind)}>
+        <select
+          id={kindId}
+          aria-label="Kind of model"
+          value={kind}
+          onChange={(e) => setKind(e.target.value as RecommendKind)}
+        >
           {RECOMMEND_KINDS.map((k) => (
             <option key={k.value} value={k.value}>
               {k.label}
             </option>
           ))}
         </select>
+        <HelpHint area="models" setting="kind" describes={kindId} />
         <select
+          id={reasonerFieldId}
           value={reasonerId}
           onChange={(e) => setReasonerId(e.target.value)}
-          title="Which local model reasons about the results"
+          aria-label="Which local model reasons about the results"
         >
           <option value="auto">Auto (most-recently-used)</option>
           {reasonerModels.map((m) => (
@@ -362,6 +409,7 @@ function AiSearch({ query, setQuery }: { query: string; setQuery: (q: string) =>
             </option>
           ))}
         </select>
+        <HelpHint area="models" setting="reasoner" describes={reasonerFieldId} />
         <button type="submit" disabled={!query.trim() || !!pendingId}>
           {pendingId ? "Searching…" : "Search"}
         </button>
@@ -445,6 +493,7 @@ function CivitaiSearch({ onUseType }: { onUseType: (t: ModelType) => void }) {
   // NSFW content is common and explicitly tagged, unlike Hugging Face. The
   // user must tick this themselves to see it.
   const [nsfw, setNsfw] = useState(false);
+  const nsfwId = useId();
 
   const trimmed = query.trim();
   const searchParams = useMemo<CivitaiSearchParams>(
@@ -463,6 +512,7 @@ function CivitaiSearch({ onUseType }: { onUseType: (t: ModelType) => void }) {
         <input
           type="text"
           className="discover__search"
+          aria-label="Search Civitai"
           value={query}
           placeholder="pony, realistic, anime style…"
           spellCheck={false}
@@ -478,20 +528,27 @@ function CivitaiSearch({ onUseType }: { onUseType: (t: ModelType) => void }) {
             {t.label}
           </label>
         ))}
-        <select value={sort} onChange={(e) => setSort(e.target.value as typeof sort)}>
+        <select
+          aria-label="Sort"
+          value={sort}
+          onChange={(e) => setSort(e.target.value as typeof sort)}
+        >
           {CIVITAI_SORTS.map((s) => (
             <option key={s.value} value={s.value}>
               {s.label}
             </option>
           ))}
         </select>
-        <label
-          className="chip"
-          title="Off by default — Civitai is an open upload platform where NSFW content is common, unlike Hugging Face"
-        >
-          <input type="checkbox" checked={nsfw} onChange={(e) => setNsfw(e.target.checked)} />
-          Show NSFW
-        </label>
+        <span className="chip">
+          <input
+            id={nsfwId}
+            type="checkbox"
+            checked={nsfw}
+            onChange={(e) => setNsfw(e.target.checked)}
+          />
+          <label htmlFor={nsfwId}>Show NSFW</label>
+        </span>
+        <HelpHint area="models" setting="nsfw" describes={nsfwId} />
       </div>
 
       {loading && !result && <p className="muted">Searching…</p>}
