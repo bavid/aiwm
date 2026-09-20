@@ -468,7 +468,15 @@ mod tests {
         assert!(paths.logs_dir().is_dir());
         assert!(paths.config_file().is_file());
         assert!(paths.db_file().is_file());
-        assert_eq!(app.config, Config::default());
+        // Defaults, except that a fresh data root keeps its model store inside
+        // itself rather than adopting the machine-wide default path.
+        assert_eq!(
+            app.config,
+            Config {
+                store_path: paths.root().join("models"),
+                ..Config::default()
+            }
+        );
     }
 
     #[tokio::test]

@@ -2453,6 +2453,7 @@ export function installDevMock(): void {
           rate_limited_secs: null,
           token_set: HF_TOKEN.length > 0,
           cache_entries: 3,
+          base_url: "https://huggingface.co",
         };
       case "set_hf_token":
         HF_TOKEN = String(a.token ?? "").trim();
@@ -2465,6 +2466,10 @@ export function installDevMock(): void {
           rate_limited_secs: null,
           token_set: CIVITAI_TOKEN.length > 0,
           cache_entries: 0,
+          base_url:
+            (CONFIG as { civitai: { front_door: string } }).civitai.front_door === "red"
+              ? "https://civitai.red"
+              : "https://civitai.com",
         };
       case "set_civitai_token":
         CIVITAI_TOKEN = String(a.token ?? "").trim();

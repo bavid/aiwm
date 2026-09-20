@@ -1,7 +1,7 @@
 import { useEffect, useId, useMemo, useState } from "react";
 import { HelpHint } from "../../components/HelpHint";
 import { Lightbox } from "../../components/Lightbox";
-import { useCivitaiSearch, useModels, useRegistrySearch } from "../../lib/hooks";
+import { useCivitaiSearch, useCivitaiStatus, useModels, useRegistrySearch } from "../../lib/hooks";
 import {
   cancelJob,
   civitaiModel,
@@ -514,6 +514,12 @@ function CivitaiSearch({ onUseType }: { onUseType: (t: ModelType) => void }) {
   const [nsfw, setNsfw] = useState(false);
   const nsfwId = useId();
 
+  // Which front door this app is on (Settings → Network & API). The model
+  // page lives on the same host, and an adult model is not on the
+  // safe-for-work one, so linking there would 404 for the user.
+  const civitaiStatus = useCivitaiStatus();
+  const host = civitaiStatus.data?.base_url || "https://civitai.com";
+
   const trimmed = query.trim();
   const linkedId = directModelId(trimmed);
   const [linked, setLinked] = useState<RegistryDetails | null>(null);
@@ -626,10 +632,17 @@ function CivitaiSearch({ onUseType }: { onUseType: (t: ModelType) => void }) {
                 model={linked}
                 onUseType={onUseType}
                 showNsfw={nsfw}
+                host={host}
               />
             )
           : result?.data.map((m) => (
-              <CivitaiResultCard key={m.id} model={m} onUseType={onUseType} showNsfw={nsfw} />
+              <CivitaiResultCard
+                key={m.id}
+                model={m}
+                onUseType={onUseType}
+                showNsfw={nsfw}
+                host={host}
+              />
             ))}
       </ul>
     </>
@@ -700,11 +713,15 @@ function CivitaiResultCard({
   model,
   onUseType,
   showNsfw,
+  host,
 }: {
   model: RemoteModel;
   onUseType: (t: ModelType) => void;
   /** Whether the search that produced this row is showing adult content. */
   showNsfw: boolean;
+  /** The front door the app is configured for — the model page lives on the
+   *  same host, and an adult model is not on the safe-for-work one. */
+  host: string;
 }) {
   const [open, setOpen] = useState(false);
   const [details, setDetails] = useState<RegistryDetails | null>(null);
@@ -744,7 +761,7 @@ function CivitaiResultCard({
       <div className="discover__main">
         <div className="discover__title">
           <a
-            href={`https://civitai.com/models/${model.id}`}
+            href={`${host}/models/${model.id}`}
             target="_blank"
             rel="noopener noreferrer"
           >
