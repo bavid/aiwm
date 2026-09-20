@@ -1,3 +1,8 @@
+/* The Chat tab's own two-column page. The list inside it is the shared
+   `SessionSidebar` (session-sidebar.css), which Image and Video dock too;
+   only this layout is Chat's own, because the conversation column owns the
+   full window height and puts its composer at the bottom. */
+
 .chat-page {
   display: flex;
   height: 100%;
@@ -12,7 +17,7 @@
   min-height: 0;
 }
 
-.chat-page__sidebar > .chat-sidebar {
+.chat-page__sidebar > .session-sidebar {
   flex: 1;
   min-height: 0;
 }
@@ -20,147 +25,4 @@
 .chat-page__sidebar-hint {
   margin: 0;
   padding: var(--space-2) var(--space-4) 0 0;
-}
-
-.chat-sidebar {
-  width: 220px;
-  flex: none;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-  padding-right: var(--space-4);
-  border-right: 1px solid var(--border);
-  overflow-y: auto;
-}
-
-.chat-sidebar__new {
-  padding: var(--space-2) var(--space-3);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--surface-2);
-  color: var(--text);
-  font: inherit;
-  font-weight: 600;
-  cursor: pointer;
-  text-align: left;
-}
-
-.chat-sidebar__new:hover {
-  border-color: var(--accent);
-  color: var(--accent);
-}
-
-.chat-sidebar__list {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  min-height: 0;
-  overflow-y: auto;
-}
-
-.chat-sidebar__row {
-  display: flex;
-  align-items: center;
-  border-radius: var(--radius-sm);
-}
-
-.chat-sidebar__row:hover {
-  background: var(--surface-2);
-}
-
-.chat-sidebar__row--active {
-  background: var(--surface-2);
-}
-
-.chat-sidebar__row--active .chat-sidebar__select {
-  color: var(--accent);
-}
-
-.chat-sidebar__select {
-  flex: 1;
-  min-width: 0;
-  padding: var(--space-2);
-  border: none;
-  background: transparent;
-  color: var(--text);
-  font: inherit;
-  font-size: var(--text-sm);
-  text-align: left;
-  cursor: pointer;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.chat-sidebar__icon {
-  flex: none;
-  padding: 2px var(--space-1);
-  border: none;
-  background: transparent;
-  color: var(--muted);
-  cursor: pointer;
-  font-size: var(--text-xs);
-  opacity: 0;
-}
-
-.chat-sidebar__row:hover .chat-sidebar__icon {
-  opacity: 1;
-}
-
-.chat-sidebar__icon:hover {
-  color: var(--text);
-}
-
-.chat-sidebar__icon--danger:hover {
-  color: var(--load-crit);
-}
-
-.chat-sidebar__rename-input {
-  flex: 1;
-  min-width: 0;
-  margin: 1px;
-  padding: var(--space-1) var(--space-2);
-  border: 1px solid var(--accent);
-  border-radius: var(--radius-sm);
-  background: var(--surface-2);
-  color: var(--text);
-  font: inherit;
-  font-size: var(--text-sm);
-}
-
-.chat-sidebar__archived-toggle {
-  padding: var(--space-1) var(--space-2);
-  border: none;
-  background: transparent;
-  color: var(--muted);
-  font-size: var(--text-xs);
-  text-align: left;
-  cursor: pointer;
-}
-
-.chat-sidebar__archived-toggle:hover {
-  color: var(--text);
-}
-
-/* Deliberately the least visually prominent thing in this sidebar -- a link,
-   not a section with its own header, since a bold "Ungrouped" heading is
-   exactly what this sidebar exists to get away from. */
-.chat-sidebar__unsorted {
-  margin-top: auto;
-  padding-top: var(--space-2);
-  border-top: 1px solid var(--border);
-}
-
-.chat-sidebar__unsorted button {
-  padding: var(--space-1) var(--space-2);
-  border: none;
-  background: transparent;
-  color: var(--muted);
-  font-size: var(--text-xs);
-  cursor: pointer;
-}
-
-.chat-sidebar__unsorted button:hover,
-.chat-sidebar__unsorted button[aria-pressed="true"] {
-  color: var(--text);
 }

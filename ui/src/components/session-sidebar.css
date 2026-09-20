@@ -1,0 +1,208 @@
+/* The shared session list (components/SessionSidebar.tsx) plus the
+   two-column page it docks into. The Chat tab keeps its own `.chat-page`
+   copy of that layout (components/chat-session-sidebar.css) because its
+   conversation column owns the full window height; Image and Video use the
+   `.session-page` classes below and simply grow with their gallery. */
+
+.session-page {
+  display: flex;
+  gap: var(--space-4);
+}
+
+/* The session list plus the `?` hint under it, as one column. The rule that
+   divides the two columns sits on this wrapper rather than on the list, so it
+   runs the whole height of a studio page (which is as tall as its gallery)
+   while the list itself stays at the top, next to the form. */
+.session-page__sidebar {
+  display: flex;
+  flex-direction: column;
+  flex: none;
+  min-height: 0;
+  padding-right: var(--space-4);
+  border-right: 1px solid var(--border);
+}
+
+.session-page__sidebar .session-sidebar {
+  padding-right: 0;
+  border-right: none;
+}
+
+/* Bottom-pinning the link needs a full-height list; here it follows the list
+   instead, so it is never a screenful below the sessions it belongs to. */
+.session-page .session-sidebar__unsorted {
+  margin-top: 0;
+}
+
+.session-page__sidebar-hint {
+  margin: 0;
+  padding: var(--space-2) 0 0;
+}
+
+.session-sidebar {
+  width: 220px;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding-right: var(--space-4);
+  border-right: 1px solid var(--border);
+  overflow-y: auto;
+}
+
+.session-sidebar__new {
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--text);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: left;
+}
+
+.session-sidebar__new:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.session-sidebar__list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.session-sidebar__row {
+  display: flex;
+  align-items: center;
+  border-radius: var(--radius-sm);
+}
+
+.session-sidebar__row:hover {
+  background: var(--surface-2);
+}
+
+.session-sidebar__row--active {
+  background: var(--surface-2);
+}
+
+.session-sidebar__row--active .session-sidebar__select {
+  color: var(--accent);
+}
+
+.session-sidebar__select {
+  flex: 1;
+  min-width: 0;
+  padding: var(--space-2);
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: var(--text-sm);
+  text-align: left;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.session-sidebar__icon {
+  flex: none;
+  padding: 2px var(--space-1);
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: var(--text-xs);
+  opacity: 0;
+}
+
+.session-sidebar__row:hover .session-sidebar__icon {
+  opacity: 1;
+}
+
+/* Keyboard users never hover: without this the rename/archive/delete buttons
+   would be focusable but invisible. */
+.session-sidebar__icon:focus-visible {
+  opacity: 1;
+}
+
+.session-sidebar__icon:hover {
+  color: var(--text);
+}
+
+.session-sidebar__icon--danger:hover {
+  color: var(--load-crit);
+}
+
+.session-sidebar__rename-input {
+  flex: 1;
+  min-width: 0;
+  margin: 1px;
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--text-sm);
+}
+
+.session-sidebar__archived-toggle {
+  padding: var(--space-1) var(--space-2);
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  text-align: left;
+  cursor: pointer;
+}
+
+.session-sidebar__archived-toggle:hover {
+  color: var(--text);
+}
+
+/* Deliberately the least visually prominent thing in this sidebar -- a link,
+   not a section with its own header, since a bold "Ungrouped" heading is
+   exactly what this sidebar exists to get away from. */
+.session-sidebar__unsorted {
+  margin-top: auto;
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--border);
+}
+
+.session-sidebar__unsorted button {
+  padding: var(--space-1) var(--space-2);
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+
+.session-sidebar__unsorted button:hover,
+.session-sidebar__unsorted button[aria-pressed="true"] {
+  color: var(--text);
+}
+
+/* Narrow window: the same breakpoint the studios fold their two columns at
+   (features/image/image.css). Scoped to `.session-page`, so the Chat tab's
+   own column keeps its full-height sidebar. */
+@media (max-width: 860px) {
+  .session-page {
+    flex-direction: column;
+  }
+
+  .session-page__sidebar {
+    padding-right: 0;
+    padding-bottom: var(--space-2);
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .session-page__sidebar .session-sidebar {
+    width: auto;
+  }
+}

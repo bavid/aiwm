@@ -8,7 +8,10 @@ import { NumField } from "../../components/NumField";
 import { PromptAssistant } from "../../components/PromptAssistant";
 import { PromptPresetPicker } from "../../components/PromptPresetPicker";
 import { QueueList } from "../../components/QueueList";
-import { SessionSwitcher } from "../../components/SessionSwitcher";
+import {
+  SessionSidebar,
+  type SessionSidebarLabels,
+} from "../../components/SessionSidebar";
 import { VramEstimateHint } from "../../components/VramEstimateHint";
 import {
   useAbout,
@@ -16,6 +19,7 @@ import {
   useJobs,
   useModels,
   useRuntimes,
+  useSessions,
   useTelemetry,
 } from "../../lib/hooks";
 import {
@@ -52,6 +56,19 @@ const MAX_STEPS = 60;
 const EASY_PIXELS = 832 * 480;
 const EASY_FRAMES = 81;
 
+/** The Video tab's wording on the shared session sidebar (the same list the
+ *  Chat tab docks). */
+const SESSION_LABELS: SessionSidebarLabels = {
+  create: "+ New session",
+  createdName: "New session",
+  empty: "No sessions yet.",
+  confirmDelete: (name) =>
+    `Delete “${name}”?
+
+Its clips stay in your history, just ungrouped.`,
+  unsorted: "Ungrouped clips",
+};
+
 const PRESETS = [
   { label: "Landscape", w: 832, h: 480 },
   { label: "Portrait", w: 480, h: 832 },
@@ -83,6 +100,7 @@ export function VideoStudio() {
   const { data: runtimes } = useRuntimes();
   const { data: jobs } = useJobs();
   const { telemetry } = useTelemetry();
+  const { data: sessions, refetch: refetchSessions } = useSessions("video");
 
   const videoModels = (models ?? []).filter((m) => m.roles.includes("base_video"));
   const hasEncoder = (models ?? []).some(
@@ -122,6 +140,7 @@ export function VideoStudio() {
   const seedId = `${ids}-seed`;
   const modelPickId = `${ids}-model`;
   const estimateId = `${ids}-estimate`;
+  const sidebarId = `${ids}-sessions`;
 
   const [pendingId, setPendingId] = useState<string | null>(null);
   const [detail, setDetail] = useState<JobDetail | null>(null);
@@ -301,390 +320,405 @@ export function VideoStudio() {
   const canGenerate = !!prompt.trim() && (!pendingId || stuck) && comfyReady;
 
   return (
-    <div className="image">
-      <section className="card image__form">
-        <header className="card__head">
-          <h2>Generate a video</h2>
-          {modelId === "auto" && videoModels.length > 0 && (
-            <span className="card__sub">Auto · {videoModels.length} model(s)</span>
-          )}
-        </header>
-        <SessionSwitcher capability="video" activeId={sessionId} onChange={setSessionId} />
-
-        <fieldset className="startframe">
-          <legend>Start from an image (optional)</legend>
-          <div className="imgform__field">
-            <span>
-              <label htmlFor={startJobId}>A finished image</label>
-              <HelpHint area="video" setting="start-frame" describes={startJobId} />
-            </span>
-            <select id={startJobId} value={startJob} onChange={(e) => setStartJob(e.target.value)}>
-              <option value="none">None — text to video</option>
-              {imageJobs.map((j) => (
-                <option key={j.id} value={j.id}>
-                  {promptOf(j).slice(0, 48)}
-                </option>
-              ))}
-            </select>
-          </div>
-          <label className="imgform__field">
-            <span>…or an image file</span>
-            <div className="pathpick">
-              <input
-                type="text"
-                value={startPath}
-                onChange={(e) => setStartPath(e.target.value)}
-                placeholder="E:\\shots\\frame_01.png"
-                spellCheck={false}
-              />
-              <button type="button" className="chip" onClick={browseForImage}>
-                Browse…
-              </button>
-            </div>
-          </label>
-          {startImage && about && startPath.trim() === "" && (
-            <img
-              className="startframe__thumb"
-              src={jobOutputUrl(about.core_api_port, startImage)}
-              alt="start frame"
-              loading="lazy"
-            />
-          )}
-        </fieldset>
-
-        <PromptAssistant
-          kind="video"
-          sessionId={sessionId}
-          onApplyPrompt={(text) => setPrompt((p) => (p.trim() ? `${p.trim()}, ${text}` : text))}
-          onApplyNegative={(text) => setNegative((n) => (n.trim() ? `${n.trim()}, ${text}` : text))}
+    <div className="session-page">
+      <div className="session-page__sidebar" id={sidebarId}>
+        <SessionSidebar
+          capability="video"
+          labels={SESSION_LABELS}
+          activeId={sessionId}
+          onChange={setSessionId}
+          sessions={sessions}
+          onRefetch={refetchSessions}
+          nameOnCreate
         />
+        <p className="session-page__sidebar-hint">
+          <HelpHint area="video" setting="sessions" describes={sidebarId} />
+        </p>
+      </div>
+      <div className="image">
+        <section className="card image__form">
+          <header className="card__head">
+            <h2>Generate a video</h2>
+            {modelId === "auto" && videoModels.length > 0 && (
+              <span className="card__sub">Auto · {videoModels.length} model(s)</span>
+            )}
+          </header>
 
-
-        {!comfyReady && (
-          <p className="muted">ComfyUI is not set up yet — open Diagnostics to install it.</p>
-        )}
-        {comfyReady && models && videoModels.length === 0 && (
-          <p className="muted">
-            No video model yet — import <strong>Wan 2.2 TI2V-5B</strong> as a “Video model” on the
-            Models tab (it also needs the umt5 text encoder and the Wan VAE).
-          </p>
-        )}
-        {comfyReady && videoModels.length > 0 && (!hasEncoder || !hasVae) && (
-          <p className="muted">
-            Wan also needs {!hasEncoder && <>the <code>umt5</code> text encoder</>}
-            {!hasEncoder && !hasVae && " and "}
-            {!hasVae && <>its VAE (<code>wan2.2_vae</code>)</>} — import{" "}
-            {!hasEncoder && !hasVae ? "them" : "it"} on the Models tab.
-          </p>
-        )}
-
-        <form
-          className="imgform"
-          onSubmit={(e) => {
-            e.preventDefault();
-            generate();
-          }}
-        >
-          <label className="imgform__field">
-            <span>Prompt</span>
-            <textarea
-              value={prompt}
-              onChange={(e) => setPrompt(e.target.value)}
-              rows={3}
-              spellCheck
-              placeholder="a paper boat drifting down a rain-soaked street, slow dolly shot"
-            />
-          </label>
-          <PromptPresetPicker
-            kind="positive"
-            onApply={(text) => setPrompt((p) => (p.trim() ? `${p.trim()}, ${text}` : text))}
-          />
-
-          <label className="imgform__field">
-            <span>Negative prompt</span>
-            <textarea
-              value={negative}
-              onChange={(e) => setNegative(e.target.value)}
-              rows={2}
-              spellCheck
-              placeholder="blurry, jitter, warped faces, low quality"
-            />
-          </label>
-          <PromptPresetPicker
-            kind="negative"
-            onApply={(text) => setNegative((n) => (n.trim() ? `${n.trim()}, ${text}` : text))}
-          />
-
-          <div className="imgform__presets">
-            {PRESETS.map((p) => (
-              <button
-                key={p.label}
-                type="button"
-                className="chip"
-                aria-pressed={width === p.w && height === p.h}
-                onClick={() => {
-                  setWidth(p.w);
-                  setHeight(p.h);
-                }}
-              >
-                {p.label}
-              </button>
-            ))}
-          </div>
-
-          <div className="imgform__grid">
-            <NumField
-              label="Width"
-              value={width}
-              step={DIM_STEP}
-              min={MIN_DIM}
-              max={MAX_DIM}
-              onChange={setWidth}
-              hint={(id) => <HelpHint area="video" setting="size" describes={id} />}
-            />
-            <NumField label="Height" value={height} step={DIM_STEP} min={MIN_DIM} max={MAX_DIM} onChange={setHeight} />
-            <NumField
-              label="Frames"
-              value={frames}
-              step={4}
-              min={MIN_FRAMES}
-              max={MAX_FRAMES}
-              onChange={setFrames}
-              hint={(id) => <HelpHint area="video" setting="frames" describes={id} />}
-            />
-            <NumField
-              label="FPS"
-              value={fps}
-              step={1}
-              min={MIN_FPS}
-              max={MAX_FPS}
-              onChange={setFps}
-              hint={(id) => <HelpHint area="video" setting="fps" describes={id} />}
-            />
-            <NumField
-              label="Steps"
-              value={steps}
-              step={1}
-              min={1}
-              max={MAX_STEPS}
-              onChange={setSteps}
-              hint={(id) => <HelpHint area="video" setting="steps" describes={id} />}
-            />
-            <NumField
-              label="CFG"
-              value={cfg}
-              step={0.5}
-              min={1}
-              max={15}
-              onChange={setCfg}
-              hint={(id) => <HelpHint area="video" setting="cfg" describes={id} />}
-            />
-          </div>
-
-          <div className="imgform__grid">
+          <fieldset className="startframe">
+            <legend>Start from an image (optional)</legend>
             <div className="imgform__field">
               <span>
-                <label htmlFor={seedId}>Seed</label>
-                <HelpHint area="video" setting="seed" describes={seedId} />
+                <label htmlFor={startJobId}>A finished image</label>
+                <HelpHint area="video" setting="start-frame" describes={startJobId} />
               </span>
-              <input
-                id={seedId}
-                type="text"
-                inputMode="numeric"
-                value={seed}
-                onChange={(e) => setSeed(e.target.value.replace(/[^\d]/g, ""))}
-                placeholder="random"
-                spellCheck={false}
-              />
-            </div>
-            <div className="imgform__field imgform__field--wide">
-              <span>
-                <label htmlFor={modelPickId}>Model</label>
-                <HelpHint area="video" setting="model" describes={modelPickId} />
-              </span>
-              <select id={modelPickId} value={modelId} onChange={(e) => setModelId(e.target.value)}>
-                <option value="auto">Auto (most-recently-used)</option>
-                {videoModels.map((m) => (
-                  <option key={m.id} value={m.id}>
-                    {m.name}
+              <select id={startJobId} value={startJob} onChange={(e) => setStartJob(e.target.value)}>
+                <option value="none">None — text to video</option>
+                {imageJobs.map((j) => (
+                  <option key={j.id} value={j.id}>
+                    {promptOf(j).slice(0, 48)}
                   </option>
                 ))}
               </select>
             </div>
-          </div>
-          <VramEstimateHint
-            vramEstimateMb={videoModels.find((m) => m.id === modelId)?.vram_estimate_mb}
-            gpu={telemetry?.gpu}
-          />
-          <LoraPicker
-            models={models ?? []}
-            family={videoModels.find((m) => m.id === modelId)?.family}
-            selected={loras}
-            onChange={setLoras}
-          />
-
-          <p id={estimateId} className={heavy ? "video__note video__note--warn" : "video__note"}>
-            ~{clipSecs.toFixed(1)}s clip · very rough guess {estLo}–{estHi} min on a 16 GB card
-            (not yet calibrated). Video is slow — minutes, not seconds. The window stays usable
-            while it renders.
-            {heavy && " Above 480p / 81 frames is much slower and can run out of VRAM."}{" "}
-            <HelpHint area="video" setting="time-estimate" />
-          </p>
-
-          <button type="submit" className="imgform__go" disabled={!canGenerate}>
-            {pendingId && !stuck ? "Rendering…" : "Generate"}
-          </button>
-        </form>
-        {sendError && <p className="image__err">{sendError}</p>}
-      </section>
-
-      <div className="image__result">
-        <QueueList
-          jobType="video"
-          jobs={jobs ?? []}
-          modelNames={modelNames}
-          selectedId={selectedId}
-          onSelect={(id) => {
-            setSelectedId(id);
-            setDetail(null);
-          }}
-          onCancel={cancelJob}
-          promptOf={promptOf}
-        />
-        <section className="card">
-          <header className="card__head">
-            <h2>Result</h2>
-            {selected && <span className="card__sub">{selected.state}</span>}
-          </header>
-          <Result
-            job={selected}
-            events={selectedEvents}
-            port={about?.core_api_port ?? null}
-            modelNames={modelNames}
-            progress={liveProgress}
-            onCancel={selected ? () => cancelJob(selected.id) : undefined}
-            onDelete={selected ? () => handleDelete(selected.id) : undefined}
-            onRetry={
-              selected && selected.state === "failed" ? () => handleRetry(selected) : undefined
-            }
-            onUpscale={
-              selected && selected.state === "completed" && selected.job_type !== "upscale"
-                ? () => handleUpscale(selected.id)
-                : undefined
-            }
-            onReuseSeed={setSeed}
-          />
-        </section>
-      </div>
-
-      <section className="card card--wide">
-        <header className="card__head">
-          <h2>Gallery</h2>
-          <span className="card__sub numeric">{gallery.length}</span>
-        </header>
-        {gallery.length === 0 ? (
-          <p className="muted">Rendered clips show up here.</p>
-        ) : (
-          <>
-            <div className="gallery">
-              {pagedGallery.map((j, i) => (
-                <div
-                  key={j.id}
-                  className={
-                    j.id === selectedId
-                      ? "gallery__item video-item gallery__item--selected"
-                      : "gallery__item video-item"
-                  }
-                >
-                  <button
-                    type="button"
-                    className="gallery__item-select"
-                    onClick={() => {
-                      setSelectedId(j.id);
-                      setDetail(null);
-                    }}
-                  >
-                    {about && (
-                      <span className="video-item__frame">
-                        <video
-                          src={jobOutputUrl(about.core_api_port, j.id)}
-                          muted
-                          preload="metadata"
-                          playsInline
-                        />
-                        <span className="video-item__play" aria-hidden="true">
-                          ▶
-                        </span>
-                      </span>
-                    )}
-                    <span className="gallery__cap">{asVideoParams(j.params).prompt ?? "video"}</span>
-                  </button>
-                  <button
-                    type="button"
-                    className="gallery__zoom"
-                    aria-label="Zoom this video"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setLightboxIndex(i);
-                    }}
-                  >
-                    ⤢
-                  </button>
-                  <button
-                    type="button"
-                    className="gallery__delete"
-                    aria-label="Delete this video"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleDelete(j.id);
-                    }}
-                  >
-                    ×
-                  </button>
-                </div>
-              ))}
-            </div>
-            {pageCount > 1 && (
-              <div className="gallery__pager">
-                <button
-                  type="button"
-                  className="chip"
-                  disabled={clampedPage === 0}
-                  onClick={() => setGalleryPage((p) => Math.max(0, p - 1))}
-                >
-                  ← Prev
-                </button>
-                <span className="muted numeric">
-                  Page {clampedPage + 1} / {pageCount}
-                </span>
-                <button
-                  type="button"
-                  className="chip"
-                  disabled={clampedPage >= pageCount - 1}
-                  onClick={() => setGalleryPage((p) => Math.min(pageCount - 1, p + 1))}
-                >
-                  Next →
+            <label className="imgform__field">
+              <span>…or an image file</span>
+              <div className="pathpick">
+                <input
+                  type="text"
+                  value={startPath}
+                  onChange={(e) => setStartPath(e.target.value)}
+                  placeholder="E:\\shots\\frame_01.png"
+                  spellCheck={false}
+                />
+                <button type="button" className="chip" onClick={browseForImage}>
+                  Browse…
                 </button>
               </div>
+            </label>
+            {startImage && about && startPath.trim() === "" && (
+              <img
+                className="startframe__thumb"
+                src={jobOutputUrl(about.core_api_port, startImage)}
+                alt="start frame"
+                loading="lazy"
+              />
             )}
-          </>
-        )}
-      </section>
+          </fieldset>
 
-      {lightboxIndex != null && about && pagedGallery[lightboxIndex] && (
-        <Lightbox
-          kind="video"
-          src={jobOutputUrl(about.core_api_port, pagedGallery[lightboxIndex].id)}
-          caption={asVideoParams(pagedGallery[lightboxIndex].params).prompt}
-          onClose={() => setLightboxIndex(null)}
-          onPrev={lightboxIndex > 0 ? () => setLightboxIndex(lightboxIndex - 1) : undefined}
-          onNext={
-            lightboxIndex < pagedGallery.length - 1
-              ? () => setLightboxIndex(lightboxIndex + 1)
-              : undefined
-          }
-        />
-      )}
+          <PromptAssistant
+            kind="video"
+            sessionId={sessionId}
+            onApplyPrompt={(text) => setPrompt((p) => (p.trim() ? `${p.trim()}, ${text}` : text))}
+            onApplyNegative={(text) => setNegative((n) => (n.trim() ? `${n.trim()}, ${text}` : text))}
+          />
+
+
+          {!comfyReady && (
+            <p className="muted">ComfyUI is not set up yet — open Diagnostics to install it.</p>
+          )}
+          {comfyReady && models && videoModels.length === 0 && (
+            <p className="muted">
+              No video model yet — import <strong>Wan 2.2 TI2V-5B</strong> as a “Video model” on the
+              Models tab (it also needs the umt5 text encoder and the Wan VAE).
+            </p>
+          )}
+          {comfyReady && videoModels.length > 0 && (!hasEncoder || !hasVae) && (
+            <p className="muted">
+              Wan also needs {!hasEncoder && <>the <code>umt5</code> text encoder</>}
+              {!hasEncoder && !hasVae && " and "}
+              {!hasVae && <>its VAE (<code>wan2.2_vae</code>)</>} — import{" "}
+              {!hasEncoder && !hasVae ? "them" : "it"} on the Models tab.
+            </p>
+          )}
+
+          <form
+            className="imgform"
+            onSubmit={(e) => {
+              e.preventDefault();
+              generate();
+            }}
+          >
+            <label className="imgform__field">
+              <span>Prompt</span>
+              <textarea
+                value={prompt}
+                onChange={(e) => setPrompt(e.target.value)}
+                rows={3}
+                spellCheck
+                placeholder="a paper boat drifting down a rain-soaked street, slow dolly shot"
+              />
+            </label>
+            <PromptPresetPicker
+              kind="positive"
+              onApply={(text) => setPrompt((p) => (p.trim() ? `${p.trim()}, ${text}` : text))}
+            />
+
+            <label className="imgform__field">
+              <span>Negative prompt</span>
+              <textarea
+                value={negative}
+                onChange={(e) => setNegative(e.target.value)}
+                rows={2}
+                spellCheck
+                placeholder="blurry, jitter, warped faces, low quality"
+              />
+            </label>
+            <PromptPresetPicker
+              kind="negative"
+              onApply={(text) => setNegative((n) => (n.trim() ? `${n.trim()}, ${text}` : text))}
+            />
+
+            <div className="imgform__presets">
+              {PRESETS.map((p) => (
+                <button
+                  key={p.label}
+                  type="button"
+                  className="chip"
+                  aria-pressed={width === p.w && height === p.h}
+                  onClick={() => {
+                    setWidth(p.w);
+                    setHeight(p.h);
+                  }}
+                >
+                  {p.label}
+                </button>
+              ))}
+            </div>
+
+            <div className="imgform__grid">
+              <NumField
+                label="Width"
+                value={width}
+                step={DIM_STEP}
+                min={MIN_DIM}
+                max={MAX_DIM}
+                onChange={setWidth}
+                hint={(id) => <HelpHint area="video" setting="size" describes={id} />}
+              />
+              <NumField label="Height" value={height} step={DIM_STEP} min={MIN_DIM} max={MAX_DIM} onChange={setHeight} />
+              <NumField
+                label="Frames"
+                value={frames}
+                step={4}
+                min={MIN_FRAMES}
+                max={MAX_FRAMES}
+                onChange={setFrames}
+                hint={(id) => <HelpHint area="video" setting="frames" describes={id} />}
+              />
+              <NumField
+                label="FPS"
+                value={fps}
+                step={1}
+                min={MIN_FPS}
+                max={MAX_FPS}
+                onChange={setFps}
+                hint={(id) => <HelpHint area="video" setting="fps" describes={id} />}
+              />
+              <NumField
+                label="Steps"
+                value={steps}
+                step={1}
+                min={1}
+                max={MAX_STEPS}
+                onChange={setSteps}
+                hint={(id) => <HelpHint area="video" setting="steps" describes={id} />}
+              />
+              <NumField
+                label="CFG"
+                value={cfg}
+                step={0.5}
+                min={1}
+                max={15}
+                onChange={setCfg}
+                hint={(id) => <HelpHint area="video" setting="cfg" describes={id} />}
+              />
+            </div>
+
+            <div className="imgform__grid">
+              <div className="imgform__field">
+                <span>
+                  <label htmlFor={seedId}>Seed</label>
+                  <HelpHint area="video" setting="seed" describes={seedId} />
+                </span>
+                <input
+                  id={seedId}
+                  type="text"
+                  inputMode="numeric"
+                  value={seed}
+                  onChange={(e) => setSeed(e.target.value.replace(/[^\d]/g, ""))}
+                  placeholder="random"
+                  spellCheck={false}
+                />
+              </div>
+              <div className="imgform__field imgform__field--wide">
+                <span>
+                  <label htmlFor={modelPickId}>Model</label>
+                  <HelpHint area="video" setting="model" describes={modelPickId} />
+                </span>
+                <select id={modelPickId} value={modelId} onChange={(e) => setModelId(e.target.value)}>
+                  <option value="auto">Auto (most-recently-used)</option>
+                  {videoModels.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+            <VramEstimateHint
+              vramEstimateMb={videoModels.find((m) => m.id === modelId)?.vram_estimate_mb}
+              gpu={telemetry?.gpu}
+            />
+            <LoraPicker
+              models={models ?? []}
+              family={videoModels.find((m) => m.id === modelId)?.family}
+              selected={loras}
+              onChange={setLoras}
+            />
+
+            <p id={estimateId} className={heavy ? "video__note video__note--warn" : "video__note"}>
+              ~{clipSecs.toFixed(1)}s clip · very rough guess {estLo}–{estHi} min on a 16 GB card
+              (not yet calibrated). Video is slow — minutes, not seconds. The window stays usable
+              while it renders.
+              {heavy && " Above 480p / 81 frames is much slower and can run out of VRAM."}{" "}
+              <HelpHint area="video" setting="time-estimate" />
+            </p>
+
+            <button type="submit" className="imgform__go" disabled={!canGenerate}>
+              {pendingId && !stuck ? "Rendering…" : "Generate"}
+            </button>
+          </form>
+          {sendError && <p className="image__err">{sendError}</p>}
+        </section>
+
+        <div className="image__result">
+          <QueueList
+            jobType="video"
+            jobs={jobs ?? []}
+            modelNames={modelNames}
+            selectedId={selectedId}
+            onSelect={(id) => {
+              setSelectedId(id);
+              setDetail(null);
+            }}
+            onCancel={cancelJob}
+            promptOf={promptOf}
+          />
+          <section className="card">
+            <header className="card__head">
+              <h2>Result</h2>
+              {selected && <span className="card__sub">{selected.state}</span>}
+            </header>
+            <Result
+              job={selected}
+              events={selectedEvents}
+              port={about?.core_api_port ?? null}
+              modelNames={modelNames}
+              progress={liveProgress}
+              onCancel={selected ? () => cancelJob(selected.id) : undefined}
+              onDelete={selected ? () => handleDelete(selected.id) : undefined}
+              onRetry={
+                selected && selected.state === "failed" ? () => handleRetry(selected) : undefined
+              }
+              onUpscale={
+                selected && selected.state === "completed" && selected.job_type !== "upscale"
+                  ? () => handleUpscale(selected.id)
+                  : undefined
+              }
+              onReuseSeed={setSeed}
+            />
+          </section>
+        </div>
+
+        <section className="card card--wide">
+          <header className="card__head">
+            <h2>Gallery</h2>
+            <span className="card__sub numeric">{gallery.length}</span>
+          </header>
+          {gallery.length === 0 ? (
+            <p className="muted">Rendered clips show up here.</p>
+          ) : (
+            <>
+              <div className="gallery">
+                {pagedGallery.map((j, i) => (
+                  <div
+                    key={j.id}
+                    className={
+                      j.id === selectedId
+                        ? "gallery__item video-item gallery__item--selected"
+                        : "gallery__item video-item"
+                    }
+                  >
+                    <button
+                      type="button"
+                      className="gallery__item-select"
+                      onClick={() => {
+                        setSelectedId(j.id);
+                        setDetail(null);
+                      }}
+                    >
+                      {about && (
+                        <span className="video-item__frame">
+                          <video
+                            src={jobOutputUrl(about.core_api_port, j.id)}
+                            muted
+                            preload="metadata"
+                            playsInline
+                          />
+                          <span className="video-item__play" aria-hidden="true">
+                            ▶
+                          </span>
+                        </span>
+                      )}
+                      <span className="gallery__cap">{asVideoParams(j.params).prompt ?? "video"}</span>
+                    </button>
+                    <button
+                      type="button"
+                      className="gallery__zoom"
+                      aria-label="Zoom this video"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setLightboxIndex(i);
+                      }}
+                    >
+                      ⤢
+                    </button>
+                    <button
+                      type="button"
+                      className="gallery__delete"
+                      aria-label="Delete this video"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleDelete(j.id);
+                      }}
+                    >
+                      ×
+                    </button>
+                  </div>
+                ))}
+              </div>
+              {pageCount > 1 && (
+                <div className="gallery__pager">
+                  <button
+                    type="button"
+                    className="chip"
+                    disabled={clampedPage === 0}
+                    onClick={() => setGalleryPage((p) => Math.max(0, p - 1))}
+                  >
+                    ← Prev
+                  </button>
+                  <span className="muted numeric">
+                    Page {clampedPage + 1} / {pageCount}
+                  </span>
+                  <button
+                    type="button"
+                    className="chip"
+                    disabled={clampedPage >= pageCount - 1}
+                    onClick={() => setGalleryPage((p) => Math.min(pageCount - 1, p + 1))}
+                  >
+                    Next →
+                  </button>
+                </div>
+              )}
+            </>
+          )}
+        </section>
+
+        {lightboxIndex != null && about && pagedGallery[lightboxIndex] && (
+          <Lightbox
+            kind="video"
+            src={jobOutputUrl(about.core_api_port, pagedGallery[lightboxIndex].id)}
+            caption={asVideoParams(pagedGallery[lightboxIndex].params).prompt}
+            onClose={() => setLightboxIndex(null)}
+            onPrev={lightboxIndex > 0 ? () => setLightboxIndex(lightboxIndex - 1) : undefined}
+            onNext={
+              lightboxIndex < pagedGallery.length - 1
+                ? () => setLightboxIndex(lightboxIndex + 1)
+                : undefined
+            }
+          />
+        )}
+      </div>
     </div>
   );
 }

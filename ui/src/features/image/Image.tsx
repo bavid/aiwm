@@ -8,7 +8,10 @@ import { NumField } from "../../components/NumField";
 import { PromptAssistant } from "../../components/PromptAssistant";
 import { PromptPresetPicker } from "../../components/PromptPresetPicker";
 import { QueueList } from "../../components/QueueList";
-import { SessionSwitcher } from "../../components/SessionSwitcher";
+import {
+  SessionSidebar,
+  type SessionSidebarLabels,
+} from "../../components/SessionSidebar";
 import { VramEstimateHint } from "../../components/VramEstimateHint";
 import {
   useAbout,
@@ -16,6 +19,7 @@ import {
   useJobs,
   useModels,
   useRuntimes,
+  useSessions,
   useTelemetry,
 } from "../../lib/hooks";
 import {
@@ -52,6 +56,17 @@ const GALLERY_PAGE_SIZE = 24;
 /** The first pass's step count a fresh form starts at, and the fallback when
  *  a job's own params don't carry one. */
 const DEFAULT_STEPS = 25;
+
+/** The Image tab's wording on the shared session sidebar (the same list the
+ *  Chat tab docks). */
+const SESSION_LABELS: SessionSidebarLabels = {
+  create: "+ New session",
+  createdName: "New session",
+  empty: "No sessions yet.",
+  confirmDelete: (name) =>
+    `Delete “${name}”?\n\nIts images stay in your history, just ungrouped.`,
+  unsorted: "Ungrouped images",
+};
 
 const PRESETS = [
   { label: "Square", w: 1024, h: 1024 },
@@ -93,6 +108,7 @@ export function ImageStudio({ prefill = null, onPrefillConsumed }: Props = {}) {
   const { data: runtimes } = useRuntimes();
   const { data: jobs } = useJobs();
   const { telemetry } = useTelemetry();
+  const { data: sessions, refetch: refetchSessions } = useSessions("image");
 
   const checkpoints = (models ?? []).filter((m) => m.roles.includes("base_diffusion"));
   const modelNames = useMemo(
@@ -123,7 +139,7 @@ export function ImageStudio({ prefill = null, onPrefillConsumed }: Props = {}) {
   const seedId = `${ids}-seed`;
   const modelPickId = `${ids}-model`;
   const presetId = `${ids}-preset`;
-  const sessionHintId = `${ids}-session`;
+  const sidebarId = `${ids}-sessions`;
 
   const selectedCheckpoint = checkpoints.find((m) => m.id === modelId);
   const isFlux = modelId !== "auto" && selectedCheckpoint?.family === "flux";
@@ -358,406 +374,418 @@ export function ImageStudio({ prefill = null, onPrefillConsumed }: Props = {}) {
   const canGenerate = !!prompt.trim() && (!pendingId || stuck) && comfyReady;
 
   return (
-    <div className="image">
-      <section className="card image__form">
-        <header className="card__head">
-          <h2>{editing ? "Edit an image" : "Generate an image"}</h2>
-          {!editing && modelId === "auto" && checkpoints.length > 0 && (
-            <span className="card__sub">Auto · {checkpoints.length} checkpoint(s)</span>
-          )}
-        </header>
-        <div className="imgform__session" id={sessionHintId}>
-          <SessionSwitcher capability="image" activeId={sessionId} onChange={setSessionId} />
-          <HelpHint area="image" setting="sessions" describes={sessionHintId} />
-        </div>
-
-        <fieldset className="startframe">
-          <legend>Edit an existing image (optional)</legend>
-          <div className="imgform__field">
-            <span>
-              <label htmlFor={sourceJobId}>A finished image</label>
-              <HelpHint area="image" setting="edit-source" describes={sourceJobId} />
-            </span>
-            <select id={sourceJobId} value={sourceJob} onChange={(e) => setSourceJob(e.target.value)}>
-              <option value="none">None — generate from a prompt</option>
-              {priorImages.map((j) => (
-                <option key={j.id} value={j.id}>
-                  {promptOf(j).slice(0, 48) || j.id}
-                </option>
-              ))}
-            </select>
-          </div>
-          <label className="imgform__field">
-            <span>…or an image file</span>
-            <div className="pathpick">
-              <input
-                type="text"
-                value={sourcePath}
-                onChange={(e) => setSourcePath(e.target.value)}
-                placeholder="E:\\photos\\me.jpg"
-                spellCheck={false}
-              />
-              <button type="button" className="chip" onClick={browseForSourceImage}>
-                Browse…
-              </button>
-            </div>
-          </label>
-          {sourceImage && about && sourcePath.trim() === "" && (
-            <img
-              className="startframe__thumb"
-              src={imageOutputUrl(about.core_api_port, sourceImage)}
-              alt="The source this prompt will edit"
-              loading="lazy"
-            />
-          )}
-          {editing && !isFlux2 && (
-            <p className="muted">Editing needs the FLUX.2 [klein] 9B stack — pick it below.</p>
-          )}
-        </fieldset>
-
-        <PromptAssistant
-          kind={editing ? "edit" : "image"}
-          sessionId={sessionId}
-          onApplyPrompt={appendPrompt}
-          onApplyNegative={editing ? undefined : appendNegative}
+    <div className="session-page">
+      <div className="session-page__sidebar" id={sidebarId}>
+        <SessionSidebar
+          capability="image"
+          labels={SESSION_LABELS}
+          activeId={sessionId}
+          onChange={setSessionId}
+          sessions={sessions}
+          onRefetch={refetchSessions}
+          nameOnCreate
         />
+        <p className="session-page__sidebar-hint">
+          <HelpHint area="image" setting="sessions" describes={sidebarId} />
+        </p>
+      </div>
+      <div className="image">
+        <section className="card image__form">
+          <header className="card__head">
+            <h2>{editing ? "Edit an image" : "Generate an image"}</h2>
+            {!editing && modelId === "auto" && checkpoints.length > 0 && (
+              <span className="card__sub">Auto · {checkpoints.length} checkpoint(s)</span>
+            )}
+          </header>
 
-
-        {!comfyReady && (
-          <p className="muted">
-            ComfyUI is not set up yet — open Diagnostics to install it.
-          </p>
-        )}
-        {comfyReady && models && checkpoints.length === 0 && (
-          <p className="muted">
-            No image checkpoint yet — import an SDXL <code>.safetensors</code> on the Models tab.
-          </p>
-        )}
-
-        <form
-          className="imgform"
-          onSubmit={(e) => {
-            e.preventDefault();
-            generate();
-          }}
-        >
-          <label className="imgform__field">
-            <span>{editing ? "Edit instruction" : "Prompt"}</span>
-            <textarea
-              value={prompt}
-              onChange={(e) => setPrompt(e.target.value)}
-              rows={3}
-              spellCheck
-              placeholder={
-                editing
-                  ? "remove the blisters, make the hair blonde, add me to a train platform…"
-                  : "a red fox in the snow, cinematic lighting, highly detailed"
-              }
-            />
-          </label>
-          <PromptPresetPicker kind="positive" onApply={appendPrompt} />
-
-          {!editing && (
-            <>
-              <div className="imgform__field">
-                <span>
-                  <label htmlFor={negativeId}>Negative prompt</label>
-                  <HelpHint area="image" setting="negative-prompt" describes={negativeId} />
-                </span>
-                <textarea
-                  id={negativeId}
-                  value={negative}
-                  onChange={(e) => setNegative(e.target.value)}
-                  rows={2}
-                  spellCheck
-                  placeholder="blurry, low quality, watermark"
-                />
-              </div>
-              <PromptPresetPicker kind="negative" onApply={appendNegative} />
-            </>
-          )}
-
-          {!editing && (
-            <>
-              <div className="imgform__presets">
-                {PRESETS.map((p) => (
-                  <button
-                    key={p.label}
-                    type="button"
-                    className="chip"
-                    aria-pressed={width === p.w && height === p.h}
-                    onClick={() => {
-                      setWidth(p.w);
-                      setHeight(p.h);
-                    }}
-                  >
-                    {p.label}
-                  </button>
-                ))}
-                <button
-                  id={swapId}
-                  type="button"
-                  className="chip"
-                  aria-label="Swap width and height"
-                  onClick={() => {
-                    setWidth(height);
-                    setHeight(width);
-                  }}
-                >
-                  <span aria-hidden="true">↔</span>
-                </button>
-              </div>
-
-              <div className="imgform__grid">
-                <NumField
-                  label="Width"
-                  value={width}
-                  step={DIM_STEP}
-                  min={MIN_DIM}
-                  max={MAX_DIM}
-                  onChange={setWidth}
-                  hint={(id) => <HelpHint area="image" setting="size" describes={id} />}
-                />
-                <NumField label="Height" value={height} step={DIM_STEP} min={MIN_DIM} max={MAX_DIM} onChange={setHeight} />
-              </div>
-            </>
-          )}
-          {editing && (
-            <p className="muted">The edited image keeps the source image's own size.</p>
-          )}
-
-          <div className="imgform__grid">
-            <NumField
-              label="Steps"
-              value={steps}
-              step={1}
-              min={1}
-              max={60}
-              onChange={setSteps}
-              hint={(id) => <HelpHint area="image" setting="steps" describes={id} />}
-            />
-            <NumField
-              label={isFlux ? "Guidance" : "CFG"}
-              value={cfg}
-              step={0.5}
-              min={1}
-              max={isFlux || isFlux2 ? 10 : 15}
-              onChange={setCfg}
-              hint={(id) => <HelpHint area="image" setting="cfg" describes={id} />}
-            />
-          </div>
-          {isFlux && (
-            <p className="muted">Flux runs at CFG 1 — this sets FluxGuidance (≈ 3–4 is typical).</p>
-          )}
-          {isFlux2 && (
-            <p className="muted">
-              FLUX.2 Klein is fast/distilled — low CFG (≈1.5–2) and few steps (≈8) is typical.
-            </p>
-          )}
-
-          {!editing && (
-            <HiresFixField
-              value={hires}
-              onChange={setHires}
-              width={clampDim(width)}
-              height={clampDim(height)}
-              steps={steps}
-            />
-          )}
-
-          <div className="imgform__grid">
+          <fieldset className="startframe">
+            <legend>Edit an existing image (optional)</legend>
             <div className="imgform__field">
               <span>
-                <label htmlFor={seedId}>Seed</label>
-                <HelpHint area="image" setting="seed" describes={seedId} />
+                <label htmlFor={sourceJobId}>A finished image</label>
+                <HelpHint area="image" setting="edit-source" describes={sourceJobId} />
               </span>
-              <input
-                id={seedId}
-                type="text"
-                inputMode="numeric"
-                value={seed}
-                onChange={(e) => setSeed(e.target.value.replace(/[^\d]/g, ""))}
-                placeholder="random"
-                spellCheck={false}
-              />
-            </div>
-            <div className="imgform__field imgform__field--wide">
-              <span>
-                <label htmlFor={modelPickId}>Model</label>
-                <HelpHint area="image" setting="model" describes={modelPickId} />
-              </span>
-              <select id={modelPickId} value={modelId} onChange={(e) => setModelId(e.target.value)}>
-                <option value="auto">Auto (most-recently-used)</option>
-                {checkpoints.map((m) => (
-                  <option key={m.id} value={m.id}>
-                    {m.name}
+              <select id={sourceJobId} value={sourceJob} onChange={(e) => setSourceJob(e.target.value)}>
+                <option value="none">None — generate from a prompt</option>
+                {priorImages.map((j) => (
+                  <option key={j.id} value={j.id}>
+                    {promptOf(j).slice(0, 48) || j.id}
                   </option>
                 ))}
               </select>
             </div>
-          </div>
-          <div className="imgform__presets">
-            <button id={presetId} type="button" className="chip" onClick={applySmartphonePreset}>
-              Smartphone photo preset
-            </button>
-            <HelpHint area="image" setting="smartphone-preset" describes={presetId} />
-          </div>
-          <LoraPicker
-            models={models ?? []}
-            family={selectedCheckpoint?.family}
-            selected={loras}
-            onChange={setLoras}
-          />
-          <VramEstimateHint vramEstimateMb={selectedCheckpoint?.vram_estimate_mb} gpu={telemetry?.gpu} />
-
-          <button type="submit" className="imgform__go" disabled={!canGenerate}>
-            {pendingId && !stuck ? "Generating…" : "Generate"}
-          </button>
-        </form>
-        {sendError && <p className="image__err">{sendError}</p>}
-      </section>
-
-      <div className="image__result">
-        <QueueList
-          jobType="image"
-          jobs={jobs ?? []}
-          modelNames={modelNames}
-          selectedId={selectedId}
-          onSelect={(id) => {
-            setSelectedId(id);
-            setDetail(null);
-          }}
-          onCancel={cancelJob}
-          promptOf={promptOf}
-        />
-        <section className="card">
-          <header className="card__head">
-            <h2>Result</h2>
-            {selected && <span className="card__sub">{selected.state}</span>}
-          </header>
-          <Result
-            job={selected}
-            port={about?.core_api_port ?? null}
-            modelNames={modelNames}
-            progress={liveProgress}
-            onCancel={selected ? () => cancelJob(selected.id) : undefined}
-            onDelete={selected ? () => handleDelete(selected.id) : undefined}
-            onRetry={
-              selected && selected.state === "failed" ? () => handleRetry(selected) : undefined
-            }
-            onUpscale={
-              selected && selected.state === "completed" && selected.job_type !== "upscale"
-                ? () => handleUpscale(selected.id)
-                : undefined
-            }
-            onUseAsBase={
-              selected && selected.state === "completed" && selected.job_type === "image"
-                ? () => handleUseAsBase(selected.id)
-                : undefined
-            }
-            onReuseSeed={setSeed}
-          />
-        </section>
-      </div>
-
-      <section className="card card--wide">
-        <header className="card__head">
-          <h2>Gallery</h2>
-          <span className="card__sub numeric">{gallery.length}</span>
-        </header>
-        {gallery.length === 0 ? (
-          <p className="muted">Generated images show up here.</p>
-        ) : (
-          <>
-            <div className="gallery">
-              {pagedGallery.map((j, i) => (
-                <div
-                  key={j.id}
-                  className={
-                    j.id === selectedId ? "gallery__item gallery__item--selected" : "gallery__item"
-                  }
-                >
-                  <button
-                    type="button"
-                    className="gallery__item-select"
-                    onClick={() => {
-                      setSelectedId(j.id);
-                      setDetail(null);
-                    }}
-                  >
-                    {about && (
-                      <img src={imageOutputUrl(about.core_api_port, j.id)} alt="" loading="lazy" />
-                    )}
-                    <span className="gallery__cap">
-                      {asImageParams(j.params).prompt ?? "image"}
-                    </span>
-                  </button>
-                  <button
-                    type="button"
-                    className="gallery__zoom"
-                    aria-label="Zoom this image"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setLightboxIndex(i);
-                    }}
-                  >
-                    ⤢
-                  </button>
-                  <button
-                    type="button"
-                    className="gallery__delete"
-                    aria-label="Delete this image"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleDelete(j.id);
-                    }}
-                  >
-                    ×
-                  </button>
-                </div>
-              ))}
-            </div>
-            {pageCount > 1 && (
-              <div className="gallery__pager">
-                <button
-                  type="button"
-                  className="chip"
-                  disabled={clampedPage === 0}
-                  onClick={() => setGalleryPage((p) => Math.max(0, p - 1))}
-                >
-                  ← Prev
-                </button>
-                <span className="muted numeric">
-                  Page {clampedPage + 1} / {pageCount}
-                </span>
-                <button
-                  type="button"
-                  className="chip"
-                  disabled={clampedPage >= pageCount - 1}
-                  onClick={() => setGalleryPage((p) => Math.min(pageCount - 1, p + 1))}
-                >
-                  Next →
+            <label className="imgform__field">
+              <span>…or an image file</span>
+              <div className="pathpick">
+                <input
+                  type="text"
+                  value={sourcePath}
+                  onChange={(e) => setSourcePath(e.target.value)}
+                  placeholder="E:\\photos\\me.jpg"
+                  spellCheck={false}
+                />
+                <button type="button" className="chip" onClick={browseForSourceImage}>
+                  Browse…
                 </button>
               </div>
+            </label>
+            {sourceImage && about && sourcePath.trim() === "" && (
+              <img
+                className="startframe__thumb"
+                src={imageOutputUrl(about.core_api_port, sourceImage)}
+                alt="The source this prompt will edit"
+                loading="lazy"
+              />
             )}
-          </>
-        )}
-      </section>
+            {editing && !isFlux2 && (
+              <p className="muted">Editing needs the FLUX.2 [klein] 9B stack — pick it below.</p>
+            )}
+          </fieldset>
 
-      {lightboxIndex != null && about && pagedGallery[lightboxIndex] && (
-        <Lightbox
-          kind="image"
-          src={imageOutputUrl(about.core_api_port, pagedGallery[lightboxIndex].id)}
-          caption={asImageParams(pagedGallery[lightboxIndex].params).prompt}
-          onClose={() => setLightboxIndex(null)}
-          onPrev={lightboxIndex > 0 ? () => setLightboxIndex(lightboxIndex - 1) : undefined}
-          onNext={
-            lightboxIndex < pagedGallery.length - 1
-              ? () => setLightboxIndex(lightboxIndex + 1)
-              : undefined
-          }
-        />
-      )}
+          <PromptAssistant
+            kind={editing ? "edit" : "image"}
+            sessionId={sessionId}
+            onApplyPrompt={appendPrompt}
+            onApplyNegative={editing ? undefined : appendNegative}
+          />
+
+
+          {!comfyReady && (
+            <p className="muted">
+              ComfyUI is not set up yet — open Diagnostics to install it.
+            </p>
+          )}
+          {comfyReady && models && checkpoints.length === 0 && (
+            <p className="muted">
+              No image checkpoint yet — import an SDXL <code>.safetensors</code> on the Models tab.
+            </p>
+          )}
+
+          <form
+            className="imgform"
+            onSubmit={(e) => {
+              e.preventDefault();
+              generate();
+            }}
+          >
+            <label className="imgform__field">
+              <span>{editing ? "Edit instruction" : "Prompt"}</span>
+              <textarea
+                value={prompt}
+                onChange={(e) => setPrompt(e.target.value)}
+                rows={3}
+                spellCheck
+                placeholder={
+                  editing
+                    ? "remove the blisters, make the hair blonde, add me to a train platform…"
+                    : "a red fox in the snow, cinematic lighting, highly detailed"
+                }
+              />
+            </label>
+            <PromptPresetPicker kind="positive" onApply={appendPrompt} />
+
+            {!editing && (
+              <>
+                <div className="imgform__field">
+                  <span>
+                    <label htmlFor={negativeId}>Negative prompt</label>
+                    <HelpHint area="image" setting="negative-prompt" describes={negativeId} />
+                  </span>
+                  <textarea
+                    id={negativeId}
+                    value={negative}
+                    onChange={(e) => setNegative(e.target.value)}
+                    rows={2}
+                    spellCheck
+                    placeholder="blurry, low quality, watermark"
+                  />
+                </div>
+                <PromptPresetPicker kind="negative" onApply={appendNegative} />
+              </>
+            )}
+
+            {!editing && (
+              <>
+                <div className="imgform__presets">
+                  {PRESETS.map((p) => (
+                    <button
+                      key={p.label}
+                      type="button"
+                      className="chip"
+                      aria-pressed={width === p.w && height === p.h}
+                      onClick={() => {
+                        setWidth(p.w);
+                        setHeight(p.h);
+                      }}
+                    >
+                      {p.label}
+                    </button>
+                  ))}
+                  <button
+                    id={swapId}
+                    type="button"
+                    className="chip"
+                    aria-label="Swap width and height"
+                    onClick={() => {
+                      setWidth(height);
+                      setHeight(width);
+                    }}
+                  >
+                    <span aria-hidden="true">↔</span>
+                  </button>
+                </div>
+
+                <div className="imgform__grid">
+                  <NumField
+                    label="Width"
+                    value={width}
+                    step={DIM_STEP}
+                    min={MIN_DIM}
+                    max={MAX_DIM}
+                    onChange={setWidth}
+                    hint={(id) => <HelpHint area="image" setting="size" describes={id} />}
+                  />
+                  <NumField label="Height" value={height} step={DIM_STEP} min={MIN_DIM} max={MAX_DIM} onChange={setHeight} />
+                </div>
+              </>
+            )}
+            {editing && (
+              <p className="muted">The edited image keeps the source image's own size.</p>
+            )}
+
+            <div className="imgform__grid">
+              <NumField
+                label="Steps"
+                value={steps}
+                step={1}
+                min={1}
+                max={60}
+                onChange={setSteps}
+                hint={(id) => <HelpHint area="image" setting="steps" describes={id} />}
+              />
+              <NumField
+                label={isFlux ? "Guidance" : "CFG"}
+                value={cfg}
+                step={0.5}
+                min={1}
+                max={isFlux || isFlux2 ? 10 : 15}
+                onChange={setCfg}
+                hint={(id) => <HelpHint area="image" setting="cfg" describes={id} />}
+              />
+            </div>
+            {isFlux && (
+              <p className="muted">Flux runs at CFG 1 — this sets FluxGuidance (≈ 3–4 is typical).</p>
+            )}
+            {isFlux2 && (
+              <p className="muted">
+                FLUX.2 Klein is fast/distilled — low CFG (≈1.5–2) and few steps (≈8) is typical.
+              </p>
+            )}
+
+            {!editing && (
+              <HiresFixField
+                value={hires}
+                onChange={setHires}
+                width={clampDim(width)}
+                height={clampDim(height)}
+                steps={steps}
+              />
+            )}
+
+            <div className="imgform__grid">
+              <div className="imgform__field">
+                <span>
+                  <label htmlFor={seedId}>Seed</label>
+                  <HelpHint area="image" setting="seed" describes={seedId} />
+                </span>
+                <input
+                  id={seedId}
+                  type="text"
+                  inputMode="numeric"
+                  value={seed}
+                  onChange={(e) => setSeed(e.target.value.replace(/[^\d]/g, ""))}
+                  placeholder="random"
+                  spellCheck={false}
+                />
+              </div>
+              <div className="imgform__field imgform__field--wide">
+                <span>
+                  <label htmlFor={modelPickId}>Model</label>
+                  <HelpHint area="image" setting="model" describes={modelPickId} />
+                </span>
+                <select id={modelPickId} value={modelId} onChange={(e) => setModelId(e.target.value)}>
+                  <option value="auto">Auto (most-recently-used)</option>
+                  {checkpoints.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+            <div className="imgform__presets">
+              <button id={presetId} type="button" className="chip" onClick={applySmartphonePreset}>
+                Smartphone photo preset
+              </button>
+              <HelpHint area="image" setting="smartphone-preset" describes={presetId} />
+            </div>
+            <LoraPicker
+              models={models ?? []}
+              family={selectedCheckpoint?.family}
+              selected={loras}
+              onChange={setLoras}
+            />
+            <VramEstimateHint vramEstimateMb={selectedCheckpoint?.vram_estimate_mb} gpu={telemetry?.gpu} />
+
+            <button type="submit" className="imgform__go" disabled={!canGenerate}>
+              {pendingId && !stuck ? "Generating…" : "Generate"}
+            </button>
+          </form>
+          {sendError && <p className="image__err">{sendError}</p>}
+        </section>
+
+        <div className="image__result">
+          <QueueList
+            jobType="image"
+            jobs={jobs ?? []}
+            modelNames={modelNames}
+            selectedId={selectedId}
+            onSelect={(id) => {
+              setSelectedId(id);
+              setDetail(null);
+            }}
+            onCancel={cancelJob}
+            promptOf={promptOf}
+          />
+          <section className="card">
+            <header className="card__head">
+              <h2>Result</h2>
+              {selected && <span className="card__sub">{selected.state}</span>}
+            </header>
+            <Result
+              job={selected}
+              port={about?.core_api_port ?? null}
+              modelNames={modelNames}
+              progress={liveProgress}
+              onCancel={selected ? () => cancelJob(selected.id) : undefined}
+              onDelete={selected ? () => handleDelete(selected.id) : undefined}
+              onRetry={
+                selected && selected.state === "failed" ? () => handleRetry(selected) : undefined
+              }
+              onUpscale={
+                selected && selected.state === "completed" && selected.job_type !== "upscale"
+                  ? () => handleUpscale(selected.id)
+                  : undefined
+              }
+              onUseAsBase={
+                selected && selected.state === "completed" && selected.job_type === "image"
+                  ? () => handleUseAsBase(selected.id)
+                  : undefined
+              }
+              onReuseSeed={setSeed}
+            />
+          </section>
+        </div>
+
+        <section className="card card--wide">
+          <header className="card__head">
+            <h2>Gallery</h2>
+            <span className="card__sub numeric">{gallery.length}</span>
+          </header>
+          {gallery.length === 0 ? (
+            <p className="muted">Generated images show up here.</p>
+          ) : (
+            <>
+              <div className="gallery">
+                {pagedGallery.map((j, i) => (
+                  <div
+                    key={j.id}
+                    className={
+                      j.id === selectedId ? "gallery__item gallery__item--selected" : "gallery__item"
+                    }
+                  >
+                    <button
+                      type="button"
+                      className="gallery__item-select"
+                      onClick={() => {
+                        setSelectedId(j.id);
+                        setDetail(null);
+                      }}
+                    >
+                      {about && (
+                        <img src={imageOutputUrl(about.core_api_port, j.id)} alt="" loading="lazy" />
+                      )}
+                      <span className="gallery__cap">
+                        {asImageParams(j.params).prompt ?? "image"}
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      className="gallery__zoom"
+                      aria-label="Zoom this image"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setLightboxIndex(i);
+                      }}
+                    >
+                      ⤢
+                    </button>
+                    <button
+                      type="button"
+                      className="gallery__delete"
+                      aria-label="Delete this image"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleDelete(j.id);
+                      }}
+                    >
+                      ×
+                    </button>
+                  </div>
+                ))}
+              </div>
+              {pageCount > 1 && (
+                <div className="gallery__pager">
+                  <button
+                    type="button"
+                    className="chip"
+                    disabled={clampedPage === 0}
+                    onClick={() => setGalleryPage((p) => Math.max(0, p - 1))}
+                  >
+                    ← Prev
+                  </button>
+                  <span className="muted numeric">
+                    Page {clampedPage + 1} / {pageCount}
+                  </span>
+                  <button
+                    type="button"
+                    className="chip"
+                    disabled={clampedPage >= pageCount - 1}
+                    onClick={() => setGalleryPage((p) => Math.min(pageCount - 1, p + 1))}
+                  >
+                    Next →
+                  </button>
+                </div>
+              )}
+            </>
+          )}
+        </section>
+
+        {lightboxIndex != null && about && pagedGallery[lightboxIndex] && (
+          <Lightbox
+            kind="image"
+            src={imageOutputUrl(about.core_api_port, pagedGallery[lightboxIndex].id)}
+            caption={asImageParams(pagedGallery[lightboxIndex].params).prompt}
+            onClose={() => setLightboxIndex(null)}
+            onPrev={lightboxIndex > 0 ? () => setLightboxIndex(lightboxIndex - 1) : undefined}
+            onNext={
+              lightboxIndex < pagedGallery.length - 1
+                ? () => setLightboxIndex(lightboxIndex + 1)
+                : undefined
+            }
+          />
+        )}
+      </div>
     </div>
   );
 }

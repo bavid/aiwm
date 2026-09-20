@@ -3,7 +3,7 @@ import type { HelpSetting, HelpTopic } from "./types.ts";
 /** Image tab: the form (size, steps, CFG, seed, model), editing, the LoRA
  *  stack, Hi-res fix, sessions and queue, the result actions. Facts from
  *  `features/image/Image.tsx`, `HiresFixField.tsx`, `hires-fix.ts`,
- *  `components/LoraPicker.tsx`, `VramEstimateHint.tsx`, `SessionSwitcher.tsx`,
+ *  `components/LoraPicker.tsx`, `VramEstimateHint.tsx`, `SessionSidebar.tsx`,
  *  `QueueList.tsx` and the Hi-Res-Fix measurements in `docs/TODO.md`
  *  (2026-09-17). */
 
@@ -89,11 +89,12 @@ const FORM_SETTINGS: readonly HelpSetting[] = [
   },
   {
     key: "sessions",
-    label: "Session",
-    what: "A named group the images belong to; \"Ungrouped\" is the shared bucket. New, rename, archive and delete live next to the picker.",
-    why: "A project's images stay together in their own gallery.",
-    effect: "New renders are tagged with the session; the Gallery below shows only this session's images (24 per page). Deleting a session keeps its images, just ungrouped.",
-    benefit: "Galleries that match your projects.",
+    label: "Sessions",
+    what: "The list on the left: New session, rename, archive, delete, and \"Ungrouped images\" for images that belong to no session. The same list the Chat and Video tabs have.",
+    why: "A project's images stay together in their own gallery instead of one endless stream.",
+    effect: "New renders are tagged with the picked session; the Gallery below shows only this session's images (24 per page). A new session opens its name field right away. Archive hides a session under \"Show archived\"; Delete removes the session but keeps its images, just ungrouped.",
+    benefit: "Galleries that match your projects, and the same session list on every tab.",
+    pitfalls: "The Queue still lists every image job across all sessions — switching sessions changes the Gallery, not the queue.",
   },
   {
     key: "queue",
