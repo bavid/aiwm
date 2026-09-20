@@ -14,10 +14,10 @@ import {
 } from "../../lib/ipc";
 import { openFolder } from "../../lib/browse";
 import { HelpHint } from "../../components/HelpHint";
-import { ConfirmDialog } from "./ConfirmDialog";
+import { ConfirmDialog } from "../../components/ConfirmDialog";
 import { errorText, filesLabel, framesLabel } from "./curation";
 import { formatBytes } from "./format";
-import { SkippedFiles } from "./SkippedFiles";
+import { SkippedFiles } from "../../components/SkippedFiles";
 import "./housekeeping.css";
 
 type Props = {

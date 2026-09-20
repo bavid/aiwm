@@ -2077,7 +2077,82 @@ Profile auch die LoRAs selbst und die VAEs (Familie `flux2`) auf.
 Anlass: die App und die Entwicklungs-/Testläufe erzeugen sehr viele Dateien;
 auf dem System liegen wieder hunderte GB, teils Nutzdaten, teils Testartefakte.
 
-- **Settings-Seite "Cleanup" (Speicher aufräumen)** — eine eigene Seite, die
+**Erledigt (Plan 13 "Settings Cleanup Page", umgesetzt 2026-09-19/20):**
+`GET /cleanup/scan` (`core/src/cleanup/scan.rs` + `scan/{media,datasets,runs,
+caches}.rs`) liefert `CleanupReport { scanned_at, groups, protected }` mit
+neun festen Gruppen — generierte Medien jenseits der Retention-Regel, Medien
+ohne Job-Zeile, aussortierte Dataset-Frames (je Dataset), Arbeitsordner ohne
+Dataset (nur unter dem Datasets-Root), Frame-Zeilen ohne Datei (je Dataset;
+Dateien auf einer gerade nicht angeschlossenen Platte gelten nicht als
+fehlend, sondern landen unter *protected*), abgeschlossene Trainingsläufe
+(ganzer Ordner nur, wenn die Ergebnis-LoRA als eigene Datei in der Library
+liegt, sonst nur Zwischen-Checkpoints/`optimizer.pt`/Samples/`train.log` und
+der finale Checkpoint bleibt geschützt), Caches und Reste (Cache-Ordner,
+Download-Staging ohne aktiven Download, ComfyUI `input/temp/output` älter als
+1 h, `.pending-import`), Logs älter als 30 Tage (nie das heutige), DB-Backups
+in `exports/` — plus `protected` (Modell-Store, Runtimes, Voice-Identities,
+laufende Läufe, vom Purge-Check verweigerte Ordner). Datei-Walks in
+`spawn_blocking`, Links/Junctions werden nie verfolgt. `POST /cleanup/apply`
+`{ selections: [{ group, entry_ids }], dry_run }` (`apply.rs` + `apply/*.rs`)
+geht ausschließlich durch die vorhandenen Gates — Housekeeping-Guard
+(`housekeeping::cleanup`/`discarded_plan`, Unclaimed-Regel,
+`refuse_if_busy`), `check_purge_target`/`purge_run_folder`, `RetentionPolicy`,
+für Caches/Logs/Backups „nur reguläre Datei strikt im jeweiligen Root" —;
+`dry_run: true` (Standard) liefert die exakten Pfade/Bytes/Zeilen und löscht
+nichts; jeder echte Lauf schreibt `cleanup_log` (Migration 0021, ohne FK),
+`GET /cleanup/log` zeigt die letzten 20. `GET /storage/locations` kennt fünf
+weitere, nicht konfigurierbare Zeilen (`logs`, `exports`, `voice_identities`
+„user assets", `comfyui_data`, `pending_import`) — 12 Schlüssel. Settings-
+Abschnitt **Cleanup** (nach „Storage & data"): Warnhinweis, *Scan*,
+aufklappbare Gruppen-Karten mit Checkbox je Gruppe/Eintrag, Fußzeile
+„Selected: X in N items — Preview", Vorschau-Dialog mit der Dry-Run-Liste
+(gekappt, „… and N more") und dem Warntext, *Delete* über den nach
+`ui/src/components/` gehobenen `ConfirmDialog`, Ergebnis + Skipped-Liste,
+„Protected"-Liste, „Cleanup history", Help-Hinweis (Plan 12). Live geprüft
+gegen den Dev-Mock (Scan, Auswahl, Vorschau, Bestätigen, Historie) und mit
+einem echten Scan auf den Daten des Nutzers (unten).
+
+Gemessen 2026-09-20 mit echtem `aiwm-cored` aus dem Worktree (`8922e8c`,
+`AIWM_DATA_DIR=E:\AI\data`, Port 48160, Desktop-App nicht aktiv), DB vorher
+ins Session-Scratchpad gesichert (`aiwm.db` SHA-256 `0D070E04…43F5DBD` — nach
+dem Lauf byte-gleich, nur `-wal`/`-shm` neu, weil Migration 0021 live
+angewendet wurde), `config.toml` unangetastet (Hash und mtime gleich).
+**Es wurde nichts gelöscht: nur `GET /cleanup/scan` und `POST /cleanup/apply`
+mit `dry_run: true`; `cleanup_log` hat 0 Zeilen, `GET /cleanup/log` ist `[]`,
+alle Ordner haben vor und nach dem Lauf dieselben Datei-/Byte-Zahlen.** Was
+davon geht, entscheidet der Nutzer auf der Seite.
+
+| Schritt | Ergebnis |
+|---|---|
+| `GET /storage/locations` (2,64 s) | 12 Zeilen: outputs 0 B / 0; datasets 0 / 0; training 202.148.331 B / 161; models 148.320.782.317 B / 117; runtimes 21.878.826.432 B / 199.116; cache 283.550 B / 60; downloads 0 / 0; **logs 1.522.418 B / 10; exports (fehlt) 0 / 0; voice_identities (fehlt) 0 / 0; comfyui_data 152.028 B / 3; pending_import (fehlt) 0 / 0**; alle `skipped: 0`; `volume_free_bytes` 1.174.374.703.104 von 1.738.237.014.016 auf `E:` (der in Plan 10 notierte `null`-Befund tritt nicht mehr auf) |
+| `GET /cleanup/scan` | **0,257 s**, 2.178 B JSON, 9 Gruppen, 3 Protected-Hinweise |
+| `media_retention` / `media_orphans` | leer / leer — `outputs/` ist leer (0 Dateien); die 49 `jobs.output_path`-Zeilen zeigen alle auf nicht mehr vorhandene Dateien (nichts anzubieten) |
+| `discarded_frames` | 2 Einträge, **0 Dateien / 0 B**: „missveronika milkpreg" 1.985 Zeilen (1.794 blur, 174 transition, 17 duplicate), „train-material" 4 Zeilen — die vorhandenen Frame-Dateien dieser beiden Datasets sind die **Quellbilder** (91 unter `D:\…\missveronika milkpreg\Pics`, 54 im Scratchpad-Quellordner); der Guard bietet keine davon an, Apply würde nur die aussortierten Zeilen entfernen (wie „Clean up discarded" auf der Dataset-Seite) |
+| `unclaimed_dataset_folders` | leer — `outputs\datasets` ist leer |
+| `missing_frame_rows` | 1 Eintrag: „missveronika milkpreg" **1.960 von 2.051** Frame-Zeilen (unabhängig per SQL nachgezählt: 1.926 aussortierte + 34 behaltene Zeilen zeigen nach `E:\AI\data\outputs\datasets\01a0b38e-f3bb…\raw\Vids\…`, Ordner existiert nicht, Laufwerk `E:` ist da — genau der bekannte Befund); „train-material" fehlt zu Recht (54/54 Dateien vorhanden) |
+| `finished_runs` | 1 Eintrag: „myrender-v3 — whole folder" `E:\AI\data\training\01a0bab4-546e…`, **10 Dateien / 93.536.565 B** (Checkpoint 46.223.656, `optimizer.pt` 47.115.531, 2 Samples + Thumbs, 2× `config.yaml`, `train.log`, `trainer.pid`), Begründung „the result LoRA "myrender-v3" is in the library" — die Library-Datei `E:\AI\models\image\loras\myrender-v3.safetensors` ist eine eigene Datei (ein einziger Hardlink). Lauf 1 „myrender-v2" (Ordner seit dem 17.09. weg, `NotFound`) wird still übersprungen — weder angeboten noch protected. Beides ist die Lineage des Nutzers: nur Dry-Run |
+| `caches` | 1 Eintrag „Registry and runtime caches" `E:\AI\data\cache` **60 Dateien / 283.550 B** (alles `registry/*.json`); kein Download-Staging (56 Downloads alle done/failed, `.downloads` leer), keine ComfyUI-Reste (in `comfyui-data` liegen nur `aiwm-model-paths.yaml` und `user/comfyui.db` — nicht `input/temp/output`, richtig nicht angeboten), kein `.pending-import` |
+| `old_logs` / `db_backups` | leer / leer — ältestes Log `aiwm.log.2026-09-11` (9 Tage); `exports/` existiert nicht |
+| `protected` | Model store `E:\AI\models` („models are never cleaned up here — delete a model from the library"); Runtime installs `E:\AI\data\runtimes` („managed from Settings"); Voice identities `E:\AI\data\voice-identities` („user assets") |
+| `POST /cleanup/apply` `dry_run: true` — (a) `caches/cache`, (b) ganze Gruppe `missing_frame_rows`, (c) `finished_runs/01a0bab4…` | HTTP 200, 0,146 s: `dry_run: true`, **70 Dateien / 93.820.115 B / 1.960 Zeilen, 0 skipped**; Pfade exakt die 60 `cache\registry\*.json` + die 10 Dateien des Lauf-Ordners (alle auf `E:\`), `missing_frame_rows` 0 Pfade / 1.960 Zeilen |
+| `POST /cleanup/apply` `dry_run: true` — beide `discarded_frames`-Einträge | HTTP 200, 0,041 s: **0 Dateien / 0 B / 1.989 Zeilen, 0 Pfade** — kein `D:\`- und kein Scratchpad-Pfad in der Liste |
+| Nachher (Beweis) | `cache` 60 / 283.550 B, Lauf-Ordner 10 / 93.536.565 B, `training` 161 / 202.148.331 B, `logs` 10, `outputs` 0 — identisch; `dataset_frames` 2.051 + 54 Zeilen wie vorher; `cleanup_log` 0 Zeilen; `GET /cleanup/log` `[]`; `D:\…\Pics` weiter 91 Dateien; Daemon-Log zeigt genau zwei `cleanup apply dry_run=true`-Zeilen |
+| Teardown | Daemon PID 5040 beendet, kein `aiwm-cored`/`cargo` mehr, Port 48160 ohne Listener |
+
+Kein Eintrag war falsch (nichts angeboten, was nicht gehen dürfte).
+Auffälligkeiten für später (nicht Plan 13): der Export-Ordner
+`E:\AI\data\training\datasets\myrenders-v1` (151 Dateien / 108.611.766 B,
+davon `_latent_cache` 50 / 28.331.608 B — vom Trainer erzeugt, neu
+berechenbar) wird weder angeboten noch erwähnt — Exporte sind laut Spec keine
+Gruppe; die DB-Sicherungen neben der Datenbank (`aiwm.db.bak-task11-…`,
+`aiwm.db.bak-vram-estimate-fix`, `-wal/-shm.bak-…`) liegen im Datenroot statt
+in `exports/` und sind für die Seite unsichtbar (Generalbereinigung);
+`jobs`-Zeilen ohne Datei (49) haben keine Gruppe — nur Frame-Zeilen; ein
+Dataset kann in `discarded_frames` und `missing_frame_rows` zugleich stehen
+(hier 1.926 gemeinsame Zeilen) — wer beide wählt, bekommt beim zweiten
+Eintrag entsprechend weniger (best effort, wie vorgesehen).
+
+- ✅ **Settings-Seite "Cleanup" (Speicher aufräumen)** — eine eigene Seite, die
   anhand der konfigurierten Pfade (Settings → "Data locations" / `[paths]`)
   und der eigenen Datenbank ermittelt, was die App selbst erzeugt hat und
   entfernt werden könnte, gruppiert nach Art, mit Größe und Anzahl pro Gruppe:

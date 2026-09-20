@@ -23,12 +23,14 @@ import { getTheme, setTheme, type Theme } from "../../lib/theme";
 import { formatGB } from "../../lib/units";
 import { openFolder } from "../../lib/browse";
 import { BackupCard } from "./BackupCard";
+import { Cleanup } from "./Cleanup";
 import { DataLocations, type PathField } from "./DataLocations";
 import "./settings.css";
 
 const SECTIONS: NavSection[] = [
   { id: "general", label: "General" },
   { id: "storage", label: "Storage & data" },
+  { id: "cleanup", label: "Cleanup" },
   { id: "performance", label: "Performance" },
   { id: "runtimes", label: "Runtimes" },
   { id: "network", label: "Network & API" },
@@ -612,10 +614,13 @@ export function Settings() {
             </>
           )}
 
+          {section === "cleanup" && <Cleanup />}
           {section === "backup" && <BackupCard />}
         </div>
       </div>
 
+      {/* The Cleanup section has nothing to save and its own sticky footer. */}
+      {section !== "cleanup" && (
       <div className="settings__bar">
         {status && (
           <span className={status.kind === "ok" ? "settings__ok" : "settings__err"}>
@@ -632,6 +637,7 @@ export function Settings() {
           {saving ? "Saving…" : "Save changes"}
         </button>
       </div>
+      )}
     </div>
   );
 }

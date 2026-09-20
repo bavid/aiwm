@@ -207,6 +207,9 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/external-engines/detach", post(detach_engine))
         .route("/storage", get(storage_report))
         .route("/storage/locations", get(storage_locations))
+        .route("/cleanup/scan", get(cleanup_scan))
+        .route("/cleanup/apply", post(cleanup_apply))
+        .route("/cleanup/log", get(cleanup_log))
         .route("/outputs/cleanup", post(cleanup_outputs))
         .route("/models/{id}/benchmark", post(benchmark_model))
         .route("/models/{id}/benchmarks", get(model_benchmarks))
@@ -1132,6 +1135,31 @@ async fn storage_locations(
     State(app): AppState,
 ) -> Result<Json<Vec<crate::cleanup::StorageLocation>>, ApiError> {
     Ok(Json(handlers::storage_locations(&app).await?))
+}
+
+async fn cleanup_scan(
+    State(app): AppState,
+) -> Result<Json<crate::cleanup::CleanupReport>, ApiError> {
+    Ok(Json(handlers::cleanup_scan(&app).await?))
+}
+
+async fn cleanup_apply(
+    State(app): AppState,
+    Json(body): Json<crate::cleanup::ApplyRequest>,
+) -> Result<Json<crate::cleanup::ApplyResult>, ApiError> {
+    Ok(Json(handlers::cleanup_apply(&app, body).await?))
+}
+
+#[derive(Deserialize)]
+struct CleanupLogQuery {
+    limit: Option<i64>,
+}
+
+async fn cleanup_log(
+    State(app): AppState,
+    Query(q): Query<CleanupLogQuery>,
+) -> Result<Json<Vec<crate::db::CleanupLogEntry>>, ApiError> {
+    Ok(Json(handlers::cleanup_log(&app, q.limit).await?))
 }
 
 async fn cleanup_outputs(

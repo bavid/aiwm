@@ -1,5 +1,6 @@
-import type { SkippedFile } from "../../lib/ipc";
-import { skipReasonLabel } from "./curation";
+import type { SkippedFile } from "../lib/ipc";
+import { skipReasonLabel } from "./skip-reasons";
+import "./skipped-files.css";
 
 /** The files a deletion left alone, and why — collapsed behind a count, since
  *  a large cleanup can skip many (a shared still, a failing drive). */

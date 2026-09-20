@@ -276,6 +276,16 @@ impl<'a> DatasetFrameRepo<'a> {
         Ok(deleted)
     }
 
+    /// `(frame_path, source_path)` of every frame row there is — what the
+    /// cleanup scan judges the datasets root's folders against.
+    pub async fn list_all_paths(&self) -> Result<Vec<(String, String)>> {
+        Ok(
+            sqlx::query_as("SELECT frame_path, source_path FROM dataset_frames")
+                .fetch_all(self.pool)
+                .await?,
+        )
+    }
+
     /// `(frame_path, source_path)` of every frame that is *not* in
     /// `dataset_id` — other datasets' frames and frames without a dataset.
     /// Housekeeping never deletes any of these files.

@@ -1,0 +1,364 @@
+/* Settings → Cleanup (Plan 13): the scan toolbar, one card per group with
+   its entry rows, the sticky "Selected …" footer, the result panel, the
+   protected list and the history table. The preview dialog reuses
+   `components/confirm-dialog.css`. */
+
+.cleanup {
+  display: grid;
+  gap: var(--space-4);
+}
+
+.cleanup__intro {
+  margin: 0 0 var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border-left: 3px solid var(--load-warn);
+  border-radius: var(--radius-sm);
+  background: color-mix(in oklab, var(--load-warn) 10%, var(--surface));
+  font-size: var(--text-sm);
+  line-height: 1.55;
+}
+
+.cleanup__toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
+.cleanup__status:empty {
+  display: none;
+}
+
+.cleanup__empty {
+  margin: 0;
+  line-height: 1.5;
+}
+
+/* --- one group ------------------------------------------------------- */
+
+.cleanup-group__head {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: var(--space-3);
+  margin-bottom: var(--space-2);
+}
+
+.cleanup-group__all,
+.cleanup-entry__row input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.cleanup-group__all:disabled,
+.cleanup-entry__row input:disabled {
+  cursor: not-allowed;
+}
+
+.cleanup-group__all:focus-visible,
+.cleanup-entry__row input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.cleanup-group__title {
+  margin: 0;
+  font-size: var(--text-md);
+  font-weight: 600;
+}
+
+.cleanup-group__totals {
+  color: var(--muted);
+  font-size: var(--text-sm);
+  white-space: nowrap;
+}
+
+.cleanup-group__what {
+  margin: 0 0 var(--space-3);
+  line-height: 1.5;
+}
+
+.cleanup-entries {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border-top: 1px solid var(--border-soft);
+}
+
+.cleanup-entry {
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.cleanup-entry[data-checked="true"] {
+  background: color-mix(in oklab, var(--accent) 6%, transparent);
+}
+
+.cleanup-entry__row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto auto;
+  align-items: center;
+  gap: var(--space-3);
+  cursor: pointer;
+  font-size: var(--text-sm);
+}
+
+.cleanup-entry__label {
+  overflow-wrap: anywhere;
+}
+
+.cleanup-entry__num {
+  min-width: 5.5em;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  text-align: right;
+  white-space: nowrap;
+}
+
+.cleanup-entry__num:empty {
+  min-width: 0;
+}
+
+.cleanup-entry__detail {
+  margin: var(--space-1) 0 0 calc(16px + var(--space-3));
+  padding: 0;
+  list-style: none;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+}
+
+.cleanup-entry__detail li {
+  overflow-wrap: anywhere;
+}
+
+.cleanup-group__more {
+  margin-top: var(--space-3);
+}
+
+/* --- the sticky footer ------------------------------------------------ */
+
+.cleanup__footer {
+  position: sticky;
+  bottom: var(--space-3);
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-3) var(--space-4);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: color-mix(in oklab, var(--surface) 92%, transparent);
+  backdrop-filter: blur(6px);
+  box-shadow: 0 8px 24px color-mix(in oklab, black 18%, transparent);
+}
+
+.cleanup__selected {
+  font-size: var(--text-sm);
+}
+
+.cleanup__preview {
+  margin-left: auto;
+  padding: var(--space-2) var(--space-5);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: var(--accent);
+  color: var(--accent-fg);
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity var(--dur) var(--ease);
+}
+
+.cleanup__preview:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.cleanup__preview:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.cleanup__refused {
+  flex-basis: 100%;
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  border-left: 3px solid var(--load-crit);
+  background: color-mix(in oklab, var(--load-crit) 8%, var(--surface));
+  color: var(--load-crit);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+}
+
+.cleanup__refused::before {
+  content: "\26A0\FE0E\00A0";
+}
+
+/* --- the result panel ------------------------------------------------- */
+
+.cleanup-result {
+  border-color: color-mix(in oklab, var(--load-ok) 45%, var(--border));
+}
+
+.cleanup-result:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.cleanup-result__title {
+  margin: 0 0 var(--space-2);
+  font-size: var(--text-md);
+}
+
+.cleanup-result__title::before {
+  content: "\2713\00A0";
+  color: var(--load-ok);
+}
+
+.cleanup-result p {
+  margin: 0;
+  font-size: var(--text-sm);
+}
+
+/* --- protected --------------------------------------------------------- */
+
+.cleanup-protected__list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.cleanup-protected__list li {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: var(--text-sm);
+}
+
+.cleanup-protected__what {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.cleanup-protected__what::before {
+  content: "\1F512\FE0E\00A0";
+  color: var(--muted);
+}
+
+.cleanup-protected__reason {
+  line-height: 1.5;
+}
+
+/* --- history --------------------------------------------------------- */
+
+.cleanup-history__scroll {
+  overflow-x: auto;
+}
+
+.cleanup-history__table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--text-sm);
+}
+
+.cleanup-history__table th,
+.cleanup-history__table td {
+  padding: var(--space-1) var(--space-2);
+  border-bottom: 1px solid var(--border-soft);
+  text-align: left;
+  vertical-align: top;
+}
+
+.cleanup-history__table th {
+  color: var(--muted);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.cleanup-history__table th.numeric,
+.cleanup-history__table td.numeric {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.cleanup-history__entry {
+  overflow-wrap: anywhere;
+}
+
+/* --- the preview dialog's list ---------------------------------------- */
+
+.cleanup-preview {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  max-height: 50vh;
+  margin: 0;
+  padding: 0 !important;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.cleanup-preview__entry {
+  padding-bottom: var(--space-2);
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.cleanup-preview__head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-3);
+}
+
+.cleanup-preview__label {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.cleanup-preview__amount {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  white-space: nowrap;
+}
+
+.cleanup-preview__paths,
+.cleanup-preview__skipped {
+  margin: var(--space-1) 0 0;
+  padding: 0 !important;
+  list-style: none;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.cleanup-preview__paths li,
+.cleanup-preview__skipped li {
+  overflow-wrap: anywhere;
+}
+
+.cleanup-preview__more {
+  font-family: var(--font-sans);
+  font-style: italic;
+}
+
+.cleanup-preview__skipped {
+  color: var(--load-warn);
+}
+
+.cleanup-preview__path {
+  color: var(--text);
+}

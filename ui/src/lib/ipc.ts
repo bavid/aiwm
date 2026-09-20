@@ -548,7 +548,8 @@ export const storageReport = () => invoke<StorageReport>("storage_report");
  *  measured on disk (Plan 10). */
 export interface StorageLocation {
   /** Stable id: `outputs` | `datasets` | `training` | `models` | `runtimes`
-   *  | `cache` | `downloads`. */
+   *  | `cache` | `downloads` | `logs` | `exports` | `voice_identities`
+   *  | `comfyui_data` | `pending_import`. */
   key: string;
   /** Short human label for the Settings UI. */
   label: string;
@@ -579,6 +580,132 @@ export interface SweepResult {
  *  the Settings "Clean up now" button. A no-op (`deleted_files: 0`) when no
  *  policy is configured (both fields `0`); save one via `saveConfig` first. */
 export const cleanupOutputs = () => invoke<SweepResult>("cleanup_outputs");
+
+// --- cleanup scan (Plan 13) --------------------------------------------
+
+/** Group keys of `GET /cleanup/scan`, in display order. */
+export type CleanupGroupKey =
+  | "media_retention"
+  | "media_orphans"
+  | "discarded_frames"
+  | "unclaimed_dataset_folders"
+  | "missing_frame_rows"
+  | "finished_runs"
+  | "caches"
+  | "old_logs"
+  | "db_backups";
+
+/** One selectable item of a cleanup group: a file, a dataset, a run, a
+ *  folder. `id` is stable within its group (a file name, a dataset or run
+ *  id, a folder name) — what a later apply names. */
+export interface CleanupEntry {
+  id: string;
+  label: string;
+  /** Files that would be deleted. */
+  files: number;
+  bytes: number;
+  /** Database rows that would be removed (frame rows), else 0. */
+  rows: number;
+  /** A few lines for the expanded entry (paths, dates, names) — capped. */
+  detail: string[];
+}
+
+/** One kind of removable content — present even when empty. */
+export interface CleanupGroup {
+  key: CleanupGroupKey | string;
+  label: string;
+  entries: CleanupEntry[];
+  total_files: number;
+  total_bytes: number;
+}
+
+/** Something a user might expect to see offered, and why it is not. */
+export interface ProtectedNote {
+  what: string;
+  reason: string;
+}
+
+/** `GET /cleanup/scan` — what the app generated and could remove, grouped,
+ *  plus what was deliberately not offered. Models, runtimes, voice
+ *  identities, source media and anything a running job, run or download
+ *  needs are never in `groups`. */
+export interface CleanupReport {
+  /** RFC 3339, when the scan ran. */
+  scanned_at: string;
+  groups: CleanupGroup[];
+  protected: ProtectedNote[];
+}
+
+/** Scan for removable content. Walks every app folder — call it on demand
+ *  (the Cleanup page's "Scan" button), never on a timer. Reports only;
+ *  nothing is deleted. */
+export const cleanupScan = () => invoke<CleanupReport>("cleanup_scan");
+
+/** The entries of one group to apply — the scan's ids. An id the scan does
+ *  not (or no longer) offer is skipped with reason `not_offered`. */
+export interface CleanupSelection {
+  group: CleanupGroupKey | string;
+  entry_ids: string[];
+}
+
+/** `POST /cleanup/apply`'s body. `dry_run: true` lists exactly what would
+ *  go and deletes nothing. */
+export interface CleanupApplyRequest {
+  selections: CleanupSelection[];
+  dry_run: boolean;
+}
+
+/** One entry's outcome. In a dry run `files`/`bytes`/`rows` are what would
+ *  go and `paths` the exact files; after a real run, what went. */
+export interface CleanupEntryResult {
+  group: CleanupGroupKey | string;
+  id: string;
+  label: string;
+  files: number;
+  bytes: number;
+  rows: number;
+  skipped: SkippedFile[];
+  paths: string[];
+}
+
+/** What an apply did — or, in a dry run, would do. */
+export interface CleanupApplyResult {
+  dry_run: boolean;
+  deleted_files: number;
+  freed_bytes: number;
+  removed_rows: number;
+  /** Every skip of every entry, with its reason. */
+  skipped: SkippedFile[];
+  entries: CleanupEntryResult[];
+}
+
+/** Apply a selection from the scan through the existing deletion gates —
+ *  or, with `dry_run`, preview it. The whole request is refused (an
+ *  error, nothing deleted) while a selected dataset is busy, a selected
+ *  run has not finished or a selected download is still going; within a
+ *  group each entry is best-effort with skip reasons. Only a real run
+ *  writes the cleanup history. */
+export const cleanupApply = (req: CleanupApplyRequest) =>
+  invoke<CleanupApplyResult>("cleanup_apply", { body: req });
+
+/** One line of the cleanup history (`GET /cleanup/log`). */
+export interface CleanupLogEntry {
+  id: string;
+  /** RFC 3339, UTC. */
+  ts: string;
+  group_key: CleanupGroupKey | string;
+  entry_id: string;
+  entry_label: string;
+  deleted_files: number;
+  freed_bytes: number;
+  removed_rows: number;
+  skipped_count: number;
+  /** Skip reasons and a capped path list. */
+  detail: { skipped?: SkippedFile[]; paths?: string[] };
+}
+
+/** The newest cleanup history rows, newest first (the page shows 20). */
+export const cleanupLog = (limit = 20) => invoke<CleanupLogEntry[]>("cleanup_log", { limit });
 /** Delete a model — its file, links and DB rows. Permanent; refused while
  *  the model is loaded. */
 export const deleteModel = (id: string) => invoke<DeleteOutcome>("delete_model", { id });

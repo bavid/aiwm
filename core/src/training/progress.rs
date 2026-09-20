@@ -296,7 +296,7 @@ pub async fn tail_log(path: &Path, from: u64) -> Result<(String, u64)> {
 /// The unsuffixed file is by definition the last thing written, so it sorts
 /// above every numbered save via [`u64::MAX`]; the real step it corresponds
 /// to is the run's configured total and is already in the database.
-fn checkpoint_step(file_name: &str, run_name: &str) -> Option<u64> {
+pub(crate) fn checkpoint_step(file_name: &str, run_name: &str) -> Option<u64> {
     let stem = file_name.strip_suffix(".safetensors")?;
     let rest = stem.strip_prefix(run_name)?;
     if rest.is_empty() {
@@ -307,7 +307,7 @@ fn checkpoint_step(file_name: &str, run_name: &str) -> Option<u64> {
 
 /// The sort rank of the final, unsuffixed checkpoint — above every numbered
 /// save. Not a real step count; see [`checkpoint_step`].
-const FINAL_CHECKPOINT_RANK: u64 = u64::MAX;
+pub(crate) const FINAL_CHECKPOINT_RANK: u64 = u64::MAX;
 
 /// The step a sample image belongs to, from its file name.
 ///

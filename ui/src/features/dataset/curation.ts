@@ -1,4 +1,4 @@
-import type { DatasetFrame, SkippedFile } from "../../lib/ipc";
+import type { DatasetFrame } from "../../lib/ipc";
 
 /** The two columns of the curation board. */
 export type ColumnId = "keep" | "discard";
@@ -50,19 +50,6 @@ export function errorText(error: unknown): string {
 /** `text` without a trailing full stop, so it can be followed by our own
  *  sentence without ".." (the core's messages may or may not end in one). */
 export const withoutFinalStop = (text: string): string => text.replace(/\.\s*$/, "");
-
-const SKIP_REASON_LABEL: Record<string, string> = {
-  outside_app_folders: "outside the app's folders — not the app's to delete",
-  source_file: "a source file — never deleted",
-  in_use: "still used by another frame",
-  used_by_other_dataset: "used by another dataset",
-  not_a_file: "not a file",
-};
-
-/** Human text for one `SkippedFile.reason`; `"error: …"` is shown verbatim. */
-export function skipReasonLabel(file: SkippedFile): string {
-  return SKIP_REASON_LABEL[file.reason] ?? file.reason;
-}
 
 /** `items` in consecutive slices of at most `size` (the last may be shorter). */
 export function chunk<T>(items: readonly T[], size: number): T[][] {

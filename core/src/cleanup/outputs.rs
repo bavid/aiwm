@@ -24,10 +24,10 @@ use time::{Duration, OffsetDateTime};
 
 /// One regular file directly in the outputs folder.
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct OutputFile {
-    path: PathBuf,
-    bytes: u64,
-    modified: OffsetDateTime,
+pub(super) struct OutputFile {
+    pub(super) path: PathBuf,
+    pub(super) bytes: u64,
+    pub(super) modified: OffsetDateTime,
 }
 
 /// The configured retention rules. Either field `0` disables that rule;
@@ -67,7 +67,7 @@ pub struct SweepResult {
 /// The regular files directly in `dir` (never recurses — the outputs folder
 /// is flat by construction). Missing dir, or an unreadable entry, just means
 /// fewer/no candidates, not an error — the caller can't be blocked by that.
-fn scan(dir: &Path) -> Vec<OutputFile> {
+pub(super) fn scan(dir: &Path) -> Vec<OutputFile> {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return Vec::new();
     };
@@ -91,7 +91,7 @@ fn scan(dir: &Path) -> Vec<OutputFile> {
 /// Which files `policy` marks for deletion, given `now` — split out from
 /// [`sweep`] so the selection logic is testable without touching the
 /// filesystem's write path.
-fn files_to_delete(
+pub(super) fn files_to_delete(
     files: Vec<OutputFile>,
     policy: RetentionPolicy,
     now: OffsetDateTime,

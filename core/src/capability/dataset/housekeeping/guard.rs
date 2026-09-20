@@ -335,6 +335,34 @@ impl WorkFolders {
     }
 }
 
+/// The first path component of `p` below `root` (`<root>/<X>/…` → `X`), or
+/// `None` when `p` is not under `root`.
+pub(super) fn first_component_under(root: &Path, p: &Path) -> Option<OsString> {
+    match p.strip_prefix(root).ok()?.components().next()? {
+        Component::Normal(n) => Some(n.to_os_string()),
+        _ => None,
+    }
+}
+
+/// The names `<X>` directly under the datasets root that something claims:
+/// every prep-job id in `prep_job_ids` (a derived work folder
+/// `<root>/<prep_job_id>`) and the `<X>` of every folder in `folders` that
+/// lies under `root` (other datasets' frame folders, work/export folders,
+/// training-run folders, source folders). Only an *unclaimed* `<root>/<X>`
+/// may ever be deleted into (see the module docs and [`Guard::boundary`]).
+/// Without a root, only the job ids claim.
+pub(super) fn claimed_under<'a>(
+    root: Option<&Path>,
+    prep_job_ids: impl Iterator<Item = &'a str>,
+    folders: impl Iterator<Item = &'a Path>,
+) -> HashSet<OsString> {
+    let mut claimed: HashSet<OsString> = prep_job_ids.map(OsString::from).collect();
+    if let Some(root) = root {
+        claimed.extend(folders.filter_map(|p| first_component_under(root, p)));
+    }
+    claimed
+}
+
 /// `inner` lies strictly inside `outer`.
 fn strictly_inside(inner: &Path, outer: &Path) -> bool {
     inner.starts_with(outer) && inner != outer
@@ -422,23 +450,16 @@ impl Guard {
                     && !source_dirs.iter().any(|d| overlaps(d, w))
             });
 
-        let mut claimed: HashSet<OsString> = snap
-            .others
-            .iter()
-            .filter_map(|d| d.prep_job_id.as_deref())
-            .map(OsString::from)
-            .collect();
-        if let Some(root) = datasets_root.as_deref() {
-            let under = |p: &PathBuf| -> Option<OsString> {
-                match p.strip_prefix(root).ok()?.components().next()? {
-                    Component::Normal(n) => Some(n.to_os_string()),
-                    _ => None,
-                }
-            };
-            claimed.extend(foreign.folders.iter().filter_map(under));
-            claimed.extend(foreign_dirs.iter().filter_map(under));
-            claimed.extend(source_dirs.iter().filter_map(under));
-        }
+        let claimed = claimed_under(
+            datasets_root.as_deref(),
+            snap.others.iter().filter_map(|d| d.prep_job_id.as_deref()),
+            foreign
+                .folders
+                .iter()
+                .chain(&foreign_dirs)
+                .chain(&source_dirs)
+                .map(PathBuf::as_path),
+        );
 
         Self {
             loose,

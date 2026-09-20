@@ -19,7 +19,8 @@ use crate::{CoreError, Result};
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct StorageLocation {
     /// Stable identifier (`outputs`, `datasets`, `training`, `models`,
-    /// `runtimes`, `cache`, `downloads`).
+    /// `runtimes`, `cache`, `downloads`, `logs`, `exports`,
+    /// `voice_identities`, `comfyui_data`, `pending_import`).
     pub key: String,
     /// Short human label for the Settings UI.
     pub label: String,
@@ -90,6 +91,39 @@ fn location_specs(paths: &AppPaths, store_path: &Path) -> Vec<LocationSpec> {
             path: paths.downloads_dir(),
             configurable: false,
         },
+        // Plan 13: the fixed folders that were invisible before. None of
+        // them can be pointed elsewhere; voice identities are the user's own
+        // reference clips, never cleanup material.
+        LocationSpec {
+            key: "logs",
+            label: "Logs",
+            path: paths.logs_dir(),
+            configurable: false,
+        },
+        LocationSpec {
+            key: "exports",
+            label: "Backups",
+            path: paths.exports_dir(),
+            configurable: false,
+        },
+        LocationSpec {
+            key: "voice_identities",
+            label: "Voice identities \u{2014} user assets",
+            path: paths.voice_identities_dir(),
+            configurable: false,
+        },
+        LocationSpec {
+            key: "comfyui_data",
+            label: "ComfyUI scratch",
+            path: paths.comfyui_data_dir(),
+            configurable: false,
+        },
+        LocationSpec {
+            key: "pending_import",
+            label: "Pending import",
+            path: paths.pending_import_dir(),
+            configurable: false,
+        },
     ]
 }
 
@@ -147,11 +181,11 @@ fn nearest_existing_ancestor(path: &Path) -> PathBuf {
 
 /// What a recursive walk of one folder found.
 #[derive(Debug, Default, PartialEq, Eq)]
-struct WalkTotals {
-    exists: bool,
-    bytes: u64,
-    files: u64,
-    skipped: u64,
+pub(super) struct WalkTotals {
+    pub(super) exists: bool,
+    pub(super) bytes: u64,
+    pub(super) files: u64,
+    pub(super) skipped: u64,
 }
 
 /// Recursively sum the regular files under `dir`. Never follows a symlink or
@@ -159,7 +193,7 @@ struct WalkTotals {
 /// descended into or counted as a file. An entry that cannot be read
 /// (permission, a race) is counted in `skipped`, never fatal. A missing
 /// `dir` reports `exists: false` and all-zero totals.
-fn walk(dir: &Path) -> WalkTotals {
+pub(super) fn walk(dir: &Path) -> WalkTotals {
     if !dir.is_dir() {
         return WalkTotals::default();
     }
@@ -214,14 +248,14 @@ fn walk(dir: &Path) -> WalkTotals {
 /// SYMLINK`) — check the raw attribute bit directly. No `unsafe`: this is a
 /// plain bitwise read of a value `std` already computed.
 #[cfg(windows)]
-fn is_reparse_point(meta: &std::fs::Metadata) -> bool {
+pub(crate) fn is_reparse_point(meta: &std::fs::Metadata) -> bool {
     use std::os::windows::fs::MetadataExt;
     const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
     meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
 }
 
 #[cfg(not(windows))]
-fn is_reparse_point(_meta: &std::fs::Metadata) -> bool {
+pub(crate) fn is_reparse_point(_meta: &std::fs::Metadata) -> bool {
     false
 }
 
@@ -331,11 +365,24 @@ mod tests {
                 "models",
                 "runtimes",
                 "cache",
-                "downloads"
+                "downloads",
+                "logs",
+                "exports",
+                "voice_identities",
+                "comfyui_data",
+                "pending_import",
             ]
         );
+        const FIXED: [&str; 6] = [
+            "downloads",
+            "logs",
+            "exports",
+            "voice_identities",
+            "comfyui_data",
+            "pending_import",
+        ];
         for row in &rows {
-            let expect_configurable = row.key != "downloads";
+            let expect_configurable = !FIXED.contains(&row.key.as_str());
             assert_eq!(
                 row.configurable, expect_configurable,
                 "{} configurable flag",
@@ -350,5 +397,48 @@ mod tests {
         let outputs_row = rows.iter().find(|r| r.key == "outputs").unwrap();
         assert!(!outputs_row.exists, "nothing has written to outputs yet");
         assert_eq!(outputs_row.bytes, 0);
+    }
+
+    /// Plan 13: the five folders that were invisible before — logs, backup
+    /// exports, voice identities, ComfyUI's scratch folder and the pending
+    /// import staging — are reported at their `AppPaths` locations, and
+    /// voice identities are marked as the user's own assets.
+    #[tokio::test]
+    async fn report_measures_the_five_fixed_folders_at_their_app_paths() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = AppPaths::rooted(tmp.path().join("aiwm"));
+        std::fs::create_dir_all(paths.logs_dir()).unwrap();
+        std::fs::write(paths.logs_dir().join("aiwm.log"), vec![0u8; 7]).unwrap();
+        std::fs::create_dir_all(paths.exports_dir()).unwrap();
+        std::fs::write(paths.exports_dir().join("b.zip"), vec![0u8; 11]).unwrap();
+
+        let rows = report(&paths, &tmp.path().join("models")).await.unwrap();
+        let row = |key: &str| rows.iter().find(|r| r.key == key).unwrap();
+
+        assert_eq!(row("logs").path, paths.logs_dir().display().to_string());
+        assert_eq!(row("logs").bytes, 7);
+        assert_eq!(
+            row("exports").path,
+            paths.exports_dir().display().to_string()
+        );
+        assert_eq!(row("exports").bytes, 11);
+        assert_eq!(
+            row("voice_identities").path,
+            paths.voice_identities_dir().display().to_string()
+        );
+        assert!(
+            row("voice_identities").label.contains("user assets"),
+            "{}",
+            row("voice_identities").label
+        );
+        assert_eq!(
+            row("comfyui_data").path,
+            paths.comfyui_data_dir().display().to_string()
+        );
+        assert_eq!(
+            row("pending_import").path,
+            paths.pending_import_dir().display().to_string()
+        );
+        assert!(!row("pending_import").exists);
     }
 }
