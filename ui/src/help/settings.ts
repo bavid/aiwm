@@ -178,6 +178,16 @@ const NETWORK_SETTINGS: readonly HelpSetting[] = [
     benefit: "Gated stacks download like any other.",
   },
   {
+    key: "civitai-front-door",
+    label: "Civitai front door",
+    what: "Which of Civitai's two domains Discover searches and downloads from: civitai.com, the safe-for-work catalogue, or civitai.red, Civitai's own domain that also carries adult models.",
+    why: "Civitai split into two front doors in April 2026. Both answer the same API, so this decides which host your searches and download links go to — useful if you want adult models at all, and it keeps the app on the door you intend to use.",
+    effect: "Saved to config.toml and applied after a restart. It does not by itself show adult models: what comes back is still governed by the “Show NSFW” tick in Discover, which stays off until you set it.",
+    benefit: "One deliberate choice instead of a hidden default, and download links that match the door you browse.",
+    pitfalls:
+      "Neither door needs an account for browsing or for public downloads — verified on 2026-09-20: unauthenticated requests to both hosts answered identically. An API key is only for gated or early-access models.",
+  },
+  {
     key: "civitai-key",
     label: "Civitai API key",
     what: "Optional; for gated or early-access content and higher rate limits. Anonymous browsing works without one.",

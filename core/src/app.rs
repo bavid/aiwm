@@ -209,7 +209,9 @@ impl App {
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty());
         let civitai_registry = Arc::new(Registry::new(
-            Box::new(CivitaiSource::new()?.with_token(civitai_token)),
+            Box::new(
+                CivitaiSource::for_front_door(config.civitai.front_door)?.with_token(civitai_token),
+            ),
             paths.cache_dir().join("civitai_registry"),
             offline.clone(),
         ));

@@ -60,6 +60,7 @@ use super::{
     Gated, ModelSource, RegistryStatus, RemoteFile, RemoteFormat, RemoteModel, RemoteModelDetails,
     SearchQuery, SearchSort,
 };
+use crate::config::CivitaiFrontDoor;
 use crate::db::now_rfc3339;
 use crate::{CoreError, Result};
 
@@ -94,9 +95,18 @@ impl CivitaiSource {
         Self::build(DEFAULT_BASE.to_string(), None)
     }
 
-    /// Point at a fixture / mirror.
+    /// Point at a fixture (tests) or any other base URL.
     pub fn with_base_url(base: impl Into<String>) -> Result<Self> {
         Self::build(base.into(), None)
+    }
+
+    /// The real service on the configured front door — `civitai.com` (the
+    /// safe-for-work catalogue) or `civitai.red` (Civitai's own domain that
+    /// also carries adult models). Both serve the same API; the download URLs
+    /// a search returns point at whichever host was asked, and what comes back
+    /// is still governed by [`SearchQuery::nsfw`].
+    pub fn for_front_door(front_door: CivitaiFrontDoor) -> Result<Self> {
+        Self::build(front_door.base_url().to_string(), None)
     }
 
     /// Add an API key for gated/early-access content or higher limits.

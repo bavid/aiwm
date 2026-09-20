@@ -4,7 +4,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::agent::{HermesInstallStatus, PermissionDecision};
-use crate::config::{ComfyConfig, LlamaConfig, ModelsConfig, RetentionConfig};
+use crate::config::{CivitaiConfig, ComfyConfig, LlamaConfig, ModelsConfig, RetentionConfig};
 use crate::db::{AgentSession, AgentSessionEvent, Job, JobEvent};
 use crate::registry::{Freshness, RemoteModel, SearchQuery, SearchSort};
 use crate::runtime::{Health, RuntimeKind};
@@ -56,6 +56,10 @@ pub struct ConfigUpdate {
     /// keep retention disabled (both rules `0`).
     #[serde(default)]
     pub retention: RetentionConfig,
+    /// Which Civitai front door Discover uses. New in this slice; older
+    /// clients that omit it keep the safe-for-work default.
+    #[serde(default)]
+    pub civitai: CivitaiConfig,
 }
 
 /// The `paths` slice of [`ConfigUpdate`] — plain strings from the Settings

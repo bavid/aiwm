@@ -101,6 +101,7 @@ pub async fn save_config(app: &App, update: ConfigUpdate) -> Result<Config> {
     cfg.paths.datasets_path = non_empty_path(&update.paths.datasets_path);
     cfg.paths.training_path = non_empty_path(&update.paths.training_path);
     cfg.retention = update.retention;
+    cfg.civitai = update.civitai;
     cfg.save(&app.paths)?;
     app.set_offline(cfg.offline_mode);
 
@@ -2917,6 +2918,7 @@ mod tests {
             models: app.config.models,
             paths: Default::default(),
             retention: Default::default(),
+            civitai: Default::default(),
         };
         update.comfyui.vram_mode = "lowvram".to_string();
 
@@ -2956,6 +2958,7 @@ mod tests {
             models: app.config.models,
             paths: Default::default(),
             retention: Default::default(),
+            civitai: Default::default(),
         };
 
         let saved = save_config(&app, update).await.unwrap();
@@ -2991,6 +2994,7 @@ mod tests {
                 ..Default::default()
             },
             retention: Default::default(),
+            civitai: Default::default(),
         };
 
         let saved = save_config(&app, update).await.unwrap();
@@ -3007,6 +3011,7 @@ mod tests {
             models: app.config.models,
             paths: PathsUpdateDto::default(),
             retention: Default::default(),
+            civitai: Default::default(),
         };
         let saved = save_config(&app, clear).await.unwrap();
         assert_eq!(saved.paths.datasets_path, None);
@@ -3237,6 +3242,7 @@ mod tests {
                 models: cfg.models,
                 paths: crate::api::dto::PathsUpdateDto::default(),
                 retention: cfg.retention,
+                civitai: cfg.civitai,
             },
         )
         .await
@@ -3289,6 +3295,7 @@ mod tests {
                 models: cfg.models,
                 paths: crate::api::dto::PathsUpdateDto::default(),
                 retention: cfg.retention,
+                civitai: cfg.civitai,
             },
         )
         .await

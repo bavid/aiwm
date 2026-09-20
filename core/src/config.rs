@@ -56,6 +56,47 @@ pub struct Config {
     /// manual "clean up now" trigger and an optional startup sweep re-read
     /// `config.toml` fresh, so a saved change applies immediately.
     pub retention: RetentionConfig,
+    /// Which Civitai front door Discover searches and downloads from.
+    /// Applied at startup; a change needs a restart.
+    pub civitai: CivitaiConfig,
+}
+
+/// The `[civitai]` table.
+///
+/// Civitai split into two front doors on 2026-04-16: `civitai.com` carries the
+/// safe-for-work catalogue, `civitai.red` the whole one including adult models.
+/// Both serve the *same* API — verified 2026-09-20 with unauthenticated
+/// requests to `/api/v1/models` on both hosts, which answered byte-identically
+/// (18,632 B for `?limit=1`, 230,197 B for `?limit=3&nsfw=true`) — and the
+/// download URLs a search returns point at whichever host was asked. Which
+/// models come back is still governed by the request's own `nsfw` flag
+/// ([`crate::registry::SearchQuery::nsfw`], off unless the user ticks it), not
+/// by the host.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct CivitaiConfig {
+    pub front_door: CivitaiFrontDoor,
+}
+
+/// Which of the two hosts to talk to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CivitaiFrontDoor {
+    /// `civitai.com` — the safe-for-work front door. The default.
+    #[default]
+    Com,
+    /// `civitai.red` — Civitai's own domain that also carries adult models.
+    Red,
+}
+
+impl CivitaiFrontDoor {
+    /// The base URL for this front door, without a trailing slash.
+    pub fn base_url(self) -> &'static str {
+        match self {
+            Self::Com => "https://civitai.com",
+            Self::Red => "https://civitai.red",
+        }
+    }
 }
 
 /// Upper bound for `[comfyui].reserve_vram_mb` — reserving more than this on a
@@ -247,6 +288,7 @@ impl Default for Config {
             models: ModelsConfig::default(),
             paths: PathsConfig::default(),
             retention: RetentionConfig::default(),
+            civitai: CivitaiConfig::default(),
         }
     }
 }
@@ -663,6 +705,53 @@ mod tests {
         let cfg = Config::load(&paths).unwrap();
         assert_eq!(cfg.paths, PathsConfig::default());
         assert_eq!(cfg.paths.outputs_path, None);
+    }
+
+    #[test]
+    fn the_front_door_defaults_to_the_safe_for_work_one_and_maps_to_its_host() {
+        assert_eq!(CivitaiFrontDoor::default(), CivitaiFrontDoor::Com);
+        assert_eq!(Config::default().civitai.front_door, CivitaiFrontDoor::Com);
+        assert_eq!(CivitaiFrontDoor::Com.base_url(), "https://civitai.com");
+        assert_eq!(CivitaiFrontDoor::Red.base_url(), "https://civitai.red");
+        // No trailing slash: `CivitaiSource` joins paths onto this verbatim.
+        for door in [CivitaiFrontDoor::Com, CivitaiFrontDoor::Red] {
+            assert!(!door.base_url().ends_with('/'));
+        }
+    }
+
+    #[test]
+    fn the_civitai_table_round_trips_through_save_and_read() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = AppPaths::rooted(tmp.path());
+        let cfg = Config {
+            civitai: CivitaiConfig {
+                front_door: CivitaiFrontDoor::Red,
+            },
+            ..Config::default()
+        };
+
+        cfg.save(&paths).unwrap();
+        let reloaded = Config::read_from(&paths).unwrap();
+
+        assert_eq!(reloaded.civitai.front_door, CivitaiFrontDoor::Red);
+        let text = std::fs::read_to_string(paths.config_file()).unwrap();
+        assert!(
+            text.contains("front_door = \"red\""),
+            "the table is written in lowercase so it reads like the domain: {text}"
+        );
+    }
+
+    #[test]
+    fn a_config_without_the_civitai_table_keeps_the_default_front_door() {
+        // An older `config.toml` (the table is new) must still load.
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = AppPaths::rooted(tmp.path());
+        std::fs::create_dir_all(tmp.path()).unwrap();
+        std::fs::write(paths.config_file(), "store_path = \"E:\\\\AI\\\\models\"\n").unwrap();
+
+        let cfg = Config::read_from(&paths).unwrap();
+
+        assert_eq!(cfg.civitai.front_door, CivitaiFrontDoor::Com);
     }
 
     #[test]

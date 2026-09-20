@@ -1484,6 +1484,7 @@ const CONFIG: AnyRecord = {
     datasets_path: null, training_path: null,
   },
   retention: { max_age_days: 0, max_total_mb: 0 },
+  civitai: { front_door: "com" as const },
 };
 
 const KNOWN_MOCK: AnyRecord[] = [
