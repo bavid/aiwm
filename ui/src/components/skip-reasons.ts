@@ -11,6 +11,7 @@ const SKIP_REASON_LABEL: Record<string, string> = {
   not_offered: "no longer offered by the last scan — scan again",
   missing: "already gone",
   link_not_followed: "a link — never followed",
+  download_active: "its download resumed — still in use",
 };
 
 /** Human text for one `SkippedFile.reason`; `"error: …"` and the guard's
