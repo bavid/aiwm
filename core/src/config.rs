@@ -317,17 +317,28 @@ impl Config {
         self.write(&paths.config_file())
     }
 
+    /// Read `config.toml`, or create it with defaults for this data root.
+    ///
+    /// A **new** file gets `store_path = <data root>/models` rather than the
+    /// machine-wide [`DEFAULT_STORE_PATH`]: a data root is self-contained
+    /// (ADR-026), and a fresh root must never adopt another installation's
+    /// model store. That is also what keeps the test suite off the real store
+    /// — every test builds an `App` on a temp root, and before this each of
+    /// them pointed its store at `E:\AI\models` and could write there.
+    /// An existing file is read verbatim; nothing rewrites a configured path.
     fn read_or_create(file: &Path) -> Result<Self> {
         if file.exists() {
             let text = std::fs::read_to_string(file)
                 .map_err(|e| CoreError::Config(format!("reading {}: {e}", file.display())))?;
-            toml::from_str(&text)
-                .map_err(|e| CoreError::Config(format!("parsing {}: {e}", file.display())))
-        } else {
-            let cfg = Self::default();
-            cfg.write(file)?;
-            Ok(cfg)
+            return toml::from_str(&text)
+                .map_err(|e| CoreError::Config(format!("parsing {}: {e}", file.display())));
         }
+        let mut cfg = Self::default();
+        if let Some(root) = file.parent() {
+            cfg.store_path = root.join("models");
+        }
+        cfg.write(file)?;
+        Ok(cfg)
     }
 
     fn write(&self, file: &Path) -> Result<()> {
@@ -440,7 +451,15 @@ mod tests {
 
         let cfg = Config::load(&paths).unwrap();
 
-        assert_eq!(cfg, Config::default());
+        // Everything but the store path, which a new root puts inside itself
+        // (see `a_fresh_data_root_keeps_its_model_store_inside_itself`).
+        assert_eq!(
+            cfg,
+            Config {
+                store_path: tmp.path().join("models"),
+                ..Config::default()
+            }
+        );
         assert!(paths.config_file().is_file());
         // Re-loading reads the same values back.
         assert_eq!(Config::load(&paths).unwrap(), cfg);
@@ -705,6 +724,37 @@ mod tests {
         let cfg = Config::load(&paths).unwrap();
         assert_eq!(cfg.paths, PathsConfig::default());
         assert_eq!(cfg.paths.outputs_path, None);
+    }
+
+    #[test]
+    fn a_fresh_data_root_keeps_its_model_store_inside_itself() {
+        // Regression: every test builds an `App` on a temp root, and a created
+        // config.toml used to carry the machine-wide DEFAULT_STORE_PATH — so a
+        // test run wrote into the real `E:\AI\models` (observed 2026-09-20: a
+        // 40 kB stub appeared under `llm/downloaded-7b-cb7e76e9/`).
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = AppPaths::rooted(tmp.path());
+
+        let cfg = Config::load(&paths).unwrap();
+
+        assert_eq!(cfg.store_path, tmp.path().join("models"));
+        assert_ne!(cfg.store_path, PathBuf::from(DEFAULT_STORE_PATH));
+        assert!(
+            paths.config_file().exists(),
+            "the default file was written for this root"
+        );
+    }
+
+    #[test]
+    fn an_existing_config_keeps_the_store_path_it_names() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = AppPaths::rooted(tmp.path());
+        std::fs::create_dir_all(paths.root()).unwrap();
+        std::fs::write(paths.config_file(), "store_path = 'E:\\\\AI\\\\models'\n").unwrap();
+
+        let cfg = Config::read_from(&paths).unwrap();
+
+        assert_eq!(cfg.store_path, PathBuf::from(r"E:\AI\models"));
     }
 
     #[test]
