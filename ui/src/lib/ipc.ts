@@ -104,6 +104,7 @@ export interface AppConfig {
   models: ModelsConfig;
   paths: PathsConfig;
   retention: RetentionConfig;
+  civitai: CivitaiConfig;
 }
 
 /** The user-editable subset the Settings tab sends back. */
@@ -116,6 +117,17 @@ export interface ConfigUpdate {
   models: ModelsConfig;
   paths: PathsUpdate;
   retention: RetentionConfig;
+  civitai: CivitaiConfig;
+}
+
+/** Which Civitai front door Discover searches: `com` is the safe-for-work
+ *  catalogue, `red` Civitai's own domain that also carries adult models. Both
+ *  answer the same API; what comes back is still governed by the "Show NSFW"
+ *  tick in Discover. */
+export type CivitaiFrontDoor = "com" | "red";
+
+export interface CivitaiConfig {
+  front_door: CivitaiFrontDoor;
 }
 
 export interface GpuProcess {

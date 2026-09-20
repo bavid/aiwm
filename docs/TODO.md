@@ -2329,24 +2329,53 @@ gestartet. Tooltip/Hilfe-Eintrag (`ui/src/help/training.ts`) ergänzen.
   LoRAs pro Lauf mit eigener Stärke, inklusive der Warnung, wenn die Summe der
   Stärken das Bild „überfährt".
 
-## Civitai-Spiegel `civitai.red` als Modellquelle (Backlog, User-Wunsch 2026-09-20)
+## `civitai.red` als Modellquelle — ✅ umgesetzt (2026-09-20)
 
-- **Wunsch:** `https://civitai.red/` als zusätzliche Quelle im Discover-Tab
-  neben dem bestehenden Civitai-Register (`core/src/registry/civitai.rs`).
-  Inhalte sind laut Nutzer nach einem **Discord-Login** sichtbar.
-- **Vor jeder Zeile Code zu klären (nicht raten):** Ist `civitai.red` ein
-  Spiegel/Proxy von Civitai mit derselben API-Form, oder eine eigene Seite?
-  Gibt es eine dokumentierte API oder nur HTML? Welche Lizenz-/Nutzungsregeln
-  gelten? **Discord-OAuth in einer Desktop-App** heißt: ein Browser-Fenster für
-  den Login, ein Token, das sicher liegen muss (nie im Klartext in der
-  Konfiguration, wie `HF_TOKEN` heute in einer eigenen Datei) — und es heißt
-  ausdrücklich **nicht**, dass die App Zugangsdaten selbst entgegennimmt oder
-  speichert. Wenn die Seite keinen sauberen API-/OAuth-Weg anbietet, ist die
-  ehrliche Antwort „nicht umsetzbar, ohne die Seite zu scrapen" — dann lieber
-  ein Import-Weg „Datei von Hand heruntergeladen → in die Library aufnehmen"
-  (den es schon gibt) statt eine brüchige Scraper-Anbindung.
-- Offline-Grundsatz bleibt: jede Netzaktion hinter dem Offline-Gate, jede Datei
-  mit echtem sha256 gepinnt.
+**Evaluation zuerst (echte Messung, kein Raten):**
+
+- `civitai.red` ist **kein Spiegel und kein Proxy**, sondern Civitais **eigene
+  zweite Haustür**. Civitai hat sich am 16.04.2026 aufgeteilt: `civitai.com`
+  führt den jugendfreien Katalog, `civitai.red` den ganzen inklusive
+  Erwachseneninhalten. Civitais eigener Artikel dazu: *„The API continues to
+  live on civitai.com and will also be accessible through civitai.red. Existing
+  integrations don't need to change."*
+- **Gemessen am 20.09.2026, ohne jede Anmeldung**, je ein GET auf
+  `/api/v1/models` gegen beide Hosts:
+
+  | Anfrage | civitai.com | civitai.red |
+  |---|---|---|
+  | `?limit=1` | HTTP 200, 18.632 B | HTTP 200, 18.632 B |
+  | `?limit=3&nsfw=true` | HTTP 200, 230.197 B, 2 von 3 Treffern `nsfw:true` | HTTP 200, 230.197 B, identisch |
+
+  Die Antworten sind **byteweise identisch**. Ein Download-Link aus der
+  `red`-Antwort (`availability: Public`) beantwortete ein unangemeldetes HEAD
+  mit **307** auf die signierte CDN-URL — der Download funktioniert also ohne
+  Konto.
+- **Ergebnis: Discord-OAuth ist nicht nötig und wird nicht gebaut.** Weder zum
+  Suchen noch zum Herunterladen öffentlicher Modelle braucht es ein Konto. Die
+  mehreren Anmeldewege (Discord, Google, E-Mail) betreffen nur das
+  Civitai-Konto selbst; die App nimmt keine Zugangsdaten entgegen. Für
+  **gated/early-access**-Modelle und höhere Ratenlimits gibt es weiterhin den
+  API-Key, den man im eigenen Konto erzeugt und hier einfügt — das Feld dafür
+  existiert längst (`AppPaths::civitai_token_file`, maschinenlokal, nie im
+  Backup).
+
+**Umgesetzt:** neue Tabelle `[civitai]` in `config.toml` mit
+`front_door = "com" | "red"` (Standard `com`), `CivitaiFrontDoor::base_url()`,
+`CivitaiSource::for_front_door(...)` statt der festen Konstante, Feld in
+`ConfigUpdate` + `save_config`, Auswahl in Settings → „Network & API" → Civitai
+mit Erklärung, Hilfe-Eintrag `civitai-front-door`. Tests: Standard + Host-Mapping,
+Round-Trip durch `save`/`read_from`, eine alte `config.toml` ohne die Tabelle
+lädt unverändert weiter.
+
+**Wichtig und bewusst so:** die Haustür schaltet **keine** Erwachseneninhalte
+frei — was zurückkommt, entscheidet weiterhin allein der Schalter „Show NSFW"
+im Discover-Tab (`SearchQuery::nsfw`, standardmäßig aus). Offline-Gate und
+sha256-Pinning gelten unverändert für jeden Download.
+
+**Offen (klein):** Falls `civitai.com` seine API später wirklich auf
+jugendfreie Treffer beschränkt (heute tut sie es nicht), sollte die App das
+erkennen und auf die rote Tür hinweisen, statt leere Ergebnisse zu zeigen.
 
 ## Discover-Tab: mehr Vorschauen (Backlog, User-Wunsch 2026-09-20)
 

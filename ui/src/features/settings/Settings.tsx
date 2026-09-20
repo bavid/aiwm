@@ -2,6 +2,7 @@ import { useEffect, useId, useState } from "react";
 import { HelpHint } from "../../components/HelpHint";
 import { useAbout, useCivitaiStatus, useLocalApiStatus, useRegistryStatus } from "../../lib/hooks";
 import {
+  type CivitaiFrontDoor,
   cleanupOutputs,
   getConfig,
   saveConfig,
@@ -76,6 +77,7 @@ const toForm = (c: AppConfig): Form => ({
     training_path: orEmpty(c.paths.training_path),
   },
   retention: { ...c.retention },
+  civitai: { ...c.civitai },
 });
 
 const sameForm = (a: Form, b: Form): boolean =>
@@ -98,7 +100,8 @@ const sameForm = (a: Form, b: Form): boolean =>
   a.paths.datasets_path === b.paths.datasets_path &&
   a.paths.training_path === b.paths.training_path &&
   a.retention.max_age_days === b.retention.max_age_days &&
-  a.retention.max_total_mb === b.retention.max_total_mb;
+  a.retention.max_total_mb === b.retention.max_total_mb &&
+  a.civitai.front_door === b.civitai.front_door;
 
 export function Settings() {
   const about = useAbout();
@@ -588,7 +591,10 @@ export function Settings() {
             <>
               <HuggingFaceCard />
 
-              <CivitaiCard />
+              <CivitaiCard
+                frontDoor={form.civitai.front_door}
+                onFrontDoor={(front_door) => patch({ civitai: { front_door } })}
+              />
 
               <LocalApiCard />
 
@@ -719,12 +725,19 @@ function HuggingFaceCard() {
 /** Optional Civitai API key — for gated/early-access content and higher rate
  *  limits; anonymous browsing works without one. Same machine-local,
  *  never-in-a-backup, restart-to-apply treatment as [`HuggingFaceCard`]. */
-function CivitaiCard() {
+function CivitaiCard({
+  frontDoor,
+  onFrontDoor,
+}: {
+  frontDoor: CivitaiFrontDoor;
+  onFrontDoor: (door: CivitaiFrontDoor) => void;
+}) {
   const { data: status } = useCivitaiStatus();
   const [value, setValue] = useState("");
   const [msg, setMsg] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const keyId = useId();
+  const doorId = useId();
 
   const save = async (token: string) => {
     setBusy(true);
@@ -750,6 +763,24 @@ function CivitaiCard() {
         <h2>Civitai</h2>
         <span className="card__sub">restart to apply</span>
       </header>
+      <div className="set-field">
+        <span>
+          <label htmlFor={doorId}>Front door — which Civitai catalogue Discover searches</label>
+          <HelpHint area="settings" setting="civitai-front-door" describes={doorId} />
+        </span>
+        <select
+          id={doorId}
+          value={frontDoor}
+          onChange={(e) => onFrontDoor(e.target.value as CivitaiFrontDoor)}
+        >
+          <option value="com">civitai.com — safe-for-work catalogue</option>
+          <option value="red">civitai.red — the whole catalogue, adult models included</option>
+        </select>
+        <p className="muted">
+          Both doors answer the same API, so this picks which host the search and the download
+          links go to. Adult models only ever show up when you tick “Show NSFW” in Discover.
+        </p>
+      </div>
       <div className="set-field">
         <span>
           <label htmlFor={keyId}>
