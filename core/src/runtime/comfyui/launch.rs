@@ -154,6 +154,18 @@ fn model_paths_yaml_body(store_root: &Path) -> String {
     let _ = writeln!(yaml, "aiwm_video_checkpoints:");
     let _ = writeln!(yaml, "  base_path: {video_dir}");
     let _ = writeln!(yaml, "  checkpoints: ./");
+    // The reverse case for images: Civitai lists Krea 2 fine-tunes as
+    // "Checkpoint", so they land in image/checkpoints, yet they hold only the
+    // diffusion model and load through `UNETLoader`, which lists
+    // `diffusion_models` only. Show that folder there too.
+    let image_checkpoints = store_root
+        .join("image")
+        .join("checkpoints")
+        .to_string_lossy()
+        .replace('\\', "/");
+    let _ = writeln!(yaml, "aiwm_image_checkpoints_as_unet:");
+    let _ = writeln!(yaml, "  base_path: {image_checkpoints}");
+    let _ = writeln!(yaml, "  diffusion_models: ./");
     yaml
 }
 
@@ -298,6 +310,21 @@ mod tests {
         let body = model_paths_yaml_body(Path::new("E:\\AI\\models"));
         assert!(body.contains("base_path: E:/AI/models/video/diffusion_models"));
         assert!(body.contains("checkpoints: ./"));
+    }
+
+    #[test]
+    fn model_paths_yaml_also_registers_the_checkpoint_folder_as_diffusion_models() {
+        // Civitai lists Krea 2 fine-tunes as "Checkpoint", so they land in
+        // image/checkpoints -- but they hold only the diffusion model and load
+        // through `UNETLoader`, which lists `diffusion_models` only
+        // ("unet_name: '...' not in [...]").
+        let body = model_paths_yaml_body(Path::new("E:\\AI\\models"));
+        let block = body
+            .split("aiwm_image_checkpoints_as_unet:")
+            .nth(1)
+            .expect("the checkpoint folder is registered for UNETLoader");
+        assert!(block.contains("base_path: E:/AI/models/image/checkpoints"));
+        assert!(block.contains("diffusion_models: ./"));
     }
 
     #[test]
