@@ -3,7 +3,12 @@
  *  small stand-in for `core::model::packages` over the dev-mock library:
  *  an SDXL group that is complete, a FLUX.2 [klein] group missing its text
  *  encoder, two Pony LoRAs with a findable Pony checkpoint, a Wan 14B LoRA
- *  that cannot run here, and one orphan LoRA. Not a test double for logic. */
+ *  that cannot run here, and one orphan LoRA. Some rows carry no recorded
+ *  `base_family` but a family "detected on read" (`DETECTED`, standing in
+ *  for the header / file-name inference), which is what "Save detected
+ *  families" persists. Not a test double for logic. */
+
+import { BASE_FAMILIES } from "./base-families";
 
 type AnyRecord = Record<string, unknown>;
 
@@ -22,10 +27,16 @@ interface MockFamily {
 const WAN_14B_REASON = "does not fit 16 GB — this app runs the 5B";
 
 const FAMILIES: MockFamily[] = [
+  { id: "sd15", label: "Stable Diffusion 1.5", arch_group: "sd15", runnable: { kind: "yes" },
+    base: ["sd15-v1-5-emaonly", "Stable Diffusion 1.5 (pruned, EMA-only)", 4_265_146_304], companions: [], civitai_label: "SD 1.5" },
   { id: "sdxl", label: "Stable Diffusion XL", arch_group: "sdxl", runnable: { kind: "yes" },
     base: ["sdxl-base-1.0", "Stable Diffusion XL 1.0 (base)", 6_938_078_334], companions: [], civitai_label: "SDXL 1.0" },
   { id: "pony", label: "Pony Diffusion (SDXL)", arch_group: "sdxl", runnable: { kind: "yes" },
     companions: [], civitai_label: "Pony" },
+  { id: "illustrious", label: "Illustrious (SDXL)", arch_group: "sdxl", runnable: { kind: "yes" },
+    companions: [], civitai_label: "Illustrious" },
+  { id: "noobai", label: "NoobAI (SDXL)", arch_group: "sdxl", runnable: { kind: "yes" },
+    companions: [], civitai_label: "NoobAI" },
   { id: "flux1", label: "FLUX.1 [dev]", arch_group: "flux1", runnable: { kind: "yes" },
     base: ["flux1-dev-q8", "FLUX.1-dev — Q8_0 (GGUF)", 12_708_281_504],
     companions: [
@@ -69,6 +80,36 @@ const PONY_CANDIDATES: AnyRecord[] = [
       download_url: "https://civitai.com/api/download/models/914390" } },
 ];
 
+/** Families the mock "detects on read" for rows without a recorded
+ *  `base_family`: model id → [family, source]. */
+const DETECTED: Record<string, [string, string]> = {
+  "m-sd15": ["sd15", "catalog"],
+  "m-lora-wan-motion": ["wan22-5b", "header"],
+  "m-lora-pony-eyes": ["pony", "name"],
+};
+
+/** A row's family and how it was decided: recorded first, then detected. */
+function familyOf(m: AnyRecord): [string, string] | null {
+  if (m.base_family) return [String(m.base_family), String(m.family_source ?? "name")];
+  return DETECTED[String(m.id)] ?? null;
+}
+
+const familyIdOf = (m: AnyRecord) => familyOf(m)?.[0] ?? null;
+
+/** A registry family the mock has no stack for (chosen with "What base is
+ *  this for?"): no base, no companions. */
+function mockFamily(id: string): MockFamily | undefined {
+  const own = FAMILIES.find((f) => f.id === id);
+  if (own) return own;
+  const known = BASE_FAMILIES.find((f) => f.id === id);
+  if (!known) return undefined;
+  return {
+    id: known.id, label: known.label, arch_group: known.archGroup,
+    runnable: known.notRunnable ? { kind: "no", reason: known.notRunnable } : { kind: "yes" },
+    companions: [], civitai_label: known.label,
+  };
+}
+
 function familyRef(f: MockFamily, source: string | null): AnyRecord {
   return { id: f.id, label: f.label, arch_group: f.arch_group, source, runnable: f.runnable };
 }
@@ -98,10 +139,10 @@ function suggestion(f: MockFamily, optional: boolean, candidates: boolean): AnyR
 }
 
 function baseNeeds(f: MockFamily, models: AnyRecord[], candidates: boolean): AnyRecord[] {
-  const exact = models.find((m) => isBase(m) && m.base_family === f.id);
+  const exact = models.find((m) => isBase(m) && familyIdOf(m) === f.id);
   if (exact) return [installedNeed("base", f.label, exact, true)];
   const works = models.find(
-    (m) => isBase(m) && FAMILIES.find((x) => x.id === m.base_family)?.arch_group === f.arch_group,
+    (m) => isBase(m) && mockFamily(familyIdOf(m) ?? "")?.arch_group === f.arch_group,
   );
   if (works) return [installedNeed("base", f.label, works, false), suggestion(f, true, candidates)];
   return [suggestion(f, false, candidates)];
@@ -127,16 +168,21 @@ function missing(needs: AnyRecord[]): number {
 }
 
 export function mockLibraryPackages(models: AnyRecord[]): AnyRecord {
-  const groups = FAMILIES.flatMap((f) => {
-    const base = models.find((m) => isBase(m) && m.base_family === f.id);
-    const loras = models.filter((m) => isLora(m) && m.base_family === f.id);
+  const ids = [...new Set(models.map(familyIdOf).filter((x): x is string => !!x))];
+  const order = BASE_FAMILIES.map((f) => f.id);
+  ids.sort((a, b) => order.indexOf(a) - order.indexOf(b));
+  const groups = ids.flatMap((id) => {
+    const f = mockFamily(id);
+    if (!f) return [];
+    const base = models.find((m) => isBase(m) && familyIdOf(m) === f.id);
+    const loras = models.filter((m) => isLora(m) && familyIdOf(m) === f.id);
     if (!base && loras.length === 0) return [];
     const runnable = f.runnable.kind === "yes";
     const bNeeds = !runnable
-      ? [{ role: "base", label: f.label, optional: false, status: { kind: "not_runnable", reason: WAN_14B_REASON } }]
+      ? [{ role: "base", label: f.label, optional: false, status: { kind: "not_runnable", reason: f.runnable.reason } }]
       : base ? [] : baseNeeds(f, models, false);
     const companions = runnable ? companionNeeds(f, models) : [];
-    const member = (m: AnyRecord) => ({ model: { ...m }, family_source: m.family_source ?? "name" });
+    const member = (m: AnyRecord) => ({ model: { ...m }, family_source: familyOf(m)?.[1] ?? "name" });
     return [{
       family: familyRef(f, null),
       base: base ? member(base) : null,
@@ -147,7 +193,7 @@ export function mockLibraryPackages(models: AnyRecord[]): AnyRecord {
       complete: runnable && !!base && companions.every((n) => (n.status as AnyRecord).kind === "installed"),
     }];
   });
-  const orphans = models.filter((m) => isLora(m) && !m.base_family).map((m) => ({ ...m }));
+  const orphans = models.filter((m) => isLora(m) && !familyOf(m)).map((m) => ({ ...m }));
   return { groups, orphans };
 }
 
@@ -158,12 +204,13 @@ function kindOf(hint: unknown): string {
 }
 
 function packageFor(item: AnyRecord, familyId: string | null, source: string, models: AnyRecord[]): AnyRecord {
-  const f = FAMILIES.find((x) => x.id === familyId);
+  const f = familyId ? mockFamily(familyId) : undefined;
   if (!f) return { item, family: null, needs: [], missing_bytes: 0, verdict: { kind: "unknown_base" } };
   if (f.runnable.kind === "no") {
+    const reason = String(f.runnable.reason);
     return { item, family: familyRef(f, source),
-      needs: [{ role: "base", label: f.label, optional: false, status: { kind: "not_runnable", reason: WAN_14B_REASON } }],
-      missing_bytes: 0, verdict: { kind: "not_runnable", reason: WAN_14B_REASON } };
+      needs: [{ role: "base", label: f.label, optional: false, status: { kind: "not_runnable", reason } }],
+      missing_bytes: 0, verdict: { kind: "not_runnable", reason } };
   }
   const needs = [
     ...(item.kind === "checkpoint" ? [] : baseNeeds(f, models, true)),
@@ -192,7 +239,8 @@ export function mockResolvePackage(
     if (!m) throw new Error(`configuration error: packages: model ${String(query.model_id)} is not in the library`);
     const kind = isLora(m) ? "lora" : isBase(m) ? "checkpoint" : "other";
     const item = { name: m.name, kind, base_label: null, model_id: m.id, size_bytes: m.size_bytes };
-    return packageFor(item, (m.base_family as string | null) ?? null, String(m.family_source ?? "name"), models);
+    const fam = familyOf(m);
+    return packageFor(item, fam?.[0] ?? null, fam?.[1] ?? "name", models);
   }
   const c = civitai.find((x) => x.id === query.model_id);
   if (!c) throw new Error("configuration error: registry: civitai: Civitai returned 404 Not Found");
@@ -206,7 +254,7 @@ export function mockResolvePackage(
 export function mockSetBaseFamily(models: AnyRecord[], id: unknown, family: unknown): AnyRecord {
   const m = models.find((x) => x.id === id);
   if (!m) throw new Error(`configuration error: model ${String(id)} is not in the library`);
-  if (!FAMILIES.some((f) => f.id === family)) {
+  if (!mockFamily(String(family))) {
     throw new Error(`configuration error: unknown base family ${JSON.stringify(family)}`);
   }
   m.base_family = family;
@@ -219,8 +267,13 @@ export function mockSaveBaseFamilies(models: AnyRecord[], batch: AnyRecord[]): A
     const m = models.find((x) => x.id === row.model_id);
     if (!m) return { model_id: row.model_id, outcome: "skipped", reason: "not in the library" };
     if (m.family_source === "user") return { model_id: m.id, outcome: "kept_user_choice", reason: null };
-    m.base_family = row.family;
-    m.family_source = m.family_source ?? "header";
+    const detected = familyOf(m);
+    if (!detected) return { model_id: m.id, outcome: "skipped", reason: "no family detected" };
+    if (detected[0] !== row.family) {
+      return { model_id: m.id, outcome: "skipped", reason: `detected ${detected[0]} now, not ${String(row.family)}` };
+    }
+    m.base_family = detected[0];
+    m.family_source = detected[1];
     return { model_id: m.id, outcome: "written", reason: null };
   });
 }

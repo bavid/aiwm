@@ -1,4 +1,5 @@
 import { useId } from "react";
+import { loraFitsBase } from "../lib/base-families";
 import { type LoraParam, type Model } from "../lib/ipc";
 import { HelpHint } from "./HelpHint";
 import "./lora-picker.css";
@@ -45,16 +46,21 @@ function familySupportsLora(family: string | null | undefined): boolean {
 export function LoraPicker({
   models,
   family,
+  base,
   selected,
   onChange,
 }: {
   models: Model[];
-  /** The base model's family (`"flux"`, `"sdxl"`, `"wan"`, …) — used both to
-   *  decide whether the whole section applies (a family with no LoRA seam
-   *  hides it) and to filter which LoRAs are offered (a LoRA with a
-   *  different, known family isn't interchangeable; one with no recognizable
-   *  family always shows, since it can't be ruled out). */
+  /** The base model's legacy family (`"flux"`, `"sdxl"`, `"wan"`, …) — decides
+   *  whether the whole section applies (a family with no LoRA seam hides it),
+   *  and filters the LoRAs when no `base` is given. */
   family: string | null | undefined;
+  /** The chosen base model — filters which LoRAs are offered
+   *  (`loraFitsBase`): by its registry `base_family` when both sides have
+   *  one, so a LoRA of the same architecture group shows (a Pony LoRA on an
+   *  SDXL checkpoint); otherwise by the legacy family string. A LoRA whose
+   *  family is unknown always shows, since it can't be ruled out. */
+  base?: Model | null;
   selected: LoraParam[];
   onChange: (next: LoraParam[]) => void;
 }) {
@@ -62,7 +68,9 @@ export function LoraPicker({
   if (!familySupportsLora(family)) return null;
 
   const loras = models.filter(
-    (m) => m.roles.includes("lora") && (!family || !m.family || m.family === family),
+    (m) =>
+      m.roles.includes("lora") &&
+      loraFitsBase(m, base ?? (family ? { family, base_family: null } : null)),
   );
 
   const entryFor = (id: string) => selected.find((l) => l.model_id === id);

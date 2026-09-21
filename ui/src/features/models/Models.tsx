@@ -28,6 +28,7 @@ import { Catalog, type CatalogTab } from "./Catalog";
 import { ColibriPanel } from "./ColibriPanel";
 import { Discover } from "./Discover";
 import { Downloads } from "./Downloads";
+import { Packages } from "./Packages";
 import { DeleteButton, StoragePanel } from "./StoragePanel";
 import { UpgradeChecks } from "./UpgradeChecks";
 import "./models.css";
@@ -71,6 +72,7 @@ type ModelsProps = {
 
 const MODEL_SECTIONS: NavSection[] = [
   { id: "library", label: "Library" },
+  { id: "packages", label: "Packages" },
   { id: "add", label: "Add models" },
   { id: "discover", label: "Discover" },
   { id: "downloads", label: "Downloads" },
@@ -137,6 +139,13 @@ export function Models({ focus, onFocusConsumed }: ModelsProps) {
         />
         <div className="models-sections">
           {section === "library" && <ModelLibrary models={models} error={error} />}
+
+          {section === "packages" && (
+            <Packages
+              onViewDownloads={() => setSection("downloads")}
+              onAddModels={() => setSection("add")}
+            />
+          )}
 
           {section === "add" && (
             <>

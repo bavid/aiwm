@@ -27,18 +27,52 @@ import {
 import { PackageNeedRow } from "./PackageNeedRow";
 import "./package-dialog.css";
 
+/** What the dialog is about: a Civitai pick from Discover, or a model already
+ *  in the library (the Packages section's "Download missing" / "Get the
+ *  Pony checkpoint" — the item itself is installed, so only its needs can
+ *  be queued). */
+export type PackageSubject =
+  | {
+      source: "civitai";
+      model: RemoteModel;
+      /** The card's already-loaded file list, if "Files" was opened. */
+      details: RegistryDetails | null;
+      modelType: ModelType;
+      /** Whether the search shows adult content — the checkpoint suggestions follow it. */
+      showNsfw: boolean;
+    }
+  | {
+      source: "library";
+      /** The library model whose package is resolved. */
+      modelId: string;
+      /** The dialog's heading (e.g. the family's name). */
+      title: string;
+      /** Line above the heading. */
+      eyebrow: string;
+    };
+
 type Props = {
-  model: RemoteModel;
-  /** The card's already-loaded file list, if "Files" was opened. */
-  details: RegistryDetails | null;
-  modelType: ModelType;
-  /** Whether the search shows adult content — the checkpoint suggestions follow it. */
-  showNsfw: boolean;
+  subject: PackageSubject;
   onClose: () => void;
   onViewDownloads: () => void;
 };
 
-type Loaded = { pkg: Package; details: RegistryDetails };
+type Loaded = { pkg: Package; details: RegistryDetails | null };
+
+/** The package and — for a Civitai pick — its details (file list, licence). */
+function loadSubject(subject: PackageSubject): Promise<Loaded> {
+  if (subject.source === "library") {
+    return resolvePackage({ source: "library", model_id: subject.modelId }).then((pkg) => ({
+      pkg,
+      details: null,
+    }));
+  }
+  const { model, details, showNsfw } = subject;
+  return Promise.all([
+    resolvePackage({ source: "civitai", model_id: model.id, nsfw: showNsfw }),
+    details ? Promise.resolve(details) : civitaiModel(model.id),
+  ]).then(([pkg, d]) => ({ pkg, details: d }));
+}
 type Phase = { kind: "idle" } | { kind: "busy" } | { kind: "queued"; files: number; bytes: number };
 
 const KIND_WORD: Record<Package["item"]["kind"], string> = {
@@ -47,7 +81,8 @@ const KIND_WORD: Record<Package["item"]["kind"], string> = {
   other: "model",
 };
 
-/** "Get" for a Civitai pick: resolves what the model needs against the
+/** "Get" for a Civitai pick (or "Download missing" for a library model):
+ *  resolves what the model needs against the
  *  library and the catalogue, shows each need as installed / download /
  *  choose / not runnable, and queues the model alone or with what is
  *  missing — every file through the regular download queue, with its
@@ -56,7 +91,10 @@ const KIND_WORD: Record<Package["item"]["kind"], string> = {
  *  A native modal `<dialog>` with the same focus rules as `ConfirmDialog`
  *  (Cancel takes the first focus, Esc closes, focus returns to the opener);
  *  not `ConfirmDialog` itself, because this one has two actions. */
-export function PackageDialog({ model, details, modelType, showNsfw, onClose, onViewDownloads }: Props) {
+export function PackageDialog({ subject, onClose, onViewDownloads }: Props) {
+  const civitai = subject.source === "civitai" ? subject : null;
+  const title =
+    subject.source === "civitai" ? (subject.model.name ?? subject.model.id) : subject.title;
   const ref = useRef<HTMLDialogElement>(null);
   const cancelRef = useRef<HTMLButtonElement>(null);
   const viewRef = useRef<HTMLButtonElement>(null);
@@ -80,22 +118,21 @@ export function PackageDialog({ model, details, modelType, showNsfw, onClose, on
     };
   }, []);
 
+  // Resolved once per opening: the subject is fixed while the dialog is open.
+  const [initial] = useState(subject);
   useEffect(() => {
     let alive = true;
-    Promise.all([
-      resolvePackage({ source: "civitai", model_id: model.id, nsfw: showNsfw }),
-      details ? Promise.resolve(details) : civitaiModel(model.id),
-    ])
-      .then(([pkg, d]) => {
+    loadSubject(initial)
+      .then((l) => {
         if (!alive) return;
-        setLoaded({ pkg, details: d });
-        setChoices(initialChoices(pkg.needs));
+        setLoaded(l);
+        setChoices(initialChoices(l.pkg.needs));
       })
       .catch((e) => alive && setLoadError(humanize(e)));
     return () => {
       alive = false;
     };
-  }, [model.id, details, showNsfw]);
+  }, [initial]);
 
   useEffect(() => {
     if (phase.kind === "queued") viewRef.current?.focus();
@@ -107,7 +144,7 @@ export function PackageDialog({ model, details, modelType, showNsfw, onClose, on
   };
 
   const pkg = loaded?.pkg ?? null;
-  const file = loaded ? primaryFile(loaded.details) : null;
+  const file = loaded?.details ? primaryFile(loaded.details) : null;
   const kindWord = pkg ? KIND_WORD[pkg.item.kind] : "model";
   const itemInstalled = !!pkg?.item.model_id;
   const notRunnable = pkg?.verdict.kind === "not_runnable";
@@ -117,7 +154,14 @@ export function PackageDialog({ model, details, modelType, showNsfw, onClose, on
   const missingBytes = plannedBytes(planned);
   const missingLabel = planned.length === 0 ? "none" : formatGB(missingBytes, 1);
   const itemBody: EnqueueDownloadBody | null =
-    loaded && file ? itemDownload(loaded.details, file, modelType, pkg?.item.base_label ?? primaryBaseLabel(loaded.details)) : null;
+    civitai && loaded?.details && file
+      ? itemDownload(
+          loaded.details,
+          file,
+          civitai.modelType,
+          pkg?.item.base_label ?? primaryBaseLabel(loaded.details),
+        )
+      : null;
 
   const queue = async (withNeeds: boolean) => {
     const bodies = [
@@ -131,10 +175,10 @@ export function PackageDialog({ model, details, modelType, showNsfw, onClose, on
     try {
       // One at a time, in order: the model first, then what it needs.
       for (const body of bodies) ids.push((await enqueueDownload(body)).id);
-      tagPackage(pkg?.item.name ?? model.name ?? model.id, ids);
+      tagPackage(pkg?.item.name ?? title, ids);
       setPhase({ kind: "queued", files: bodies.length, bytes: bodies.reduce((s, b) => s + (b.size_bytes ?? 0), 0) });
     } catch (e) {
-      tagPackage(pkg?.item.name ?? model.name ?? model.id, ids);
+      tagPackage(pkg?.item.name ?? title, ids);
       const done = ids.length > 0 ? ` (${ids.length} of ${bodies.length} already queued)` : "";
       setError(`${humanize(e)}${done}`);
       setPhase({ kind: "idle" });
@@ -163,23 +207,41 @@ export function PackageDialog({ model, details, modelType, showNsfw, onClose, on
     >
       <header className="pkg__head">
         <p className="pkg__eyebrow">
-          Get a {kindWord} with what it needs <HelpHint area="models" setting="get" />
+          {civitai ? (
+            <>
+              Get a {kindWord} with what it needs <HelpHint area="models" setting="get" />
+            </>
+          ) : (
+            <>
+              {subject.source === "library" && subject.eyebrow}{" "}
+              <HelpHint area="models" setting="download-missing" />
+            </>
+          )}
         </p>
         <h3 id={titleId} className="pkg__title">
-          {model.name ?? model.id}
+          {title}
         </h3>
         <div className="pkg__facts">
-          {model.model_kind_hint && <span className="badge">{model.model_kind_hint}</span>}
-          {pkg?.family && <span className="badge">for {pkg.family.label}</span>}
+          {civitai?.model.model_kind_hint && (
+            <span className="badge">{civitai.model.model_kind_hint}</span>
+          )}
+          {pkg && !civitai && (
+            <span className="badge">
+              from your {kindWord}: {pkg.item.name}
+            </span>
+          )}
+          {pkg?.family && civitai && <span className="badge">for {pkg.family.label}</span>}
           {pkg && !pkg.family && pkg.item.base_label && (
             <span className="badge">for “{pkg.item.base_label}”</span>
           )}
           {file && <span className="numeric muted">{formatGB(file.size_bytes, 2)}</span>}
-          {file && <FitBadge fit={file.fit} vramMb={file.vram_estimate_mb} subject={model.name ?? model.id} />}
-          {itemInstalled && <span className="badge badge--pick">✓ in your library</span>}
+          {file && <FitBadge fit={file.fit} vramMb={file.vram_estimate_mb} subject={title} />}
+          {itemInstalled && civitai && <span className="badge badge--pick">✓ in your library</span>}
         </div>
-        {model.allow_commercial_use.length > 0 && (
-          <p className="pkg__licence">commercial use: {model.allow_commercial_use.join(", ")}</p>
+        {civitai && civitai.model.allow_commercial_use.length > 0 && (
+          <p className="pkg__licence">
+            commercial use: {civitai.model.allow_commercial_use.join(", ")}
+          </p>
         )}
       </header>
 
@@ -191,7 +253,7 @@ export function PackageDialog({ model, details, modelType, showNsfw, onClose, on
           </p>
         )}
         {pkg && <Verdict pkg={pkg} kindWord={kindWord} />}
-        {pkg && !file && (
+        {pkg && civitai && !file && (
           <p className="pkg__warnline">Civitai lists no downloadable file for this version.</p>
         )}
         {pkg && pkg.needs.length > 0 && (

@@ -50,8 +50,11 @@ const MODELS: AnyRecord[] = [
   mkModel("m-wan", "wan2.2_ti2v_5B_fp16", { family: "wan", base_family: "wan22-5b", family_source: "catalog", roles: ["base_video"], runtimes: ["comfyui"], vram_estimate_mb: 11800 }),
   mkModel("m-umt5", "umt5_xxl_fp8_e4m3fn_scaled", { roles: ["text_encoder"], runtimes: ["comfyui"] }),
   mkModel("m-wanvae", "wan2.2_vae", { family: "wan", roles: ["vae"], runtimes: ["comfyui"] }),
-  mkModel("m-lora-wan-motion", "Wan Motion Boost", { family: "wan", base_family: "wan22-5b", family_source: "header", roles: ["lora"], runtimes: ["comfyui"], size_bytes: 128_000_000 }),
+  mkModel("m-lora-wan-motion", "Wan Motion Boost", { family: "wan", roles: ["lora"], runtimes: ["comfyui"], size_bytes: 128_000_000 }),
   mkModel("m-sdxl", "SDXL Base 1.0", { family: "sdxl", base_family: "sdxl", family_source: "catalog", roles: ["base_diffusion"], runtimes: ["comfyui"], vram_estimate_mb: 8200 }),
+  // SD 1.5 from the catalogue: the import records the legacy family "sd15";
+  // its base family is only detected (catalog), not recorded yet.
+  mkModel("m-sd15", "Stable Diffusion 1.5 (pruned, EMA-only)", { family: "sd15", roles: ["base_diffusion"], runtimes: ["comfyui"], size_bytes: 4_265_146_304, vram_estimate_mb: 4300 }),
   mkModel("m-lora-detail", "Add Detail XL", { family: "sdxl", base_family: "sdxl", family_source: "civitai", roles: ["lora"], runtimes: ["comfyui"], size_bytes: 220_000_000 }),
   mkModel("m-lora-flux-style", "Ink Wash Style (Flux)", { family: "flux", base_family: "flux1", family_source: "name", roles: ["lora"], runtimes: ["comfyui"], size_bytes: 340_000_000 }),
   // The two-run lineage the "Your LoRAs" overview shows: v0 trained from
@@ -66,7 +69,7 @@ const MODELS: AnyRecord[] = [
   mkModel("m-flux2-vae", "flux2-vae", { family: "flux2", roles: ["vae"], runtimes: ["comfyui"], size_bytes: 336_211_292 }),
   mkModel("m-flux2-edit-vae", "full_encoder_small_decoder", { family: "flux2", roles: ["vae"], runtimes: ["comfyui"], size_bytes: 249_519_092 }),
   mkModel("m-lora-pony-ink", "Pony Ink Style", { family: "sdxl", base_family: "pony", family_source: "civitai", roles: ["lora"], runtimes: ["comfyui"], size_bytes: 228_000_000, source: "civitai:123456/654321" }),
-  mkModel("m-lora-pony-eyes", "ponyEyesDetail_v2", { base_family: "pony", family_source: "header", roles: ["lora"], runtimes: ["comfyui"], size_bytes: 57_000_000 }),
+  mkModel("m-lora-pony-eyes", "ponyEyesDetail_v2", { roles: ["lora"], runtimes: ["comfyui"], size_bytes: 57_000_000 }),
   mkModel("m-lora-wan14-motion", "Wan 2.2 I2V A14B Orbit Cam", { family: "wan", base_family: "wan-14b", family_source: "civitai", roles: ["lora"], runtimes: ["comfyui"], size_bytes: 306_000_000, source: "civitai:1800000/2000000" }),
   mkModel("m-lora-mystery", "mystery_style_v3", { roles: ["lora"], runtimes: ["comfyui"], size_bytes: 144_000_000 }),
   mkModel("m-qwen", "Qwen2.5 7B Instruct", { family: "qwen2", format: "gguf", quant: "Q5_K_M", param_count: 7_615_616_512, ctx_max: 32_768, roles: ["chat"], runtimes: ["llamacpp"], vram_estimate_mb: 6400 }),
@@ -1636,6 +1639,17 @@ const KNOWN_MOCK: AnyRecord[] = [
     sha256: "5".repeat(64), size_bytes: 4_893_934_904,
     license: "Apache-2.0",
     note: "Flux prompt encoder. ComfyUI offloads it after encoding, so it is not resident during sampling.",
+    is_default: false, media: "image", fit: { level: "green" },
+  },
+  {
+    // The FLUX.2 [klein] group's missing encoder in the Packages view.
+    id: "qwen3-8b-flux2-encoder", name: "Qwen3-8B — fp8 mixed (FLUX.2 text encoder)", kind: "text_encoder",
+    family: null, publisher: "Comfy-Org", repo: "Comfy-Org/vae-text-encorder-for-flux-klein-9b",
+    file: "qwen_3_8b_fp8mixed.safetensors",
+    url: "https://huggingface.co/Comfy-Org/vae-text-encorder-for-flux-klein-9b/resolve/main/split_files/text_encoders/qwen_3_8b_fp8mixed.safetensors",
+    sha256: "abad16806e0cbabc54e0325d6565847443fe396d5f0be38bb3cd3fe75a1201d6", size_bytes: 8_664_848_742,
+    license: "Apache-2.0",
+    note: "FLUX.2's prompt encoder — a full Qwen3-8B. ComfyUI offloads it after encoding.",
     is_default: false, media: "image", fit: { level: "green" },
   },
   {

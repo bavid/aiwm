@@ -102,6 +102,45 @@ const CATALOG_SETTINGS: readonly HelpSetting[] = [
   },
 ];
 
+const PACKAGES_SETTINGS: readonly HelpSetting[] = [
+  {
+    key: "packages",
+    label: "Packages",
+    what: "Your image and video models grouped by the base they belong to: per base family the checkpoint (✓ installed or ✗ missing), its text encoders and VAE, and the LoRAs made for it. Each group reads Ready, Works with your … (made for another base of the same architecture), Missing: … — N GB, or Not runnable here.",
+    why: "A LoRA is worth nothing without the base it was trained for, and a base without its encoder or VAE does not render. This view shows at a glance which of your files can actually be used.",
+    effect: "Reading only — the families are worked out on read (recorded family, catalogue, file header, file name) and nothing is written until you press a button. It re-reads when the library changes.",
+    benefit: "\"4 LoRAs for Pony, no Pony checkpoint\" or \"FLUX.2 [klein] without its text encoder\" is visible before a render fails.",
+    pitfalls: "A Pony, Illustrious or NoobAI group without its own checkpoint runs on your SDXL checkpoint — it reads \"Works with your SDXL\", not missing. Wan 14B and LTX-2 groups are listed but cannot run on 16 GB; they offer nothing to download.",
+  },
+  {
+    key: "download-missing",
+    label: "Download missing",
+    what: "Opens the package for the group — the same dialog as Discover's Get — with each missing part, its size and where it comes from; \"Get the Pony checkpoint\" opens it with Civitai's top checkpoints for that base to choose from.",
+    why: "Completing a base is several files from different places; the dialog lists them with pinned hashes (catalogue) or Civitai's (a community checkpoint).",
+    effect: "\"Download missing (N GB)\" queues every ticked part through the download queue, grouped under the family in Downloads; each file is verified and imported with its base family recorded. Optional parts (the FLUX.2 edit VAE, a made-for checkpoint) start unticked.",
+    benefit: "One click from \"missing\" to a group that renders.",
+    pitfalls: "The Civitai checkpoint list needs the network and is empty in Offline mode. The size shown on the card counts catalogue files only — a checkpoint you still have to choose adds its own size in the dialog.",
+  },
+  {
+    key: "what-base",
+    label: "What base is this for?",
+    what: "For a LoRA whose base could not be worked out (no recorded family, nothing in its header or name): a list of the base families this app knows, and Save.",
+    why: "Without a base the LoRA pickers can only guess — an unknown LoRA is offered on every checkpoint, where most will not load.",
+    effect: "Saves your choice as the LoRA's base family (source \"set by you\"); the LoRA moves into that group and the pickers offer it only on matching checkpoints. A later detection never overwrites your choice.",
+    benefit: "Every LoRA in its place, once.",
+    pitfalls: "The LoRA's page on Civitai or Hugging Face says which base it was trained for — a wrong choice hides it from the checkpoints it would work on. Choosing a base marked \"not runnable here\" is allowed; the LoRA then shows as unusable.",
+  },
+  {
+    key: "save-detected",
+    label: "Save detected families",
+    what: "A preview of every family the grouping worked out but the library has not stored yet — model → base family, and where it came from (catalogue, file header, file name) — and a button that stores the ticked ones.",
+    why: "Detection runs on every read and a file-name guess can be wrong; storing the confirmed ones makes the pickers and this view stable, and a weak guess stays visible as such.",
+    effect: "Writes each ticked row with its detection source; then reports how many were written, kept (a base you chose yourself is never replaced) and skipped (the detection changed since the preview). Guesses from the file name are flagged and start unticked.",
+    benefit: "One press instead of setting families model by model.",
+    pitfalls: "Only tick a weak guess after checking it. Nothing is written by just opening the view.",
+  },
+];
+
 const DISCOVER_SETTINGS: readonly HelpSetting[] = [
   {
     key: "get",
@@ -238,7 +277,7 @@ export const MODELS_TOPICS: readonly HelpTopic[] = [
     body: [
       {
         kind: "p",
-        text: "A model is a file in the model store plus a row in the library: its family, quant, parameter count, size, context, VRAM estimate, roles and the runtimes that can serve it. Everything else in the app picks models from this library by role. The tab has five sections: Library, Add models (catalogue + import form), Discover, Downloads, Maintenance (upgrade checks, storage, Colibri).",
+        text: "A model is a file in the model store plus a row in the library: its family, quant, parameter count, size, context, VRAM estimate, roles and the runtimes that can serve it. Everything else in the app picks models from this library by role. The tab has six sections: Library, Packages (the library by base family), Add models (catalogue + import form), Discover, Downloads, Maintenance (upgrade checks, storage, Colibri).",
       },
     ],
   },
@@ -272,6 +311,19 @@ export const MODELS_TOPICS: readonly HelpTopic[] = [
       },
     ],
     settings: LIBRARY_SETTINGS,
+  },
+  {
+    id: "packages",
+    area: "models",
+    title: "Packages",
+    summary: "The library grouped by base family: base, text encoders, VAE and the LoRAs for it — what is ready, what is missing, what cannot run here.",
+    body: [
+      {
+        kind: "p",
+        text: "Each base family you have a checkpoint or a LoRA for gets a card. \"Download missing\" completes a group through the download queue; a Pony, Illustrious or NoobAI group without its own checkpoint works with your SDXL and offers its own checkpoint as an option. LoRAs of unknown base ask which base they are for; families detected on read can be stored with \"Save detected families\".",
+      },
+    ],
+    settings: PACKAGES_SETTINGS,
   },
   {
     id: "import",

@@ -822,10 +822,7 @@ function CivitaiResultCard({
       </div>
       {getting && (
         <PackageDialog
-          model={model}
-          details={details}
-          modelType={modelType}
-          showNsfw={showNsfw}
+          subject={{ source: "civitai", model, details, modelType, showNsfw }}
           onClose={() => setGetting(false)}
           onViewDownloads={() => {
             setGetting(false);

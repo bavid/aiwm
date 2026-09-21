@@ -552,6 +552,7 @@ export function VideoStudio() {
             <LoraPicker
               models={models ?? []}
               family={videoModels.find((m) => m.id === modelId)?.family}
+              base={videoModels.find((m) => m.id === modelId)}
               selected={loras}
               onChange={setLoras}
             />
