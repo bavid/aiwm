@@ -2475,6 +2475,123 @@ zwischenspeichern. Heute lädt sie der Browser direkt von Civitais CDN — damit
 liegt nichts auf der Platte, was die Cleanup-Seite aufräumen müsste. Ein
 lokaler Cache lohnt erst, wenn dieselben Treffer oft wiederkommen.
 
+## Modell-Pakete: Basismodell + Begleiter automatisch (User-Wunsch 2026-09-21) — ✅ umgesetzt (2026-09-21)
+
+Anlass: „Ich kann beliebig viele LoRAs laden — ohne Basismodell sind sie
+nichts wert. ‚Set import type' tut nichts außer zu den Flux-Klein/SDXL-Paketen
+zu springen." Spec `docs/superpowers/specs/2026-09-21-model-packages-design.md`,
+Plan 14 `docs/superpowers/plans/2026-09-21-model-packages-plan-14.md`.
+
+**Erledigt (Plan 14 "Model Packages"):**
+- **Basis-Familien-Registry** `core/src/model/family.rs` (+ `family/detect.rs`):
+  14 Familien (`sd15`, `sdxl`, `pony`, `illustrious`, `noobai`, `flux1`,
+  `flux1-schnell`, `flux1-krea`, `flux2-klein-4b`, `flux2-klein-9b`,
+  `wan22-5b`, `wan-14b`, `ltxv`, `ltx2`) mit Civitai-`baseModel`-Labels,
+  HF-`base_model`-Ids, Architektur-Gruppe (Pony/Illustrious/NoobAI → SDXL),
+  Katalog-Stack und „läuft hier?" (Wan 14B → `No("does not fit 16 GB — this
+  app runs the 5B")`). Unbekannte Labels (Krea 2, Anima, ZImage …) → keine
+  Familie, nie geraten.
+- **Inferenz beim Lesen** (`infer_family`): gespeicherte `base_family` →
+  Katalog-Zeile → gespeicherte Legacy-Familie → safetensors-Header
+  (Tensor-Namen je Architektur, LoRA-Key-Präfixe) → Dateiname. Nichts wird
+  beim bloßen Anschauen geschrieben. Migrationen 0022 (`models.family_source`),
+  0023 (`models.base_family` — eigene Spalte, `models.family` behält seine
+  Laufzeit-Bedeutung und wird von diesem Feature **nie** geschrieben), 0024
+  (`downloads.origin/base_family/family_source`: ein Civitai/HF-Download merkt
+  sich, was er ist). Ein `user`-Wert wird nur durch einen `user`-Wert ersetzt.
+- **Resolver** `core/src/model/packages.rs` (+ `packages/library.rs`):
+  `resolve_package` → `Package { item, family, needs, missing_bytes, verdict }`,
+  Bedarf je Rolle `installed` / `catalog` / `findable` (Civitai-Top-3-Checkpoints
+  per `baseModels=`, hinter dem Offline-Gate) / `not_runnable`; „made for" vs
+  „works with" (Pony-LoRA auf vorhandenem SDXL = bereit, eigener Pony-Checkpoint
+  optional). Routen `GET /packages/resolve?source=civitai|library&model_id=…`,
+  `GET /packages/library`, `POST /models/{id}/base-family`,
+  `POST /models/base-families` (+ Tauri, ipc, Dev-Mock).
+- **Discover „Get"-Dialog** statt „Set import type": jeder Bedarf mit
+  ✓/↓/?/✗, Größe, Fit-Badge, Lizenz, Top-3-Checkpoints bei `findable`,
+  „Download … only" / „… + missing (N GB)"; Not-runnable-Warnung schon auf der
+  Karte; Downloads-Seite gruppiert die Teile eines Pakets.
+- **Models → „Packages"**: Library nach Familie gruppiert (Basis, Begleiter,
+  LoRAs), „Download missing", „What base is this?"-Picker für Waisen,
+  „Save detected families" mit Vorschau.
+- **SD 1.5-Stack**: `sd15-v1-5-emaonly` aus
+  `stable-diffusion-v1-5/stable-diffusion-v1-5@451f4fe`, echt geladen und
+  gehasht: SHA-256 `6ce0161689b3853acaa03779ec93eafe75a02f4ced659bee03f50797806fa2fa`,
+  4.265.146.304 B; Bild-Pipeline mit SD 1.5-Defaults (512 px,
+  `image_defaults.rs`).
+- **LoRA-Picker kennt Architektur-Gruppen** (`ui/src/lib/base-families.ts`):
+  eine Pony-LoRA erscheint bei einem SDXL-Checkpoint, eine Wan-14B-LoRA nicht
+  beim 5B.
+
+Gemessen 2026-09-21 mit echtem `aiwm-cored` aus dem Worktree (`6fc3a9f`,
+`AIWM_DATA_DIR=E:\AI\data`, Port 48160, Desktop-App nicht aktiv),
+**nur Lesen: ausschließlich `GET /packages/library` und `GET /packages/resolve`,
+kein Download, kein Family-POST.** DB vorher gesichert (`aiwm.db` SHA-256
+`cb711486…3a29c79`, nach dem Lauf byte-gleich; nur `-wal`/`-shm` neu, weil die
+additiven Migrationen 0022–0024 live liefen). Beweis per Read-only-SQL
+Backup ↔ Live: `models.family` aller 76 Zeilen identisch (Hash
+`54181f4d…`), alle `models`-Zeilen ohne die neuen Spalten identisch,
+`models.base_family`/`family_source` 0 Zeilen ≠ NULL, `downloads` (1 Zeile)
+identisch, `downloads.origin/base_family/family_source` 0 Zeilen ≠ NULL,
+alle anderen Tabellen identisch; `E:\AI\models` 129 Dateien vorher/nachher
+gleich (Pfad, Größe, mtime). Civitai über die konfigurierte Haustür.
+
+| Anfrage | Zeit | Ergebnis |
+|---|---|---|
+| `GET /packages/library` (3×) | 0,059 / 0,047 / 0,044 s, 13.099 B | 7 Gruppen, 4 Waisen. **sd15** ✓ `pornvision_final` (header), 1 LoRA (header), komplett. **sdxl** ✓ `sd_xl_base_1.0` (catalog), 0 LoRAs, komplett. **flux1** ✓ `flux1-dev-Q8_0` + T5/CLIP-L/ae ✓, komplett. **flux2-klein-4b** ✗ Basis (findable „Flux.2 Klein 4B"), keine Begleiter (kein Stack), LoRAs `myrender-v2`/`-v3` (header), **nicht komplett**, 0 B fehlend (findable zählt nicht). **flux2-klein-9b** ✓ + Qwen3-8B/VAE/Edit-VAE (optional) ✓, komplett. **wan22-5b** ✓ + umt5/VAE ✓, komplett. **ltxv** ✓ + T5 ✓, komplett. Waisen: `K_spreadinggape`, `KNP_000003000`, `realism_engine_krea2_v3.1`, `stomach_bulge_…_krea2_final` (alle Krea 2 → unbekannt, richtig). Quellen der gezeigten Basen/LoRAs: 5 catalog, 4 header, 0 name |
+| Alle 32 Bild/Video-Zeilen einzeln `resolve?source=library` | 0,03–0,05 s (lokal), 0,30–0,31 s mit Civitai-Checkpoint-Suche | `myrender-v2/v3` → `flux2-klein-4b` (header) ✓ richtig (auf 4B trainiert); `animagineXLV31`, `unnamedixlRealisticModel_v7` → sdxl (name, aus Legacy-Familie) ✓; `mopMixtureOfPerverts` → sdxl (header) ✓; `pornvision_final` → sd15 (header, 1,066 Mrd. Parameter = UNet+CLIP+VAE von SD 1.5) ✓; Krea-2-Checkpoints ×3, `animaika_v48`, `CLIP-ViT-H`, `clip_l`, `qwen_3_8b` → unbekannt |
+| `resolve` library `myrender-v2` | 0,358 s | flux2-klein-4b, `needs_download`, Basis findable: „Flux.2 Klein" (7,75 GB), „Flux Klein FP8" (3,88 GB), „unStable Revolution F2K 4b alpha" (7,75 GB), alle mit sha256 |
+| Civitai SDXL 1.0 — „Detail Tweaker XL" (122359) | 0,24 / 0,22 s | sdxl (civitai), **ready**, Basis ✓ `sd_xl_base_1.0` (made for), 0 B |
+| Civitai Pony — „Incase Style [PonyXL]" (300005) | 0,58 / 0,54 s | pony, **ready**: works with ✓ `animagineXLV31_v31` (made_for false) + optional findable: Pony Diffusion V6 XL (6,94 GB), CyberRealistic Pony (6,94 GB), Pony Realism (7,11 GB); 0 B Pflicht |
+| Civitai Flux.1 D — „XLabs Flux Realism LoRA" (631986) | 0,25 / 0,23 s | flux1, **ready**: Basis + T5 + CLIP-L + ae alle ✓, 0 B |
+| Civitai Wan 2.2 I2V-A14B — „wan2.2-i2v-Glass Kiss" (1899592) | 0,24 / 0,23 s | wan-14b, **not_runnable** „does not fit 16 GB — this app runs the 5B" |
+| Civitai SD 1.5 — „Detail Tweaker LoRA" (58390) | 0,25 / 0,28 s | sd15, **ready**, Basis ✓ `pornvision_final` (made for), 0 B |
+| Civitai Krea 2 — „Krea2 TextFusion Refusal-Reduction" (2775340) | 0,23 / 0,22 s | keine Familie, **unknown_base**, keine Bedarfe |
+| Civitai Illustrious — „Illustrious Style Pack" (1060551, Gegenprobe) | 0,60 s | illustrious, ready: works with `animagineXLV31_v31`, optional findable Nova Anime XL / Realism Illustrious / PerfectDeliberate — **obwohl `hassakuXLIllustrious_v34` installiert ist** (siehe unten) |
+| Teardown | — | Daemon beendet, Port 48160 ohne Listener |
+
+**Falsch / auffällig (gefunden im echten Lauf, noch nicht behoben):**
+- **T5-XXL und umt5-XXL werden als „sdxl" (Quelle `catalog`) aufgelöst.**
+  `resolve?source=library` auf `t5xxl_fp8_e4m3fn` (`catalog:t5xxl-fp8`) und
+  `umt5_xxl_fp8_e4m3fn_scaled` (`catalog:wan-umt5-xxl-fp8`) meldet „Stable
+  Diffusion XL, Basis ✓ sd_xl_base_1.0, ready". Ursache: beide Zeilen tragen in
+  der DB die falsche Legacy-Familie `sdxl` (alter Import), und `infer_family`
+  wertet „Katalog-Zeile + gespeicherte Familie" als stärkste Quelle, statt die
+  Familie des Katalog-Eintrags selbst zu nehmen. Die Library-Gruppen sind nicht
+  betroffen (dort werden Begleiter per sha256 zugeordnet: T5 korrekt bei
+  flux1/ltxv, umt5 bei wan22-5b). Risiko: „Save detected families" dürfte
+  diese Fehlzuordnung nicht persistieren — prüfen.
+- **Illustrious-Checkpoint wird nicht als Illustrious erkannt.**
+  `hassakuXLIllustrious_v34` hat die Legacy-Familie `sdxl`; die gewinnt vor dem
+  Namen („Illustrious"). Folge: eine Illustrious-LoRA schlägt vor, einen
+  Illustrious-Checkpoint zu holen, obwohl einer installiert ist
+  (Architektur passt trotzdem — „works with" ist korrekt, „made for" fehlt).
+- **Packages-Ansicht zeigt pro Familie genau eine Basis.** Weitere Checkpoints
+  derselben Familie (`animagineXLV31`, `hassakuXLIllustrious`,
+  `unnamedixlRealisticModel`, `mopMixtureOfPerverts` bei sdxl) tauchen in
+  `GET /packages/library` nirgends auf, ebenso Checkpoints ohne Familie
+  (3× Krea 2, `animaika_v48` — `orphans` enthält nur LoRAs).
+- `pony`-LoRA „works with" wählt den ersten SDXL-Checkpoint
+  (`animagineXLV31`), nicht `sd_xl_base_1.0` — funktioniert, ist aber
+  zufällig.
+- Der Trainings-Ordner `FLUX.2 [klein] 4B base (training)` (Diffusers, 16 GB)
+  zählt nicht als Basis der 4B-Gruppe (richtig für ComfyUI-Inferenz, aber für
+  den Nutzer überraschend: „4B fehlt", obwohl 16 GB 4B auf der Platte liegen).
+
+**Offen:**
+- Hugging-Face-Treffer haben noch keinen „Get"-Dialog (nur Civitai).
+- Die Architektur-Gruppen/„not runnable"-Spiegelung in der UI
+  (`ui/src/lib/base-families.ts`) muss mit `core/src/model/family.rs` synchron
+  gehalten werden — kein generierter Typ, kein Test über beide.
+- HunyuanVideo-LoRA-Erkennung ungetestet (keine echte Datei).
+- FLUX.2 klein 4B hat keinen Katalog-Stack: Basis nur „findable", Begleiter
+  (Qwen3-4B-Encoder, FLUX.2-VAE) werden gar nicht gelistet.
+- Ein echtes SD 1.5-Rendering mit dem Katalog-Checkpoint wurde nicht gemacht —
+  braucht den 4,27-GB-Download, nur mit OK des Nutzers.
+- Krea 2 / Anima: der Nutzer hat 3 Krea-2-Checkpoints (~13 GB je) und
+  Krea-2-LoRAs in der Library (nie benutzt); ob dafür ein Stack kommt, ist
+  Nutzerentscheidung.
+
 ## Offen / später zu entscheiden
 - App-Selbst-Update offline (manueller Installer + Signaturprüfung angenommen)
 - Parallele Jobs: Policy verfeinern (klein-LLM + Upscale gleichzeitig)
