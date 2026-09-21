@@ -44,15 +44,23 @@ export function PackageGroupCard({ group, onComplete }: Props) {
         <StateLine state={state} group={g} onComplete={onComplete} />
       </header>
       <ul className="pkgv-rows" aria-label={`${g.family.label}: base and companions`}>
-        {g.base ? (
-          <InstalledBase base={g.base} />
-        ) : (
-          g.base_needs.map((n) => <NeedLine key={`${n.role}-${n.label}-${n.optional}`} need={n} />)
-        )}
+        {g.checkpoints.length > 0
+          ? g.checkpoints.map((c, i) => (
+              <InstalledCheckpoint key={c.model.id} checkpoint={c} preferred={i === 0} />
+            ))
+          : g.base_needs.map((n) => (
+              <NeedLine key={`${n.role}-${n.label}-${n.optional}`} need={n} />
+            ))}
         {g.companions.map((n) => (
           <NeedLine key={`${n.role}-${n.label}`} need={n} />
         ))}
       </ul>
+      {g.note && (
+        <p className="pkgv-card__note">
+          <span aria-hidden="true">ⓘ </span>
+          {g.note}
+        </p>
+      )}
       <LoraList loras={g.loras} family={g.family.label} />
     </li>
   );
@@ -97,41 +105,66 @@ function StateLine({
           )}
         </div>
       );
-    case "missing":
+    case "missing": {
+      // A findable base has no size until one is chosen: say "choose",
+      // never "0 B to download".
+      const others = state.needs.filter((n) => n.role !== "base");
       return (
         <div className="pkgv-state" data-state="missing">
-          <p>
-            <span aria-hidden="true">↓ </span>
-            <strong>Missing:</strong>{" "}
-            {state.needs.length > 0 ? missingText(state.needs) : "a base to run on"}
-            {state.bytes > 0 && (
-              <>
-                {" "}— <span className="numeric">{formatGB(state.bytes, 1)}</span>
-              </>
-            )}
-          </p>
+          {state.chooseBase ? (
+            <p>
+              <span aria-hidden="true">↓ </span>
+              <strong>Base missing — choose a checkpoint.</strong>
+              {others.length > 0 && <> Also missing: {missingText(others)}.</>}
+            </p>
+          ) : (
+            <p>
+              <span aria-hidden="true">↓ </span>
+              <strong>Missing:</strong>{" "}
+              {state.needs.length > 0 ? missingText(state.needs) : "a base to run on"}
+              {state.bytes > 0 && (
+                <>
+                  {" "}— <span className="numeric">{formatGB(state.bytes, 1)}</span>
+                </>
+              )}
+            </p>
+          )}
           <span className="pkgv-state__action">
             <button type="button" className="pkg__go" onClick={() => onComplete(group, "missing")}>
-              Download missing…
+              {state.chooseBase ? "Choose a checkpoint…" : "Download missing…"}
             </button>
             <HelpHint area="models" setting="download-missing" />
           </span>
         </div>
       );
+    }
   }
 }
 
-function InstalledBase({ base }: { base: GroupModel }) {
+/** One installed checkpoint of the family. The preferred one (what a LoRA
+ *  of this family runs on by default) is the "Base"; the others are listed
+ *  as further checkpoints. */
+function InstalledCheckpoint({
+  checkpoint,
+  preferred,
+}: {
+  checkpoint: GroupModel;
+  preferred: boolean;
+}) {
   return (
-    <li className="pkgv-row" data-status="installed">
+    <li className="pkgv-row" data-status="installed" data-preferred={preferred || undefined}>
       <span className="pkgv-row__icon" aria-hidden="true">
         ✓
       </span>
-      <span className="pkgv-row__role">Base</span>
+      <span className="pkgv-row__role">{preferred ? "Base" : "Checkpoint"}</span>
       <span className="pkgv-row__name">
-        <strong>Installed</strong> — {base.model.name}
+        {preferred && <strong>Installed — </strong>}
+        {checkpoint.model.name}
+        {isWeakSource(checkpoint.family_source) && (
+          <span className="pkgv-weak"> · {SOURCE_PHRASE[checkpoint.family_source]}</span>
+        )}
       </span>
-      <span className="pkgv-row__size numeric">{formatGB(base.model.size_bytes, 1)}</span>
+      <span className="pkgv-row__size numeric">{formatGB(checkpoint.model.size_bytes, 1)}</span>
     </li>
   );
 }

@@ -19,7 +19,7 @@ mod library;
 #[cfg(test)]
 mod tests;
 
-pub use library::{library_packages, GroupModel, LibraryGroup, LibraryPackages};
+pub use library::{library_packages, GroupModel, LibraryGroup, LibraryPackages, UnknownModel};
 
 use serde::{Serialize, Serializer};
 
@@ -39,6 +39,10 @@ pub enum ItemKind {
     Lora,
     /// Is a base; needs its companions.
     Checkpoint,
+    /// A VAE, text encoder or CLIP vision encoder: part of a base's stack,
+    /// with no base family of its own. Its package names the stacks that use
+    /// it and needs nothing.
+    Companion,
     /// Anything else that targets a base (an embedding, a ControlNet, …) —
     /// resolved like a LoRA.
     Other,
@@ -59,6 +63,10 @@ pub struct PackageItem {
     /// ([`infer_family`]).
     #[serde(skip)]
     pub family: Option<(&'static BaseFamily, FamilySource)>,
+    /// The curated catalog entry the item is ([`catalog_entry_of`]) — what a
+    /// companion's "used by" is read from.
+    #[serde(skip)]
+    pub catalog_id: Option<&'static str>,
 }
 
 /// A base family as a package reports it.
@@ -197,6 +205,11 @@ pub struct Package {
     /// no size until picked).
     pub missing_bytes: u64,
     pub verdict: Verdict,
+    /// For a [`ItemKind::Companion`]: the families whose catalog stack
+    /// carries it ("Text encoder used by FLUX.1 [dev] and LTX-Video").
+    /// Empty for everything else, and for a companion the catalog does not
+    /// know.
+    pub used_by: Vec<FamilyRef>,
 }
 
 /// The catalog the resolver draws on — [`Catalog::builtin`] in production.
@@ -281,6 +294,58 @@ pub(crate) fn is_lora(model: &Model) -> bool {
     has_role(model, "lora")
 }
 
+/// Roles of the parts a base runs with rather than a base of their own.
+const COMPANION_ROLES: &[&str] = &["vae", "text_encoder", "clip_vision"];
+
+/// A VAE / text encoder / CLIP vision encoder that is neither a base nor a
+/// LoRA — it has no base family of its own, whatever its legacy string says.
+pub(crate) fn is_companion(model: &Model) -> bool {
+    !is_base(model) && !is_lora(model) && COMPANION_ROLES.iter().any(|r| has_role(model, r))
+}
+
+/// The catalog entry a library row is: the id recorded at import
+/// (`catalog:<id>` in `source_revision` or `source`), else its SHA-256.
+pub fn catalog_entry_of<'a>(model: &Model, catalog: &Catalog<'a>) -> Option<&'a KnownModel> {
+    let tagged = [
+        model.source_revision.as_deref(),
+        Some(model.source.as_str()),
+    ]
+    .into_iter()
+    .flatten()
+    .find_map(|s| s.strip_prefix("catalog:"));
+    let by_tag = tagged.and_then(|id| catalog.known.iter().find(|k| k.id == id));
+    by_tag.or_else(|| {
+        let sha = model.sha256.as_deref()?.trim();
+        catalog
+            .known
+            .iter()
+            .find(|k| k.sha256.eq_ignore_ascii_case(sha))
+    })
+}
+
+/// The package item for a library model: a LoRA, a checkpoint, a companion
+/// (see [`is_companion`]), or something else that targets a base.
+pub fn library_item(m: &LibraryModel, catalog: &Catalog<'static>) -> PackageItem {
+    let kind = if is_lora(&m.model) {
+        ItemKind::Lora
+    } else if is_base(&m.model) {
+        ItemKind::Checkpoint
+    } else if is_companion(&m.model) {
+        ItemKind::Companion
+    } else {
+        ItemKind::Other
+    };
+    PackageItem {
+        name: m.model.name.clone(),
+        kind,
+        base_label: None,
+        model_id: Some(m.model.id.clone()),
+        size_bytes: u64::try_from(m.model.size_bytes).ok(),
+        family: m.family,
+        catalog_id: catalog_entry_of(&m.model, catalog).map(|k| k.id),
+    }
+}
+
 /// The family's own catalog stack.
 fn own_stack<'a>(family: &BaseFamily, catalog: &Catalog<'a>) -> Option<&'a ModelStack> {
     family.stack_id.and_then(|id| catalog.stack(id))
@@ -317,6 +382,18 @@ fn match_member<'l>(
     family_id: &str,
     library: &'l [LibraryModel],
 ) -> Option<&'l LibraryModel> {
+    let role = NeedRole::of_kind(member.kind);
+    let by_role = || {
+        library
+            .iter()
+            .find(|m| role.filled_by(&m.model) && m.family_id() == Some(family_id))
+    };
+    match_exact(member, library).or_else(by_role)
+}
+
+/// The library model that *is* this catalog file: by SHA-256, then by the
+/// catalog id recorded at import — never by role or family.
+fn match_exact<'l>(member: &KnownModel, library: &'l [LibraryModel]) -> Option<&'l LibraryModel> {
     let by_sha = library.iter().find(|m| {
         m.model
             .sha256
@@ -330,13 +407,44 @@ fn match_member<'l>(
                 || m.model.source == catalog_tag
         })
     };
-    let role = NeedRole::of_kind(member.kind);
-    let by_role = || {
-        library
-            .iter()
-            .find(|m| role.filled_by(&m.model) && m.family_id() == Some(family_id))
-    };
-    by_sha.or_else(by_catalog).or_else(by_role)
+    by_sha.or_else(by_catalog)
+}
+
+/// The first of the most used models among `candidates` (library order
+/// breaks ties).
+fn most_used<'l>(candidates: impl Iterator<Item = &'l LibraryModel>) -> Option<&'l LibraryModel> {
+    candidates.min_by_key(|m| std::cmp::Reverse(m.model.use_count))
+}
+
+/// The installed catalog base of `family`'s architecture — the pinned file
+/// of a same-architecture family's stack (`sd_xl_base_1.0` for Pony), matched
+/// by content or catalog id.
+fn canonical_base<'l>(
+    family: &BaseFamily,
+    registry: &[BaseFamily],
+    library: &'l [LibraryModel],
+    catalog: &Catalog<'static>,
+) -> Option<&'l LibraryModel> {
+    registry
+        .iter()
+        .filter(|f| works_with(family, f))
+        .filter_map(|f| own_stack(f, catalog))
+        .filter_map(|s| catalog.members(s).into_iter().next())
+        .find_map(|k| match_exact(k, library).filter(|m| is_base(&m.model)))
+}
+
+/// The families whose own catalog stack carries the catalog file `known_id`,
+/// in registry order.
+fn families_using(
+    known_id: &str,
+    registry: &'static [BaseFamily],
+    catalog: &Catalog<'static>,
+) -> Vec<FamilyRef> {
+    registry
+        .iter()
+        .filter(|f| own_stack(f, catalog).is_some_and(|s| s.member_ids.contains(&known_id)))
+        .map(|f| FamilyRef::new(f, None))
+        .collect()
 }
 
 fn installed(m: &LibraryModel, made_for: bool) -> NeedStatus {
@@ -370,9 +478,14 @@ fn need(role: NeedRole, label: impl Into<String>, optional: bool, status: NeedSt
 /// installed → made for it; only a same-architecture base installed → works
 /// with it, plus an optional suggestion of its own base; nothing installed →
 /// its own base from the catalog, or findable on Civitai.
+///
+/// Which installed base: the family's own catalog file, else its most used
+/// checkpoint; for "works with", the architecture's canonical catalog base
+/// ([`canonical_base`]), else the most used checkpoint of the architecture.
 fn base_needs(
     family: &'static BaseFamily,
     base_label: Option<&str>,
+    registry: &[BaseFamily],
     library: &[LibraryModel],
     catalog: &Catalog<'static>,
 ) -> Vec<Need> {
@@ -380,9 +493,11 @@ fn base_needs(
     let made_for = own_base
         .and_then(|k| match_member(k, family.id, library))
         .or_else(|| {
-            library
-                .iter()
-                .find(|m| is_base(&m.model) && m.family_id() == Some(family.id))
+            most_used(
+                library
+                    .iter()
+                    .filter(|m| is_base(&m.model) && m.family_id() == Some(family.id)),
+            )
         });
     if let Some(m) = made_for {
         return vec![need(
@@ -410,9 +525,12 @@ fn base_needs(
             },
         ),
     };
-    let works_with_base = library
-        .iter()
-        .find(|m| is_base(&m.model) && m.family.is_some_and(|(f, _)| works_with(family, f)));
+    let works_with_base =
+        canonical_base(family, registry, library, catalog).or_else(|| {
+            most_used(library.iter().filter(|m| {
+                is_base(&m.model) && m.family.is_some_and(|(f, _)| works_with(family, f))
+            }))
+        });
     match works_with_base {
         Some(m) => vec![
             need(NeedRole::Base, family.label, false, installed(m, false)),
@@ -487,9 +605,26 @@ fn summarize(needs: &[Need]) -> (u64, Verdict) {
 pub fn resolve_package(
     item: PackageItem,
     library: &[LibraryModel],
-    registry: &[BaseFamily],
+    registry: &'static [BaseFamily],
     catalog: &Catalog<'static>,
 ) -> Package {
+    if item.kind == ItemKind::Companion {
+        // No base family of its own, whatever `item.family` says (an old
+        // import stored `sdxl` on the T5 encoder): it needs nothing, and is
+        // used by the stacks that carry it.
+        let used_by = item
+            .catalog_id
+            .map(|id| families_using(id, registry, catalog))
+            .unwrap_or_default();
+        return Package {
+            item,
+            family: None,
+            needs: Vec::new(),
+            missing_bytes: 0,
+            verdict: Verdict::Ready,
+            used_by,
+        };
+    }
     let Some((family, source)) = item.family else {
         return Package {
             item,
@@ -497,6 +632,7 @@ pub fn resolve_package(
             needs: Vec::new(),
             missing_bytes: 0,
             verdict: Verdict::UnknownBase,
+            used_by: Vec::new(),
         };
     };
     let family_ref = Some(FamilyRef::new(family, Some(source)));
@@ -512,6 +648,7 @@ pub fn resolve_package(
             )],
             missing_bytes: 0,
             verdict: Verdict::NotRunnable(reason),
+            used_by: Vec::new(),
         };
     }
     let mut needs = Vec::new();
@@ -519,6 +656,7 @@ pub fn resolve_package(
         needs.extend(base_needs(
             family,
             item.base_label.as_deref(),
+            registry,
             library,
             catalog,
         ));
@@ -531,5 +669,6 @@ pub fn resolve_package(
         needs,
         missing_bytes,
         verdict,
+        used_by: Vec::new(),
     }
 }

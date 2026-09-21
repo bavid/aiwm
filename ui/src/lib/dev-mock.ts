@@ -72,6 +72,16 @@ const MODELS: AnyRecord[] = [
   mkModel("m-lora-pony-eyes", "ponyEyesDetail_v2", { roles: ["lora"], runtimes: ["comfyui"], size_bytes: 57_000_000 }),
   mkModel("m-lora-wan14-motion", "Wan 2.2 I2V A14B Orbit Cam", { family: "wan", base_family: "wan-14b", family_source: "civitai", roles: ["lora"], runtimes: ["comfyui"], size_bytes: 306_000_000, source: "civitai:1800000/2000000" }),
   mkModel("m-lora-mystery", "mystery_style_v3", { roles: ["lora"], runtimes: ["comfyui"], size_bytes: 144_000_000 }),
+  // Packages view (Plan 14 fix round): further SDXL-architecture checkpoints
+  // with the legacy `sdxl`, Krea 2 checkpoints no stack covers, a klein 4B
+  // LoRA and the trainer's 4B Diffusers folder (not a checkpoint).
+  mkModel("m-hassaku", "hassakuXLIllustrious_v34", { family: "sdxl", roles: ["base_diffusion"], runtimes: ["comfyui"], size_bytes: 6_938_040_682 }),
+  mkModel("m-animagine", "animagineXLV31_v31", { family: "sdxl", roles: ["base_diffusion"], runtimes: ["comfyui"], size_bytes: 6_938_040_714, use_count: 4 }),
+  mkModel("m-krea-a", "realism_engine_krea2_v3.1", { roles: ["base_diffusion"], runtimes: ["comfyui"], size_bytes: 13_010_000_000 }),
+  mkModel("m-krea-b", "realism_engine_krea2_v2", { roles: ["base_diffusion"], runtimes: ["comfyui"], size_bytes: 13_010_000_000 }),
+  mkModel("m-lora-krea", "stomach_detail_krea2_final", { roles: ["lora"], runtimes: ["comfyui"], size_bytes: 342_000_000 }),
+  mkModel("m-lora-myrender", "myrender-v2", { family: "flux2", base_family: "flux2-klein-4b", family_source: "header", roles: ["lora"], runtimes: ["comfyui"], size_bytes: 82_000_000 }),
+  mkModel("m-klein4-train", "FLUX.2 [klein] 4B base (training)", { family: "flux2", format: "directory", roles: ["training_base_flux2_klein_4b"], runtimes: [], size_bytes: 16_000_000_000 }),
   mkModel("m-qwen", "Qwen2.5 7B Instruct", { family: "qwen2", format: "gguf", quant: "Q5_K_M", param_count: 7_615_616_512, ctx_max: 32_768, roles: ["chat"], runtimes: ["llamacpp"], vram_estimate_mb: 6400 }),
   mkModel("m-hermes", "Hermes-3-Llama-3.1-8B", { family: "llama3", format: "gguf", quant: "Q5_K_M", param_count: 8_030_000_000, ctx_max: 131_072, roles: ["chat", "coding"], runtimes: ["llamacpp"], vram_estimate_mb: 5700 }),
   mkModel("m-kokoro", "Kokoro 82M — int8", { family: "kokoro", format: "onnx", roles: ["voice_model"], runtimes: [], size_bytes: 114_119_327 }),

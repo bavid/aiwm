@@ -60,6 +60,7 @@ fn item(kind: ItemKind, family: Option<&str>, label: Option<&str>) -> PackageIte
         model_id: None,
         size_bytes: Some(100),
         family: family.map(|f| (family_by_id(f).unwrap(), FamilySource::Civitai)),
+        catalog_id: None,
     }
 }
 
@@ -339,7 +340,7 @@ fn recorded(id: &str, roles: &[&str], base_family: &str, source: &str) -> Librar
 }
 
 #[test]
-fn the_library_groups_by_family_with_orphans() {
+fn the_library_groups_by_family_with_unknown_models() {
     let mut library = vec![
         recorded("sdxl-base", &["base_diffusion"], "sdxl", "catalog"),
         recorded("sdxl-lora", &["lora"], "sdxl", "civitai"),
@@ -392,6 +393,262 @@ fn the_library_groups_by_family_with_orphans() {
         NeedStatus::NotRunnable { .. }
     ));
 
-    let orphans: Vec<&str> = out.orphans.iter().map(|m| m.id.as_str()).collect();
-    assert_eq!(orphans, ["mystery"]);
+    let unknown: Vec<&str> = out.unknown.iter().map(|m| m.model.id.as_str()).collect();
+    assert_eq!(unknown, ["mystery"]);
+}
+
+// ---- real-run findings (2026-09-21) ------------------------------------------
+
+/// A library row shaped like the real one, its family inferred on read:
+/// legacy `family`, the catalog tag the import recorded, roles.
+fn real(id: &str, legacy: Option<&str>, catalog: Option<&str>, roles: &[&str]) -> LibraryModel {
+    let mut m = model(id, id, roles);
+    m.file_path = format!("E:\\AI\\models\\{id}.safetensors");
+    m.family = legacy.map(str::to_string);
+    m.source_revision = catalog.map(|c| format!("catalog:{c}"));
+    LibraryModel::infer(m, None)
+}
+
+fn used_by(p: &Package) -> Vec<&str> {
+    p.used_by.iter().map(|f| f.id).collect()
+}
+
+fn resolve_library(id: &str, library: &[LibraryModel]) -> Package {
+    let m = library.iter().find(|m| m.model.id == id).unwrap();
+    resolve(library_item(m, &Catalog::builtin()), library)
+}
+
+#[test]
+fn a_catalog_text_encoder_resolves_to_the_stacks_that_use_it() {
+    let library = [
+        real(
+            "t5xxl_fp8_e4m3fn",
+            Some("sdxl"),
+            Some("t5xxl-fp8"),
+            &["text_encoder"],
+        ),
+        real(
+            "umt5_xxl_fp8_e4m3fn_scaled",
+            Some("sdxl"),
+            Some("wan-umt5-xxl-fp8"),
+            &["text_encoder"],
+        ),
+        real(
+            "sd_xl_base_1.0",
+            Some("sdxl"),
+            Some("sdxl-base-1.0"),
+            &["base_diffusion"],
+        ),
+    ];
+    let t5 = resolve_library("t5xxl_fp8_e4m3fn", &library);
+    assert_eq!(t5.item.kind, ItemKind::Companion);
+    assert_eq!(t5.verdict, Verdict::Ready);
+    assert!(t5.needs.is_empty(), "a companion needs no base");
+    assert!(t5.family.is_none(), "{:?}", t5.family);
+    assert_eq!(used_by(&t5), ["flux1", "ltxv"]);
+
+    let umt5 = resolve_library("umt5_xxl_fp8_e4m3fn_scaled", &library);
+    assert_eq!(umt5.verdict, Verdict::Ready);
+    assert!(umt5.needs.is_empty());
+    assert_eq!(used_by(&umt5), ["wan22-5b"]);
+}
+
+#[test]
+fn a_companion_is_recognised_by_its_hash_and_never_needs_a_base() {
+    // Matched by content only — no catalog tag, a wrong legacy string.
+    let mut by_hash = real("renamed_encoder", Some("sdxl"), None, &["text_encoder"]);
+    by_hash.model.sha256 = Some(known("qwen3-8b-flux2-encoder").sha256.into());
+    // Not in the catalog at all: still a companion, with no stack to name.
+    let stray = real("some_vae", Some("sdxl"), None, &["vae"]);
+    let library = [by_hash, stray];
+
+    let p = resolve_library("renamed_encoder", &library);
+    assert_eq!(p.item.kind, ItemKind::Companion);
+    assert_eq!(used_by(&p), ["flux2-klein-9b"]);
+    let p = resolve_library("some_vae", &library);
+    assert_eq!(p.item.kind, ItemKind::Companion);
+    assert_eq!(p.verdict, Verdict::Ready);
+    assert!(p.needs.is_empty() && p.used_by.is_empty() && p.family.is_none());
+}
+
+#[test]
+fn a_pony_lora_works_with_the_canonical_sdxl_base_when_installed() {
+    let mut animagine = real(
+        "animagineXLV31_v31",
+        Some("sdxl"),
+        None,
+        &["base_diffusion"],
+    );
+    animagine.model.use_count = 40;
+    let library = [
+        animagine,
+        installed_file("sd_xl_base_1.0", "sdxl-base-1.0", &["base_diffusion"]),
+    ];
+    let p = resolve(item(ItemKind::Lora, Some("pony"), Some("Pony")), &library);
+    assert_eq!(installed_id(&p.needs[0]), Some(("sd_xl_base_1.0", false)));
+}
+
+#[test]
+fn without_the_canonical_base_a_lora_works_with_the_most_used_checkpoint() {
+    let mut rare = real(
+        "animagineXLV31_v31",
+        Some("sdxl"),
+        None,
+        &["base_diffusion"],
+    );
+    rare.model.use_count = 2;
+    let mut used = real(
+        "mopMixtureOfPerverts",
+        Some("sdxl"),
+        None,
+        &["base_diffusion"],
+    );
+    used.model.use_count = 9;
+    let p = resolve(
+        item(ItemKind::Lora, Some("pony"), Some("Pony")),
+        &[rare, used],
+    );
+    assert_eq!(
+        installed_id(&p.needs[0]),
+        Some(("mopMixtureOfPerverts", false))
+    );
+}
+
+#[test]
+fn an_illustrious_lora_is_made_for_an_installed_illustrious_checkpoint() {
+    let library = [
+        installed_file("sd_xl_base_1.0", "sdxl-base-1.0", &["base_diffusion"]),
+        real(
+            "hassakuXLIllustrious_v34",
+            Some("sdxl"),
+            None,
+            &["base_diffusion"],
+        ),
+    ];
+    let p = resolve(
+        item(ItemKind::Lora, Some("illustrious"), Some("Illustrious")),
+        &library,
+    );
+    assert_eq!(p.needs.len(), 1, "no Illustrious checkpoint to fetch");
+    assert_eq!(
+        installed_id(&p.needs[0]),
+        Some(("hassakuXLIllustrious_v34", true))
+    );
+}
+
+fn real_library() -> Vec<LibraryModel> {
+    let mut unnamed = real(
+        "unnamedixlRealisticModel_v7",
+        Some("sdxl"),
+        None,
+        &["base_diffusion"],
+    );
+    unnamed.model.use_count = 3;
+    let krea = |id: &str, size: i64| {
+        let mut m = real(id, None, None, &["base_diffusion"]);
+        m.model.size_bytes = size;
+        m
+    };
+    vec![
+        real(
+            "animagineXLV31_v31",
+            Some("sdxl"),
+            None,
+            &["base_diffusion"],
+        ),
+        unnamed,
+        installed_file("sd_xl_base_1.0", "sdxl-base-1.0", &["base_diffusion"]),
+        real(
+            "hassakuXLIllustrious_v34",
+            Some("sdxl"),
+            None,
+            &["base_diffusion"],
+        ),
+        krea("realism_engine_krea2_v3.1", 13_000_000_000),
+        krea("realism_engine_krea2_v2", 13_100_000_000),
+        real("K_spreadinggape", None, None, &["lora"]),
+        real(
+            "t5xxl_fp8_e4m3fn",
+            Some("sdxl"),
+            Some("t5xxl-fp8"),
+            &["text_encoder"],
+        ),
+        recorded("myrender-v2", &["lora"], "flux2-klein-4b", "header"),
+        real(
+            "FLUX.2 [klein] 4B base (training)",
+            Some("flux2"),
+            None,
+            &["training_base_flux2_klein_4b"],
+        ),
+    ]
+}
+
+#[test]
+fn every_installed_checkpoint_is_listed_canonical_first() {
+    let out = library_packages(&real_library(), FAMILIES, &Catalog::builtin());
+    let group = |id: &str| out.groups.iter().find(|g| g.family.id == id).unwrap();
+    let names = |g: &LibraryGroup| -> Vec<String> {
+        g.checkpoints.iter().map(|c| c.model.id.clone()).collect()
+    };
+    let sdxl = group("sdxl");
+    assert_eq!(
+        names(sdxl),
+        [
+            "sd_xl_base_1.0",
+            "unnamedixlRealisticModel_v7",
+            "animagineXLV31_v31"
+        ]
+    );
+    assert_eq!(sdxl.base.as_ref().unwrap().model.id, "sd_xl_base_1.0");
+    assert_eq!(names(group("illustrious")), ["hassakuXLIllustrious_v34"]);
+    assert!(group("illustrious").complete);
+}
+
+#[test]
+fn models_without_a_base_family_are_listed_as_unknown_with_their_kind() {
+    let out = library_packages(&real_library(), FAMILIES, &Catalog::builtin());
+    let unknown: Vec<(&str, ItemKind, i64)> = out
+        .unknown
+        .iter()
+        .map(|u| (u.model.id.as_str(), u.kind, u.model.size_bytes))
+        .collect();
+    assert_eq!(
+        unknown,
+        [
+            (
+                "realism_engine_krea2_v3.1",
+                ItemKind::Checkpoint,
+                13_000_000_000
+            ),
+            (
+                "realism_engine_krea2_v2",
+                ItemKind::Checkpoint,
+                13_100_000_000
+            ),
+            ("K_spreadinggape", ItemKind::Lora, 1),
+        ],
+        "companions and training folders are not \"unknown\""
+    );
+}
+
+#[test]
+fn a_base_that_is_only_findable_asks_for_a_choice_not_bytes() {
+    let out = library_packages(&real_library(), FAMILIES, &Catalog::builtin());
+    let klein = out
+        .groups
+        .iter()
+        .find(|g| g.family.id == "flux2-klein-4b")
+        .unwrap();
+    assert!(!klein.complete);
+    assert_eq!(klein.missing_bytes, 0);
+    assert!(klein.base_choice_needed);
+    assert!(
+        klein.checkpoints.is_empty(),
+        "the training folder is no base"
+    );
+    let note = klein.note.as_deref().unwrap_or_default();
+    assert!(note.contains("training base is installed"), "{note:?}");
+
+    let sdxl = out.groups.iter().find(|g| g.family.id == "sdxl").unwrap();
+    assert!(!sdxl.base_choice_needed && sdxl.note.is_none());
 }

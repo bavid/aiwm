@@ -70,7 +70,7 @@ export function Packages({ onViewDownloads, onAddModels }: Props) {
     });
   };
 
-  const empty = data && data.groups.length === 0 && data.orphans.length === 0;
+  const empty = data && data.groups.length === 0 && data.unknown.length === 0;
 
   return (
     <section className="card card--wide pkgv" aria-labelledby="pkgv-title">
@@ -118,7 +118,7 @@ export function Packages({ onViewDownloads, onAddModels }: Props) {
           ))}
         </ul>
       )}
-      {data && <OrphanLoras orphans={data.orphans} onChanged={reload} />}
+      {data && <OrphanLoras unknown={data.unknown} onChanged={reload} />}
       {subject && (
         <PackageDialog
           subject={subject}

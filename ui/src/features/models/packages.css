@@ -308,6 +308,36 @@ p.pkgv-state {
   flex-basis: 100%;
 }
 
+.pkgv-orphans__sum {
+  font-weight: 600;
+  color: var(--muted);
+}
+
+/* "Checkpoint" / "LoRA" tag before an unknown model's name. */
+.pkgv-orphan__kind {
+  margin-right: var(--space-1);
+  padding: 0 var(--space-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+/* One-line card note (a training base that is not a checkpoint). */
+.pkgv-card__note {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--muted);
+}
+
+/* Further checkpoints of a family: the name is what matters there. */
+.pkgv-row[data-status="installed"]:not([data-preferred]) .pkgv-row__name {
+  color: var(--text);
+}
+
 /* The "Save detected families" preview. */
 .pkgv-detected {
   display: grid;

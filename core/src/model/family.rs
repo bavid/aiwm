@@ -398,9 +398,17 @@ pub fn normalize_library_family(family: &str) -> Option<&'static BaseFamily> {
 ///
 /// 1. a recorded `base_family` (a registry id, with how it was decided in
 ///    `family_source`) — authoritative, whatever the legacy string says;
-/// 2. on a catalog row (`source_revision = catalog:<id>`), the catalog's
-///    legacy family in its catalog meaning;
-/// 3. a legacy `family` string that is unambiguous (`sdxl`, a registry id);
+/// 2. on a catalog row (`source_revision = catalog:<id>`), the catalog
+///    **entry's** own family — never the stored string, which an old import
+///    may have got wrong (real rows: the T5 and umt5 encoders stored as
+///    `sdxl`). A companion entry without a family (a text encoder) has no
+///    base family, and nothing further is guessed. A catalog id this build
+///    no longer knows falls back to the stored string in its catalog
+///    meaning;
+/// 3. a legacy `family` string that is unambiguous (`sdxl`, a registry id) —
+///    except that a bare `sdxl` gives way to a fine-tune the name clearly
+///    names as a word (`hassakuXLIllustrious` → Illustrious, still
+///    [`FamilySource::Name`]);
 /// 4. the safetensors `header` ([`family_from_header`]);
 /// 5. an ambiguous legacy string (`flux`, `flux2`, `wan`, `ltx` — see
 ///    [`LEGACY_FAMILIES`]) in its catalog meaning;
@@ -422,6 +430,12 @@ pub fn infer_family(
             .unwrap_or(FamilySource::Name);
         return Some((family, source));
     }
+    if let Some(entry) = catalog_entry(model) {
+        return entry
+            .family
+            .and_then(normalize_library_family)
+            .map(|family| (family, FamilySource::Catalog));
+    }
     let stored = model
         .family
         .as_deref()
@@ -432,7 +446,8 @@ pub fn infer_family(
     }
     let ambiguous = stored.is_some_and(|(raw, _)| legacy_alias(raw.trim()).is_some());
     if let (Some((_, family)), false) = (stored, ambiguous) {
-        return Some((family, FamilySource::Name));
+        let named = named_subfamily(model, family);
+        return Some((named.unwrap_or(family), FamilySource::Name));
     }
     if let Some(family) = header.and_then(family_from_header) {
         return Some((family, FamilySource::Header));
@@ -444,6 +459,22 @@ pub fn infer_family(
         .and_then(family_from_name)
         .or_else(|| family_from_name(&model.name))
         .map(|family| (family, FamilySource::Name))
+}
+
+/// The curated catalog entry a row was imported as (`catalog:<id>` in
+/// `source_revision`), when this build still knows that id.
+fn catalog_entry(model: &Model) -> Option<&'static crate::model::KnownModel> {
+    let id = model.source_revision.as_deref()?.strip_prefix("catalog:")?;
+    crate::model::KNOWN_MODELS.iter().find(|k| k.id == id)
+}
+
+/// A fine-tune the file name (then the display name) clearly names, when
+/// the stored legacy family is only its arch-group root (`sdxl` →
+/// `hassakuXLIllustrious` is Illustrious).
+fn named_subfamily(model: &Model, stored: &BaseFamily) -> Option<&'static BaseFamily> {
+    file_name(&model.file_path)
+        .and_then(|n| detect::subfamily_from_name(stored.id, n))
+        .or_else(|| detect::subfamily_from_name(stored.id, &model.name))
 }
 
 fn is_catalog_row(model: &Model) -> bool {

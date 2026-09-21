@@ -1,4 +1,11 @@
-import type { FamilySource, GroupModel, LibraryGroup, LibraryPackages, Need } from "../../lib/ipc";
+import type {
+  FamilySource,
+  GroupModel,
+  LibraryGroup,
+  LibraryPackages,
+  Need,
+  UnknownModel,
+} from "../../lib/ipc";
 
 /** Where a library group stands, as the card's one-line status says it. */
 export type GroupState =
@@ -9,8 +16,10 @@ export type GroupState =
    *  optional own base, if there is one to get. */
   | { kind: "works_with"; baseName: string; suggestion: Need | null }
   /** Required parts not installed; `bytes` counts the catalogue files only
-   *  (a findable checkpoint's size is known once one is chosen). */
-  | { kind: "missing"; needs: Need[]; bytes: number };
+   *  (a findable checkpoint's size is known once one is chosen).
+   *  `chooseBase`: the base itself is missing and only findable — the
+   *  person has to pick a checkpoint before any size is known. */
+  | { kind: "missing"; needs: Need[]; bytes: number; chooseBase: boolean };
 
 const isInstalled = (n: Need) => n.status.kind === "installed";
 
@@ -39,8 +48,9 @@ export function baseSuggestion(g: LibraryGroup): Need | null {
 
 export function groupState(g: LibraryGroup): GroupState {
   if (g.family.runnable.kind === "no") return { kind: "not_runnable", reason: g.family.runnable.reason };
+  const chooseBase = g.base_choice_needed;
   const missing = missingNeeds(g);
-  if (missing.length > 0) return { kind: "missing", needs: missing, bytes: g.missing_bytes };
+  if (missing.length > 0) return { kind: "missing", needs: missing, bytes: g.missing_bytes, chooseBase };
   if (g.complete) return { kind: "ready" };
   const works = worksWithBase(g);
   if (works && works.status.kind === "installed") {
@@ -48,7 +58,17 @@ export function groupState(g: LibraryGroup): GroupState {
   }
   // Nothing missing and nothing installed to run on — the backend reports
   // this only for a group whose base could not be placed; treat as missing.
-  return { kind: "missing", needs: [], bytes: g.missing_bytes };
+  return { kind: "missing", needs: [], bytes: g.missing_bytes, chooseBase };
+}
+
+/** The "Unknown or unsupported" summary: "2 checkpoints (26 GB), 3 LoRAs". */
+export function unknownSummary(unknown: readonly UnknownModel[]) {
+  const checkpoints = unknown.filter((u) => u.kind === "checkpoint");
+  return {
+    checkpoints: checkpoints.length,
+    checkpointBytes: checkpoints.reduce((sum, u) => sum + u.model.size_bytes, 0),
+    loras: unknown.length - checkpoints.length,
+  };
 }
 
 /** The library model a group's package is resolved from: its base when
@@ -92,7 +112,7 @@ export interface DetectedRow {
  *  would persist. */
 export function detectedRows(data: LibraryPackages): DetectedRow[] {
   return data.groups.flatMap((g) => {
-    const members: GroupModel[] = [...(g.base ? [g.base] : []), ...g.loras];
+    const members: GroupModel[] = [...g.checkpoints, ...g.loras];
     return members
       .filter((m) => m.family_source !== "user" && m.model.base_family !== g.family.id)
       .map((m) => ({

@@ -262,6 +262,72 @@ fn flux_lora_family(t: &[(String, &[u64])], widths: &BTreeMap<u64, usize>) -> Op
 
 // ---- file names --------------------------------------------------------------
 
+/// Arch-group roots and the fine-tunes of them a name can clearly announce.
+/// A stored legacy `sdxl` says only "SDXL architecture"; a file called
+/// `hassakuXLIllustrious` says which fine-tune.
+const NAMED_SUBFAMILIES: &[(&str, &[&str])] = &[("sdxl", &["pony", "illustrious", "noobai"])];
+
+/// The subfamily of `root` that `name` names as a word of its own
+/// ([`names_word`]); `None` when it names none or `root` has no
+/// subfamilies.
+pub(super) fn subfamily_from_name(root: &str, name: &str) -> Option<&'static BaseFamily> {
+    let (_, subs) = NAMED_SUBFAMILIES.iter().find(|(r, _)| *r == root)?;
+    subs.iter()
+        .find(|sub| names_word(name, sub))
+        .and_then(|sub| family_by_id(sub))
+}
+
+/// Whether `name` contains `word` (ASCII, case-insensitive) as a word of its
+/// own: bounded by the ends, a non-alphanumeric character, a digit, or a
+/// camelCase change (`ponyDiffusion`, `XLIllustrious`, `noobaiXL`).
+/// `ponytail`, `capony` and all-caps `PONYTAIL` do not name `pony`.
+fn names_word(name: &str, word: &str) -> bool {
+    let chars: Vec<char> = name.chars().collect();
+    let needle: Vec<char> = word.chars().collect();
+    if needle.is_empty() || chars.len() < needle.len() {
+        return false;
+    }
+    (0..=chars.len() - needle.len()).any(|i| {
+        let end = i + needle.len();
+        chars[i..end]
+            .iter()
+            .zip(&needle)
+            .all(|(a, b)| a.eq_ignore_ascii_case(b))
+            && starts_word(&chars, i)
+            && ends_word(&chars, end)
+    })
+}
+
+/// A word starts at `i`: at the start, after a separator or digit, at an
+/// upper-case letter after a lower-case one, or at the last capital of an
+/// acronym run followed by lower case (`XL|Illustrious`).
+fn starts_word(chars: &[char], i: usize) -> bool {
+    let Some(&prev) = i.checked_sub(1).and_then(|p| chars.get(p)) else {
+        return true;
+    };
+    let first = chars[i];
+    let next_is_lower = chars.get(i + 1).is_some_and(char::is_ascii_lowercase);
+    !prev.is_ascii_alphanumeric()
+        || prev.is_ascii_digit()
+        || (first.is_ascii_uppercase() && prev.is_ascii_lowercase())
+        || (first.is_ascii_uppercase() && prev.is_ascii_uppercase() && next_is_lower)
+}
+
+/// A word ends before `end`: at the end, before a separator or digit, or
+/// before an upper-case letter that follows a lower-case one
+/// (`pony|Diffusion`, `noobai|XL`). An all-caps run gives no boundary
+/// (`PONY|TAIL`), so `NoobAIXL` does not name `noobai` — a missed hint, never
+/// a wrong one.
+fn ends_word(chars: &[char], end: usize) -> bool {
+    let Some(&next) = chars.get(end) else {
+        return true;
+    };
+    let last = chars[end - 1];
+    !next.is_ascii_alphanumeric()
+        || next.is_ascii_digit()
+        || (next.is_ascii_uppercase() && last.is_ascii_lowercase())
+}
+
 /// The family a file (or display) name suggests — the weakest hint, used
 /// only when nothing better is known. Letters and digits only, lowercase,
 /// so `flux-2-klein-4b`, `flux2_klein_4B` and `Flux2Klein4b` read alike.

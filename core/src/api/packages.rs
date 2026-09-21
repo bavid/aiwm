@@ -13,8 +13,8 @@ use serde::{Deserialize, Serialize};
 use crate::db::{Database, Model, SetFamily};
 use crate::model::family::{family_by_id, family_for_civitai, FamilySource, FAMILIES};
 use crate::model::packages::{
-    library_packages as group_library, load_library, resolve_package, Catalog, ItemKind,
-    LibraryModel, LibraryPackages, NeedStatus, Package, PackageItem,
+    is_companion, library_item, library_packages as group_library, load_library, resolve_package,
+    Catalog, ItemKind, LibraryModel, LibraryPackages, NeedStatus, Package, PackageItem,
 };
 use crate::registry::RemoteModelDetails;
 use crate::{App, CoreError, Result};
@@ -138,30 +138,8 @@ fn civitai_item(
         base_label,
         model_id: installed.map(|m| m.model.id.clone()),
         size_bytes: file.map(|f| f.size),
+        catalog_id: None,
     })
-}
-
-/// The package item for a library model.
-fn library_item(m: &LibraryModel) -> PackageItem {
-    let roles = &m.model.roles;
-    let kind = if roles.iter().any(|r| r == "lora") {
-        ItemKind::Lora
-    } else if roles
-        .iter()
-        .any(|r| r == "base_diffusion" || r == "base_video")
-    {
-        ItemKind::Checkpoint
-    } else {
-        ItemKind::Other
-    };
-    PackageItem {
-        name: m.model.name.clone(),
-        kind,
-        base_label: None,
-        model_id: Some(m.model.id.clone()),
-        size_bytes: u64::try_from(m.model.size_bytes).ok(),
-        family: m.family,
-    }
 }
 
 /// Fill every findable need with Civitai's top checkpoints for its label —
@@ -208,7 +186,7 @@ pub async fn resolve(app: &App, q: ResolveQuery) -> Result<Package> {
                 .iter()
                 .find(|m| m.model.id == q.model_id.trim())
                 .ok_or_else(|| err(format!("model {} is not in the library", q.model_id)))?;
-            library_item(m)
+            library_item(m, &catalog)
         }
         other => return Err(err(format!("unknown source {other:?}"))),
     };
@@ -270,6 +248,17 @@ pub async fn save_detected(
             ));
             continue;
         };
+        if is_companion(&m.model) {
+            // A VAE / text encoder runs with a base; it has none of its own.
+            // Whatever the detection reads from a legacy string, never
+            // record one.
+            out.push(saved(
+                id,
+                SaveOutcome::Skipped,
+                Some("a VAE or text encoder has no base family of its own".into()),
+            ));
+            continue;
+        }
         let Some(wanted) = family_by_id(&choice.family) else {
             out.push(saved(
                 id,
@@ -392,6 +381,56 @@ mod tests {
             (Some("illustrious".into()), Some("user".into()))
         );
         assert_eq!(get(changed).await, (None, None));
+    }
+
+    /// A text encoder with the wrong legacy family `sdxl` an old import
+    /// wrote (the real T5 / umt5 rows), with or without its catalog tag.
+    async fn encoder(db: &Database, file: &str, catalog: Option<&str>) -> String {
+        db.models()
+            .insert(NewModel {
+                name: file.into(),
+                family: Some("sdxl".into()),
+                format: "safetensors".into(),
+                file_path: format!("E:\\AI\\models\\text_encoders\\{file}"),
+                size_bytes: 1,
+                source: "manual".into(),
+                source_revision: catalog.map(|c| format!("catalog:{c}")),
+                roles: vec!["text_encoder".into()],
+                ..NewModel::default()
+            })
+            .await
+            .unwrap()
+            .id
+    }
+
+    #[tokio::test]
+    async fn saving_detected_families_never_persists_one_for_a_companion() {
+        let db = Database::connect_in_memory().await.unwrap();
+        let catalog_t5 = encoder(&db, "t5xxl_fp8_e4m3fn.safetensors", Some("t5xxl-fp8")).await;
+        // Outside the catalog the legacy string still reads as "sdxl" on
+        // read — the save must refuse it all the same.
+        let stray = encoder(&db, "t5xxl_other.safetensors", None).await;
+        let library = inferred(&db).await;
+        let stray_row = library.iter().find(|m| m.model.id == stray).unwrap();
+        assert_eq!(stray_row.family.map(|(f, _)| f.id), Some("sdxl"));
+
+        let out = save_detected(
+            &db,
+            &library,
+            &[choice(&catalog_t5, "sdxl"), choice(&stray, "sdxl")],
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            out.iter().all(|s| s.outcome == SaveOutcome::Skipped),
+            "{out:?}"
+        );
+        for id in [catalog_t5, stray] {
+            let m = db.models().get(&id).await.unwrap().unwrap();
+            assert_eq!((m.base_family, m.family_source), (None, None));
+            assert_eq!(m.family.as_deref(), Some("sdxl"), "legacy string untouched");
+        }
     }
 
     #[tokio::test]

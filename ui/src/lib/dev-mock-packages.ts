@@ -1,9 +1,11 @@
 /** Dev-mock for the Plan 14 package commands (`resolve_package`,
  *  `library_packages`, `set_model_base_family`, `save_base_families`). A
  *  small stand-in for `core::model::packages` over the dev-mock library:
- *  an SDXL group that is complete, a FLUX.2 [klein] group missing its text
- *  encoder, two Pony LoRAs with a findable Pony checkpoint, a Wan 14B LoRA
- *  that cannot run here, and one orphan LoRA. Some rows carry no recorded
+ *  an SDXL group that is complete (two checkpoints), an Illustrious
+ *  checkpoint, a FLUX.2 [klein] 9B group missing its text encoder, a klein 4B
+ *  LoRA whose base is only findable (plus the trainer's 4B folder), two Pony
+ *  LoRAs with a findable Pony checkpoint, a Wan 14B LoRA that cannot run
+ *  here, and Krea 2 checkpoints / LoRAs of unknown base. Some rows carry no recorded
  *  `base_family` but a family "detected on read" (`DETECTED`, standing in
  *  for the header / file-name inference), which is what "Save detected
  *  families" persists. Not a test double for logic. */
@@ -86,6 +88,9 @@ const DETECTED: Record<string, [string, string]> = {
   "m-sd15": ["sd15", "catalog"],
   "m-lora-wan-motion": ["wan22-5b", "header"],
   "m-lora-pony-eyes": ["pony", "name"],
+  // Legacy `sdxl`; the name says Illustrious (a subfamily of the SDXL group).
+  "m-hassaku": ["illustrious", "name"],
+  "m-animagine": ["sdxl", "name"],
 };
 
 /** A row's family and how it was decided: recorded first, then detected. */
@@ -139,11 +144,12 @@ function suggestion(f: MockFamily, optional: boolean, candidates: boolean): AnyR
 }
 
 function baseNeeds(f: MockFamily, models: AnyRecord[], candidates: boolean): AnyRecord[] {
-  const exact = models.find((m) => isBase(m) && familyIdOf(m) === f.id);
+  const exact = checkpointsOf(f, models)[0];
   if (exact) return [installedNeed("base", f.label, exact, true)];
-  const works = models.find(
-    (m) => isBase(m) && mockFamily(familyIdOf(m) ?? "")?.arch_group === f.arch_group,
-  );
+  // The architecture's catalogue base first, then the most used checkpoint.
+  const works = models
+    .filter((m) => isBase(m) && mockFamily(familyIdOf(m) ?? "")?.arch_group === f.arch_group)
+    .sort((a, b) => rankBase(b) - rankBase(a))[0];
   if (works) return [installedNeed("base", f.label, works, false), suggestion(f, true, candidates)];
   return [suggestion(f, false, candidates)];
 }
@@ -167,14 +173,35 @@ function missing(needs: AnyRecord[]): number {
     }, 0);
 }
 
+/** Catalogue checkpoints rank first, then by use. */
+const rankBase = (m: AnyRecord) =>
+  (familyOf(m)?.[1] === "catalog" ? 1e9 : 0) + Number(m.use_count ?? 0);
+
+/** Every checkpoint of a family, the catalogue one first, then most used. */
+function checkpointsOf(f: MockFamily, models: AnyRecord[]): AnyRecord[] {
+  return models
+    .filter((m) => isBase(m) && familyIdOf(m) === f.id)
+    .sort((a, b) => rankBase(b) - rankBase(a));
+}
+
+/** The trainer's Diffusers base is no checkpoint — say so on its group. */
+function trainingNote(f: MockFamily, models: AnyRecord[]): string | null {
+  const role = `training_base_${f.id.replace(/-/g, "_")}`;
+  return models.some((m) => ((m.roles as string[]) ?? []).includes(role))
+    ? `Your training base is installed; image generation with ${f.label} needs a single-file checkpoint.`
+    : null;
+}
+
 export function mockLibraryPackages(models: AnyRecord[]): AnyRecord {
   const ids = [...new Set(models.map(familyIdOf).filter((x): x is string => !!x))];
   const order = BASE_FAMILIES.map((f) => f.id);
   ids.sort((a, b) => order.indexOf(a) - order.indexOf(b));
+  const member = (m: AnyRecord) => ({ model: { ...m }, family_source: familyOf(m)?.[1] ?? "name" });
   const groups = ids.flatMap((id) => {
     const f = mockFamily(id);
     if (!f) return [];
-    const base = models.find((m) => isBase(m) && familyIdOf(m) === f.id);
+    const checkpoints = checkpointsOf(f, models);
+    const base = checkpoints[0];
     const loras = models.filter((m) => isLora(m) && familyIdOf(m) === f.id);
     if (!base && loras.length === 0) return [];
     const runnable = f.runnable.kind === "yes";
@@ -182,19 +209,23 @@ export function mockLibraryPackages(models: AnyRecord[]): AnyRecord {
       ? [{ role: "base", label: f.label, optional: false, status: { kind: "not_runnable", reason: f.runnable.reason } }]
       : base ? [] : baseNeeds(f, models, false);
     const companions = runnable ? companionNeeds(f, models) : [];
-    const member = (m: AnyRecord) => ({ model: { ...m }, family_source: familyOf(m)?.[1] ?? "name" });
     return [{
       family: familyRef(f, null),
       base: base ? member(base) : null,
+      checkpoints: checkpoints.map(member),
       base_needs: bNeeds,
       companions,
       loras: loras.map(member),
       missing_bytes: missing([...bNeeds, ...companions]),
       complete: runnable && !!base && companions.every((n) => (n.status as AnyRecord).kind === "installed"),
+      base_choice_needed: !base && bNeeds.some((n) => !n.optional && (n.status as AnyRecord).kind === "findable"),
+      note: base ? null : trainingNote(f, models),
     }];
   });
-  const orphans = models.filter((m) => isLora(m) && !familyOf(m)).map((m) => ({ ...m }));
-  return { groups, orphans };
+  const unknown = models
+    .filter((m) => !familyOf(m) && (isLora(m) || isBase(m)))
+    .map((m) => ({ model: { ...m }, kind: isLora(m) ? "lora" : "checkpoint" }));
+  return { groups, unknown };
 }
 
 function kindOf(hint: unknown): string {
@@ -204,13 +235,19 @@ function kindOf(hint: unknown): string {
 }
 
 function packageFor(item: AnyRecord, familyId: string | null, source: string, models: AnyRecord[]): AnyRecord {
+  if (item.kind === "companion") {
+    // No base of its own; the stacks whose companion list names it use it.
+    const usedBy = FAMILIES.filter((f) => f.companions.some((c) => c[4] === item.model_id));
+    return { item, family: null, needs: [], missing_bytes: 0, verdict: { kind: "ready" },
+      used_by: usedBy.map((f) => familyRef(f, null)) };
+  }
   const f = familyId ? mockFamily(familyId) : undefined;
-  if (!f) return { item, family: null, needs: [], missing_bytes: 0, verdict: { kind: "unknown_base" } };
+  if (!f) return { item, family: null, needs: [], missing_bytes: 0, verdict: { kind: "unknown_base" }, used_by: [] };
   if (f.runnable.kind === "no") {
     const reason = String(f.runnable.reason);
     return { item, family: familyRef(f, source),
       needs: [{ role: "base", label: f.label, optional: false, status: { kind: "not_runnable", reason } }],
-      missing_bytes: 0, verdict: { kind: "not_runnable", reason } };
+      missing_bytes: 0, verdict: { kind: "not_runnable", reason }, used_by: [] };
   }
   const needs = [
     ...(item.kind === "checkpoint" ? [] : baseNeeds(f, models, true)),
@@ -220,7 +257,16 @@ function packageFor(item: AnyRecord, familyId: string | null, source: string, mo
     (n) => !n.optional && ["catalog", "findable"].includes(String((n.status as AnyRecord).kind)),
   );
   return { item, family: familyRef(f, source), needs, missing_bytes: missing(needs),
-    verdict: { kind: incomplete ? "needs_download" : "ready" } };
+    verdict: { kind: incomplete ? "needs_download" : "ready" }, used_by: [] };
+}
+
+const COMPANION_ROLES = ["vae", "text_encoder", "clip_vision"];
+
+function libraryKind(m: AnyRecord): string {
+  if (isLora(m)) return "lora";
+  if (isBase(m)) return "checkpoint";
+  const roles = (m.roles as string[]) ?? [];
+  return roles.some((r) => COMPANION_ROLES.includes(r)) ? "companion" : "other";
 }
 
 /** Civitai `baseModel` label → mock family id. */
@@ -237,7 +283,7 @@ export function mockResolvePackage(
   if (query.source === "library") {
     const m = models.find((x) => x.id === query.model_id);
     if (!m) throw new Error(`configuration error: packages: model ${String(query.model_id)} is not in the library`);
-    const kind = isLora(m) ? "lora" : isBase(m) ? "checkpoint" : "other";
+    const kind = libraryKind(m);
     const item = { name: m.name, kind, base_label: null, model_id: m.id, size_bytes: m.size_bytes };
     const fam = familyOf(m);
     return packageFor(item, fam?.[0] ?? null, fam?.[1] ?? "name", models);

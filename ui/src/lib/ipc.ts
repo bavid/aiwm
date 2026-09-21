@@ -824,7 +824,8 @@ export type PackageVerdict =
 
 export interface PackageItem {
   name: string;
-  kind: "lora" | "checkpoint" | "other";
+  /** `companion`: a VAE / text encoder — no base of its own, needs nothing. */
+  kind: "lora" | "checkpoint" | "companion" | "other";
   base_label: string | null;
   model_id: string | null;
   size_bytes: number | null;
@@ -837,6 +838,8 @@ export interface Package {
   /** Required catalog bytes still missing. */
   missing_bytes: number;
   verdict: PackageVerdict;
+  /** For a companion: the families whose stack carries it. */
+  used_by: FamilyRef[];
 }
 
 export interface GroupModel {
@@ -846,19 +849,33 @@ export interface GroupModel {
 
 export interface LibraryGroup {
   family: FamilyRef;
+  /** The preferred installed checkpoint — `checkpoints[0]`. */
   base: GroupModel | null;
+  /** Every installed checkpoint of the family, the preferred one first. */
+  checkpoints: GroupModel[];
   /** When `base` is null: what would provide one. */
   base_needs: Need[];
   companions: Need[];
   loras: GroupModel[];
   missing_bytes: number;
   complete: boolean;
+  /** No checkpoint, and the base is only findable: the user must pick one
+   *  (there is nothing with a size to download yet). */
+  base_choice_needed: boolean;
+  /** One line for the card (e.g. a training base that is not a checkpoint). */
+  note: string | null;
+}
+
+/** A checkpoint or LoRA whose base family could not be inferred. */
+export interface UnknownModel {
+  model: Model;
+  kind: "checkpoint" | "lora";
 }
 
 export interface LibraryPackages {
   groups: LibraryGroup[];
-  /** LoRAs whose base family could not be inferred. */
-  orphans: Model[];
+  /** Checkpoints and LoRAs with no inferable base family. */
+  unknown: UnknownModel[];
 }
 
 export type ResolvePackageQuery =

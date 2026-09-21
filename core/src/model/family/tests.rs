@@ -808,3 +808,129 @@ fn family_source_round_trips_through_its_column_value() {
     assert_eq!(FamilySource::parse(" USER "), Some(FamilySource::User));
     assert_eq!(FamilySource::parse("guess"), None);
 }
+
+// ---- real-run findings (2026-09-21) ---------------------------------------------
+
+/// A library row shaped like the real one: legacy `family`, the catalog tag
+/// the import recorded, its roles.
+fn real_row(file: &str, legacy: Option<&str>, catalog: Option<&str>, roles: &[&str]) -> Model {
+    Model {
+        source_revision: catalog.map(|c| format!("catalog:{c}")),
+        roles: roles.iter().map(|r| (*r).to_string()).collect(),
+        ..model(legacy, None, file)
+    }
+}
+
+fn sdxl_checkpoint_header() -> SafetensorsHeader {
+    header(&[
+        ("model.diffusion_model.label_emb.0.0.weight", &[1280, 2816]),
+        (
+            "conditioner.embedders.1.model.transformer.resblocks.0.attn.in_proj_weight",
+            &[3840, 1280],
+        ),
+    ])
+}
+
+#[test]
+fn a_catalog_text_encoder_has_no_base_family_whatever_its_legacy_string() {
+    // Both real rows carry `models.family = 'sdxl'` from an old import.
+    let t5 = real_row(
+        "t5xxl_fp8_e4m3fn.safetensors",
+        Some("sdxl"),
+        Some("t5xxl-fp8"),
+        &["text_encoder"],
+    );
+    assert_eq!(inferred(&t5, None), None);
+    let umt5 = real_row(
+        "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
+        Some("sdxl"),
+        Some("wan-umt5-xxl-fp8"),
+        &["text_encoder"],
+    );
+    assert_eq!(inferred(&umt5, None), None);
+}
+
+#[test]
+fn a_catalog_row_takes_its_family_from_the_catalog_entry() {
+    // A wrong legacy string on a catalog row loses to the entry's own family.
+    let base = real_row(
+        "sd_xl_base_1.0.safetensors",
+        Some("flux"),
+        Some("sdxl-base-1.0"),
+        &["base_diffusion"],
+    );
+    assert_eq!(inferred(&base, None), Some(("sdxl", FamilySource::Catalog)));
+    let vae = real_row("ae.safetensors", Some("sdxl"), Some("flux-vae"), &["vae"]);
+    assert_eq!(inferred(&vae, None), Some(("flux1", FamilySource::Catalog)));
+    // A catalog id this build does not know keeps the stored string.
+    let gone = real_row("x.safetensors", Some("sdxl"), Some("retired-entry"), &[]);
+    assert_eq!(inferred(&gone, None), Some(("sdxl", FamilySource::Catalog)));
+}
+
+#[test]
+fn a_subfamily_in_the_name_beats_a_generic_stored_sdxl() {
+    for (file, want) in [
+        ("hassakuXLIllustrious_v34.safetensors", "illustrious"),
+        ("ponyDiffusionV6XL_v6StartWithThisOne.safetensors", "pony"),
+        ("noobaiXLNAIXL_vPred10.safetensors", "noobai"),
+        ("NoobAI-XL-v1.1.safetensors", "noobai"),
+        ("sdxl_pony_style.safetensors", "pony"),
+        ("animagineXLV31_v31.safetensors", "sdxl"),
+        ("unnamedixlRealisticModel_v7.safetensors", "sdxl"),
+    ] {
+        let m = real_row(file, Some("sdxl"), None, &["base_diffusion"]);
+        assert_eq!(
+            inferred(&m, None),
+            Some((want, FamilySource::Name)),
+            "file {file:?}"
+        );
+    }
+}
+
+#[test]
+fn a_subfamily_word_inside_another_word_does_not_flip_sdxl() {
+    for file in [
+        "ponytailHelperXL.safetensors",
+        "caponyXL_v2.safetensors",
+        "epicponyness.safetensors",
+        "illustriousnessXL.safetensors",
+        "PONYTAILXL.safetensors",
+    ] {
+        let m = real_row(file, Some("sdxl"), None, &["lora"]);
+        assert_eq!(
+            inferred(&m, None),
+            Some(("sdxl", FamilySource::Name)),
+            "file {file:?}"
+        );
+    }
+}
+
+#[test]
+fn a_subfamily_name_never_overrides_a_user_catalog_or_header_result() {
+    let user = recorded(
+        "sdxl",
+        Some("user"),
+        Some("sdxl"),
+        "hassakuXLIllustrious_v34.safetensors",
+    );
+    assert_eq!(inferred(&user, None), Some(("sdxl", FamilySource::User)));
+    let catalog = real_row(
+        "ponyRenamed_sd_xl_base.safetensors",
+        Some("sdxl"),
+        Some("sdxl-base-1.0"),
+        &["base_diffusion"],
+    );
+    assert_eq!(
+        inferred(&catalog, None),
+        Some(("sdxl", FamilySource::Catalog))
+    );
+    // No stored string: the header decides, the name does not flip it.
+    let header_only = real_row("hassakuXLIllustrious_v34.safetensors", None, None, &[]);
+    assert_eq!(
+        inferred(&header_only, Some(&sdxl_checkpoint_header())),
+        Some(("sdxl", FamilySource::Header))
+    );
+    // Only the arch-group root flips: a stored `pony` stays pony.
+    let pony = real_row("illustriousMix.safetensors", Some("pony"), None, &[]);
+    assert_eq!(inferred(&pony, None), Some(("pony", FamilySource::Name)));
+}

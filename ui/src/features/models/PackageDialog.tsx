@@ -78,6 +78,7 @@ type Phase = { kind: "idle" } | { kind: "busy" } | { kind: "queued"; files: numb
 const KIND_WORD: Record<Package["item"]["kind"], string> = {
   lora: "LoRA",
   checkpoint: "checkpoint",
+  companion: "encoder or VAE",
   other: "model",
 };
 
@@ -336,6 +337,17 @@ function Verdict({ pkg, kindWord }: { pkg: Package; kindWord: string }) {
   const v = pkg.verdict;
   switch (v.kind) {
     case "ready":
+      if (pkg.item.kind === "companion") {
+        const users = pkg.used_by.map((f) => f.label);
+        return (
+          <p className="pkg__verdict" data-verdict="ready">
+            <span aria-hidden="true">✓ </span>
+            {users.length > 0
+              ? `Part of a base's setup — used by ${users.join(" and ")}. It needs nothing else.`
+              : "A VAE or text encoder — it runs with a base and needs nothing else."}
+          </p>
+        );
+      }
       return (
         <p className="pkg__verdict" data-verdict="ready">
           <span aria-hidden="true">✓ </span>
