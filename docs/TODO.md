@@ -2550,7 +2550,7 @@ gleich (Pfad, Größe, mtime). Civitai über die konfigurierte Haustür.
 | Civitai Illustrious — „Illustrious Style Pack" (1060551, Gegenprobe) | 0,60 s | illustrious, ready: works with `animagineXLV31_v31`, optional findable Nova Anime XL / Realism Illustrious / PerfectDeliberate — **obwohl `hassakuXLIllustrious_v34` installiert ist** (siehe unten) |
 | Teardown | — | Daemon beendet, Port 48160 ohne Listener |
 
-**Falsch / auffällig (gefunden im echten Lauf, noch nicht behoben):**
+**Falsch / auffällig (gefunden im echten Lauf; behoben in der Fix-Runde 2026-09-21, siehe ✅):**
 - **T5-XXL und umt5-XXL werden als „sdxl" (Quelle `catalog`) aufgelöst.**
   `resolve?source=library` auf `t5xxl_fp8_e4m3fn` (`catalog:t5xxl-fp8`) und
   `umt5_xxl_fp8_e4m3fn_scaled` (`catalog:wan-umt5-xxl-fp8`) meldet „Stable
@@ -2561,22 +2561,32 @@ gleich (Pfad, Größe, mtime). Civitai über die konfigurierte Haustür.
   betroffen (dort werden Begleiter per sha256 zugeordnet: T5 korrekt bei
   flux1/ltxv, umt5 bei wan22-5b). Risiko: „Save detected families" dürfte
   diese Fehlzuordnung nicht persistieren — prüfen.
+  ✅ Behoben: Katalog-Zeilen nehmen die Familie des Katalog-Eintrags (T5/umt5 →
+  keine), ein Begleiter löst zu „used by FLUX.1 [dev] and LTX-Video (2B)“ / „Wan 2.2
+  TI2V-5B“ auf (ready, keine Bedarfe), „Save detected families“ überspringt Begleiter.
 - **Illustrious-Checkpoint wird nicht als Illustrious erkannt.**
   `hassakuXLIllustrious_v34` hat die Legacy-Familie `sdxl`; die gewinnt vor dem
   Namen („Illustrious"). Folge: eine Illustrious-LoRA schlägt vor, einen
   Illustrious-Checkpoint zu holen, obwohl einer installiert ist
   (Architektur passt trotzdem — „works with" ist korrekt, „made for" fehlt).
+  ✅ Behoben: gespeichertes `sdxl` + Name nennt Pony/Illustrious/NoobAI als eigenes Wort
+  (`hassakuXLIllustrious`) → Unterfamilie (Quelle `name`); nie gegen `user`/Header/Katalog.
 - **Packages-Ansicht zeigt pro Familie genau eine Basis.** Weitere Checkpoints
   derselben Familie (`animagineXLV31`, `hassakuXLIllustrious`,
   `unnamedixlRealisticModel`, `mopMixtureOfPerverts` bei sdxl) tauchen in
   `GET /packages/library` nirgends auf, ebenso Checkpoints ohne Familie
   (3× Krea 2, `animaika_v48` — `orphans` enthält nur LoRAs).
+  ✅ Behoben: jede Gruppe listet alle Checkpoints (`checkpoints`, Katalog-Basis zuerst,
+  dann nach Nutzung); `unknown` ersetzt `orphans` und zeigt Checkpoints + LoRAs mit Größe.
 - `pony`-LoRA „works with" wählt den ersten SDXL-Checkpoint
   (`animagineXLV31`), nicht `sd_xl_base_1.0` — funktioniert, ist aber
-  zufällig.
+  zufällig. ✅ Behoben: Katalog-Basis der Architektur, sonst der meistgenutzte Checkpoint.
 - Der Trainings-Ordner `FLUX.2 [klein] 4B base (training)` (Diffusers, 16 GB)
   zählt nicht als Basis der 4B-Gruppe (richtig für ComfyUI-Inferenz, aber für
   den Nutzer überraschend: „4B fehlt", obwohl 16 GB 4B auf der Platte liegen).
+  ✅ Behoben: die Gruppe sagt „Your training base is installed; image generation with
+  FLUX.2 [klein] 4B needs a single-file checkpoint"; eine nur „findable" Basis zeigt
+  „Base missing — choose a checkpoint" (`base_choice_needed`) statt „0 B".
 
 **Offen:**
 - Hugging-Face-Treffer haben noch keinen „Get"-Dialog (nur Civitai).
