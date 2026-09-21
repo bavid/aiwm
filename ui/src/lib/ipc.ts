@@ -1906,9 +1906,20 @@ export interface RegistryFile {
   virus_scan_result: string | null;
 }
 
+/** One version of a remote model (`registry::RemoteVersion`). */
+export interface RemoteVersion {
+  id: string;
+  name: string | null;
+  /** Civitai's `baseModel` label (`"Pony"`, `"SDXL 1.0"`, …). */
+  base_model: string | null;
+}
+
 export interface RegistryDetails extends RemoteModel {
   revision: string;
   files: RegistryFile[];
+  /** Every version, newest first, with the base each targets — a Civitai
+   *  model's versions can target different bases. Empty for Hugging Face. */
+  versions?: RemoteVersion[];
   freshness: Freshness;
 }
 

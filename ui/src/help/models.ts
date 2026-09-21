@@ -49,7 +49,7 @@ const IMPORT_SETTINGS: readonly HelpSetting[] = [
     key: "import-type",
     label: "Type",
     what: "What kind of file is being imported: chat GGUF, image checkpoint, diffusion model / UNet, VAE, LoRA, text encoder, CLIP vision, IP-Adapter, video model, voice model, voice data, WD tagger, a Florence-2 or Qwen2.5-VL file.",
-    why: "The kind decides where the file is linked for ComfyUI or the sidecar and which roles it gets. \"Set import type\" on a catalogue or Discover row sets it for you.",
+    why: "The kind decides where the file is linked for ComfyUI or the sidecar and which roles it gets. Only files from elsewhere need it — Discover's Get and the catalogue download straight into the library with the right kind.",
     effect: "Changes the accepted extensions, the placeholder and the roles offered. A .gguf can never be a checkpoint, VAE or LoRA — the type is corrected from the file if they disagree.",
     benefit: "One form for every kind of model.",
   },
@@ -103,6 +103,23 @@ const CATALOG_SETTINGS: readonly HelpSetting[] = [
 ];
 
 const DISCOVER_SETTINGS: readonly HelpSetting[] = [
+  {
+    key: "get",
+    label: "Get (Civitai)",
+    what: "Opens the package for a Civitai pick: the model plus everything it needs to run here — the base checkpoint, its text encoders and VAE — each marked Installed ✓, Download ↓ (with its size), Choose a checkpoint ? or Not runnable ✗.",
+    why: "A LoRA is useless without the base it was trained for, and Civitai hosts LoRAs for bases this app cannot run at all. Get checks your library and the catalogue before anything is downloaded.",
+    effect: "\"Download LoRA only\" queues just the file. \"Download LoRA + missing (N GB)\" also queues every ticked need: catalogue files (pinned hashes) and, for a base the catalogue lacks, the Civitai checkpoint you picked from the top three by downloads. Everything goes through the download queue and is recorded with its source and base family; \"View downloads\" shows them grouped under the package.",
+    benefit: "One click from a search result to something that actually renders — no hunting for the right base, encoder or VAE.",
+    pitfalls: "\"Works with your SDXL — made for Pony\" means it loads on what you have but was tuned on Pony; that suggestion starts unticked. A base Civitai names that this app does not know is said so plainly (\"may not load\"); only \"Download … only\" is offered then. Suggested checkpoints are community uploads: their hash is Civitai's claim, re-checked by the download manager.",
+  },
+  {
+    key: "not-runnable",
+    label: "\"Will not load\" line (Civitai)",
+    what: "A warning on a result card when the model is made for a base this app cannot run — Wan 14B (does not fit 16 GB; the app runs the 5B) or LTX-2.",
+    why: "You should know before a multi-gigabyte download, not after.",
+    effect: "Shown on the card itself, from the base labels Civitai lists — no extra request per card. When only some versions target such a base it says so; Get then checks the version you would actually download.",
+    benefit: "No more downloading LoRAs that can never load here.",
+  },
   {
     key: "source",
     label: "Hugging Face / Civitai",
@@ -185,7 +202,7 @@ const DOWNLOADS_SETTINGS: readonly HelpSetting[] = [
     label: "Downloads",
     what: "The download queue: one transfer at a time, resumable, verified against the pinned SHA-256 where one is known, then imported with the requested kind and roles.",
     why: "Model files are gigabytes; a queue with pause, resume and verification beats a browser download you then have to import by hand.",
-    effect: "Pause / Resume / Cancel per row; failed rows can be resumed (retries are counted). A finished row reads Imported. \"Clear finished\" removes done and failed rows from the list — not the models.",
+    effect: "Pause / Resume / Cancel per row; failed rows can be resumed (retries are counted). A finished row reads Imported. \"Clear finished\" removes done and failed rows from the list — not the models. Files that one Get queued together are listed under the package's name with a tally (until the app restarts; each file keeps its own source and base family either way).",
     benefit: "Queue a whole stack and walk away.",
     pitfalls: "Every download is refused while Offline mode is on (Settings → Network); the message says so. The same file requested twice joins the transfer already running instead of starting a second one.",
     measured: "2026-09-19: the WD tagger's two files (1,260,744,467 B) arrived in 30.1 s, about 40 MB/s; Florence-2's 11 files in 36.3 s, about 43 MB/s, every hash checked.",
@@ -236,7 +253,7 @@ export const MODELS_TOPICS: readonly HelpTopic[] = [
         items: [
           "Add models → pick a category tab (Image, Video, Voice, Chat, Code, Training & captioning). Each pick is fit-checked against your VRAM budget and one per group is marked ★ recommended.",
           "Download entire stack (or one file); watch Downloads; the model appears in the Library when verified and imported.",
-          "Discover → search Hugging Face or Civitai, open a repo's files, read the fit badges, Download & import the quant you want — or tick \"Ask my local model\" and let it shortlist.",
+          "Discover → search Hugging Face or Civitai, open a repo's files, read the fit badges, Download & import the quant you want — or tick \"Ask my local model\" and let it shortlist. On Civitai, Get downloads a LoRA or checkpoint together with the base, encoders and VAE it still lacks.",
           "Have a file already? Add models → Import: type, path (or link), roles, Import.",
           "Library: rename by clicking the name, add tags, toggle roles, Test for a score, Better? for an upgrade check, pin favourites, Delete.",
         ],
@@ -290,7 +307,7 @@ export const MODELS_TOPICS: readonly HelpTopic[] = [
     body: [
       {
         kind: "p",
-        text: "Plain browsing is live as you type (from two characters) and remembers your last six searches. When the site is unreachable, or Offline mode is on, the last cached result is shown with its age. \"Files\" resolves a repo's weight files with a fit badge each; \"Set import type\" prepares the import form for what you would download by hand.",
+        text: "Plain browsing is live as you type (from two characters) and remembers your last six searches. When the site is unreachable, or Offline mode is on, the last cached result is shown with its age. \"Files\" resolves a repo's weight files with a fit badge each, each one downloadable straight into the library. On Civitai, \"Get\" shows what a model needs to run here and downloads it together with whatever is missing.",
       },
     ],
     settings: DISCOVER_SETTINGS,

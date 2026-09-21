@@ -3,6 +3,7 @@ import { humanize } from "../../lib/errors";
 import { useDownloads, useModels } from "../../lib/hooks";
 import { enqueueDownload, resumeDownload, type ModelStack } from "../../lib/ipc";
 import {
+  knownModelDownload,
   pendingMembers,
   stackProgress,
   type MemberProgress,
@@ -146,13 +147,7 @@ export function useStackInstaller(
           } else {
             // The core returns the already-active download when another tab
             // queued this file first — that counts as "already downloading".
-            const d = await enqueueDownload({
-              url: m.member.url,
-              filename: m.member.file,
-              model_type: m.member.kind,
-              sha256: m.member.sha256,
-              size_bytes: m.member.size_bytes,
-            });
+            const d = await enqueueDownload(knownModelDownload(m.member));
             ids.add(d.id);
           }
         }

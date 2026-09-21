@@ -23,6 +23,8 @@ import {
 import { filterDisplayTags } from "../../lib/tags";
 import { FileList } from "./FileList";
 import { FitBadge } from "./FitBadge";
+import { PackageDialog } from "./PackageDialog";
+import { cardBaseWarning, primaryBaseLabel } from "./package-plan";
 import { weightFiles } from "./registry-files";
 
 /** Which Discover source is active. Civitai has no "ask my local model"
@@ -91,8 +93,8 @@ function freshnessNote(f: Freshness, sourceLabel = "Hugging Face"): string | nul
 }
 
 /** The user's chosen kind is a far better signal than the file format alone
- *  (format only tells you gguf vs not) -- the user can still correct it via
- *  "Set import type" / the expanded file list. */
+ *  (format only tells you gguf vs not) -- the user can still change the
+ *  roles on the Library table afterwards. */
 function guessModelType(kind: RecommendKind, format: RecommendCandidate["format"]): ModelType {
   switch (kind) {
     case "chat":
@@ -120,7 +122,7 @@ function rolesFor(kind: RecommendKind): string[] | undefined {
  *  your own chat/coding model pick a shortlist and explain why). They used
  *  to be two separate pages; splitting "search Hugging Face" into two nav
  *  entries was more surface area than the difference was worth. */
-export function Discover({ onUseType }: { onUseType: (t: ModelType) => void }) {
+export function Discover({ onViewDownloads }: { onViewDownloads: () => void }) {
   const [source, setSource] = useState<DiscoverSource>("huggingface");
   const [aiMode, setAiMode] = useState(false);
   const [query, setQuery] = useState("");
@@ -130,10 +132,10 @@ export function Discover({ onUseType }: { onUseType: (t: ModelType) => void }) {
 
   const subtitle =
     source === "civitai"
-      ? "search Civitai · download in your browser, then import above"
+      ? "search Civitai · Get fetches a model with everything it needs"
       : aiMode
         ? "your local model ranks & explains the results"
-        : "search Hugging Face · download in your browser, then import above";
+        : "search Hugging Face · download a file straight into the library";
 
   return (
     <section className="card card--wide">
@@ -183,26 +185,18 @@ export function Discover({ onUseType }: { onUseType: (t: ModelType) => void }) {
           {aiMode ? (
             <AiSearch query={query} setQuery={setQuery} />
           ) : (
-            <PlainSearch query={query} setQuery={setQuery} onUseType={onUseType} />
+            <PlainSearch query={query} setQuery={setQuery} />
           )}
         </>
       )}
 
-      {source === "civitai" && <CivitaiSearch onUseType={onUseType} />}
+      {source === "civitai" && <CivitaiSearch onViewDownloads={onViewDownloads} />}
     </section>
   );
 }
 
 /** The original Discover behavior: live-as-you-type, no local-model cost. */
-function PlainSearch({
-  query,
-  setQuery,
-  onUseType,
-}: {
-  query: string;
-  setQuery: (q: string) => void;
-  onUseType: (t: ModelType) => void;
-}) {
+function PlainSearch({ query, setQuery }: { query: string; setQuery: (q: string) => void }) {
   const [gguf, setGguf] = useState(true);
   const [sort, setSort] = useState<NonNullable<RegistrySearchParams["sort"]>>("downloads");
   const ids = useId();
@@ -283,7 +277,7 @@ function PlainSearch({
 
       <ul className="discover__results">
         {result?.data.map((m) => (
-          <ResultCard key={m.id} model={m} onUseType={onUseType} />
+          <ResultCard key={m.id} model={m} />
         ))}
       </ul>
     </>
@@ -504,7 +498,7 @@ function civitaiModelType(hint: string | null, format: RemoteModel["format"]): M
  *  "GGUF only", an explicit NSFW opt-in instead of nothing) against its own
  *  search endpoint. No "ask my local model" mode — that ranking job only
  *  understands the Hugging Face registry today. */
-function CivitaiSearch({ onUseType }: { onUseType: (t: ModelType) => void }) {
+function CivitaiSearch({ onViewDownloads }: { onViewDownloads: () => void }) {
   const [query, setQuery] = useState("");
   const [types, setTypes] = useState<string[]>(["Checkpoint", "LORA"]);
   const [sort, setSort] = useState<NonNullable<CivitaiSearchParams["sort"]>>("downloads");
@@ -630,7 +624,7 @@ function CivitaiSearch({ onUseType }: { onUseType: (t: ModelType) => void }) {
               <CivitaiResultCard
                 key={linked.id}
                 model={linked}
-                onUseType={onUseType}
+                onViewDownloads={onViewDownloads}
                 showNsfw={nsfw}
                 host={host}
               />
@@ -639,7 +633,7 @@ function CivitaiSearch({ onUseType }: { onUseType: (t: ModelType) => void }) {
               <CivitaiResultCard
                 key={m.id}
                 model={m}
-                onUseType={onUseType}
+                onViewDownloads={onViewDownloads}
                 showNsfw={nsfw}
                 host={host}
               />
@@ -711,12 +705,12 @@ function PreviewStrip({ previews, showNsfw }: { previews: RemotePreview[]; showN
 
 function CivitaiResultCard({
   model,
-  onUseType,
+  onViewDownloads,
   showNsfw,
   host,
 }: {
   model: RemoteModel;
-  onUseType: (t: ModelType) => void;
+  onViewDownloads: () => void;
   /** Whether the search that produced this row is showing adult content. */
   showNsfw: boolean;
   /** The front door the app is configured for — the model page lives on the
@@ -727,6 +721,7 @@ function CivitaiResultCard({
   const [details, setDetails] = useState<RegistryDetails | null>(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [getting, setGetting] = useState(false);
 
   const toggle = async () => {
     const next = !open;
@@ -745,6 +740,8 @@ function CivitaiResultCard({
   };
 
   const modelType = civitaiModelType(model.model_kind_hint, model.format);
+  const baseWarning = cardBaseWarning(model.base_model_family);
+  const what = model.model_kind_hint === "LORA" ? "LoRA" : "model";
 
   return (
     <li className="discover__row">
@@ -774,6 +771,15 @@ function CivitaiResultCard({
           ↓ {count(model.downloads)} · 👍 {count(model.likes)}
           {model.base_model_family && ` · ${model.base_model_family}`}
         </div>
+        {baseWarning && (
+          <p className="discover__basewarn" data-every={baseWarning.every}>
+            <span aria-hidden="true">✗ </span>
+            {baseWarning.every
+              ? `Made for ${baseWarning.label}: ${baseWarning.reason}. This ${what} will not load.`
+              : `Some versions are made for ${baseWarning.label}: ${baseWarning.reason}. Get checks the version you would download.`}{" "}
+            <HelpHint area="models" setting="not-runnable" />
+          </p>
+        )}
         {model.allow_commercial_use.length > 0 && (
           <div className="discover__meta">
             commercial use: {model.allow_commercial_use.join(", ")}
@@ -792,6 +798,12 @@ function CivitaiResultCard({
                 files={details.files}
                 gated={false}
                 modelType={modelType}
+                origin={{
+                  source: "civitai",
+                  model_id: details.id,
+                  version: details.revision,
+                  base_model: primaryBaseLabel(details) ?? undefined,
+                }}
                 emptyNote="No files listed for this model."
               />
             )}
@@ -800,18 +812,32 @@ function CivitaiResultCard({
       </div>
 
       <div className="known__actions">
+        <button type="button" className="discover__get" onClick={() => setGetting(true)}>
+          Get
+          <span className="visually-hidden"> {model.name ?? model.id} with what it needs</span>
+        </button>
         <button type="button" onClick={toggle}>
           {open ? "Hide files" : "Files"}
         </button>
-        <button type="button" onClick={() => onUseType(modelType)}>
-          Set import type
-        </button>
       </div>
+      {getting && (
+        <PackageDialog
+          model={model}
+          details={details}
+          modelType={modelType}
+          showNsfw={showNsfw}
+          onClose={() => setGetting(false)}
+          onViewDownloads={() => {
+            setGetting(false);
+            onViewDownloads();
+          }}
+        />
+      )}
     </li>
   );
 }
 
-function ResultCard({ model, onUseType }: { model: RemoteModel; onUseType: (t: ModelType) => void }) {
+function ResultCard({ model }: { model: RemoteModel }) {
   const [open, setOpen] = useState(false);
   const [details, setDetails] = useState<RegistryDetails | null>(null);
   const [loading, setLoading] = useState(false);
@@ -864,6 +890,12 @@ function ResultCard({ model, onUseType }: { model: RemoteModel; onUseType: (t: M
                 files={weightFiles(details)}
                 gated={model.gated !== "no"}
                 modelType={importTypeFor(model.format)}
+                origin={{
+                  source: "hf",
+                  model_id: model.id,
+                  version: details.revision,
+                  ...(model.base_model ? { base_model: model.base_model } : {}),
+                }}
                 emptyNote="No weight files detected in this repo."
               />
             )}
@@ -874,9 +906,6 @@ function ResultCard({ model, onUseType }: { model: RemoteModel; onUseType: (t: M
       <div className="known__actions">
         <button type="button" onClick={toggle}>
           {open ? "Hide files" : "Files"}
-        </button>
-        <button type="button" onClick={() => onUseType(importTypeFor(model.format))}>
-          Set import type
         </button>
       </div>
     </li>
@@ -943,6 +972,7 @@ function RecommendCard({ candidate, kind }: { candidate: RecommendCandidate; kin
                 gated={candidate.gated}
                 modelType={guessModelType(kind, candidate.format)}
                 roles={rolesFor(kind)}
+                origin={{ source: "hf", model_id: candidate.id, version: details.revision }}
                 emptyNote="No weight files detected in this repo."
               />
             )}

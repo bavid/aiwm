@@ -1,6 +1,11 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { HelpHint } from "../../components/HelpHint";
-import { enqueueDownload, type ModelType, type RegistryFile } from "../../lib/ipc";
+import {
+  enqueueDownload,
+  type DownloadOrigin,
+  type ModelType,
+  type RegistryFile,
+} from "../../lib/ipc";
 import { formatGB } from "../../lib/units";
 import { FitBadge } from "./FitBadge";
 import { countFitTiers, fitTierSummary, sortByFitTier } from "./fit-utils";
@@ -36,6 +41,7 @@ export function FileList({
   gated,
   modelType,
   roles,
+  origin,
   isRecommended,
   emptyNote,
 }: {
@@ -45,6 +51,9 @@ export function FileList({
   /** Roles to stamp on import (e.g. `["chat", "coding"]`); omit for a plain
    *  download. */
   roles?: string[];
+  /** Where the files come from — recorded on the import with the base
+   *  family its label maps to. */
+  origin?: DownloadOrigin;
   /** Flags the curated "pick this one" quant among several shown. */
   isRecommended?: (file: RegistryFile) => boolean;
   /** Shown instead of the list when the source returned no usable file. */
@@ -90,6 +99,7 @@ export function FileList({
           gated={gated}
           modelType={modelType}
           roles={roles}
+          origin={origin}
           recommended={isRecommended?.(f)}
         />
       ))}
@@ -163,12 +173,14 @@ function FileRow({
   gated,
   modelType,
   roles,
+  origin,
   recommended,
 }: {
   file: RegistryFile;
   gated: boolean;
   modelType: ModelType;
   roles?: string[];
+  origin?: DownloadOrigin;
   recommended?: boolean;
 }) {
   const [copied, setCopied] = useState(false);
@@ -205,6 +217,7 @@ function FileRow({
         sha256: file.sha256 ?? undefined,
         size_bytes: file.size_bytes,
         roles,
+        origin,
       });
       setDl("queued");
     } catch {

@@ -75,14 +75,13 @@ type CatalogProps = {
   onTabChange: (tab: CatalogTab) => void;
   /** Bumped by another tab's hand-over: scroll here and focus the active tab. */
   focusRequest: number;
-  onUseType: (t: ModelType) => void;
 };
 
 /** "What should I install, and for what?" — the curated image/video catalogue
  *  (6.x) plus the chat/coding recommendations, grouped into tabs, each
  *  fit-checked against the current VRAM budget and with one pick per group
  *  flagged "★ recommended for your hardware". */
-export function Catalog({ tab, onTabChange, focusRequest, onUseType }: CatalogProps) {
+export function Catalog({ tab, onTabChange, focusRequest }: CatalogProps) {
   const stacks = useModelStacks();
   const featured = useFeaturedModels();
   const about = useAbout();
@@ -181,7 +180,7 @@ export function Catalog({ tab, onTabChange, focusRequest, onUseType }: CatalogPr
         {isStackTab && tab !== "training" && stackRows && stackRows.length > 0 && (
           <div className="stacklist">
             {stackRows.map((s) => (
-              <StackCard key={s.id} stack={s} onUseType={onUseType} />
+              <StackCard key={s.id} stack={s} />
             ))}
           </div>
         )}
@@ -191,7 +190,7 @@ export function Catalog({ tab, onTabChange, focusRequest, onUseType }: CatalogPr
         {!isStackTab && featuredRows && featuredRows.length > 0 && (
           <ul className="known">
             {featuredRows.map((m) => (
-              <FeaturedRow key={m.id} model={m} onUseType={onUseType} />
+              <FeaturedRow key={m.id} model={m} />
             ))}
           </ul>
         )}
@@ -204,15 +203,7 @@ export function Catalog({ tab, onTabChange, focusRequest, onUseType }: CatalogPr
  *  Featured pick), so "Download & import" needs no registry lookup — it
  *  queues straight away. `compact` drops the note/file-details line, for use
  *  inside a `StackCard`'s already-labelled member list. */
-function KnownRow({
-  model,
-  onUseType,
-  compact,
-}: {
-  model: KnownModel;
-  onUseType: (t: ModelType) => void;
-  compact?: boolean;
-}) {
+function KnownRow({ model, compact }: { model: KnownModel; compact?: boolean }) {
   const [copied, setCopied] = useState(false);
   const [dl, setDl] = useState<"idle" | "queued" | "error">("idle");
 
@@ -263,9 +254,6 @@ function KnownRow({
         <button type="button" onClick={download} disabled={dl === "queued"}>
           {dl === "queued" ? "Queued ✓" : dl === "error" ? "Failed — retry" : "Download & import"}
         </button>
-        <button type="button" onClick={() => onUseType(model.kind)}>
-          Set import type
-        </button>
         <button type="button" onClick={copyLink}>
           {copied ? "Copied ✓" : "Copy link"}
         </button>
@@ -279,7 +267,7 @@ function KnownRow({
  *  you don't have to know Flux needs four separate files or hunt them down
  *  one at a time. Every file is still individually downloadable below, for
  *  topping up just the one piece you're missing. */
-function StackCard({ stack, onUseType }: { stack: ModelStack; onUseType: (t: ModelType) => void }) {
+function StackCard({ stack }: { stack: ModelStack }) {
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<"idle" | "queued" | "error">("idle");
   const downloadAllId = useId();
@@ -327,7 +315,7 @@ function StackCard({ stack, onUseType }: { stack: ModelStack; onUseType: (t: Mod
 
       <ul className="known stackcard__members">
         {stack.members.map((m) => (
-          <KnownRow key={m.id} model={m} onUseType={onUseType} compact />
+          <KnownRow key={m.id} model={m} compact />
         ))}
       </ul>
 
@@ -358,7 +346,7 @@ function StackCard({ stack, onUseType }: { stack: ModelStack; onUseType: (t: Mod
  *  weight file Hugging Face offers, not just the recommended one — pick a
  *  smaller/bigger quant if you want. Each one-click download carries
  *  `model.import_roles`, so a coding pick actually gets the `coding` role. */
-function FeaturedRow({ model, onUseType }: { model: FeaturedModel; onUseType: (t: ModelType) => void }) {
+function FeaturedRow({ model }: { model: FeaturedModel }) {
   const [open, setOpen] = useState(false);
   const [details, setDetails] = useState<RegistryDetails | null>(null);
   const [loading, setLoading] = useState(false);
@@ -425,6 +413,7 @@ function FeaturedRow({ model, onUseType }: { model: FeaturedModel; onUseType: (t
                 gated={gated}
                 modelType="chat"
                 roles={model.import_roles}
+                origin={{ source: "hf", model_id: model.repo, version: details.revision }}
                 isRecommended={(f) =>
                   f.quant?.toUpperCase().includes(hint) ?? f.path.toUpperCase().includes(hint)
                 }
@@ -437,9 +426,6 @@ function FeaturedRow({ model, onUseType }: { model: FeaturedModel; onUseType: (t
       <div className="known__actions">
         <button type="button" onClick={toggle}>
           {open ? "Hide" : "Show download options"}
-        </button>
-        <button type="button" onClick={() => onUseType("chat")}>
-          Set import type
         </button>
         <button type="button" onClick={copyRepoLink}>
           {copied ? "Copied ✓" : "Copy repo link"}

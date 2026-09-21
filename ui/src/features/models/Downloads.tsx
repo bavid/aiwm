@@ -11,6 +11,7 @@ import {
 } from "../../lib/ipc";
 import { useDownloads } from "../../lib/hooks";
 import { formatGB } from "../../lib/units";
+import { usePackageGroups, type PackageGroup } from "./package-groups";
 
 const pct = (d: Download) =>
   d.size_bytes && d.size_bytes > 0 ? Math.min(100, (d.bytes_done / d.size_bytes) * 100) : null;
@@ -26,11 +27,34 @@ const STATE_LABEL: Record<DownloadState, string> = {
 
 const TERMINAL: DownloadState[] = ["done", "failed"];
 
+/** The queue in its own order, with the files one "Get" queued together
+ *  gathered under that package — placed where its first file appears. */
+type Entry = { kind: "row"; d: Download } | { kind: "group"; group: PackageGroup; rows: Download[] };
+
+function entriesOf(rows: readonly Download[], groups: ReadonlyMap<string, PackageGroup>): Entry[] {
+  const members = new Map<string, Download[]>();
+  for (const d of rows) {
+    const g = groups.get(d.id);
+    if (g) members.set(g.id, [...(members.get(g.id) ?? []), d]);
+  }
+  const placed = new Set<string>();
+  return rows.flatMap((d): Entry[] => {
+    const g = groups.get(d.id);
+    const rowsOfGroup = g ? (members.get(g.id) ?? []) : [];
+    // A package whose other files were cleared from the history is a plain row again.
+    if (!g || rowsOfGroup.length < 2) return [{ kind: "row", d }];
+    if (placed.has(g.id)) return [];
+    placed.add(g.id);
+    return [{ kind: "group", group: g, rows: rowsOfGroup }];
+  });
+}
+
 /** Active + recent model downloads. Hidden when the list is empty. History
  *  (done/failed rows) can pile up once you've deleted the models those
  *  downloads brought in -- "Clear finished" wipes just those, in one go. */
 export function Downloads() {
   const { data, refetch } = useDownloads();
+  const groups = usePackageGroups();
   const rows = data ?? [];
   const [clearing, setClearing] = useState(false);
   if (rows.length === 0) return null;
@@ -63,11 +87,46 @@ export function Downloads() {
         )}
       </header>
       <ul className="dl__list">
-        {rows.map((d) => (
-          <DownloadRow key={d.id} d={d} onRemoved={refetch} />
-        ))}
+        {entriesOf(rows, groups).map((e) =>
+          e.kind === "row" ? (
+            <DownloadRow key={e.d.id} d={e.d} onRemoved={refetch} />
+          ) : (
+            <PackageRows key={e.group.id} label={e.group.label} rows={e.rows} onRemoved={refetch} />
+          ),
+        )}
       </ul>
     </section>
+  );
+}
+
+/** One package's files under its name, with a one-line tally. */
+function PackageRows({
+  label,
+  rows,
+  onRemoved,
+}: {
+  label: string;
+  rows: Download[];
+  onRemoved: () => void;
+}) {
+  const imported = rows.filter((d) => d.state === "done").length;
+  const failed = rows.filter((d) => d.state === "failed").length;
+  const total = rows.reduce((sum, d) => sum + (d.size_bytes ?? 0), 0);
+  return (
+    <li className="dl__group">
+      <div className="dl__grouphead">
+        <span className="dl__groupname">{label}</span>
+        <span className="dl__meta numeric">
+          package · {rows.length} files · {formatGB(total, 1)} · {imported} of {rows.length} imported
+          {failed > 0 && ` · ${failed} failed`}
+        </span>
+      </div>
+      <ul className="dl__list dl__list--nested" aria-label={`Files of ${label}`}>
+        {rows.map((d) => (
+          <DownloadRow key={d.id} d={d} onRemoved={onRemoved} />
+        ))}
+      </ul>
+    </li>
   );
 }
 
