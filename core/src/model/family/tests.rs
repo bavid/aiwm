@@ -18,7 +18,7 @@ const SAMPLE_2026_09_21: &[(&str, Option<&str>)] = &[
     ("Wan Video 2.2 I2V-A14B", Some("wan-14b")),
     ("Pony", Some("pony")),
     ("SDXL 1.0", Some("sdxl")),
-    ("Krea 2", None),
+    ("Krea 2", Some("krea2")),
     ("ZImageBase", None),
     ("Anima", None),
     ("Illustrious", Some("illustrious")),
@@ -135,6 +135,10 @@ fn stack_ids_point_at_real_catalog_stacks() {
         Some("wan22")
     );
     assert_eq!(family_by_id("ltxv").and_then(|f| f.stack_id), Some("ltx"));
+    assert_eq!(
+        family_by_id("krea2").and_then(|f| f.stack_id),
+        Some("krea2")
+    );
     // Community checkpoints are found on Civitai, not pinned.
     for community in ["pony", "illustrious", "noobai"] {
         assert_eq!(family_by_id(community).and_then(|f| f.stack_id), None);
@@ -158,6 +162,7 @@ fn wan_14b_and_ltx2_are_known_but_not_runnable() {
         "flux2-klein-4b",
         "wan22-5b",
         "ltxv",
+        "krea2",
     ] {
         assert_eq!(
             family_by_id(runnable).map(|f| f.runnable),
@@ -789,7 +794,7 @@ fn the_file_name_is_used_last() {
 
 #[test]
 fn a_recorded_family_the_registry_does_not_know_falls_through() {
-    let m = recorded("krea2", Some("civitai"), None, "sd_xl_thing.safetensors");
+    let m = recorded("zimage", Some("civitai"), None, "sd_xl_thing.safetensors");
     assert_eq!(inferred(&m, None), Some(("sdxl", FamilySource::Name)));
 }
 
@@ -933,4 +938,114 @@ fn a_subfamily_name_never_overrides_a_user_catalog_or_header_result() {
     // Only the arch-group root flips: a stored `pony` stays pony.
     let pony = real_row("illustriousMix.safetensors", Some("pony"), None, &[]);
     assert_eq!(inferred(&pony, None), Some(("pony", FamilySource::Name)));
+}
+
+// ---- Krea 2 -------------------------------------------------------------------
+
+#[test]
+fn krea2_is_a_runnable_family_of_its_own() {
+    let krea = family_by_id("krea2").expect("krea2 is in the registry");
+    assert_eq!(krea.label, "Krea 2");
+    assert_eq!(krea.civitai_labels, &["Krea 2"]);
+    assert_eq!(krea.arch_group, ArchGroup::Krea2);
+    assert_eq!(krea.runnable, Runnable::Yes);
+    assert_eq!(id(family_for_civitai("Krea 2")), Some("krea2"));
+    // FLUX.1 Krea [dev] is a different model with FLUX.1's architecture.
+    assert_eq!(id(family_for_civitai("Flux.1 Krea")), Some("flux1-krea"));
+    let flux_krea = family_by_id("flux1-krea").expect("flux1-krea");
+    assert_eq!(fit(krea, flux_krea), Fit::Incompatible);
+    assert_eq!(id(normalize_library_family("krea2")), Some("krea2"));
+}
+
+/// Keys of `lustifyNSFWCheckpoint_v10Krea2` (430 F8 tensors, no text
+/// encoder, no VAE), under `prefix`.
+fn krea2_diffusion_header(prefix: &str) -> SafetensorsHeader {
+    SafetensorsHeader {
+        tensors: [
+            "blocks.0.attn.gate.weight",
+            "blocks.0.attn.wq.weight",
+            "blocks.0.mlp.up.weight",
+            "txtfusion.layerwise_blocks.0.attn.wq.weight",
+            "txtfusion.projector.weight",
+            "first.weight",
+            "last.linear.weight",
+            "tmlp.0.weight",
+        ]
+        .iter()
+        .map(|k| (format!("{prefix}{k}"), vec![8, 8]))
+        .collect(),
+        metadata: BTreeMap::new(),
+    }
+}
+
+#[test]
+fn a_krea2_diffusion_model_is_told_by_its_text_fusion_projector() {
+    for prefix in ["", "diffusion_model.", "model.diffusion_model."] {
+        let h = krea2_diffusion_header(prefix);
+        assert_eq!(
+            id(family_from_header(&h)),
+            Some("krea2"),
+            "prefix {prefix:?}"
+        );
+    }
+}
+
+#[test]
+fn a_krea2_lora_is_told_by_its_keys_or_its_training_metadata() {
+    let by_keys = from_header(&[
+        (
+            "diffusion_model.blocks.0.attn.gate.lora_A.weight",
+            &[16, 3072],
+        ),
+        (
+            "diffusion_model.blocks.0.attn.gate.lora_B.weight",
+            &[3072, 16],
+        ),
+        (
+            "diffusion_model.blocks.0.attn.wq.lora_A.weight",
+            &[16, 3072],
+        ),
+    ]);
+    assert_eq!(by_keys, Some("krea2"));
+
+    let mut by_meta = header(&[("unet.some.module.lora_A.weight", &[16, 64])]);
+    by_meta
+        .metadata
+        .insert("ss_base_model_version".into(), "krea2".into());
+    assert_eq!(id(family_from_header(&by_meta)), Some("krea2"));
+}
+
+#[test]
+fn krea2_names_do_not_capture_flux1_krea_and_vice_versa() {
+    let cases = [
+        (
+            "lustifyNSFWCheckpoint_v10Krea2_2997637.safetensors",
+            Some("krea2"),
+        ),
+        ("krea2_turbo_fp8_scaled.safetensors", Some("krea2")),
+        ("my Krea 2 finetune.safetensors", Some("krea2")),
+        ("krea-2-raw.safetensors", Some("krea2")),
+        ("flux1-krea-dev_fp8_scaled.safetensors", Some("flux1-krea")),
+        ("flux1-krea-dev.safetensors", Some("flux1-krea")),
+        ("FLUX.1-Krea-dev-Q8_0.gguf", Some("flux1-krea")),
+    ];
+    for (name, want) in cases {
+        assert_eq!(id(family_from_name(name)), want, "name {name:?}");
+    }
+}
+
+#[test]
+fn a_krea2_row_without_any_recorded_family_is_inferred_from_its_header() {
+    let m = model(
+        None,
+        None,
+        "lustifyNSFWCheckpoint_v10Krea2_2997637.safetensors",
+    );
+    let h = krea2_diffusion_header("");
+    assert_eq!(
+        inferred(&m, Some(&h)),
+        Some(("krea2", FamilySource::Header))
+    );
+    // No header (unreadable file): the name still says it.
+    assert_eq!(inferred(&m, None), Some(("krea2", FamilySource::Name)));
 }

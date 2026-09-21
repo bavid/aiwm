@@ -2598,9 +2598,26 @@ gleich (Pfad, Größe, mtime). Civitai über die konfigurierte Haustür.
   (Qwen3-4B-Encoder, FLUX.2-VAE) werden gar nicht gelistet.
 - Ein echtes SD 1.5-Rendering mit dem Katalog-Checkpoint wurde nicht gemacht —
   braucht den 4,27-GB-Download, nur mit OK des Nutzers.
-- Krea 2 / Anima: der Nutzer hat 3 Krea-2-Checkpoints (~13 GB je) und
+- ~~Krea 2 / Anima: der Nutzer hat 3 Krea-2-Checkpoints (~13 GB je) und
   Krea-2-LoRAs in der Library (nie benutzt); ob dafür ein Stack kommt, ist
-  Nutzerentscheidung.
+  Nutzerentscheidung.~~ → ✅ Krea 2 (2026-09-21): Familie `krea2` (Civitai
+  „Krea 2", Header `txtfusion.projector.weight`, LoRA-Keys
+  `blocks.N.attn.gate`/`ss_base_model_version=krea2`, Name `krea2` — nie
+  `flux1-krea`), eigenes Rezept nach Comfy-Orgs Turbo-Template
+  (`UNETLoader` + `CLIPLoader type=krea2` + `VAELoader`, `KSampler`
+  8 Steps/CFG 1/euler/simple, Negativ = `ConditioningZeroOut` außer bei
+  Negativ-Prompt + CFG > 1, LoRAs via `LoraLoaderModelOnly`, Hi-Res-Fix wie
+  bei SDXL). Braucht zusätzlich zwei Dateien aus `Comfy-Org/Krea-2`
+  (Katalog-Stack „Krea 2"): `qwen3vl_4b_fp8_scaled.safetensors` (5,24 GB,
+  Text-Encoder) und `qwen_image_vae.safetensors` (254 MB); die Turbo-Basis
+  `krea2_turbo_fp8_scaled.safetensors` (13,1 GB) ist optional, wenn schon ein
+  Krea-2-Checkpoint da ist. Zeilen ohne Familie gehen über Header/Name ans
+  Krea-2-Rezept; ein reiner Diffusion-Checkpoint unbekannter Basis bricht jetzt
+  *vor* ComfyUI mit Klartext ab (statt „clip input is invalid: None").
+  **Offen:** echtes Rendering steht aus — braucht den ~5,5-GB-Begleiter-Download,
+  nur mit OK des Nutzers. VRAM-Schätzung: bewusst kein eigener Headroom-Eintrag
+  (13,1 GB + 4 GB würde auf 16 GB blockieren; ComfyUI lädt den Encoder separat
+  und lagert aus) — nach dem ersten echten Lauf kalibrieren.
 
 ## Offen / später zu entscheiden
 - App-Selbst-Update offline (manueller Installer + Signaturprüfung angenommen)

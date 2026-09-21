@@ -4,12 +4,13 @@
 //! Every checkpoint goes through the same graph ([`crate::pipeline::Recipe`]),
 //! but the base resolution is baked into the weights: SDXL was trained at
 //! 1024 px, Stable Diffusion 1.5 at 512 px, and SD 1.5 asked for 1024 px
-//! repeats its subject across the canvas. So the defaults follow the
-//! model's family ([`crate::model::family::infer_family`]); explicit values in
-//! the job's params always win.
+//! repeats its subject across the canvas. Krea 2's distilled Turbo model
+//! wants 8 steps at CFG 1 with the `simple` scheduler. So the defaults follow
+//! the model's family ([`crate::model::family::infer_family`]); explicit
+//! values in the job's params always win.
 
 use crate::db::Model;
-use crate::model::family::{infer_family, ArchGroup};
+use crate::model::family::{infer_family, ArchGroup, BaseFamily};
 
 /// What an image request falls back to when its params leave a value out.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -18,14 +19,20 @@ pub struct ImageDefaults {
     pub dim: u32,
     pub steps: u32,
     pub cfg: f64,
+    /// `KSampler`'s `sampler_name` / `scheduler`.
+    pub sampler: &'static str,
+    pub scheduler: &'static str,
 }
 
 impl ImageDefaults {
-    /// SDXL-class checkpoints and the FLUX recipes: 1024 px, 25 steps, CFG 7.
+    /// SDXL-class checkpoints and the FLUX recipes: 1024 px, 25 steps, CFG 7,
+    /// euler / normal.
     pub const STANDARD: Self = Self {
         dim: 1024,
         steps: 25,
         cfg: 7.0,
+        sampler: "euler",
+        scheduler: "normal",
     };
 
     /// Stable Diffusion 1.5: the values of ComfyUI's own SD 1.5 example
@@ -36,16 +43,35 @@ impl ImageDefaults {
         dim: 512,
         steps: 20,
         cfg: 8.0,
+        sampler: "euler",
+        scheduler: "normal",
     };
 
-    /// The defaults for `model`'s family: [`Self::SD15`] for anything of the
-    /// SD 1.5 architecture, [`Self::STANDARD`] otherwise (including a model
-    /// whose family cannot be told).
+    /// Krea 2: Comfy-Org's own Turbo template (`text_to_image_krea_2_turbo` —
+    /// `EmptyLatentImage` 1024×1024, `KSampler` 8 steps, cfg 1, euler /
+    /// simple). The RAW base model wants ~52 steps; a job states that itself.
+    pub const KREA2: Self = Self {
+        dim: 1024,
+        steps: 8,
+        cfg: 1.0,
+        sampler: "euler",
+        scheduler: "simple",
+    };
+
+    /// The defaults for `model`'s family as [`infer_family`] tells it without
+    /// reading the file ([`Self::for_family`]).
     pub fn for_model(model: &Model) -> Self {
-        if is_sd15(model) {
-            Self::SD15
-        } else {
-            Self::STANDARD
+        Self::for_family(infer_family(model, None).map(|(family, _)| family))
+    }
+
+    /// [`Self::SD15`] for anything of the SD 1.5 architecture, [`Self::KREA2`]
+    /// for Krea 2, [`Self::STANDARD`] otherwise (including a model whose
+    /// family cannot be told).
+    pub fn for_family(family: Option<&BaseFamily>) -> Self {
+        match family.map(|f| f.arch_group) {
+            Some(ArchGroup::Sd15) => Self::SD15,
+            Some(ArchGroup::Krea2) => Self::KREA2,
+            _ => Self::STANDARD,
         }
     }
 }
@@ -103,7 +129,9 @@ mod tests {
             ImageDefaults {
                 dim: 512,
                 steps: 20,
-                cfg: 8.0
+                cfg: 8.0,
+                sampler: "euler",
+                scheduler: "normal",
             }
         );
     }
@@ -153,6 +181,55 @@ mod tests {
         )
         .unwrap();
         assert_eq!((r.width, r.height, r.steps, r.cfg), (768, 512, 30, 6.5));
+    }
+
+    #[test]
+    fn krea2_gets_the_turbo_template_defaults() {
+        let turbo = ImageDefaults {
+            dim: 1024,
+            steps: 8,
+            cfg: 1.0,
+            sampler: "euler",
+            scheduler: "simple",
+        };
+        for m in [
+            model(Some("krea2"), None, "krea2_turbo_fp8_scaled.safetensors"),
+            model(None, Some("krea2"), "realism_engine_v3.safetensors"),
+            model(
+                None,
+                None,
+                "lustifyNSFWCheckpoint_v10Krea2_2997637.safetensors",
+            ),
+        ] {
+            assert_eq!(ImageDefaults::for_model(&m), turbo, "{}", m.name);
+        }
+        let m = model(None, Some("krea2"), "realism_engine_v3.safetensors");
+        let r = ImageRequest::for_model(&serde_json::json!({ "prompt": "a cat" }), &m).unwrap();
+        assert_eq!(
+            (
+                r.width,
+                r.height,
+                r.steps,
+                r.cfg,
+                r.sampler.as_str(),
+                r.scheduler.as_str()
+            ),
+            (1024, 1024, 8, 1.0, "euler", "simple")
+        );
+        // What the job states still wins.
+        let r = ImageRequest::for_model(
+            &serde_json::json!({ "prompt": "a cat", "steps": 52, "cfg": 4.0, "scheduler": "beta" }),
+            &m,
+        )
+        .unwrap();
+        assert_eq!((r.steps, r.cfg, r.scheduler.as_str()), (52, 4.0, "beta"));
+    }
+
+    #[test]
+    fn the_standard_and_sd15_defaults_keep_euler_normal() {
+        for d in [ImageDefaults::STANDARD, ImageDefaults::SD15] {
+            assert_eq!((d.sampler, d.scheduler), ("euler", "normal"));
+        }
     }
 
     #[test]

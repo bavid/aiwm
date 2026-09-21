@@ -37,6 +37,10 @@ const CLIP_TYPE_WAN: &str = "wan";
 /// `CLIPLoader`'s `type` for LTX-Video's T5 encoder.
 const CLIP_TYPE_LTXV: &str = "ltxv";
 
+/// `CLIPLoader`'s `type` for Krea 2's Qwen3-VL 4B encoder (in ComfyUI
+/// v0.34.0's type list).
+const CLIP_TYPE_KREA2: &str = "krea2";
+
 /// `UnetLoaderGGUF` (`ComfyUI-GGUF`) — a `.gguf` diffusion model. Exact keys
 /// from `flux_txt2img`.
 pub fn unet_loader_gguf(g: &mut Graph, id: &str, file: &str) -> OwnedLink {
@@ -182,6 +186,23 @@ pub fn wan(
     Loaded {
         model: unet_loader(g, ids.unet, unet_file),
         clip: clip_loader(g, ids.clip, clip_file, CLIP_TYPE_WAN),
+        vae: vae_loader(g, ids.vae, vae_file),
+    }
+}
+
+/// Krea 2: `UNETLoader` + `CLIPLoader` (`type: "krea2"`, `device:
+/// "default"`, the Qwen3-VL encoder) + `VAELoader` (the Qwen-Image VAE).
+/// Exact keys from Comfy-Org's `text_to_image_krea_2_turbo` template.
+pub fn krea2(
+    g: &mut Graph,
+    ids: &SplitModelIds,
+    unet_file: &str,
+    clip_file: &str,
+    vae_file: &str,
+) -> Loaded {
+    Loaded {
+        model: unet_loader(g, ids.unet, unet_file),
+        clip: clip_loader_on_device(g, ids.clip, clip_file, CLIP_TYPE_KREA2, CLIP_DEVICE_DEFAULT),
         vae: vae_loader(g, ids.vae, vae_file),
     }
 }

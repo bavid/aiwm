@@ -34,7 +34,7 @@ pub(crate) mod recipes;
 
 pub use recipes::image::{
     checkpoint_txt2img, flux2_klein_edit, flux2_klein_txt2img, flux2_klein_txt2img_safetensors,
-    flux_txt2img,
+    flux_txt2img, krea2_txt2img,
 };
 pub use recipes::story::{
     checkpoint_ipadapter_txt2img, flux2_klein_reference_txt2img,
@@ -159,6 +159,17 @@ pub struct Flux2KleinModels<'a> {
     pub vae: &'a str,
 }
 
+/// Krea 2's three files (bare names as ComfyUI sees them in
+/// `diffusion_models` / `text_encoders` / `vae`): the diffusion model — the
+/// Turbo base or a Civitai fine-tune, which ship without an encoder or VAE —
+/// its Qwen3-VL 4B text encoder, and the Qwen-Image VAE.
+#[derive(Debug, Clone, Copy)]
+pub struct Krea2Models<'a> {
+    pub unet: &'a str,
+    pub clip: &'a str,
+    pub vae: &'a str,
+}
+
 /// One LoRA to splice into a graph before sampling, as a `LoraLoader` node.
 /// Multiple entries chain in order. A single `strength` drives both the model
 /// and CLIP patch — ComfyUI's default UI splits these into two knobs, but one
@@ -188,16 +199,23 @@ pub enum Recipe {
     /// Verified against a real exported ComfyUI workflow for this checkpoint
     /// (see [`flux2_klein_txt2img_safetensors`]).
     Flux2KleinSafetensors,
+    /// Krea 2: a `.safetensors` diffusion model (`UNETLoader`) plus its
+    /// Qwen3-VL text encoder (`CLIPLoader` type `krea2`) and the Qwen-Image
+    /// VAE, sampled with a plain `KSampler` — Comfy-Org's own Turbo
+    /// template (see [`krea2_txt2img`]).
+    Krea2,
 }
 
 impl Recipe {
     /// `family == "flux"` → [`Recipe::FluxGguf`]; `"flux2"` → the GGUF or
     /// safetensors Klein recipe depending on `file_name`'s extension (both
     /// share the same companion files, they just load the diffusion model
-    /// differently); everything else is a single-file checkpoint.
+    /// differently); `"krea2"` → [`Recipe::Krea2`]; everything else is a
+    /// single-file checkpoint.
     pub fn for_family(family: Option<&str>, file_name: &str) -> Self {
         match family {
             Some(f) if f.eq_ignore_ascii_case("flux") => Self::FluxGguf,
+            Some(f) if f.eq_ignore_ascii_case("krea2") => Self::Krea2,
             Some(f) if f.eq_ignore_ascii_case("flux2") => {
                 if file_name.to_ascii_lowercase().ends_with(".gguf") {
                     Self::Flux2KleinGguf
@@ -382,6 +400,23 @@ mod tests {
         assert_eq!(
             Recipe::for_family(Some("flux2"), "flux-2-klein-9b-fp8mixed.safetensors"),
             Recipe::Flux2KleinSafetensors
+        );
+    }
+
+    #[test]
+    fn recipe_selects_krea2_for_its_family() {
+        assert_eq!(
+            Recipe::for_family(Some("krea2"), "krea2_turbo_fp8_scaled.safetensors"),
+            Recipe::Krea2
+        );
+        assert_eq!(
+            Recipe::for_family(Some("KREA2"), "x.safetensors"),
+            Recipe::Krea2
+        );
+        // FLUX.1 Krea [dev] is FLUX.1, not Krea 2.
+        assert_eq!(
+            Recipe::for_family(Some("flux"), "flux1-krea-dev-Q8_0.gguf"),
+            Recipe::FluxGguf
         );
     }
 

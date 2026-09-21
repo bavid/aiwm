@@ -15,7 +15,9 @@ use crate::pipeline::recipes::{
     finish, DENOISE_FULL, DISTILLED_SAMPLER_CFG, FLUX_GUIDANCE_RANGE, SOURCE_MEGAPIXELS,
     SOURCE_RESOLUTION_STEPS, SOURCE_UPSCALE_METHOD,
 };
-use crate::pipeline::{EditInputs, Flux2KleinModels, FluxModels, LoraSpec, Txt2ImgInputs};
+use crate::pipeline::{
+    EditInputs, Flux2KleinModels, FluxModels, Krea2Models, LoraSpec, Txt2ImgInputs,
+};
 
 /// The node ids a LoRA chain's model link has to reach in a `KSampler`-family
 /// txt2img recipe: the first sampler, plus the Hi-Res-Fix second pass when
@@ -293,6 +295,91 @@ pub fn flux2_klein_txt2img_safetensors(
         &["6"],
     );
     finish(g, applied)
+}
+
+/// Krea 2, Comfy-Org's `text_to_image_krea_2_turbo` template: `UNETLoader`,
+/// `CLIPLoader` (`type: "krea2"`) and `VAELoader`, `EmptyLatentImage`, a
+/// plain `KSampler` at the request's CFG, `VAEDecode`. LoRAs patch the
+/// model only (`LoraLoaderModelOnly`), as in the template.
+///
+/// The negative is the template's `ConditioningZeroOut` of the positive
+/// unless there is a real negative prompt *and* a CFG above 1 (the RAW
+/// model's way of sampling) — at CFG 1 the negative has no effect at all.
+/// Hi-Res-Fix is the shared `KSampler` second pass.
+pub fn krea2_txt2img(i: &Txt2ImgInputs, m: &Krea2Models, loras: &[LoraSpec]) -> Value {
+    let mut g = Graph::default();
+    let loaded = loaders::krea2(
+        &mut g,
+        &loaders::SplitModelIds {
+            unet: "12",
+            clip: "11",
+            vae: "10",
+        },
+        m.unet,
+        m.clip,
+        m.vae,
+    );
+    let canvas = latent::empty(&mut g, "5", i.width, i.height);
+    let positive = conditioning::encode_single(&mut g, "6", &loaded.clip, i.positive);
+    let negative = if encodes_negative(i) {
+        conditioning::encode_single(&mut g, "7", &loaded.clip, i.negative)
+    } else {
+        conditioning::zero_out(&mut g, "27", &positive)
+    };
+    let first = sampling::SamplerParams {
+        seed: i.seed,
+        steps: i.steps,
+        cfg: i.cfg,
+        sampler: i.sampler,
+        scheduler: i.scheduler,
+        denoise: DENOISE_FULL,
+    };
+    let sampled = sampling::ksampler(
+        &mut g,
+        "3",
+        &loaded.model,
+        &positive,
+        &negative,
+        &canvas,
+        &first,
+    );
+    let second_pass = i.hires.map(|h| {
+        hires::ksampler_pass(
+            &mut g,
+            &sampled,
+            &loaded.model,
+            &positive,
+            &negative,
+            &first,
+            &h,
+        )
+    });
+    let final_latent = second_pass.as_ref().unwrap_or(&sampled);
+    output::decode_and_save(
+        &mut g,
+        "8",
+        "9",
+        final_latent,
+        &loaded.vae,
+        i.filename_prefix,
+    );
+    let applied = loras::apply_model_only(
+        &mut g,
+        loras,
+        &loaded.model,
+        &model_consumers("3", &second_pass),
+    );
+    finish(g, applied)
+}
+
+/// The CFG at or below which a negative prompt changes nothing (the sampler
+/// skips the unconditional pass).
+const NO_GUIDANCE_CFG: f64 = 1.0;
+
+/// Whether a Krea 2 render encodes its negative prompt rather than zeroing
+/// it: only a non-blank negative at a CFG above 1 has any effect.
+fn encodes_negative(i: &Txt2ImgInputs) -> bool {
+    !i.negative.trim().is_empty() && i.cfg > NO_GUIDANCE_CFG
 }
 
 /// FLUX.2 \[klein\] 9B's own image-editing graph — the same model unifies

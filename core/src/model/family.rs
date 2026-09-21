@@ -56,6 +56,8 @@ pub enum ArchGroup {
     Ltxv,
     #[serde(rename = "ltx2")]
     Ltx2,
+    #[serde(rename = "krea2")]
+    Krea2,
 }
 
 /// One base family AIWM knows.
@@ -240,6 +242,18 @@ pub const FAMILIES: &[BaseFamily] = &[
         arch_group: ArchGroup::Ltx2,
         stack_id: None,
         runnable: Runnable::No(LTX2_REASON),
+    },
+    // Krea 2 (`Comfy-Org/Krea-2`): a diffusion-model-only file run with a
+    // separate Qwen3-VL 4B text encoder and the Qwen-Image VAE — its own
+    // architecture, unrelated to FLUX.1 Krea [dev] despite the name.
+    BaseFamily {
+        id: "krea2",
+        label: "Krea 2",
+        civitai_labels: &["Krea 2"],
+        hf_base_models: &[],
+        arch_group: ArchGroup::Krea2,
+        stack_id: Some("krea2"),
+        runnable: Runnable::Yes,
     },
 ];
 
