@@ -9,6 +9,10 @@ use sqlx::SqlitePool;
 use super::now_rfc3339;
 use crate::{CoreError, Result};
 
+mod family;
+
+pub use family::SetFamily;
+
 /// How one runtime reaches a model's canonical file.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, sqlx::FromRow)]
 pub struct ModelLink {
@@ -24,6 +28,11 @@ pub struct Model {
     pub publisher: Option<String>,
     pub name: String,
     pub family: Option<String>,
+    /// How `family` was decided (`civitai`, `hf`, `catalog`, `header`,
+    /// `name`, `user` — [`crate::model::family::FamilySource`]); `None` for
+    /// rows written before migration 0022, whose family came from the file
+    /// name, the catalog or the trainer.
+    pub family_source: Option<String>,
     pub format: String,
     pub quant: Option<String>,
     pub arch: Option<String>,
@@ -104,6 +113,7 @@ struct ModelRow {
     publisher: Option<String>,
     name: String,
     family: Option<String>,
+    family_source: Option<String>,
     format: String,
     quant: Option<String>,
     arch: Option<String>,
@@ -132,6 +142,7 @@ impl ModelRow {
             publisher: self.publisher,
             name: self.name,
             family: self.family,
+            family_source: self.family_source,
             format: self.format,
             quant: self.quant,
             arch: self.arch,
@@ -157,7 +168,8 @@ impl ModelRow {
     }
 }
 
-const COLS: &str = "id, publisher, name, family, format, quant, arch, param_count, file_path, \
+const COLS: &str =
+    "id, publisher, name, family, family_source, format, quant, arch, param_count, file_path, \
      sha256, size_bytes, ctx_max, vram_estimate_mb, ram_estimate_mb, source, source_revision, \
      imported_at, last_used_at, use_count, n_layers, n_embd, n_heads, n_kv_heads";
 
