@@ -114,10 +114,14 @@ fn group(
     };
     let everything: Vec<Need> = base_needs.iter().chain(&companions).cloned().collect();
     let (missing_bytes, _) = summarize(&everything);
+    // Optional companions (the FLUX.2 edit VAE) are offered, never required:
+    // the same rule `resolve_package` uses for `Ready`, so a group and a
+    // package can't disagree about whether a setup is usable.
     let complete = matches!(family.runnable, Runnable::Yes)
         && base.is_some()
         && companions
             .iter()
+            .filter(|n| !n.optional)
             .all(|n| matches!(n.status, NeedStatus::Installed { .. }));
     let base_choice_needed = base.is_none()
         && base_needs

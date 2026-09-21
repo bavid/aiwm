@@ -340,6 +340,26 @@ fn recorded(id: &str, roles: &[&str], base_family: &str, source: &str) -> Librar
 }
 
 #[test]
+fn a_library_group_without_only_the_optional_edit_vae_is_complete() {
+    // The group view and `resolve_package` must agree: the edit VAE is
+    // offered, never required, so base + encoder + VAE is a complete setup.
+    let library: Vec<LibraryModel> = klein_stack_installed()
+        .into_iter()
+        .filter(|m| m.model.id != "edit-vae")
+        .collect();
+
+    let out = library_packages(&library, FAMILIES, &Catalog::builtin());
+    let klein = out
+        .groups
+        .iter()
+        .find(|g| g.family.id == "flux2-klein-9b")
+        .expect("the klein group");
+
+    assert!(klein.complete, "only the optional edit VAE is missing");
+    assert_eq!(klein.missing_bytes, 0);
+}
+
+#[test]
 fn the_library_groups_by_family_with_unknown_models() {
     let mut library = vec![
         recorded("sdxl-base", &["base_diffusion"], "sdxl", "catalog"),
