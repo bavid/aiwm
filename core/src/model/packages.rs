@@ -422,8 +422,16 @@ fn base_needs(
     }
 }
 
+/// Stack members a model can run without. The FLUX.2 klein stack carries a
+/// second VAE that only image *editing* uses (its catalog note: "Only for
+/// editing an existing image (not text-to-image)"); counting it as required
+/// would report a working text-to-image setup as incomplete and add ~238 MB to
+/// every "download missing".
+const OPTIONAL_COMPANIONS: &[&str] = &["flux2-klein-edit-vae"];
+
 /// The companions of `family`'s stack (every member but the base), each
-/// installed or in the catalog.
+/// installed or in the catalog; the ones in [`OPTIONAL_COMPANIONS`] are marked
+/// optional, so they neither count towards the missing bytes nor block `Ready`.
 fn companion_needs(
     family: &'static BaseFamily,
     registry: &[BaseFamily],
@@ -442,7 +450,12 @@ fn companion_needs(
                 Some(m) => installed(m, true),
                 None => catalog_status(k),
             };
-            need(NeedRole::of_kind(k.kind), k.name, false, status)
+            need(
+                NeedRole::of_kind(k.kind),
+                k.name,
+                OPTIONAL_COMPANIONS.contains(&k.id),
+                status,
+            )
         })
         .collect()
 }

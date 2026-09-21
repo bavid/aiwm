@@ -250,11 +250,33 @@ fn a_checkpoint_needs_its_companions_not_a_base() {
             (Some("flux2-klein-edit-vae"), None),
         ]
     );
-    assert_eq!(
-        p.missing_bytes,
-        known("qwen3-8b-flux2-encoder").size_bytes + known("flux2-klein-edit-vae").size_bytes
-    );
+    // The edit VAE is listed but optional: only the text encoder counts.
+    assert_eq!(p.missing_bytes, known("qwen3-8b-flux2-encoder").size_bytes);
+    let edit_vae = p
+        .needs
+        .iter()
+        .find(|n| shape(n).0 == Some("flux2-klein-edit-vae"))
+        .expect("the edit VAE is still offered");
+    assert!(edit_vae.optional);
     assert_eq!(p.verdict, Verdict::NeedsDownload);
+}
+
+#[test]
+fn a_text_to_image_klein_setup_without_the_edit_vae_is_ready() {
+    // Regression: the edit VAE is only for editing a photo, so a library
+    // with the diffusion model, its encoder and its VAE is complete.
+    let library: Vec<LibraryModel> = klein_stack_installed()
+        .into_iter()
+        .filter(|m| m.model.id != "edit-vae")
+        .collect();
+
+    let p = resolve(
+        item(ItemKind::Checkpoint, Some("flux2-klein-9b"), None),
+        &library,
+    );
+
+    assert_eq!(p.missing_bytes, 0);
+    assert_eq!(p.verdict, Verdict::Ready);
 }
 
 #[test]
