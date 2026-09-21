@@ -14,13 +14,15 @@ use serde_json::{json, Value};
 use tokio::sync::watch;
 
 use super::image_defaults::{is_sd15, ImageDefaults};
+use super::image_route;
 use super::media::{
     comfy_err as image_err, file_name, parse_loras, resolve_loras, resolve_seed, round_to,
     str_param, write_output, LoraRef,
 };
 use crate::db::{Database, EventLevel, Model};
 use crate::pipeline::{
-    self, EditInputs, Flux2KleinModels, FluxModels, HiresFix, LoraSpec, Recipe, Txt2ImgInputs,
+    self, EditInputs, Flux2KleinModels, FluxModels, HiresFix, Krea2Models, LoraSpec, Recipe,
+    Txt2ImgInputs,
 };
 use crate::runtime::ComfyUiAdapter;
 use crate::Result;
@@ -34,9 +36,6 @@ const MAX_STEPS: u32 = 150;
 
 const MIN_CFG: f64 = 1.0;
 const MAX_CFG: f64 = 30.0;
-
-const DEFAULT_SAMPLER: &str = "euler";
-const DEFAULT_SCHEDULER: &str = "normal";
 
 /// `IPAdapterAdvanced`'s own default is `1.0`; the node pack's README
 /// recommends lowering it ("at least 0.8") for better prompt adherence, so
@@ -109,7 +108,7 @@ pub struct ImageRequest {
     /// [`crate::pipeline::HiresFix`]). Already clamped — the recipes wire
     /// whatever they're handed verbatim.
     ///
-    /// Only the four text-to-image recipes honour it. An *edit*
+    /// Only the text-to-image recipes honour it. An *edit*
     /// ([`Self::source_image`]) has no latent of its own to upscale, and a
     /// reference-anchored render ([`Self::reference_image`]) deliberately
     /// skips it: Story Studio trades resolution for character consistency
@@ -131,6 +130,15 @@ impl ImageRequest {
     /// unless the job asks for another size.
     pub fn for_model(params: &Value, model: &Model) -> Result<Self> {
         Self::from_params_with(params, ImageDefaults::for_model(model))
+    }
+
+    /// [`Self::for_model`], but with the base family decided the way the
+    /// renderer decides it — the safetensors header included, so a Krea 2
+    /// fine-tune imported with no family and a name that says nothing still
+    /// gets Krea 2's defaults. For the engine, which knows the library row.
+    pub async fn for_library_model(params: &Value, model: &Model) -> Result<Self> {
+        let family = image_route::base_family(model).await;
+        Self::from_params_with(params, ImageDefaults::for_family(family))
     }
 
     /// Read a job's `params`; a size, step count or CFG it leaves out comes
@@ -188,7 +196,7 @@ impl ImageRequest {
                 v.clamp(MIN_REFERENCE_WEIGHT, MAX_REFERENCE_WEIGHT)
             });
 
-        // Only the four text-to-image recipes honour Hi-Res-Fix: an edit has
+        // Only the text-to-image recipes honour Hi-Res-Fix: an edit has
         // no canvas of its own and a reference render trades resolution for
         // consistency. Dropping it here — at the parse boundary, not at
         // render time — keeps `final_size`, `apply_to` and the VRAM plan
@@ -206,8 +214,8 @@ impl ImageRequest {
             height: dim("height"),
             steps,
             cfg,
-            sampler: str_param(params, "sampler", DEFAULT_SAMPLER),
-            scheduler: str_param(params, "scheduler", DEFAULT_SCHEDULER),
+            sampler: str_param(params, "sampler", defaults.sampler),
+            scheduler: str_param(params, "scheduler", defaults.scheduler),
             seed: resolve_seed(params),
             loras: parse_loras(params),
             source_image,
@@ -220,7 +228,7 @@ impl ImageRequest {
     /// The pixel size the finished image actually has: `width`×`height` for a
     /// single-pass render, the second pass's size when Hi-Res-Fix is on.
     ///
-    /// True for *every* request, not just the four text-to-image recipes,
+    /// True for *every* request, not just the text-to-image recipes,
     /// because [`Self::from_params`] already dropped `hires` for the edit and
     /// reference paths that would ignore it.
     ///
@@ -401,7 +409,7 @@ pub async fn run(
         .await;
     }
 
-    let recipe = Recipe::for_family(model.family.as_deref(), model_file);
+    let recipe = image_route::route(model, model_file).await?;
     let resolved_loras = resolve_loras(db, &req.loras).await?;
     if !resolved_loras.is_empty() {
         let summary = resolved_loras
@@ -430,11 +438,7 @@ pub async fn run(
                 req.width,
                 req.height,
                 req.steps,
-                if matches!(recipe, Recipe::FluxGguf | Recipe::Flux2KleinSafetensors) {
-                    "guidance"
-                } else {
-                    "cfg"
-                },
+                cfg_label(recipe),
                 req.cfg,
                 req.seed,
                 model.name
@@ -532,6 +536,28 @@ pub async fn run(
                 &lora_specs,
             )
         }
+        Recipe::Krea2 => {
+            let c = resolve_krea2_companions(db).await?;
+            db.jobs()
+                .append_event(
+                    job_id,
+                    EventLevel::Info,
+                    &format!(
+                        "Krea 2 \u{2014} text encoder \u{201c}{}\u{201d}, VAE \u{201c}{}\u{201d}",
+                        c.clip, c.vae
+                    ),
+                )
+                .await?;
+            pipeline::krea2_txt2img(
+                &inputs,
+                &Krea2Models {
+                    unet: model_file,
+                    clip: &c.clip,
+                    vae: &c.vae,
+                },
+                &lora_specs,
+            )
+        }
     };
 
     // The reported size is the *finished* one, which a Hi-Res-Fix render
@@ -549,6 +575,16 @@ pub async fn run(
         cancel,
     )
     .await
+}
+
+/// What the render event line calls the request's CFG: FLUX.1 and FLUX.2
+/// \[klein\] `.safetensors` wire it into `FluxGuidance`; every other recipe
+/// (Krea 2 included) hands it to the sampler as CFG.
+fn cfg_label(recipe: Recipe) -> &'static str {
+    match recipe {
+        Recipe::FluxGguf | Recipe::Flux2KleinSafetensors => "guidance",
+        Recipe::Checkpoint | Recipe::Flux2KleinGguf | Recipe::Krea2 => "cfg",
+    }
 }
 
 /// Submit `workflow`, wait for the image, write it under `outputs_dir`, and
@@ -709,11 +745,17 @@ async fn run_reference(
     reference_spec: &str,
     cancel: watch::Receiver<bool>,
 ) -> Result<ImageOutcome> {
-    let recipe = Recipe::for_family(model.family.as_deref(), model_file);
+    let recipe = image_route::route(model, model_file).await?;
     if matches!(recipe, Recipe::FluxGguf) {
         return Err(image_err(
             "character-consistent generation needs an SDXL checkpoint or the FLUX.2 [klein] \
              stack \u{2014} FLUX.1 dev doesn't support it yet (see docs/TODO.md)",
+        ));
+    }
+    if matches!(recipe, Recipe::Krea2) {
+        return Err(image_err(
+            "character-consistent generation needs an SDXL checkpoint or the FLUX.2 [klein] \
+             stack \u{2014} Krea 2 doesn't support it yet",
         ));
     }
     // The IP-Adapter pair the reference path loads is SDXL's; its
@@ -836,7 +878,13 @@ async fn run_reference(
                 &lora_specs,
             )
         }
-        Recipe::FluxGguf => unreachable!("checked above"),
+        // Refused above, before anything was staged.
+        Recipe::FluxGguf | Recipe::Krea2 => {
+            return Err(image_err(
+                "character-consistent generation needs an SDXL checkpoint or the FLUX.2 \
+                 [klein] stack",
+            ))
+        }
     };
 
     finish(
@@ -925,7 +973,7 @@ async fn resolve_flux_companions(db: &Database) -> Result<FluxCompanionFiles> {
     // Excludes FLUX.2's VAEs (plain and edit) by name -- now that other
     // `vae`-role files can exist in the library, picking blindly
     // (`pick_for_role`, most-recently-used) risked handing a FLUX.1 job one
-    // of FLUX.2's incompatible VAEs.
+    // of FLUX.2's incompatible VAEs. Krea 2's Qwen-Image VAE likewise.
     let vae = db
         .models()
         .for_role("vae")
@@ -936,6 +984,7 @@ async fn resolve_flux_companions(db: &Database) -> Result<FluxCompanionFiles> {
                 && !name_is_flux2(&m.file_path)
                 && !name_is_flux2_edit_vae(&m.name)
                 && !name_is_flux2_edit_vae(&m.file_path)
+                && !is_qwen_image_vae(m)
         })
         .ok_or_else(|| {
             image_err("Flux needs a VAE — import ae.safetensors as \u{201c}VAE\u{201d}")
@@ -973,7 +1022,7 @@ async fn resolve_flux2_klein_companions(db: &Database) -> Result<Flux2KleinCompa
         .for_role("text_encoder")
         .await?
         .into_iter()
-        .find(|m| name_is_qwen(&m.name) || name_is_qwen(&m.file_path))
+        .find(is_klein_encoder)
         .ok_or_else(|| {
             image_err(
                 "FLUX.2 needs its Qwen3 text encoder — import qwen_3_8b_fp8mixed.safetensors \
@@ -1002,6 +1051,80 @@ fn name_is_qwen(s: &str) -> bool {
     s.to_ascii_lowercase().contains("qwen")
 }
 
+/// Krea 2's Qwen3-VL encoder (`qwen3vl_4b_fp8_scaled.safetensors`) —
+/// `qwen` like FLUX.2's Qwen3, so the two need telling apart.
+fn name_is_qwen3vl(s: &str) -> bool {
+    let n = s.to_ascii_lowercase();
+    ["qwen3vl", "qwen3_vl", "qwen3-vl"]
+        .iter()
+        .any(|needle| n.contains(needle))
+}
+
+/// FLUX.2 [klein]'s Qwen3 encoder: a `qwen` text encoder that is not Krea
+/// 2's Qwen3-VL, by display name and file name alike.
+fn is_klein_encoder(m: &Model) -> bool {
+    (name_is_qwen(&m.name) || name_is_qwen(&m.file_path))
+        && !name_is_qwen3vl(&m.name)
+        && !name_is_qwen3vl(&m.file_path)
+}
+
+fn is_krea2_encoder(m: &Model) -> bool {
+    name_is_qwen3vl(&m.name) || name_is_qwen3vl(&m.file_path)
+}
+
+/// The Qwen-Image VAE Krea 2 decodes with (`qwen_image_vae.safetensors`).
+fn name_is_qwen_image_vae(s: &str) -> bool {
+    let n = s.to_ascii_lowercase();
+    n.contains("qwen_image") || n.contains("qwen-image")
+}
+
+fn is_qwen_image_vae(m: &Model) -> bool {
+    name_is_qwen_image_vae(&m.name) || name_is_qwen_image_vae(&m.file_path)
+}
+
+/// Krea 2's two companion files, resolved from the library by role + name.
+#[derive(Debug)]
+struct Krea2CompanionFiles {
+    clip: String,
+    vae: String,
+}
+
+/// Find Krea 2's Qwen3-VL text encoder and its Qwen-Image VAE. FLUX.2's
+/// Qwen3 encoder shares the role and the `qwen` in its name but is a
+/// different model, so only a Qwen3-VL file counts.
+async fn resolve_krea2_companions(db: &Database) -> Result<Krea2CompanionFiles> {
+    let clip = db
+        .models()
+        .for_role("text_encoder")
+        .await?
+        .into_iter()
+        .find(is_krea2_encoder)
+        .ok_or_else(|| {
+            image_err(
+                "Krea 2 needs its Qwen3-VL text encoder, qwen3vl_4b_fp8_scaled.safetensors \
+                 \u{2014} get it on Models \u{2192} Packages (Krea 2), or import it as \
+                 \u{201c}Text encoder / CLIP\u{201d}",
+            )
+        })?;
+    let vae = db
+        .models()
+        .for_role("vae")
+        .await?
+        .into_iter()
+        .find(is_qwen_image_vae)
+        .ok_or_else(|| {
+            image_err(
+                "Krea 2 needs its own VAE, qwen_image_vae.safetensors \u{2014} get it on \
+                 Models \u{2192} Packages (Krea 2), or import it as \u{201c}VAE\u{201d}",
+            )
+        })?;
+
+    Ok(Krea2CompanionFiles {
+        clip: file_name(&clip.file_path)?.to_string(),
+        vae: file_name(&vae.file_path)?.to_string(),
+    })
+}
+
 fn name_is_flux2(s: &str) -> bool {
     s.to_ascii_lowercase().contains("flux2")
 }
@@ -1024,7 +1147,7 @@ async fn resolve_flux2_klein_edit_companions(db: &Database) -> Result<Flux2Klein
         .for_role("text_encoder")
         .await?
         .into_iter()
-        .find(|m| name_is_qwen(&m.name) || name_is_qwen(&m.file_path))
+        .find(is_klein_encoder)
         .ok_or_else(|| {
             image_err(
                 "Editing needs FLUX.2's Qwen3 text encoder — import \
@@ -1066,7 +1189,7 @@ mod tests {
         assert_eq!(r.width, DEFAULT_DIM);
         assert_eq!(r.height, DEFAULT_DIM);
         assert_eq!(r.steps, DEFAULT_STEPS);
-        assert_eq!(r.sampler, DEFAULT_SAMPLER);
+        assert_eq!(r.sampler, ImageDefaults::STANDARD.sampler);
         assert!(r.seed >= 0);
     }
 
@@ -1704,5 +1827,229 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(plain.final_size(), (1024, 768));
+    }
+
+    // --- Krea 2 ---------------------------------------------------------------
+
+    async fn add_companion(db: &Database, name: &str, role: &str) {
+        db.models()
+            .insert(crate::db::NewModel {
+                name: name.to_string(),
+                format: "safetensors".into(),
+                file_path: format!("E:\\AI\\models\\image\\x\\{name}"),
+                size_bytes: 1_000,
+                source: "manual".into(),
+                roles: vec![role.to_string()],
+                ..crate::db::NewModel::default()
+            })
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn resolve_krea2_companions_needs_its_own_encoder_and_vae() {
+        let db = Database::connect_in_memory().await.unwrap();
+        // FLUX.1's and FLUX.2's companions are no substitute.
+        add_companion(&db, "t5xxl_fp8.safetensors", "text_encoder").await;
+        add_companion(&db, "qwen_3_8b_fp8mixed.safetensors", "text_encoder").await;
+        add_companion(&db, "ae.safetensors", "vae").await;
+        add_companion(&db, "flux2-vae.safetensors", "vae").await;
+
+        let err = resolve_krea2_companions(&db).await.unwrap_err().to_string();
+        assert!(err.contains("qwen3vl_4b_fp8_scaled.safetensors"), "{err}");
+        assert!(err.contains("Models \u{2192} Packages"), "{err}");
+
+        add_companion(&db, "qwen3vl_4b_fp8_scaled.safetensors", "text_encoder").await;
+        let err = resolve_krea2_companions(&db).await.unwrap_err().to_string();
+        assert!(err.contains("qwen_image_vae.safetensors"), "{err}");
+        assert!(err.contains("Models \u{2192} Packages"), "{err}");
+
+        add_companion(&db, "qwen_image_vae.safetensors", "vae").await;
+        let c = resolve_krea2_companions(&db).await.unwrap();
+        assert_eq!(c.clip, "qwen3vl_4b_fp8_scaled.safetensors");
+        assert_eq!(c.vae, "qwen_image_vae.safetensors");
+    }
+
+    #[tokio::test]
+    async fn klein_and_krea2_each_pick_their_own_qwen_encoder_when_both_are_installed() {
+        let db = Database::connect_in_memory().await.unwrap();
+        // `for_role` lists by name, and `qwen3vl…` sorts before `qwen_3_8b…`.
+        add_companion(&db, "qwen3vl_4b_fp8_scaled.safetensors", "text_encoder").await;
+        add_companion(&db, "qwen_3_8b_fp8mixed.safetensors", "text_encoder").await;
+        add_companion(&db, "qwen_image_vae.safetensors", "vae").await;
+        add_companion(&db, "flux2-vae.safetensors", "vae").await;
+        add_companion(&db, "full_encoder_small_decoder.safetensors", "vae").await;
+
+        let klein = resolve_flux2_klein_companions(&db).await.unwrap();
+        assert_eq!(klein.clip, "qwen_3_8b_fp8mixed.safetensors");
+        assert_eq!(klein.vae, "flux2-vae.safetensors");
+        let edit = resolve_flux2_klein_edit_companions(&db).await.unwrap();
+        assert_eq!(edit.clip, "qwen_3_8b_fp8mixed.safetensors");
+        let krea = resolve_krea2_companions(&db).await.unwrap();
+        assert_eq!(krea.clip, "qwen3vl_4b_fp8_scaled.safetensors");
+        assert_eq!(krea.vae, "qwen_image_vae.safetensors");
+    }
+
+    #[tokio::test]
+    async fn klein_does_not_settle_for_the_krea2_encoder_alone() {
+        let db = Database::connect_in_memory().await.unwrap();
+        add_companion(&db, "qwen3vl_4b_fp8_scaled.safetensors", "text_encoder").await;
+        add_companion(&db, "flux2-vae.safetensors", "vae").await;
+        let err = resolve_flux2_klein_companions(&db).await.unwrap_err();
+        assert!(err.to_string().contains("Qwen3"), "{err}");
+    }
+
+    #[test]
+    fn the_render_line_calls_krea2s_knob_cfg() {
+        assert_eq!(cfg_label(Recipe::Krea2), "cfg");
+        assert_eq!(cfg_label(Recipe::Checkpoint), "cfg");
+        assert_eq!(cfg_label(Recipe::Flux2KleinGguf), "cfg");
+        assert_eq!(cfg_label(Recipe::FluxGguf), "guidance");
+        assert_eq!(cfg_label(Recipe::Flux2KleinSafetensors), "guidance");
+    }
+
+    /// A library row as a Civitai import leaves it: no family, no base
+    /// family, and a real file at `path`.
+    async fn unrecorded_checkpoint(db: &Database, name: &str, path: &str) -> Model {
+        db.models()
+            .insert(crate::db::NewModel {
+                name: name.into(),
+                format: "safetensors".into(),
+                file_path: path.into(),
+                size_bytes: 1_000,
+                source: "civitai".into(),
+                roles: vec!["base_diffusion".into()],
+                ..crate::db::NewModel::default()
+            })
+            .await
+            .unwrap()
+    }
+
+    fn offline_comfy(db: &Database) -> Arc<ComfyUiAdapter> {
+        Arc::new(ComfyUiAdapter::with_launch(
+            db.clone(),
+            None,
+            crate::runtime::ComfyDirs {
+                base: std::env::temp_dir(),
+                output: std::env::temp_dir(),
+                models_store: std::env::temp_dir(),
+            },
+        ))
+    }
+
+    async fn render(db: &Database, model: &Model, params: serde_json::Value) -> String {
+        let job = db
+            .jobs()
+            .insert(crate::db::NewJob::new("image"))
+            .await
+            .unwrap();
+        let (_cancel_tx, cancel_rx) = watch::channel(false);
+        let req = ImageRequest::for_model(&params, model).unwrap();
+        run(
+            db,
+            &offline_comfy(db),
+            Path::new("/tmp/out"),
+            &job.id,
+            model,
+            req,
+            cancel_rx,
+        )
+        .await
+        .unwrap_err()
+        .to_string()
+    }
+
+    const KREA2_KEYS: &[&str] = &[
+        "blocks.0.attn.gate.weight",
+        "txtfusion.projector.weight",
+        "first.weight",
+    ];
+
+    #[tokio::test]
+    async fn a_krea2_file_without_any_recorded_family_renders_as_krea2() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = super::super::image_route::tests::write_safetensors(
+            dir.path(),
+            "civitai_2997637.safetensors",
+            KREA2_KEYS,
+        );
+        let db = Database::connect_in_memory().await.unwrap();
+        let model = unrecorded_checkpoint(&db, "Lustify Krea", &path).await;
+        // No companions installed: the Krea 2 recipe asks for its encoder
+        // before anything is queued — not the checkpoint graph's CLIP error.
+        let err = render(&db, &model, serde_json::json!({ "prompt": "a fox" })).await;
+        assert!(err.contains("qwen3vl_4b_fp8_scaled.safetensors"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn a_diffusion_only_file_of_an_unknown_base_fails_before_queueing() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = super::super::image_route::tests::write_safetensors(
+            dir.path(),
+            "mystery_v1.safetensors",
+            &["layers.0.attn.qkv.weight", "final_layer.weight"],
+        );
+        let db = Database::connect_in_memory().await.unwrap();
+        let model = unrecorded_checkpoint(&db, "Mystery v1", &path).await;
+        let err = render(&db, &model, serde_json::json!({ "prompt": "a fox" })).await;
+        assert!(
+            err.contains("\u{201c}Mystery v1\u{201d} holds only a diffusion model"),
+            "{err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_krea2_file_known_only_by_its_header_gets_the_turbo_defaults() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = super::super::image_route::tests::write_safetensors(
+            dir.path(),
+            "civitai_2997637.safetensors",
+            KREA2_KEYS,
+        );
+        let db = Database::connect_in_memory().await.unwrap();
+        let model = unrecorded_checkpoint(&db, "civitai_2997637", &path).await;
+        let r = ImageRequest::for_library_model(&serde_json::json!({ "prompt": "a fox" }), &model)
+            .await
+            .unwrap();
+        assert_eq!((r.steps, r.cfg, r.scheduler.as_str()), (8, 1.0, "simple"));
+    }
+
+    #[tokio::test]
+    async fn run_reference_refuses_krea2_before_staging_anything() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = super::super::image_route::tests::write_safetensors(
+            dir.path(),
+            "civitai_2997637.safetensors",
+            KREA2_KEYS,
+        );
+        let db = Database::connect_in_memory().await.unwrap();
+        let model = unrecorded_checkpoint(&db, "Lustify Krea", &path).await;
+        let err = render(
+            &db,
+            &model,
+            serde_json::json!({
+                "prompt": "Kira the ranger",
+                "reference_image": "job-earlier-portrait"
+            }),
+        )
+        .await;
+        assert!(err.contains("Krea 2"), "{err}");
+        assert!(err.contains("character-consistent"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn flux1_does_not_take_the_qwen_image_vae_for_its_own() {
+        let db = Database::connect_in_memory().await.unwrap();
+        add_companion(&db, "t5xxl_fp8.safetensors", "text_encoder").await;
+        add_companion(&db, "clip_l.safetensors", "text_encoder").await;
+        // Krea 2's VAE shares the `vae` role; on its own it must not be taken.
+        add_companion(&db, "qwen_image_vae.safetensors", "vae").await;
+        let err = resolve_flux_companions(&db).await.unwrap_err();
+        assert!(err.to_string().contains("VAE"), "{err}");
+        add_companion(&db, "ae.safetensors", "vae").await;
+        assert_eq!(
+            resolve_flux_companions(&db).await.unwrap().vae,
+            "ae.safetensors"
+        );
     }
 }

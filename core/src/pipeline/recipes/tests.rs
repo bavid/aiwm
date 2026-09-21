@@ -1,5 +1,5 @@
 //! Cross-recipe invariants: the node-id map in [`super::ids`] is only worth
-//! having if every recipe actually respects it, so this renders all fourteen
+//! having if every recipe actually respects it, so this renders all fifteen
 //! of them — each with a full five-LoRA chain where it takes one — and checks
 //! the reservations hold.
 //!
@@ -12,9 +12,10 @@ use super::ids::{HIRES_IDS, LORA_IDS, MAX_LORAS};
 use crate::pipeline::{
     checkpoint_ipadapter_txt2img, checkpoint_txt2img, flux2_klein_edit,
     flux2_klein_reference_txt2img, flux2_klein_reference_txt2img_safetensors, flux2_klein_txt2img,
-    flux2_klein_txt2img_safetensors, flux_txt2img, ltx_video, rtx_upscale_image, rtx_upscale_video,
-    wan_ti2v, EditInputs, Flux2KleinModels, FluxModels, IpAdapterSpec, LoraSpec, LtxModels,
-    Txt2ImgInputs, UpscaleImageInputs, UpscaleResize, UpscaleVideoInputs, VideoInputs, WanModels,
+    flux2_klein_txt2img_safetensors, flux_txt2img, krea2_txt2img, ltx_video, rtx_upscale_image,
+    rtx_upscale_video, wan_ti2v, EditInputs, Flux2KleinModels, FluxModels, IpAdapterSpec,
+    Krea2Models, LoraSpec, LtxModels, Txt2ImgInputs, UpscaleImageInputs, UpscaleResize,
+    UpscaleVideoInputs, VideoInputs, WanModels,
 };
 
 fn five_loras() -> Vec<LoraSpec<'static>> {
@@ -142,6 +143,19 @@ fn render_every_recipe() -> Vec<Rendered> {
             reserves_hires_ids: true,
         },
         Rendered {
+            name: "krea2_txt2img",
+            graph: krea2_txt2img(
+                &i,
+                &Krea2Models {
+                    unet: "u",
+                    clip: "c",
+                    vae: "v",
+                },
+                &loras,
+            ),
+            reserves_hires_ids: true,
+        },
+        Rendered {
             name: "flux2_klein_edit",
             graph: flux2_klein_edit(&edit, &klein(), &loras),
             reserves_hires_ids: false,
@@ -223,15 +237,22 @@ fn nodes(graph: &Value) -> Vec<(u32, String)> {
         .collect()
 }
 
+/// The two node classes a LoRA chain is built from: `LoraLoader` (model +
+/// CLIP) and, for Krea 2, `LoraLoaderModelOnly`.
+fn is_lora_loader(class: &str) -> bool {
+    matches!(class, "LoraLoader" | "LoraLoaderModelOnly")
+}
+
 #[test]
 fn no_recipe_puts_a_node_in_another_concerns_reserved_range() {
     for r in render_every_recipe() {
         for (id, class) in nodes(&r.graph) {
             if LORA_IDS.contains(&id) {
-                assert_eq!(
-                    class, "LoraLoader",
+                assert!(
+                    is_lora_loader(&class),
                     "{}: node {id} is a {class}, but {:?} is reserved for the LoRA chain",
-                    r.name, LORA_IDS
+                    r.name,
+                    LORA_IDS
                 );
             }
             if r.reserves_hires_ids {
@@ -252,7 +273,7 @@ fn a_full_lora_chain_fills_exactly_the_reserved_range() {
     for r in render_every_recipe() {
         let chain: Vec<u32> = nodes(&r.graph)
             .into_iter()
-            .filter(|(_, class)| class == "LoraLoader")
+            .filter(|(_, class)| is_lora_loader(class))
             .map(|(id, _)| id)
             .collect();
         if chain.is_empty() {

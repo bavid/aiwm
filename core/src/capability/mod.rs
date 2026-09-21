@@ -20,6 +20,7 @@ pub mod colibri;
 pub mod dataset;
 pub mod image;
 pub mod image_defaults;
+mod image_route;
 mod media;
 pub mod tts;
 pub mod upscale;

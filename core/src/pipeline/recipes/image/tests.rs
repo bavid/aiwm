@@ -7,7 +7,8 @@ use serde_json::json;
 
 use super::*;
 use crate::pipeline::{
-    latent_upscaled_px, EditInputs, Flux2KleinModels, FluxModels, HiresFix, LoraSpec, Txt2ImgInputs,
+    latent_upscaled_px, EditInputs, Flux2KleinModels, FluxModels, HiresFix, Krea2Models, LoraSpec,
+    Txt2ImgInputs,
 };
 
 fn inputs() -> Txt2ImgInputs<'static> {
@@ -753,4 +754,202 @@ fn loras_apply_to_both_passes() {
     let g = flux2_klein_txt2img(&hires_inputs(), &klein_models(), &loras);
     assert_eq!(g["31"]["inputs"]["model"], json!(["91", 0]));
     assert_eq!(g["44"]["inputs"]["guider"], json!(["31", 0]));
+}
+
+// --- Krea 2 -------------------------------------------------------------------
+
+fn krea2_models() -> Krea2Models<'static> {
+    Krea2Models {
+        unet: "lustifyNSFWCheckpoint_v10Krea2_2997637.safetensors",
+        clip: "qwen3vl_4b_fp8_scaled.safetensors",
+        vae: "qwen_image_vae.safetensors",
+    }
+}
+
+/// Comfy-Org's own Turbo template: 8 steps, CFG 1, euler / simple, no
+/// negative prompt.
+fn krea2_turbo_inputs() -> Txt2ImgInputs<'static> {
+    Txt2ImgInputs {
+        negative: "",
+        steps: 8,
+        cfg: 1.0,
+        sampler: "euler",
+        scheduler: "simple",
+        ..inputs()
+    }
+}
+
+#[test]
+fn krea2_graph_is_the_official_turbo_template() {
+    let g = krea2_txt2img(&krea2_turbo_inputs(), &krea2_models(), &[]);
+    assert_eq!(
+        g["12"],
+        json!({
+            "class_type": "UNETLoader",
+            "inputs": {
+                "unet_name": "lustifyNSFWCheckpoint_v10Krea2_2997637.safetensors",
+                "weight_dtype": "default"
+            }
+        })
+    );
+    assert_eq!(
+        g["11"],
+        json!({
+            "class_type": "CLIPLoader",
+            "inputs": {
+                "clip_name": "qwen3vl_4b_fp8_scaled.safetensors",
+                "type": "krea2",
+                "device": "default"
+            }
+        })
+    );
+    assert_eq!(
+        g["10"],
+        json!({
+            "class_type": "VAELoader",
+            "inputs": { "vae_name": "qwen_image_vae.safetensors" }
+        })
+    );
+    assert_eq!(
+        g["6"],
+        json!({
+            "class_type": "CLIPTextEncode",
+            "inputs": { "text": "a red fox in the snow", "clip": ["11", 0] }
+        })
+    );
+    assert_eq!(
+        g["27"],
+        json!({
+            "class_type": "ConditioningZeroOut",
+            "inputs": { "conditioning": ["6", 0] }
+        })
+    );
+    assert!(g.get("7").is_none(), "no negative prompt is encoded");
+    assert_eq!(
+        g["5"],
+        json!({
+            "class_type": "EmptyLatentImage",
+            "inputs": { "width": 1024, "height": 1024, "batch_size": 1 }
+        })
+    );
+    assert_eq!(
+        g["3"],
+        json!({
+            "class_type": "KSampler",
+            "inputs": {
+                "seed": 42,
+                "steps": 8,
+                "cfg": 1.0,
+                "sampler_name": "euler",
+                "scheduler": "simple",
+                "denoise": 1.0,
+                "model": ["12", 0],
+                "positive": ["6", 0],
+                "negative": ["27", 0],
+                "latent_image": ["5", 0]
+            }
+        })
+    );
+    assert_eq!(g["8"]["class_type"], "VAEDecode");
+    assert_eq!(g["8"]["inputs"]["samples"], json!(["3", 0]));
+    assert_eq!(g["8"]["inputs"]["vae"], json!(["10", 0]));
+    assert_eq!(g["9"]["class_type"], "SaveImage");
+    assert_eq!(g["9"]["inputs"]["images"], json!(["8", 0]));
+    assert_eq!(g["9"]["inputs"]["filename_prefix"], "job-abc");
+    assert_eq!(g.as_object().map(|o| o.len()), Some(9), "{g}");
+}
+
+#[test]
+fn krea2_encodes_a_real_negative_only_above_cfg_one() {
+    // A negative prompt and a CFG above 1 (the RAW model's way): encoded.
+    let raw = Txt2ImgInputs {
+        negative: "blurry",
+        cfg: 4.0,
+        steps: 52,
+        ..krea2_turbo_inputs()
+    };
+    let g = krea2_txt2img(&raw, &krea2_models(), &[]);
+    assert_eq!(
+        g["7"],
+        json!({
+            "class_type": "CLIPTextEncode",
+            "inputs": { "text": "blurry", "clip": ["11", 0] }
+        })
+    );
+    assert_eq!(g["3"]["inputs"]["negative"], json!(["7", 0]));
+    assert_eq!(g["3"]["inputs"]["cfg"], 4.0);
+    assert!(g.get("27").is_none());
+
+    // At CFG 1 the negative has no effect, so it is zeroed like the template.
+    let turbo = Txt2ImgInputs {
+        negative: "blurry",
+        ..krea2_turbo_inputs()
+    };
+    let g = krea2_txt2img(&turbo, &krea2_models(), &[]);
+    assert_eq!(g["3"]["inputs"]["negative"], json!(["27", 0]));
+    assert!(g.get("7").is_none());
+
+    // A blank negative is zeroed too, whatever the CFG.
+    let blank = Txt2ImgInputs {
+        negative: "   ",
+        cfg: 4.0,
+        ..krea2_turbo_inputs()
+    };
+    let g = krea2_txt2img(&blank, &krea2_models(), &[]);
+    assert_eq!(g["3"]["inputs"]["negative"], json!(["27", 0]));
+}
+
+#[test]
+fn krea2_loras_patch_the_model_only() {
+    let loras = [
+        LoraSpec {
+            file: "krea2_style.safetensors",
+            strength: 0.8,
+        },
+        LoraSpec {
+            file: "krea2_detail.safetensors",
+            strength: 0.5,
+        },
+    ];
+    let g = krea2_txt2img(&krea2_turbo_inputs(), &krea2_models(), &loras);
+    assert_eq!(
+        g["90"],
+        json!({
+            "class_type": "LoraLoaderModelOnly",
+            "inputs": {
+                "model": ["12", 0],
+                "lora_name": "krea2_style.safetensors",
+                "strength_model": 0.8
+            }
+        })
+    );
+    assert_eq!(g["91"]["class_type"], "LoraLoaderModelOnly");
+    assert_eq!(g["91"]["inputs"]["model"], json!(["90", 0]));
+    assert_eq!(g["3"]["inputs"]["model"], json!(["91", 0]));
+    assert_eq!(
+        g["6"]["inputs"]["clip"],
+        json!(["11", 0]),
+        "the text encoder is not patched"
+    );
+}
+
+#[test]
+fn krea2_hires_reuses_the_ksampler_second_pass_with_the_patched_model() {
+    let i = Txt2ImgInputs {
+        hires: Some(hires()),
+        ..krea2_turbo_inputs()
+    };
+    let loras = [LoraSpec {
+        file: "a.safetensors",
+        strength: 1.0,
+    }];
+    let g = krea2_txt2img(&i, &krea2_models(), &loras);
+    assert_eq!(g["40"]["class_type"], "LatentUpscaleBy");
+    assert_eq!(g["40"]["inputs"]["samples"], json!(["3", 0]));
+    assert_eq!(g["41"]["class_type"], "KSampler");
+    assert_eq!(g["41"]["inputs"]["model"], json!(["90", 0]));
+    assert_eq!(g["41"]["inputs"]["negative"], json!(["27", 0]));
+    assert_eq!(g["41"]["inputs"]["cfg"], 1.0);
+    assert_eq!(g["41"]["inputs"]["denoise"], 0.45);
+    assert_eq!(g["8"]["inputs"]["samples"], json!(["41", 0]));
 }

@@ -76,6 +76,41 @@ pub fn apply(
     Ok(())
 }
 
+/// [`apply`] for a model whose text encoder takes no LoRA patch: a chain of
+/// `LoraLoaderModelOnly` nodes (`model`, `lora_name`, `strength_model` —
+/// the node Comfy-Org's Krea 2 template uses) in the same reserved id
+/// window, repointing only the model consumers. Same no-op, cap and error
+/// behaviour as [`apply`].
+pub fn apply_model_only(
+    g: &mut Graph,
+    loras: &[LoraSpec],
+    model_source: &OwnedLink,
+    model_consumers: &[&str],
+) -> Result<(), PipelineError> {
+    if loras.is_empty() {
+        return Ok(());
+    }
+    let mut ids = NextId::new(LORA_ID_BASE);
+    let mut model_link = model_source.clone();
+    for lora in loras.iter().take(MAX_LORAS) {
+        let id = ids.take();
+        g.node(
+            &id,
+            "LoraLoaderModelOnly",
+            json!({
+                "model": model_link.json(),
+                "lora_name": lora.file,
+                "strength_model": lora.strength,
+            }),
+        );
+        model_link = OwnedLink::new(&id, 0);
+    }
+    for consumer in model_consumers {
+        g.set_input(consumer, "model", model_link.json())?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

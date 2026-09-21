@@ -198,7 +198,7 @@ mod tests {
         let id = lora(&db).await;
         assert!(db
             .models()
-            .set_base_family(&id, "krea2", FamilySource::User)
+            .set_base_family(&id, "zimage", FamilySource::User)
             .await
             .is_err());
         assert_eq!(family_of(&db, &id).await, (None, None));

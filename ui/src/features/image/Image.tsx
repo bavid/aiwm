@@ -45,7 +45,7 @@ import {
   toHiresParams,
   type HiresFixSettings,
 } from "./hires-fix";
-import { carryOver, defaultsFor, isSd15, STANDARD_DEFAULTS } from "./image-defaults";
+import { carryOver, defaultsFor, isKrea2, isSd15, STANDARD_DEFAULTS } from "./image-defaults";
 import "./image.css";
 
 const DONE: JobState[] = ["completed", "failed", "cancelled"];
@@ -146,6 +146,7 @@ export function ImageStudio({ prefill = null, onPrefillConsumed }: Props = {}) {
   const isFlux = modelId !== "auto" && selectedCheckpoint?.family === "flux";
   const isFlux2 = modelId !== "auto" && selectedCheckpoint?.family === "flux2";
   const sd15 = modelId !== "auto" && isSd15(selectedCheckpoint);
+  const krea2 = modelId !== "auto" && isKrea2(selectedCheckpoint);
 
   /** Pick a checkpoint. When its family's size/steps/CFG defaults differ
    *  from the current one's (SD 1.5: 512 px, 20 steps, CFG 8), every field
@@ -596,6 +597,12 @@ export function ImageStudio({ prefill = null, onPrefillConsumed }: Props = {}) {
             {isFlux2 && (
               <p className="muted">
                 FLUX.2 Klein is fast/distilled — low CFG (≈1.5–2) and few steps (≈8) is typical.
+              </p>
+            )}
+            {krea2 && (
+              <p className="muted">
+                Krea 2 Turbo runs at 8 steps and CFG 1 (the RAW model wants ≈50 steps); a negative
+                prompt only counts above CFG 1.
               </p>
             )}
             {sd15 && (
