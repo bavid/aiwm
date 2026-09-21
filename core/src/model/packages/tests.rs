@@ -634,21 +634,31 @@ fn models_without_a_base_family_are_listed_as_unknown_with_their_kind() {
         .collect();
     assert_eq!(
         unknown,
-        [
-            (
-                "realism_engine_krea2_v3.1",
-                ItemKind::Checkpoint,
-                13_000_000_000
-            ),
-            (
-                "realism_engine_krea2_v2",
-                ItemKind::Checkpoint,
-                13_100_000_000
-            ),
-            ("K_spreadinggape", ItemKind::Lora, 1),
-        ],
-        "companions and training folders are not \"unknown\""
+        [("K_spreadinggape", ItemKind::Lora, 1)],
+        "companions, training folders and Krea 2 checkpoints are not \"unknown\""
     );
+}
+
+#[test]
+fn krea2_checkpoints_group_under_krea2_and_need_its_encoder_and_vae() {
+    let out = library_packages(&real_library(), FAMILIES, &Catalog::builtin());
+    let krea = out
+        .groups
+        .iter()
+        .find(|g| g.family.id == "krea2")
+        .expect("a krea2 group");
+    let ids: Vec<&str> = krea
+        .checkpoints
+        .iter()
+        .map(|c| c.model.id.as_str())
+        .collect();
+    assert_eq!(
+        ids,
+        ["realism_engine_krea2_v3.1", "realism_engine_krea2_v2"]
+    );
+    assert!(!krea.complete, "the encoder and VAE are not installed");
+    // The base is installed; only the Qwen3-VL encoder and the VAE are due.
+    assert_eq!(krea.missing_bytes, 5_242_467_968 + 253_806_246);
 }
 
 #[test]

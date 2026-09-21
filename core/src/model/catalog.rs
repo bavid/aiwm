@@ -44,6 +44,11 @@ pub struct KnownModel {
     pub media: &'static str,
 }
 
+/// Krea 2's licence as `Comfy-Org/Krea-2` declares it (`license: other`, the
+/// text in the repo's LICENSE.pdf).
+const KREA2_LICENSE: &str =
+    "Krea 2 License (\u{201c}other\u{201d} on Hugging Face — LICENSE.pdf in the repo)";
+
 /// The catalogue. Order is display order (default first, then the Flux stack).
 pub const KNOWN_MODELS: &[KnownModel] = &[
     KnownModel {
@@ -303,6 +308,67 @@ pub const KNOWN_MODELS: &[KnownModel] = &[
         license: "Custom (\u{201c}other\u{201d} on Hugging Face — check the repo before commercial use)",
         note: "Pushes toward photographic realism — fine skin/organic texture, less \u{201c}AI-clean.\u{201d} \
                Trigger word srx_detail; start around strength 0.8 (1.0 can oversaturate skin texture).",
+        is_default: false,
+        media: "image",
+    },
+    // --- Krea 2 ---
+    // The three files of Comfy-Org's own Krea 2 text-to-image template
+    // (`workflow_templates` blueprint `text_to_image_krea_2_turbo`), pinned to
+    // `Comfy-Org/Krea-2` commit e5ea8b4dd7f38f348b138eb0fe29f92c0e367e96;
+    // sizes and SHA-256 are the Hugging Face tree's `size` / `lfs.oid`.
+    KnownModel {
+        id: "krea2-turbo-fp8",
+        name: "Krea 2 Turbo — fp8 (safetensors)",
+        kind: "diffusion_model",
+        family: Some("krea2"),
+        publisher: "Krea / Comfy-Org",
+        repo: "Comfy-Org/Krea-2",
+        file: "krea2_turbo_fp8_scaled.safetensors",
+        url: "https://huggingface.co/Comfy-Org/Krea-2/resolve/\
+              e5ea8b4dd7f38f348b138eb0fe29f92c0e367e96/diffusion_models/\
+              krea2_turbo_fp8_scaled.safetensors",
+        sha256: "eb4dd8c612cfd10f64f25b057e6e6bbcb5737c94a7372177e456dbf7579502f1",
+        size_bytes: 13_141_730_784,
+        license: KREA2_LICENSE,
+        note: "The distilled Turbo model: 8 steps at CFG 1, 1K–2K resolution. The \
+               diffusion model only — needs the Qwen3-VL text encoder and the Qwen-Image \
+               VAE below. Krea 2 fine-tunes from Civitai run with the same two files.",
+        is_default: false,
+        media: "image",
+    },
+    KnownModel {
+        id: "qwen3vl-4b-krea2-encoder",
+        name: "Qwen3-VL 4B — fp8 (Krea 2 text encoder)",
+        kind: "text_encoder",
+        family: None,
+        publisher: "Comfy-Org",
+        repo: "Comfy-Org/Krea-2",
+        file: "qwen3vl_4b_fp8_scaled.safetensors",
+        url: "https://huggingface.co/Comfy-Org/Krea-2/resolve/\
+              e5ea8b4dd7f38f348b138eb0fe29f92c0e367e96/text_encoders/\
+              qwen3vl_4b_fp8_scaled.safetensors",
+        sha256: "54bd5144df0bbc25dd6ccadfcb826b521445a1b06ae5a42570bdd2974ca87094",
+        size_bytes: 5_242_467_968,
+        license: KREA2_LICENSE,
+        note: "Krea 2's prompt encoder (ComfyUI `CLIPLoader` type krea2). Not the \
+               FLUX.2 [klein] Qwen3 encoder — the two are not interchangeable.",
+        is_default: false,
+        media: "image",
+    },
+    KnownModel {
+        id: "qwen-image-vae",
+        name: "Qwen-Image VAE (Krea 2)",
+        kind: "vae",
+        family: None,
+        publisher: "Comfy-Org",
+        repo: "Comfy-Org/Krea-2",
+        file: "qwen_image_vae.safetensors",
+        url: "https://huggingface.co/Comfy-Org/Krea-2/resolve/\
+              e5ea8b4dd7f38f348b138eb0fe29f92c0e367e96/vae/qwen_image_vae.safetensors",
+        sha256: "a70580f0213e67967ee9c95f05bb400e8fb08307e017a924bf3441223e023d1f",
+        size_bytes: 253_806_246,
+        license: KREA2_LICENSE,
+        note: "Krea 2's autoencoder — not compatible with the FLUX.1 or FLUX.2 VAEs.",
         is_default: false,
         media: "image",
     },
@@ -1213,6 +1279,20 @@ pub const MODEL_STACKS: &[ModelStack] = &[
         is_default: false,
     },
     ModelStack {
+        id: "krea2",
+        label: "Krea 2",
+        media: "image",
+        member_ids: &[
+            "krea2-turbo-fp8",
+            "qwen3vl-4b-krea2-encoder",
+            "qwen-image-vae",
+        ],
+        note: "Three files: the Turbo diffusion model (8 steps, CFG 1), its Qwen3-VL \
+               text encoder and the Qwen-Image VAE. Krea 2 checkpoints from Civitai hold \
+               only the diffusion model and need the same encoder and VAE.",
+        is_default: false,
+    },
+    ModelStack {
         id: "wan22",
         label: "Wan 2.2 TI2V-5B",
         media: "video",
@@ -1918,6 +1998,69 @@ mod tests {
             assert!(m.disk_estimate_bytes > 0, "{}", m.id);
             assert!(!m.license.is_empty(), "{}", m.id);
             assert!(!m.note.is_empty(), "{}", m.id);
+        }
+    }
+
+    /// Krea 2: the three files of Comfy-Org's own text-to-image template,
+    /// pinned to `Comfy-Org/Krea-2` commit e5ea8b4d, sizes and SHA-256 as the
+    /// Hugging Face tree lists them.
+    #[test]
+    fn krea2_stack_is_the_turbo_model_its_qwen3_vl_encoder_and_the_qwen_image_vae() {
+        const REV: &str = "e5ea8b4dd7f38f348b138eb0fe29f92c0e367e96";
+        let s = stack("krea2");
+        assert_eq!(s.label, "Krea 2");
+        assert_eq!(s.media, "image");
+        assert!(!s.is_default, "SDXL stays the default image stack");
+        assert_eq!(
+            s.member_ids,
+            &[
+                "krea2-turbo-fp8",
+                "qwen3vl-4b-krea2-encoder",
+                "qwen-image-vae"
+            ]
+        );
+
+        let cases = [
+            (
+                "krea2-turbo-fp8",
+                "diffusion_model",
+                Some("krea2"),
+                "diffusion_models/krea2_turbo_fp8_scaled.safetensors",
+                13_141_730_784,
+                "eb4dd8c612cfd10f64f25b057e6e6bbcb5737c94a7372177e456dbf7579502f1",
+            ),
+            (
+                "qwen3vl-4b-krea2-encoder",
+                "text_encoder",
+                None,
+                "text_encoders/qwen3vl_4b_fp8_scaled.safetensors",
+                5_242_467_968,
+                "54bd5144df0bbc25dd6ccadfcb826b521445a1b06ae5a42570bdd2974ca87094",
+            ),
+            (
+                "qwen-image-vae",
+                "vae",
+                None,
+                "vae/qwen_image_vae.safetensors",
+                253_806_246,
+                "a70580f0213e67967ee9c95f05bb400e8fb08307e017a924bf3441223e023d1f",
+            ),
+        ];
+        for (id, kind, family, path, size, sha) in cases {
+            let m = member(id);
+            assert_eq!(m.kind, kind, "{id}");
+            assert_eq!(m.family, family, "{id}");
+            assert_eq!(m.media, "image", "{id}");
+            assert!(!m.is_default, "{id}");
+            assert_eq!(m.repo, "Comfy-Org/Krea-2", "{id}");
+            assert_eq!(
+                m.url,
+                format!("https://huggingface.co/Comfy-Org/Krea-2/resolve/{REV}/{path}"),
+                "{id}"
+            );
+            assert_eq!(m.size_bytes, size, "{id}");
+            assert_eq!(m.sha256, sha, "{id}");
+            assert!(m.license.contains("Krea 2"), "{id}: {}", m.license);
         }
     }
 

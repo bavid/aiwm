@@ -14,7 +14,10 @@
 //!   3 × 2560 = 7680, Qwen3-8B: 3 × 4096 = 12288); Wan by `head.modulation`
 //!   (its last dimension is the width); LTX by `adaln_single`, LTX-2 by
 //!   `audio_adaln_single`; SDXL by `conditioner.embedders.1.`, SD 1.x by
-//!   `cond_stage_model.transformer.`.
+//!   `cond_stage_model.transformer.`; Krea 2 by `txtfusion.projector.weight`.
+//!   Krea 2 LoRAs by `blocks.N.attn.{gate,wq}` (a real library file:
+//!   `diffusion_model.blocks.0.attn.gate.lora_A.weight`) or their
+//!   `ss_base_model_version: "krea2"` metadata.
 //! - the widths: real headers read from Hugging Face on 2026-09-21
 //!   (`sd_xl_base_1.0`, `v1-5-pruned-emaonly`, `flux1-schnell-fp8`, a FLUX.2
 //!   klein 9B checkpoint, `wan2.2_ti2v_5B_fp16`, a Wan 2.2 14B,
@@ -39,7 +42,7 @@ pub fn family_from_header(header: &SafetensorsHeader) -> Option<&'static BaseFam
         .map(|(name, shape)| (canonical(name), shape.as_slice()))
         .collect();
     let id = if tensors.iter().any(|(k, _)| is_down_projection(k)) {
-        lora_family(&tensors)
+        lora_family_from_metadata(header).or_else(|| lora_family(&tensors))
     } else {
         checkpoint_family(&tensors)
     }?;
@@ -60,12 +63,47 @@ fn any_key(t: &[(String, &[u64])], needle: &str) -> bool {
     t.iter().any(|(k, _)| k.contains(needle))
 }
 
+// ---- Krea 2 --------------------------------------------------------------------
+
+/// The tensor ComfyUI detects Krea 2 by (`comfy/model_detection.py`): the
+/// text-fusion projector, which no other family here has. Canonical form.
+const KREA2_MARKER: &str = "txtfusion.projector.weight";
+
+/// kohya-style training metadata naming the base a LoRA was trained on.
+const LORA_BASE_METADATA_KEY: &str = "ss_base_model_version";
+
+/// The `ss_base_model_version` values that name a registry family, trimmed
+/// and compared case-insensitively. Only values read from real files.
+const LORA_BASE_METADATA: &[(&str, &str)] = &[("krea2", "krea2")];
+
+/// The family a LoRA's training metadata names, when it names one this
+/// registry knows.
+fn lora_family_from_metadata(header: &SafetensorsHeader) -> Option<&'static str> {
+    let value = header.metadata.get(LORA_BASE_METADATA_KEY)?.trim();
+    LORA_BASE_METADATA
+        .iter()
+        .find(|(v, _)| v.eq_ignore_ascii_case(value))
+        .map(|(_, id)| *id)
+}
+
+/// A Krea 2 LoRA: `blocks.N.attn.{gate,wq,…}` (no other family here names
+/// its attention projections `gate`/`wq`), or anything on the text fusion.
+fn is_krea2_lora(t: &[(String, &[u64])]) -> bool {
+    any_key(t, "txtfusion.")
+        || t.iter().any(|(k, _)| {
+            k.contains("blocks.") && (k.contains(".attn.gate.") || k.contains(".attn.wq."))
+        })
+}
+
 // ---- checkpoints -------------------------------------------------------------
 
 fn checkpoint_family(t: &[(String, &[u64])]) -> Option<&'static str> {
     let shape = |suffix: &str| t.iter().find(|(k, _)| k.ends_with(suffix)).map(|(_, s)| *s);
     let dim = |suffix: &str, i: usize| shape(suffix).and_then(|s| s.get(i).copied());
 
+    if shape(KREA2_MARKER).is_some() {
+        return Some("krea2");
+    }
     if any_key(t, "adaln.single.emb.timestep.embedder.linear.1.bias") {
         if any_key(t, "pos.embed.proj.bias") {
             return None; // PixArt
@@ -161,6 +199,9 @@ fn model_width(t: &[(String, &[u64])], widths: &BTreeMap<u64, usize>) -> Option<
 /// `lora_te1_`, and CLIP's own layers are named `self_attn` like Wan's —
 /// so FLUX first, the SD text-encoder/UNet rules next, Wan last.
 fn lora_family(t: &[(String, &[u64])]) -> Option<&'static str> {
+    if is_krea2_lora(t) {
+        return Some("krea2");
+    }
     let widths = down_widths(t);
     let flux = [
         "double.blocks.",
@@ -338,7 +379,11 @@ pub fn family_from_name(name: &str) -> Option<&'static BaseFamily> {
         .map(|c| c.to_ascii_lowercase())
         .collect();
     let has = |needle: &str| n.contains(needle);
-    let id = if has("flux2") || has("klein") {
+    // `krea2` / `Krea 2` / `krea-2` — but never a FLUX name: FLUX.1 Krea
+    // [dev] files (`flux1-krea-dev…`) are FLUX.1.
+    let id = if has("krea2") && !has("flux") {
+        "krea2"
+    } else if has("flux2") || has("klein") {
         if has("4b") {
             "flux2-klein-4b"
         } else if has("9b") {

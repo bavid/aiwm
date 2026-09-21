@@ -48,6 +48,7 @@ export const BASE_FAMILIES: readonly KnownBaseFamily[] = [
     notRunnable:
       "LTX-2 is a different, much larger audio-video model — this app runs LTX-Video 0.9.5 (2B)",
   },
+  { id: "krea2", label: "Krea 2", archGroup: "krea2", notRunnable: null },
 ];
 
 export const baseFamilyById = (id: string | null | undefined): KnownBaseFamily | null =>
