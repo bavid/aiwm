@@ -208,6 +208,37 @@ pub struct RemoteModelDetails {
     pub model: RemoteModel,
     pub revision: String,
     pub files: Vec<RemoteFile>,
+    /// Every version the source lists, newest first, with the base each one
+    /// targets — a Civitai model's versions can target different bases.
+    /// Empty for a source without versions (Hugging Face).
+    #[serde(default)]
+    pub versions: Vec<RemoteVersion>,
+}
+
+/// One version of a remote model.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RemoteVersion {
+    pub id: String,
+    pub name: Option<String>,
+    /// Civitai's `baseModel` label (`"Pony"`, `"SDXL 1.0"`, …).
+    pub base_model: Option<String>,
+}
+
+/// A checkpoint a source offers for a base label — what a package's
+/// "findable" base lists to pick from. The file is the version's primary
+/// weight file; its SHA-256 is the source's claim, re-verified by the
+/// download manager like every other.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CheckpointCandidate {
+    pub model_id: String,
+    pub version_id: String,
+    pub name: String,
+    pub downloads: i64,
+    /// The version's `baseModel` — equal to the label that was asked for.
+    pub base_model: String,
+    pub nsfw: bool,
+    pub preview_image_url: Option<String>,
+    pub file: Option<RemoteFile>,
 }
 
 /// How to order search results.
@@ -255,6 +286,21 @@ pub trait ModelSource: Send + Sync + std::fmt::Debug {
     async fn search(&self, query: &SearchQuery) -> Result<Vec<RemoteModel>>;
     /// `id` is `owner/repo`.
     async fn details(&self, id: &str) -> Result<RemoteModelDetails>;
+
+    /// The most downloaded checkpoints for a base label (Civitai's
+    /// `baseModels`), at most `limit`. Sources without base labels refuse.
+    async fn checkpoints_for_base(
+        &self,
+        base_label: &str,
+        nsfw: bool,
+        limit: usize,
+    ) -> Result<Vec<CheckpointCandidate>> {
+        let _ = (nsfw, limit);
+        Err(CoreError::Config(format!(
+            "registry: {} has no checkpoints by base label {base_label:?}",
+            self.id()
+        )))
+    }
 
     /// Last-fetch / rate-limit / token status for the Diagnostics line.
     fn status(&self) -> RegistryStatus {
@@ -337,6 +383,27 @@ impl Registry {
     pub async fn details(&self, id: &str) -> Result<Fetched<RemoteModelDetails>> {
         let key = cache::key(&["details", id]);
         self.resolve(&key, self.source.details(id)).await
+    }
+
+    /// [`ModelSource::checkpoints_for_base`] through the cache and the
+    /// offline gate.
+    pub async fn checkpoints_for_base(
+        &self,
+        base_label: &str,
+        nsfw: bool,
+        limit: usize,
+    ) -> Result<Fetched<Vec<CheckpointCandidate>>> {
+        let key = cache::key(&[
+            "checkpoints",
+            base_label,
+            &nsfw.to_string(),
+            &limit.to_string(),
+        ]);
+        self.resolve(
+            &key,
+            self.source.checkpoints_for_base(base_label, nsfw, limit),
+        )
+        .await
     }
 
     /// The Diagnostics health line — the source's status plus the local cache

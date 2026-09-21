@@ -37,21 +37,6 @@
   min-width: 0;
 }
 
-/* Brief highlight so "Set import type" (clicked from the catalog, further up
-   the page) has a visible effect after scrolling the form into view. */
-.models__flash .card {
-  animation: models-flash 1.2s ease-out;
-}
-
-@keyframes models-flash {
-  0% {
-    box-shadow: 0 0 0 2px var(--accent);
-  }
-  100% {
-    box-shadow: 0 0 0 0 transparent;
-  }
-}
-
 .import {
   display: flex;
   flex-direction: column;
@@ -1006,6 +991,33 @@ p.filelist__hidden,
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--surface-2);
+}
+
+/* Files one "Get" queued together, under the package's name. */
+.dl__group {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid color-mix(in oklab, var(--accent) 35%, var(--border));
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+
+.dl__grouphead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+
+.dl__groupname {
+  font-weight: 600;
+}
+
+.dl__list--nested {
+  margin: 0;
+  padding-left: var(--space-3);
+  border-left: 2px solid var(--border);
 }
 
 .dl__row--failed {

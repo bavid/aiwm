@@ -1,4 +1,4 @@
-import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
 import { HelpHint } from "../../components/HelpHint";
 import { SectionNav, type NavSection } from "../../components/SectionNav";
 import {
@@ -28,6 +28,7 @@ import { Catalog, type CatalogTab } from "./Catalog";
 import { ColibriPanel } from "./ColibriPanel";
 import { Discover } from "./Discover";
 import { Downloads } from "./Downloads";
+import { Packages } from "./Packages";
 import { DeleteButton, StoragePanel } from "./StoragePanel";
 import { UpgradeChecks } from "./UpgradeChecks";
 import "./models.css";
@@ -71,6 +72,7 @@ type ModelsProps = {
 
 const MODEL_SECTIONS: NavSection[] = [
   { id: "library", label: "Library" },
+  { id: "packages", label: "Packages" },
   { id: "add", label: "Add models" },
   { id: "discover", label: "Discover" },
   { id: "downloads", label: "Downloads" },
@@ -111,8 +113,6 @@ export function Models({ focus, onFocusConsumed }: ModelsProps) {
   const { data: models, error, refetch } = useModels();
   const [modelType, setModelType] = useState<ModelType>("chat");
   const [section, setSection] = useState<string>(MODEL_SECTIONS[0].id);
-  const importRef = useRef<HTMLDivElement>(null);
-  const [importFlash, setImportFlash] = useState(false);
   const [catalogTab, setCatalogTab] = useState<CatalogTab>("image");
   /** Bumped to make the catalog scroll into view and focus its active tab. */
   const [catalogFocusRequest, setCatalogFocusRequest] = useState(0);
@@ -124,22 +124,6 @@ export function Models({ focus, onFocusConsumed }: ModelsProps) {
     setCatalogFocusRequest((n) => n + 1);
     onFocusConsumed();
   }, [focus, onFocusConsumed]);
-
-  // "Set import type" (on a catalog/Discover row) changes a dropdown on the
-  // Import form, which lives on the "Add models" page -- jump there, then
-  // scroll it into view and flash it once that page has actually rendered
-  // (a plain scrollIntoView here would run before the section switch
-  // commits, when the ref is still null).
-  useEffect(() => {
-    if (importFlash) importRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
-  }, [importFlash]);
-
-  const useType = (t: ModelType) => {
-    setModelType(t);
-    setSection("add");
-    setImportFlash(true);
-    setTimeout(() => setImportFlash(false), 1200);
-  };
 
   return (
     <div className="models">
@@ -156,21 +140,25 @@ export function Models({ focus, onFocusConsumed }: ModelsProps) {
         <div className="models-sections">
           {section === "library" && <ModelLibrary models={models} error={error} />}
 
+          {section === "packages" && (
+            <Packages
+              onViewDownloads={() => setSection("downloads")}
+              onAddModels={() => setSection("add")}
+            />
+          )}
+
           {section === "add" && (
             <>
               <Catalog
                 tab={catalogTab}
                 onTabChange={setCatalogTab}
                 focusRequest={catalogFocusRequest}
-                onUseType={useType}
               />
-              <div ref={importRef} className={importFlash ? "models__flash" : undefined}>
-                <ImportForm modelType={modelType} setModelType={setModelType} onImported={refetch} />
-              </div>
+              <ImportForm modelType={modelType} setModelType={setModelType} onImported={refetch} />
             </>
           )}
 
-          {section === "discover" && <Discover onUseType={useType} />}
+          {section === "discover" && <Discover onViewDownloads={() => setSection("downloads")} />}
 
           {section === "downloads" && <Downloads />}
 

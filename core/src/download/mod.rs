@@ -20,9 +20,14 @@ use tokio::io::AsyncWriteExt as _;
 use tokio::sync::{Mutex, Notify};
 
 use crate::db::{Database, Download, DownloadState, NewDownload};
+use crate::model::family::FamilySource;
 use crate::model::{import_model, ImportRequest};
+
+mod origin;
+
 use crate::runtime::download::hex;
 use crate::{CoreError, Result};
+pub use origin::{DownloadOrigin, DownloadOriginDto};
 
 /// Transport retries (each resumes from the partial file) before a download is
 /// marked failed.
@@ -55,6 +60,9 @@ pub struct EnqueueRequest {
     /// Roles to stamp on the model once imported (e.g. `["chat", "coding"]`
     /// for an agent pick from the Models tab) — empty for a plain download.
     pub roles: Vec<String>,
+    /// Where the file comes from and which base it is made for — recorded
+    /// on the model at import. [`DownloadOrigin::default`] = nothing known.
+    pub origin: DownloadOrigin,
 }
 
 /// The queue + the single-slot worker.
@@ -218,6 +226,9 @@ impl DownloadManager {
                     sha256: req.sha256,
                     size_bytes: req.size_bytes,
                     roles: req.roles,
+                    origin: req.origin.origin,
+                    base_family: req.origin.base_family.map(str::to_string),
+                    family_source: req.origin.family_source.map(|s| s.as_str().to_string()),
                 },
                 &self.staging_root,
             )
@@ -476,10 +487,34 @@ impl DownloadManager {
             },
         )
         .await?;
+        self.record_origin(d, &outcome.model.id).await;
         self.finish_import(&d.id, &outcome.model.id).await?;
         let _ = tokio::fs::remove_dir_all(self.staging_root.join(&d.id)).await;
         tracing::info!(id = %d.id, model = %outcome.model.id, "download imported");
         Ok(())
+    }
+
+    /// Record what the download is on the imported model: its origin as the
+    /// model's `source` (when the import left `manual`) and the base family
+    /// its source named (never over a user's choice). The file is already in
+    /// the store, so a failure here is logged, not a failed download.
+    async fn record_origin(&self, d: &Download, model_id: &str) {
+        let base = d
+            .base_family
+            .as_deref()
+            .zip(d.family_source.as_deref().and_then(FamilySource::parse));
+        if d.origin.is_none() && base.is_none() {
+            return;
+        }
+        if let Err(e) = self
+            .db
+            .models()
+            .record_origin(model_id, d.origin.as_deref(), base)
+            .await
+        {
+            tracing::warn!(id = %d.id, model = %model_id, error = %e,
+                "could not record the download's origin on the model");
+        }
     }
 
     /// Mark an imported download done and hand the imported model every role

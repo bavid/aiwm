@@ -1101,6 +1101,42 @@ async fn rename_model(
     to_ipc(handlers::rename_model(&app, &id, &name).await)
 }
 
+/// Plan 14: a Civitai pick or a library model as the package it needs.
+#[tauri::command]
+async fn resolve_package(
+    app: tauri::State<'_, Arc<App>>,
+    query: api::packages::ResolveQuery,
+) -> Result<aiwm_core::model::packages::Package, String> {
+    to_ipc(api::packages::resolve(&app, query).await)
+}
+
+/// Plan 14: the library grouped by base family (reads only).
+#[tauri::command]
+async fn library_packages(
+    app: tauri::State<'_, Arc<App>>,
+) -> Result<aiwm_core::model::packages::LibraryPackages, String> {
+    to_ipc(api::packages::library_packages(&app).await)
+}
+
+/// Plan 14: "What base is this?" — the user's choice.
+#[tauri::command]
+async fn set_model_base_family(
+    app: tauri::State<'_, Arc<App>>,
+    id: String,
+    family: String,
+) -> Result<Model, String> {
+    to_ipc(api::packages::set_base_family(&app, &id, &family).await)
+}
+
+/// Plan 14: "Save detected families" after a preview.
+#[tauri::command]
+async fn save_base_families(
+    app: tauri::State<'_, Arc<App>>,
+    batch: Vec<api::packages::BaseFamilyChoice>,
+) -> Result<Vec<api::packages::SavedFamily>, String> {
+    to_ipc(api::packages::save_base_families(&app, &batch).await)
+}
+
 #[tauri::command]
 fn registry_status(app: tauri::State<'_, Arc<App>>) -> aiwm_core::RegistryStatus {
     handlers::registry_status(&app)
@@ -1344,6 +1380,10 @@ fn try_run() -> anyhow::Result<()> {
             set_model_tags,
             set_model_roles,
             rename_model,
+            resolve_package,
+            library_packages,
+            set_model_base_family,
+            save_base_families,
             registry_status,
             set_hf_token,
             civitai_status,

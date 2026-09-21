@@ -358,6 +358,11 @@ mod tests {
             Recipe::for_family(Some("sdxl"), "sd_xl_base_1.0.safetensors"),
             Recipe::Checkpoint
         );
+        // What an import of the SD 1.5 catalog checkpoint records.
+        assert_eq!(
+            Recipe::for_family(Some("sd15"), "v1-5-pruned-emaonly.safetensors"),
+            Recipe::Checkpoint
+        );
         assert_eq!(
             Recipe::for_family(None, "x.safetensors"),
             Recipe::Checkpoint

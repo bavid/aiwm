@@ -373,6 +373,47 @@ fn checkpoint_graph_splices_a_lora_before_the_sampler_and_clip() {
     assert_eq!(g["7"]["inputs"]["clip"], json!(["90", 1]));
 }
 
+/// SD 1.5 runs through the same single-file checkpoint graph as SDXL — the
+/// node set of ComfyUI's own SD 1.5 example (`script_examples/
+/// basic_api_example.py`, v0.34.0: `CheckpointLoaderSimple` →
+/// `CLIPTextEncode` ×2 → `KSampler` → `VAEDecode` → `SaveImage`, 512×512,
+/// 20 steps, cfg 8) — and an SD 1.5 LoRA splices in the same `LoraLoader`
+/// way, patching both the UNet and the one CLIP text encoder.
+#[test]
+fn an_sd15_checkpoint_renders_through_the_checkpoint_graph_with_its_lora() {
+    let sd15 = Txt2ImgInputs {
+        width: 512,
+        height: 512,
+        steps: 20,
+        cfg: 8.0,
+        ..inputs()
+    };
+    let g = checkpoint_txt2img(
+        &sd15,
+        "v1-5-pruned-emaonly.safetensors",
+        &[LoraSpec {
+            file: "add_detail.safetensors",
+            strength: 0.7,
+        }],
+    );
+    assert_eq!(g["4"]["class_type"], "CheckpointLoaderSimple");
+    assert_eq!(
+        g["4"]["inputs"]["ckpt_name"],
+        "v1-5-pruned-emaonly.safetensors"
+    );
+    assert_eq!(g["5"]["class_type"], "EmptyLatentImage");
+    assert_eq!(g["5"]["inputs"]["width"], 512);
+    assert_eq!(g["5"]["inputs"]["height"], 512);
+    assert_eq!(g["3"]["class_type"], "KSampler");
+    assert_eq!(g["3"]["inputs"]["steps"], 20);
+    assert_eq!(g["3"]["inputs"]["cfg"], 8.0);
+    assert_eq!(g["90"]["class_type"], "LoraLoader");
+    assert_eq!(g["90"]["inputs"]["lora_name"], "add_detail.safetensors");
+    assert_eq!(g["3"]["inputs"]["model"], json!(["90", 0]));
+    assert_eq!(g["6"]["inputs"]["clip"], json!(["90", 1]));
+    assert_eq!(g["8"]["inputs"]["vae"], json!(["4", 2]));
+}
+
 #[test]
 fn checkpoint_graph_chains_multiple_loras_in_order() {
     let g = checkpoint_txt2img(

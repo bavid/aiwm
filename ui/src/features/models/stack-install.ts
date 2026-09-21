@@ -1,4 +1,11 @@
-import type { Download, DownloadState, KnownModel, Model, ModelStack } from "../../lib/ipc";
+import type {
+  Download,
+  DownloadState,
+  EnqueueDownloadBody,
+  KnownModel,
+  Model,
+  ModelStack,
+} from "../../lib/ipc";
 import { formatGB } from "../../lib/units";
 
 /** Where one file of a catalog stack stands, derived from the model library
@@ -138,3 +145,13 @@ export const stackSizeLabel = (stack: ModelStack) => formatGB(stackBytes(stack))
 /** A stack's whole download size. */
 export const stackBytes = (stack: ModelStack) =>
   stack.members.reduce((sum, m) => sum + m.size_bytes, 0);
+
+/** The queue request for one pinned catalog file — the same body whether a
+ *  whole stack is installed or a package fetches just the member it lacks. */
+export const knownModelDownload = (member: KnownModel): EnqueueDownloadBody => ({
+  url: member.url,
+  filename: member.file,
+  model_type: member.kind,
+  sha256: member.sha256,
+  size_bytes: member.size_bytes,
+});

@@ -944,6 +944,11 @@ pub struct EnqueueDownloadDto {
     /// for an agent pick). Older clients that omit it get a plain download.
     #[serde(default)]
     pub roles: Vec<String>,
+    /// Where the file comes from (Civitai model/version or Hugging Face
+    /// repo/revision) and the base label the source gives it — recorded on
+    /// the model at import (Plan 14). Omitted → nothing is recorded.
+    #[serde(default)]
+    pub origin: Option<crate::download::DownloadOriginDto>,
 }
 
 /// Body for `PUT /models/{id}/tags` — replace a model's tag set (Phase 6.9).

@@ -3,10 +3,12 @@
 pub mod catalog;
 mod delete;
 mod directory;
+pub mod family;
 mod gguf;
 mod import;
 mod integrity;
 mod kind;
+pub mod packages;
 mod safetensors;
 
 pub use directory::register_directory_model;
@@ -22,7 +24,8 @@ pub use import::{import_model, ImportOutcome, ImportRequest};
 pub use integrity::{verify_captioner_dir, verify_captioner_dir_async};
 pub use kind::{ModelKind, FLORENCE2_ROLE, QWEN_VL_ROLE, WD_TAGGER_ROLE};
 pub use safetensors::{
-    lora_alpha_from_header, lora_rank_from_header, read_safetensors_info, SafetensorsInfo,
+    lora_alpha_from_header, lora_rank_from_header, read_safetensors_header, read_safetensors_info,
+    SafetensorsHeader, SafetensorsInfo,
 };
 
 /// Bytes per MiB, used for the VRAM/size estimates.

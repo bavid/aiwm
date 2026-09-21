@@ -31,7 +31,7 @@ pub use datasets::{Dataset, DatasetMode, DatasetRepo, NewDataset};
 pub use documents::{Document, DocumentChunk, DocumentRepo, NewDocument};
 pub use downloads::{Download, DownloadRepo, DownloadState, NewDownload};
 pub use jobs::{EventLevel, Job, JobEvent, JobFilter, JobPatch, JobRepo, NewJob};
-pub use models::{Model, ModelLink, ModelRepo, NewModel};
+pub use models::{Model, ModelLink, ModelRepo, NewModel, SetFamily};
 pub use personas::{Persona, PersonaMode, PersonaRepo, ACTIVE_PERSONA_KEY};
 pub use runtimes::{state as runtime_state, RuntimeRecord, RuntimeRepo};
 pub use sessions::{Session, SessionRepo};

@@ -53,6 +53,15 @@ const FORM_SETTINGS: readonly HelpSetting[] = [
     benefit: "Match the value to the model family and the prompt behaves.",
   },
   {
+    key: "sd15-defaults",
+    label: "SD 1.5 defaults",
+    what: "When the chosen checkpoint is Stable Diffusion 1.5, the size, steps and CFG fields start at 512×512, 20 steps and CFG 8 instead of 1024×1024, 25 steps and CFG 7.",
+    why: "SD 1.5 was trained at 512 px; at 1024 px it repeats subjects and falls apart. The values are those of ComfyUI's own SD 1.5 example.",
+    effect: "Picking an SD 1.5 checkpoint moves every field that still holds the previous default; a value you changed yourself stays. Picking an SDXL or FLUX checkpoint moves them back the same way.",
+    benefit: "A usable first SD 1.5 render without looking up its native size.",
+    pitfalls: "The family comes from the checkpoint's recorded base family or its import family; an SD 1.5 file imported by hand without either gets the 1024 px defaults — set the fields yourself, or get it from the catalogue. The reference image (IP-Adapter) is refused on SD 1.5: the installed IP-Adapter is SDXL's.",
+  },
+  {
     key: "seed",
     label: "Seed",
     what: "The random number the render starts from. Blank means a new random seed every time; the result shows the seed it used, with a \"reuse\" button.",

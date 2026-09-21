@@ -259,6 +259,7 @@ impl ModelSource for HuggingFaceSource {
             )
             .await?;
         Ok(RemoteModelDetails {
+            versions: Vec::new(),
             model,
             revision,
             files: parse_tree(&tree),

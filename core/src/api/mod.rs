@@ -10,6 +10,7 @@
 pub mod dto;
 pub mod handlers;
 mod http;
+pub mod packages;
 
 pub use http::router;
 

@@ -75,6 +75,13 @@ pub struct Download {
     /// Roles to stamp on the model once imported (e.g. `["chat", "coding"]`
     /// for an agent pick) — empty for a plain download.
     pub roles: Vec<String>,
+    /// `civitai:<model>/<version>` | `hf:<repo>@<rev>` — recorded on the
+    /// model as its `source` at import (migration 0024).
+    pub origin: Option<String>,
+    /// Registry id of the base family the source's label maps to.
+    pub base_family: Option<String>,
+    /// `civitai` | `hf` — how `base_family` was decided.
+    pub family_source: Option<String>,
 }
 
 /// Fields a caller supplies to queue a download. `dest_path` is filled in from
@@ -87,6 +94,9 @@ pub struct NewDownload {
     pub sha256: Option<String>,
     pub size_bytes: Option<u64>,
     pub roles: Vec<String>,
+    pub origin: Option<String>,
+    pub base_family: Option<String>,
+    pub family_source: Option<String>,
 }
 
 /// `["chat", "coding"]` <-> `"chat,coding"` — plenty for a handful of short,
@@ -126,6 +136,9 @@ struct Row {
     created_at: String,
     updated_at: String,
     roles: String,
+    origin: Option<String>,
+    base_family: Option<String>,
+    family_source: Option<String>,
 }
 
 impl Row {
@@ -146,12 +159,15 @@ impl Row {
             created_at: self.created_at,
             updated_at: self.updated_at,
             roles: split_roles(&self.roles),
+            origin: self.origin,
+            base_family: self.base_family,
+            family_source: self.family_source,
         })
     }
 }
 
 const COLS: &str = "id, url, filename, dest_path, model_type, sha256, size_bytes, bytes_done, \
-     retries, state, error_text, model_id, created_at, updated_at, roles";
+     retries, state, error_text, model_id, created_at, updated_at, roles, origin, base_family,      family_source";
 
 impl<'a> DownloadRepo<'a> {
     pub(super) fn new(pool: &'a SqlitePool) -> Self {
@@ -178,8 +194,8 @@ impl<'a> DownloadRepo<'a> {
 
         sqlx::query(
             "INSERT INTO downloads (id, url, filename, dest_path, model_type, sha256, size_bytes,
-                 state, created_at, updated_at, roles)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,'queued',$8,$8,$9)",
+                 state, created_at, updated_at, roles, origin, base_family, family_source)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,'queued',$8,$8,$9,$10,$11,$12)",
         )
         .bind(&id)
         .bind(new.url.trim())
@@ -190,6 +206,9 @@ impl<'a> DownloadRepo<'a> {
         .bind(new.size_bytes.and_then(|n| i64::try_from(n).ok()))
         .bind(&now)
         .bind(join_roles(&new.roles))
+        .bind(&new.origin)
+        .bind(&new.base_family)
+        .bind(&new.family_source)
         .execute(self.pool)
         .await?;
 
@@ -342,6 +361,7 @@ mod tests {
             sha256: Some("ABCDEF".into()),
             size_bytes: Some(1024),
             roles: vec![],
+            ..NewDownload::default()
         }
     }
 

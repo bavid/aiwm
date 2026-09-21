@@ -25,6 +25,13 @@ import {
   mockDialogOpen,
   mockStorageLocations,
 } from "./dev-mock-storage";
+import {
+  mockDownloadOrigin,
+  mockLibraryPackages,
+  mockResolvePackage,
+  mockSaveBaseFamilies,
+  mockSetBaseFamily,
+} from "./dev-mock-packages";
 
 type AnyRecord = Record<string, unknown>;
 
@@ -40,19 +47,41 @@ function removeWhere<T>(arr: T[], predicate: (item: T) => boolean): void {
 }
 
 const MODELS: AnyRecord[] = [
-  mkModel("m-wan", "wan2.2_ti2v_5B_fp16", { family: "wan", roles: ["base_video"], runtimes: ["comfyui"], vram_estimate_mb: 11800 }),
+  mkModel("m-wan", "wan2.2_ti2v_5B_fp16", { family: "wan", base_family: "wan22-5b", family_source: "catalog", roles: ["base_video"], runtimes: ["comfyui"], vram_estimate_mb: 11800 }),
   mkModel("m-umt5", "umt5_xxl_fp8_e4m3fn_scaled", { roles: ["text_encoder"], runtimes: ["comfyui"] }),
   mkModel("m-wanvae", "wan2.2_vae", { family: "wan", roles: ["vae"], runtimes: ["comfyui"] }),
   mkModel("m-lora-wan-motion", "Wan Motion Boost", { family: "wan", roles: ["lora"], runtimes: ["comfyui"], size_bytes: 128_000_000 }),
-  mkModel("m-sdxl", "SDXL Base 1.0", { family: "sdxl", roles: ["base_diffusion"], runtimes: ["comfyui"], vram_estimate_mb: 8200 }),
-  mkModel("m-lora-detail", "Add Detail XL", { family: "sdxl", roles: ["lora"], runtimes: ["comfyui"], size_bytes: 220_000_000 }),
-  mkModel("m-lora-flux-style", "Ink Wash Style (Flux)", { family: "flux", roles: ["lora"], runtimes: ["comfyui"], size_bytes: 340_000_000 }),
+  mkModel("m-sdxl", "SDXL Base 1.0", { family: "sdxl", base_family: "sdxl", family_source: "catalog", roles: ["base_diffusion"], runtimes: ["comfyui"], vram_estimate_mb: 8200 }),
+  // SD 1.5 from the catalogue: the import records the legacy family "sd15";
+  // its base family is only detected (catalog), not recorded yet.
+  mkModel("m-sd15", "Stable Diffusion 1.5 (pruned, EMA-only)", { family: "sd15", roles: ["base_diffusion"], runtimes: ["comfyui"], size_bytes: 4_265_146_304, vram_estimate_mb: 4300 }),
+  mkModel("m-lora-detail", "Add Detail XL", { family: "sdxl", base_family: "sdxl", family_source: "civitai", roles: ["lora"], runtimes: ["comfyui"], size_bytes: 220_000_000 }),
+  mkModel("m-lora-flux-style", "Ink Wash Style (Flux)", { family: "flux", base_family: "flux1", family_source: "name", roles: ["lora"], runtimes: ["comfyui"], size_bytes: 340_000_000 }),
   // The two-run lineage the "Your LoRAs" overview shows: v0 trained from
   // scratch, v1 continued from it (see `TRAINING_RUNS`).
-  mkModel("m-lora-ghibli-v0", "Ghibli Look v0", { family: "flux2", roles: ["lora"], runtimes: ["comfyui"], size_bytes: 168_000_000, source: "training:tr-v0", imported_at: "2026-09-12T18:04:00Z" }),
-  mkModel("m-lora-ghibli-v1", "Ghibli Look v1", { family: "flux2", roles: ["lora"], runtimes: ["comfyui"], size_bytes: 168_000_000, source: "training:tr-done", imported_at: "2026-09-17T21:40:00Z" }),
-  mkModel("m-flux2-klein", "FLUX.2 [klein] 9B — Q4_K_M (GGUF)", { family: "flux2", format: "gguf", roles: ["base_diffusion"], runtimes: ["comfyui"], vram_estimate_mb: 5900 }),
-  mkModel("m-lora-flux2-detail", "Realistic Detail LoRA (FLUX.2 Klein 9B)", { family: "flux2", roles: ["lora"], runtimes: ["comfyui"], size_bytes: 165_704_488 }),
+  mkModel("m-lora-ghibli-v0", "Ghibli Look v0", { family: "flux2", base_family: "flux2-klein-9b", family_source: "header", roles: ["lora"], runtimes: ["comfyui"], size_bytes: 168_000_000, source: "training:tr-v0", imported_at: "2026-09-12T18:04:00Z" }),
+  mkModel("m-lora-ghibli-v1", "Ghibli Look v1", { family: "flux2", base_family: "flux2-klein-9b", family_source: "header", roles: ["lora"], runtimes: ["comfyui"], size_bytes: 168_000_000, source: "training:tr-done", imported_at: "2026-09-17T21:40:00Z" }),
+  mkModel("m-flux2-klein", "FLUX.2 [klein] 9B — Q4_K_M (GGUF)", { family: "flux2", base_family: "flux2-klein-9b", family_source: "catalog", format: "gguf", roles: ["base_diffusion"], runtimes: ["comfyui"], vram_estimate_mb: 5900 }),
+  mkModel("m-lora-flux2-detail", "Realistic Detail LoRA (FLUX.2 Klein 9B)", { family: "flux2", base_family: "flux2-klein-9b", family_source: "hf", roles: ["lora"], runtimes: ["comfyui"], size_bytes: 165_704_488 }),
+  // Plan 14 packages: the FLUX.2 [klein] group has both VAEs but not its
+  // Qwen3 text encoder; two Pony LoRAs without a Pony checkpoint (they work
+  // with SDXL); a Wan 14B LoRA that cannot run here; one LoRA of unknown base.
+  mkModel("m-flux2-vae", "flux2-vae", { family: "flux2", roles: ["vae"], runtimes: ["comfyui"], size_bytes: 336_211_292 }),
+  mkModel("m-flux2-edit-vae", "full_encoder_small_decoder", { family: "flux2", roles: ["vae"], runtimes: ["comfyui"], size_bytes: 249_519_092 }),
+  mkModel("m-lora-pony-ink", "Pony Ink Style", { family: "sdxl", base_family: "pony", family_source: "civitai", roles: ["lora"], runtimes: ["comfyui"], size_bytes: 228_000_000, source: "civitai:123456/654321" }),
+  mkModel("m-lora-pony-eyes", "ponyEyesDetail_v2", { roles: ["lora"], runtimes: ["comfyui"], size_bytes: 57_000_000 }),
+  mkModel("m-lora-wan14-motion", "Wan 2.2 I2V A14B Orbit Cam", { family: "wan", base_family: "wan-14b", family_source: "civitai", roles: ["lora"], runtimes: ["comfyui"], size_bytes: 306_000_000, source: "civitai:1800000/2000000" }),
+  mkModel("m-lora-mystery", "mystery_style_v3", { roles: ["lora"], runtimes: ["comfyui"], size_bytes: 144_000_000 }),
+  // Packages view (Plan 14 fix round): further SDXL-architecture checkpoints
+  // with the legacy `sdxl`, Krea 2 checkpoints no stack covers, a klein 4B
+  // LoRA and the trainer's 4B Diffusers folder (not a checkpoint).
+  mkModel("m-hassaku", "hassakuXLIllustrious_v34", { family: "sdxl", roles: ["base_diffusion"], runtimes: ["comfyui"], size_bytes: 6_938_040_682 }),
+  mkModel("m-animagine", "animagineXLV31_v31", { family: "sdxl", roles: ["base_diffusion"], runtimes: ["comfyui"], size_bytes: 6_938_040_714, use_count: 4 }),
+  mkModel("m-krea-a", "realism_engine_krea2_v3.1", { roles: ["base_diffusion"], runtimes: ["comfyui"], size_bytes: 13_010_000_000 }),
+  mkModel("m-krea-b", "realism_engine_krea2_v2", { roles: ["base_diffusion"], runtimes: ["comfyui"], size_bytes: 13_010_000_000 }),
+  mkModel("m-lora-krea", "stomach_detail_krea2_final", { roles: ["lora"], runtimes: ["comfyui"], size_bytes: 342_000_000 }),
+  mkModel("m-lora-myrender", "myrender-v2", { family: "flux2", base_family: "flux2-klein-4b", family_source: "header", roles: ["lora"], runtimes: ["comfyui"], size_bytes: 82_000_000 }),
+  mkModel("m-klein4-train", "FLUX.2 [klein] 4B base (training)", { family: "flux2", format: "directory", roles: ["training_base_flux2_klein_4b"], runtimes: [], size_bytes: 16_000_000_000 }),
   mkModel("m-qwen", "Qwen2.5 7B Instruct", { family: "qwen2", format: "gguf", quant: "Q5_K_M", param_count: 7_615_616_512, ctx_max: 32_768, roles: ["chat"], runtimes: ["llamacpp"], vram_estimate_mb: 6400 }),
   mkModel("m-hermes", "Hermes-3-Llama-3.1-8B", { family: "llama3", format: "gguf", quant: "Q5_K_M", param_count: 8_030_000_000, ctx_max: 131_072, roles: ["chat", "coding"], runtimes: ["llamacpp"], vram_estimate_mb: 5700 }),
   mkModel("m-kokoro", "Kokoro 82M — int8", { family: "kokoro", format: "onnx", roles: ["voice_model"], runtimes: [], size_bytes: 114_119_327 }),
@@ -80,7 +109,8 @@ const JOBS: AnyRecord[] = [
 
 function mkModel(id: string, name: string, over: AnyRecord): AnyRecord {
   return {
-    id, name, publisher: null, family: null, format: "safetensors", quant: null, arch: null,
+    id, name, publisher: null, family: null, base_family: null, family_source: null,
+    format: "safetensors", quant: null, arch: null,
     param_count: null, file_path: `E:\\AI\\models\\${name}`, sha256: null, size_bytes: 6_000_000_000,
     ctx_max: null, vram_estimate_mb: null, ram_estimate_mb: null, source: "manual",
     imported_at: now(), last_used_at: null, use_count: 0,
@@ -1422,6 +1452,63 @@ const CIVITAI_DISCOVER_MODELS: AnyRecord[] = [
     precision: null, format: "safetensors", nsfw: true, preview_image_url: null, previews: [],
     allow_commercial_use: [], model_kind_hint: "Checkpoint", base_model_family: "SD 1.5",
   },
+  // Plan 14 "Get": ready (SDXL installed), base in the catalog (Flux.1),
+  // findable + "made for" (Pony on SDXL), not runnable (Wan 14B), unknown base.
+  {
+    id: "5100001", name: "Film Grain XL", author: "grainlab",
+    downloads: 84000, likes: 2100, trending_score: null, created_at: null,
+    last_modified: "2026-08-01T00:00:00.000Z", pipeline_tag: null, library_name: null,
+    gated: "no", license: null, base_model: null,
+    tags: ["style"], param_count: null, arch: null, ctx_max: null,
+    precision: null, format: "safetensors", nsfw: false,
+    preview_image_url: "https://placehold.co/144x144/2a2a2a/e8e3ff?text=Grain",
+    previews: [],
+    allow_commercial_use: ["Image"], model_kind_hint: "LORA", base_model_family: "SDXL 1.0",
+  },
+  {
+    id: "5100002", name: "Ink Wash (Flux.1 D)", author: "inkwell",
+    downloads: 61000, likes: 1525, trending_score: null, created_at: null,
+    last_modified: "2026-08-01T00:00:00.000Z", pipeline_tag: null, library_name: null,
+    gated: "no", license: null, base_model: null,
+    tags: ["style"], param_count: null, arch: null, ctx_max: null,
+    precision: null, format: "safetensors", nsfw: false,
+    preview_image_url: "https://placehold.co/144x144/1f2530/e8e3ff?text=Ink",
+    previews: [],
+    allow_commercial_use: ["Image"], model_kind_hint: "LORA", base_model_family: "Flux.1 D",
+  },
+  {
+    id: "5100003", name: "Pony Cel Shade", author: "celshade",
+    downloads: 142000, likes: 3550, trending_score: null, created_at: null,
+    last_modified: "2026-08-01T00:00:00.000Z", pipeline_tag: null, library_name: null,
+    gated: "no", license: null, base_model: null,
+    tags: ["style"], param_count: null, arch: null, ctx_max: null,
+    precision: null, format: "safetensors", nsfw: false,
+    preview_image_url: "https://placehold.co/144x144/302040/e8e3ff?text=Cel",
+    previews: [],
+    allow_commercial_use: ["Image"], model_kind_hint: "LORA", base_model_family: "Pony",
+  },
+  {
+    id: "5100004", name: "Wan 2.2 Orbit Camera 14B", author: "orbit",
+    downloads: 97000, likes: 2425, trending_score: null, created_at: null,
+    last_modified: "2026-08-01T00:00:00.000Z", pipeline_tag: null, library_name: null,
+    gated: "no", license: null, base_model: null,
+    tags: ["style"], param_count: null, arch: null, ctx_max: null,
+    precision: null, format: "safetensors", nsfw: false,
+    preview_image_url: "https://placehold.co/144x144/203030/e8e3ff?text=Orbit",
+    previews: [],
+    allow_commercial_use: ["Image"], model_kind_hint: "LORA", base_model_family: "Wan Video 2.2 I2V-A14B",
+  },
+  {
+    id: "5100005", name: "Krea 2 Glow", author: "glowmaker",
+    downloads: 23000, likes: 575, trending_score: null, created_at: null,
+    last_modified: "2026-08-01T00:00:00.000Z", pipeline_tag: null, library_name: null,
+    gated: "no", license: null, base_model: null,
+    tags: ["style"], param_count: null, arch: null, ctx_max: null,
+    precision: null, format: "safetensors", nsfw: false,
+    preview_image_url: "https://placehold.co/144x144/402a20/e8e3ff?text=Glow",
+    previews: [],
+    allow_commercial_use: ["Image"], model_kind_hint: "LORA", base_model_family: "Krea 2",
+  },
 ];
 
 const CIVITAI_FILES: Record<string, AnyRecord[]> = {
@@ -1445,6 +1532,41 @@ const CIVITAI_FILES: Record<string, AnyRecord[]> = {
     shard: null, download_url: "https://civitai.com/api/download/models/424242",
     vram_estimate_mb: null, fit: { level: "unknown" },
     pickle_scan_result: "Danger", virus_scan_result: "Success",
+  }],
+  "5100001": [{
+    path: "film-grain-xl.safetensors", size_bytes: 228000000,
+    sha256: "b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1", quant: null,
+    shard: null, download_url: "https://civitai.com/api/download/models/51000010",
+    vram_estimate_mb: null, fit: { level: "unknown" },
+    pickle_scan_result: "Success", virus_scan_result: "Success",
+  }],
+  "5100002": [{
+    path: "ink-wash-flux.safetensors", size_bytes: 171000000,
+    sha256: "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2", quant: null,
+    shard: null, download_url: "https://civitai.com/api/download/models/51000020",
+    vram_estimate_mb: null, fit: { level: "unknown" },
+    pickle_scan_result: "Success", virus_scan_result: "Success",
+  }],
+  "5100003": [{
+    path: "pony-cel-shade.safetensors", size_bytes: 57000000,
+    sha256: "b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3", quant: null,
+    shard: null, download_url: "https://civitai.com/api/download/models/51000030",
+    vram_estimate_mb: null, fit: { level: "unknown" },
+    pickle_scan_result: "Success", virus_scan_result: "Success",
+  }],
+  "5100004": [{
+    path: "wan22-orbit-cam-a14b.safetensors", size_bytes: 306000000,
+    sha256: "b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4", quant: null,
+    shard: null, download_url: "https://civitai.com/api/download/models/51000040",
+    vram_estimate_mb: null, fit: { level: "unknown" },
+    pickle_scan_result: "Success", virus_scan_result: "Success",
+  }],
+  "5100005": [{
+    path: "krea2-glow.safetensors", size_bytes: 112000000,
+    sha256: "b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b5", quant: null,
+    shard: null, download_url: "https://civitai.com/api/download/models/51000050",
+    vram_estimate_mb: null, fit: { level: "unknown" },
+    pickle_scan_result: "Success", virus_scan_result: "Success",
   }],
 };
 
@@ -1527,6 +1649,17 @@ const KNOWN_MOCK: AnyRecord[] = [
     sha256: "5".repeat(64), size_bytes: 4_893_934_904,
     license: "Apache-2.0",
     note: "Flux prompt encoder. ComfyUI offloads it after encoding, so it is not resident during sampling.",
+    is_default: false, media: "image", fit: { level: "green" },
+  },
+  {
+    // The FLUX.2 [klein] group's missing encoder in the Packages view.
+    id: "qwen3-8b-flux2-encoder", name: "Qwen3-8B — fp8 mixed (FLUX.2 text encoder)", kind: "text_encoder",
+    family: null, publisher: "Comfy-Org", repo: "Comfy-Org/vae-text-encorder-for-flux-klein-9b",
+    file: "qwen_3_8b_fp8mixed.safetensors",
+    url: "https://huggingface.co/Comfy-Org/vae-text-encorder-for-flux-klein-9b/resolve/main/split_files/text_encoders/qwen_3_8b_fp8mixed.safetensors",
+    sha256: "abad16806e0cbabc54e0325d6565847443fe396d5f0be38bb3cd3fe75a1201d6", size_bytes: 8_664_848_742,
+    license: "Apache-2.0",
+    note: "FLUX.2's prompt encoder — a full Qwen3-8B. ComfyUI offloads it after encoding.",
     is_default: false, media: "image", fit: { level: "green" },
   },
   {
@@ -2437,6 +2570,14 @@ export function installDevMock(): void {
         m.roles = clean;
         return clean;
       }
+      case "resolve_package":
+        return mockResolvePackage((a.query ?? {}) as AnyRecord, MODELS, CIVITAI_DISCOVER_MODELS);
+      case "library_packages":
+        return mockLibraryPackages(MODELS);
+      case "set_model_base_family":
+        return mockSetBaseFamily(MODELS, a.id, a.family);
+      case "save_base_families":
+        return mockSaveBaseFamilies(MODELS, (a.batch as AnyRecord[]) ?? []);
       case "rename_model": {
         const m = MODELS.find((x) => x.id === a.id);
         if (!m) throw new Error(`model ${a.id} is not in the library`);
@@ -2716,6 +2857,7 @@ export function installDevMock(): void {
           size_bytes: body.size_bytes ?? 4_683_073_536, bytes_done: 0, retries: 0,
           state: "running", error_text: null, model_id: null,
           created_at: now(), updated_at: now(), roles: body.roles ?? [],
+          ...mockDownloadOrigin(body.origin as AnyRecord | undefined),
         };
         DOWNLOADS.unshift(d);
         return d;

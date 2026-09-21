@@ -155,6 +155,8 @@ mod tests {
             publisher: None,
             name: name.into(),
             family: None,
+            base_family: None,
+            family_source: None,
             format: "gguf".into(),
             quant: None,
             arch: None,

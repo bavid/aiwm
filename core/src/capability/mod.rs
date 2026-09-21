@@ -19,6 +19,7 @@ pub mod chat;
 pub mod colibri;
 pub mod dataset;
 pub mod image;
+pub mod image_defaults;
 mod media;
 pub mod tts;
 pub mod upscale;

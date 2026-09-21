@@ -13,6 +13,7 @@ use std::time::Duration;
 use serde_json::{json, Value};
 use tokio::sync::watch;
 
+use super::image_defaults::{is_sd15, ImageDefaults};
 use super::media::{
     comfy_err as image_err, file_name, parse_loras, resolve_loras, resolve_seed, round_to,
     str_param, write_output, LoraRef,
@@ -24,15 +25,13 @@ use crate::pipeline::{
 use crate::runtime::ComfyUiAdapter;
 use crate::Result;
 
-const DEFAULT_DIM: u32 = 1024;
+// Default size / steps / CFG: see `ImageDefaults` (they follow the family).
 const MIN_DIM: u32 = 256;
 const MAX_DIM: u32 = 2048;
 const DIM_MULTIPLE: u32 = 8;
 
-const DEFAULT_STEPS: u32 = 25;
 const MAX_STEPS: u32 = 150;
 
-const DEFAULT_CFG: f64 = 7.0;
 const MIN_CFG: f64 = 1.0;
 const MAX_CFG: f64 = 30.0;
 
@@ -121,7 +120,22 @@ pub struct ImageRequest {
 }
 
 impl ImageRequest {
+    /// [`Self::from_params_with`] at the [`ImageDefaults::STANDARD`] (SDXL /
+    /// FLUX) defaults — for callers that do not know the model yet.
     pub fn from_params(params: &Value) -> Result<Self> {
+        Self::from_params_with(params, ImageDefaults::STANDARD)
+    }
+
+    /// [`Self::from_params_with`] at the defaults of `model`'s family
+    /// ([`ImageDefaults::for_model`]): an SD 1.5 checkpoint renders at 512 px
+    /// unless the job asks for another size.
+    pub fn for_model(params: &Value, model: &Model) -> Result<Self> {
+        Self::from_params_with(params, ImageDefaults::for_model(model))
+    }
+
+    /// Read a job's `params`; a size, step count or CFG it leaves out comes
+    /// from `defaults`.
+    pub fn from_params_with(params: &Value, defaults: ImageDefaults) -> Result<Self> {
         let prompt = params
             .get("prompt")
             .and_then(Value::as_str)
@@ -141,7 +155,7 @@ impl ImageRequest {
             params
                 .get(key)
                 .and_then(Value::as_u64)
-                .map_or(DEFAULT_DIM, |v| {
+                .map_or(defaults.dim, |v| {
                     round_to(v, DIM_MULTIPLE).clamp(MIN_DIM, MAX_DIM)
                 })
         };
@@ -149,11 +163,11 @@ impl ImageRequest {
             .get("steps")
             .and_then(Value::as_u64)
             .and_then(|v| u32::try_from(v).ok())
-            .map_or(DEFAULT_STEPS, |v| v.clamp(1, MAX_STEPS));
+            .map_or(defaults.steps, |v| v.clamp(1, MAX_STEPS));
         let cfg = params
             .get("cfg")
             .and_then(Value::as_f64)
-            .map_or(DEFAULT_CFG, |v| v.clamp(MIN_CFG, MAX_CFG));
+            .map_or(defaults.cfg, |v| v.clamp(MIN_CFG, MAX_CFG));
 
         let source_image = params
             .get("source_image")
@@ -702,6 +716,14 @@ async fn run_reference(
              stack \u{2014} FLUX.1 dev doesn't support it yet (see docs/TODO.md)",
         ));
     }
+    // The IP-Adapter pair the reference path loads is SDXL's; its
+    // cross-attention shapes do not fit an SD 1.5 UNet.
+    if is_sd15(model) {
+        return Err(image_err(
+            "character-consistent generation needs an SDXL checkpoint or the FLUX.2 [klein] \
+             stack \u{2014} the IP-Adapter it uses is made for SDXL, not SD 1.5",
+        ));
+    }
 
     let staged =
         super::media::stage_image(db, &comfyui.input_dir(), job_id, reference_spec).await?;
@@ -1032,6 +1054,9 @@ async fn resolve_flux2_klein_edit_companions(db: &Database) -> Result<Flux2Klein
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const DEFAULT_DIM: u32 = ImageDefaults::STANDARD.dim;
+    const DEFAULT_STEPS: u32 = ImageDefaults::STANDARD.steps;
 
     #[test]
     fn from_params_fills_defaults_and_resolves_a_seed() {
@@ -1409,6 +1434,64 @@ mod tests {
         .await
         .unwrap_err();
         assert!(err.to_string().contains("FLUX.1"), "{err}");
+    }
+
+    /// The reference path's IP-Adapter pair is SDXL's
+    /// (`ip-adapter-plus_sdxl_vit-h`); on an SD 1.5 UNet its cross-attention
+    /// shapes do not match, so an SD 1.5 reference render is refused up front
+    /// with a reason, before anything is staged or queued on ComfyUI.
+    #[tokio::test]
+    async fn run_reference_refuses_sd15_before_staging_anything() {
+        use crate::db::{Database, NewJob, NewModel};
+        use crate::runtime::ComfyUiAdapter;
+
+        let db = Database::connect_in_memory().await.unwrap();
+        let model = db
+            .models()
+            .insert(NewModel {
+                name: "Stable Diffusion 1.5".into(),
+                format: "safetensors".into(),
+                file_path: "E:\\AI\\models\\image\\checkpoints\\v1-5-pruned-emaonly.safetensors"
+                    .into(),
+                size_bytes: 1_000,
+                source: "manual".into(),
+                family: Some("sd15".into()),
+                ..NewModel::default()
+            })
+            .await
+            .unwrap();
+        let job = db.jobs().insert(NewJob::new("image")).await.unwrap();
+        let (_cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
+        let comfy = std::sync::Arc::new(ComfyUiAdapter::with_launch(
+            db.clone(),
+            None,
+            crate::runtime::ComfyDirs {
+                base: std::env::temp_dir(),
+                output: std::env::temp_dir(),
+                models_store: std::env::temp_dir(),
+            },
+        ));
+        let req = ImageRequest::for_model(
+            &serde_json::json!({
+                "prompt": "Kira the ranger in a tavern",
+                "reference_image": "job-earlier-portrait"
+            }),
+            &model,
+        )
+        .unwrap();
+
+        let err = run(
+            &db,
+            &comfy,
+            std::path::Path::new("/tmp/out"),
+            &job.id,
+            &model,
+            req,
+            cancel_rx,
+        )
+        .await
+        .unwrap_err();
+        assert!(err.to_string().contains("SD 1.5"), "{err}");
     }
 
     // --- Hi-Res-Fix (Plan 3 Task 6) ---------------------------------------

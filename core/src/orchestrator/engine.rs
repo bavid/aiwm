@@ -678,7 +678,7 @@ impl JobEngine {
             let req = VideoRequest::from_params(&job.params)?;
             (req.width, req.height, req.length)
         } else {
-            let req = ImageRequest::from_params(&job.params)?;
+            let req = ImageRequest::for_model(&job.params, &model)?;
             // The *finished* size, not the requested one: with Hi-Res-Fix the
             // sampler and the VAE decode both run on the second pass's larger
             // latent, so that's the shape the headroom has to cover.
@@ -926,8 +926,10 @@ impl JobEngine {
                 });
             }
             let model = self.require_model(&model_id).await?;
-            let req = image::ImageRequest::from_params(&job.params)?;
-            // Pin the resolved request (concrete seed) back onto the job.
+            // Defaults follow the model's family (SD 1.5 renders at 512 px).
+            let req = image::ImageRequest::for_model(&job.params, &model)?;
+            // Pin the resolved request (concrete seed, defaulted size) back
+            // onto the job.
             let mut params = job.params.clone();
             req.apply_to(&mut params);
             self.db.jobs().set_params(&job.id, &params).await?;

@@ -241,6 +241,41 @@ pub fn read_safetensors_info(path: &Path) -> Result<SafetensorsInfo> {
     Ok(info)
 }
 
+/// Every tensor's name and shape plus the `__metadata__` strings — what
+/// family detection ([`crate::model::family`]) looks at. Header only: the
+/// tensor data is never read.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SafetensorsHeader {
+    /// Tensor name -> shape (dimensions that are not unsigned integers are
+    /// dropped, leaving a shorter shape rather than a guessed one).
+    pub tensors: BTreeMap<String, Vec<u64>>,
+    pub metadata: BTreeMap<String, String>,
+}
+
+/// Read the tensor names and shapes of the `.safetensors` file at `path`.
+pub fn read_safetensors_header(path: &Path) -> Result<SafetensorsHeader> {
+    let obj = read_header(path)?;
+    let mut out = SafetensorsHeader::default();
+    for (name, spec) in obj {
+        if name == "__metadata__" {
+            if let Value::Object(meta) = spec {
+                out.metadata.extend(
+                    meta.into_iter()
+                        .filter_map(|(k, v)| v.as_str().map(|s| (k, s.to_string()))),
+                );
+            }
+            continue;
+        }
+        let shape = spec
+            .get("shape")
+            .and_then(Value::as_array)
+            .map(|dims| dims.iter().filter_map(Value::as_u64).collect())
+            .unwrap_or_default();
+        out.tensors.insert(name, shape);
+    }
+    Ok(out)
+}
+
 /// Collapse the fp8 variants; leave the rest as the header spelled them.
 fn normalise_dtype(d: &str) -> String {
     let u = d.to_ascii_uppercase();
@@ -291,6 +326,23 @@ mod tests {
                 .map(String::as_str),
             Some("flux-1-dev")
         );
+    }
+
+    #[test]
+    fn header_lists_every_tensor_shape_and_the_metadata() {
+        let dir = tempfile::tempdir().unwrap();
+        let header = serde_json::json!({
+            "__metadata__": { "format": "pt" },
+            "head.modulation": { "dtype": "F32", "shape": [1, 2, 3072], "data_offsets": [0, 24576] },
+            "scalar.alpha": { "dtype": "F32", "shape": [], "data_offsets": [24576, 24580] }
+        });
+        let p = write_st(dir.path(), "wan.safetensors", &header, 24580);
+
+        let h = read_safetensors_header(&p).unwrap();
+        assert_eq!(h.tensors.len(), 2);
+        assert_eq!(h.tensors.get("head.modulation"), Some(&vec![1, 2, 3072]));
+        assert_eq!(h.tensors.get("scalar.alpha"), Some(&vec![]));
+        assert_eq!(h.metadata.get("format").map(String::as_str), Some("pt"));
     }
 
     #[test]

@@ -45,6 +45,7 @@ import {
   toHiresParams,
   type HiresFixSettings,
 } from "./hires-fix";
+import { carryOver, defaultsFor, isSd15, STANDARD_DEFAULTS } from "./image-defaults";
 import "./image.css";
 
 const DONE: JobState[] = ["completed", "failed", "cancelled"];
@@ -55,7 +56,7 @@ const DIM_STEP = 64;
 const GALLERY_PAGE_SIZE = 24;
 /** The first pass's step count a fresh form starts at, and the fallback when
  *  a job's own params don't carry one. */
-const DEFAULT_STEPS = 25;
+const DEFAULT_STEPS = STANDARD_DEFAULTS.steps;
 
 /** The Image tab's wording on the shared session sidebar (the same list the
  *  Chat tab docks). */
@@ -121,10 +122,10 @@ export function ImageStudio({ prefill = null, onPrefillConsumed }: Props = {}) {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [prompt, setPrompt] = useState("");
   const [negative, setNegative] = useState("");
-  const [width, setWidth] = useState(1024);
-  const [height, setHeight] = useState(1024);
+  const [width, setWidth] = useState(STANDARD_DEFAULTS.width);
+  const [height, setHeight] = useState(STANDARD_DEFAULTS.height);
   const [steps, setSteps] = useState(DEFAULT_STEPS);
-  const [cfg, setCfg] = useState(7);
+  const [cfg, setCfg] = useState(STANDARD_DEFAULTS.cfg);
   const [seed, setSeed] = useState("");
   const [modelId, setModelId] = useState("auto");
   const [loras, setLoras] = useState<LoraParam[]>([]);
@@ -144,6 +145,22 @@ export function ImageStudio({ prefill = null, onPrefillConsumed }: Props = {}) {
   const selectedCheckpoint = checkpoints.find((m) => m.id === modelId);
   const isFlux = modelId !== "auto" && selectedCheckpoint?.family === "flux";
   const isFlux2 = modelId !== "auto" && selectedCheckpoint?.family === "flux2";
+  const sd15 = modelId !== "auto" && isSd15(selectedCheckpoint);
+
+  /** Pick a checkpoint. When its family's size/steps/CFG defaults differ
+   *  from the current one's (SD 1.5: 512 px, 20 steps, CFG 8), every field
+   *  still at the old default moves to the new one; a value the user
+   *  changed stays. */
+  const pickModel = (id: string) => {
+    const from = defaultsFor(modelId === "auto" ? null : selectedCheckpoint);
+    const to = defaultsFor(id === "auto" ? null : checkpoints.find((m) => m.id === id));
+    setModelId(id);
+    if (from === to) return;
+    setWidth((v) => carryOver(v, from.width, to.width));
+    setHeight((v) => carryOver(v, from.height, to.height));
+    setSteps((v) => carryOver(v, from.steps, to.steps));
+    setCfg((v) => carryOver(v, from.cfg, to.cfg));
+  };
 
   // Editing an existing image instead of generating one from scratch --
   // a finished image job's id, or a path to a file on disk.
@@ -280,7 +297,7 @@ export function ImageStudio({ prefill = null, onPrefillConsumed }: Props = {}) {
     const flux2Lora = (models ?? []).find(
       (m) => m.roles.includes("lora") && m.family === "flux2",
     );
-    setModelId(flux2Model.id);
+    pickModel(flux2Model.id);
     setCfg(1.5);
     setSteps(8);
     setLoras(flux2Lora ? [{ model_id: flux2Lora.id, strength: 0.8 }] : []);
@@ -581,6 +598,12 @@ export function ImageStudio({ prefill = null, onPrefillConsumed }: Props = {}) {
                 FLUX.2 Klein is fast/distilled — low CFG (≈1.5–2) and few steps (≈8) is typical.
               </p>
             )}
+            {sd15 && (
+              <p className="muted">
+                SD 1.5 works best at 512 px — defaults are 512×512, 20 steps, CFG 8.{" "}
+                <HelpHint area="image" setting="sd15-defaults" />
+              </p>
+            )}
 
             {!editing && (
               <HiresFixField
@@ -613,7 +636,7 @@ export function ImageStudio({ prefill = null, onPrefillConsumed }: Props = {}) {
                   <label htmlFor={modelPickId}>Model</label>
                   <HelpHint area="image" setting="model" describes={modelPickId} />
                 </span>
-                <select id={modelPickId} value={modelId} onChange={(e) => setModelId(e.target.value)}>
+                <select id={modelPickId} value={modelId} onChange={(e) => pickModel(e.target.value)}>
                   <option value="auto">Auto (most-recently-used)</option>
                   {checkpoints.map((m) => (
                     <option key={m.id} value={m.id}>
@@ -632,6 +655,7 @@ export function ImageStudio({ prefill = null, onPrefillConsumed }: Props = {}) {
             <LoraPicker
               models={models ?? []}
               family={selectedCheckpoint?.family}
+              base={selectedCheckpoint}
               selected={loras}
               onChange={setLoras}
             />
