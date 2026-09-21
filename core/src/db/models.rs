@@ -27,11 +27,19 @@ pub struct Model {
     pub id: String,
     pub publisher: Option<String>,
     pub name: String,
+    /// The legacy/runtime family string (`sdxl`, `flux`, `flux2`, `wan`,
+    /// `ltx`, …) the recipes, the trainer and the LoRA pickers compare
+    /// against. Never written by the base-family registry — see
+    /// `base_family`.
     pub family: Option<String>,
-    /// How `family` was decided (`civitai`, `hf`, `catalog`, `header`,
-    /// `name`, `user` — [`crate::model::family::FamilySource`]); `None` for
-    /// rows written before migration 0022, whose family came from the file
-    /// name, the catalog or the trainer.
+    /// The base family this model is made for, as a registry id
+    /// ([`crate::model::family::FAMILIES`]) — recorded at download time, by
+    /// the user, or from a previewed detection (migration 0023). `None` until
+    /// one of those happened; [`crate::model::family::infer_family`] decides
+    /// it on read otherwise.
+    pub base_family: Option<String>,
+    /// How `base_family` was decided (`civitai`, `hf`, `catalog`, `header`,
+    /// `name`, `user` — [`crate::model::family::FamilySource`]).
     pub family_source: Option<String>,
     pub format: String,
     pub quant: Option<String>,
@@ -113,6 +121,7 @@ struct ModelRow {
     publisher: Option<String>,
     name: String,
     family: Option<String>,
+    base_family: Option<String>,
     family_source: Option<String>,
     format: String,
     quant: Option<String>,
@@ -142,6 +151,7 @@ impl ModelRow {
             publisher: self.publisher,
             name: self.name,
             family: self.family,
+            base_family: self.base_family,
             family_source: self.family_source,
             format: self.format,
             quant: self.quant,
@@ -169,7 +179,7 @@ impl ModelRow {
 }
 
 const COLS: &str =
-    "id, publisher, name, family, family_source, format, quant, arch, param_count, file_path, \
+    "id, publisher, name, family, base_family, family_source, format, quant, arch, param_count, file_path, \
      sha256, size_bytes, ctx_max, vram_estimate_mb, ram_estimate_mb, source, source_revision, \
      imported_at, last_used_at, use_count, n_layers, n_embd, n_heads, n_kv_heads";
 

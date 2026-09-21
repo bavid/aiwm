@@ -225,7 +225,15 @@ export interface Model {
   id: string;
   publisher: string | null;
   name: string;
+  /** Legacy/runtime family string (`sdxl`, `flux`, `flux2`, `wan`, …) the
+   *  recipes and LoRA pickers compare against. */
   family: string | null;
+  /** The base family it is made for, as a registry id (`sdxl`, `pony`,
+   *  `flux2-klein-9b`, …) — recorded at download, by the user, or from a
+   *  saved detection; `null` until then (Plan 14). */
+  base_family: string | null;
+  /** How `base_family` was decided. */
+  family_source: FamilySource | null;
   format: string;
   quant: string | null;
   arch: string | null;
@@ -742,6 +750,143 @@ export const setModelRoles = (id: string, roles: string[]) =>
 /** Rename a model's display name -- never touches the file on disk. */
 export const renameModel = (id: string, name: string) =>
   invoke<Model>("rename_model", { id, name });
+
+// --- packages (Plan 14) ---------------------------------------------------
+
+/** How a model's base family was decided — `models.family_source`. */
+export type FamilySource = "civitai" | "hf" | "catalog" | "header" | "name" | "user";
+
+export type Runnable = { kind: "yes" } | { kind: "no"; reason: string };
+
+export interface FamilyRef {
+  /** Registry id, e.g. `pony`, `flux2-klein-9b`. */
+  id: string;
+  label: string;
+  /** Families in one group load each other's LoRAs (Pony works with SDXL). */
+  arch_group: string;
+  /** `null` on a library group (its members carry their own). */
+  source: FamilySource | null;
+  runnable: Runnable;
+}
+
+/** `base` | `vae` | `text_encoder`, or another catalog kind verbatim. */
+export type NeedRole = "base" | "vae" | "text_encoder" | (string & {});
+
+/** A checkpoint Civitai offers for a base label (top by downloads). */
+export interface CheckpointCandidate {
+  model_id: string;
+  version_id: string;
+  name: string;
+  downloads: number;
+  base_model: string;
+  nsfw: boolean;
+  preview_image_url: string | null;
+  file: {
+    path: string;
+    size: number;
+    sha256: string | null;
+    download_url: string | null;
+  } | null;
+}
+
+export type NeedStatus =
+  | { kind: "installed"; model_id: string; name: string; made_for: boolean }
+  | {
+      kind: "catalog";
+      known_model_id: string;
+      name: string;
+      size_bytes: number;
+      sha256: string;
+      url: string;
+    }
+  | {
+      kind: "findable";
+      base_label: string;
+      candidates: CheckpointCandidate[];
+      /** Why `candidates` is empty (offline, lookup failed). */
+      note: string | null;
+    }
+  | { kind: "not_runnable"; reason: string };
+
+export interface Need {
+  role: NeedRole;
+  label: string;
+  /** A suggestion (the base it was made for), not a requirement. */
+  optional: boolean;
+  status: NeedStatus;
+}
+
+export type PackageVerdict =
+  | { kind: "ready" }
+  | { kind: "needs_download" }
+  | { kind: "not_runnable"; reason: string }
+  | { kind: "unknown_base" };
+
+export interface PackageItem {
+  name: string;
+  kind: "lora" | "checkpoint" | "other";
+  base_label: string | null;
+  model_id: string | null;
+  size_bytes: number | null;
+}
+
+export interface Package {
+  item: PackageItem;
+  family: FamilyRef | null;
+  needs: Need[];
+  /** Required catalog bytes still missing. */
+  missing_bytes: number;
+  verdict: PackageVerdict;
+}
+
+export interface GroupModel {
+  model: Model;
+  family_source: FamilySource;
+}
+
+export interface LibraryGroup {
+  family: FamilyRef;
+  base: GroupModel | null;
+  /** When `base` is null: what would provide one. */
+  base_needs: Need[];
+  companions: Need[];
+  loras: GroupModel[];
+  missing_bytes: number;
+  complete: boolean;
+}
+
+export interface LibraryPackages {
+  groups: LibraryGroup[];
+  /** LoRAs whose base family could not be inferred. */
+  orphans: Model[];
+}
+
+export type ResolvePackageQuery =
+  | { source: "civitai"; model_id: string; version_id?: string; nsfw?: boolean }
+  | { source: "library"; model_id: string };
+
+export interface BaseFamilyChoice {
+  model_id: string;
+  family: string;
+}
+
+export interface SavedFamily {
+  model_id: string;
+  outcome: "written" | "kept_user_choice" | "skipped";
+  reason: string | null;
+}
+
+/** The package a Civitai pick or a library model needs (`GET /packages/resolve`). */
+export const resolvePackage = (query: ResolvePackageQuery) =>
+  invoke<Package>("resolve_package", { query });
+/** The library grouped by base family — reads only (`GET /packages/library`). */
+export const libraryPackages = () => invoke<LibraryPackages>("library_packages");
+/** "What base is this?" — the user's choice, never overwritten by a detection. */
+export const setModelBaseFamily = (id: string, family: string) =>
+  invoke<Model>("set_model_base_family", { id, family });
+/** Persist a previewed batch of detected families; user choices are kept. */
+export const saveBaseFamilies = (batch: BaseFamilyChoice[]) =>
+  invoke<SavedFamily[]>("save_base_families", { batch });
 
 /** The registry health line for Diagnostics (`GET /registry/status`). */
 export interface RegistryStatus {
@@ -1887,6 +2032,22 @@ export interface Download {
   updated_at: string;
   /** Roles stamped on the model once imported (e.g. a Featured coding pick). */
   roles: string[];
+  /** `civitai:<model>/<version>` | `hf:<repo>@<rev>` — recorded on the model. */
+  origin: string | null;
+  /** Registry id of the base family the source's label maps to. */
+  base_family: string | null;
+  family_source: FamilySource | null;
+}
+
+/** Where a download comes from — recorded on the imported model (Plan 14). */
+export interface DownloadOrigin {
+  source: "civitai" | "hf";
+  /** Civitai's numeric model id, or the Hugging Face `owner/repo`. */
+  model_id: string;
+  /** Civitai version id, or the Hugging Face revision (`main` when omitted). */
+  version?: string;
+  /** Civitai's `baseModel` label, or Hugging Face's `base_model`. */
+  base_model?: string;
 }
 
 export interface EnqueueDownloadBody {
@@ -1897,6 +2058,8 @@ export interface EnqueueDownloadBody {
   size_bytes?: number;
   /** Roles to stamp on the model once imported (e.g. `["chat", "coding"]`). */
   roles?: string[];
+  /** Source metadata so the import records origin + base family. */
+  origin?: DownloadOrigin;
 }
 
 export const listDownloads = () => invoke<Download[]>("list_downloads");

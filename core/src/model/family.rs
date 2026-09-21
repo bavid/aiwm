@@ -61,7 +61,7 @@ pub enum ArchGroup {
 /// One base family AIWM knows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct BaseFamily {
-    /// Stable registry id (what `models.family` holds once persisted).
+    /// Stable registry id (what `models.base_family` holds once persisted).
     pub id: &'static str,
     /// Display name.
     pub label: &'static str,
@@ -396,33 +396,39 @@ pub fn normalize_library_family(family: &str) -> Option<&'static BaseFamily> {
 /// The family of a library model and how it was decided, without writing
 /// anything. Order:
 ///
-/// 1. a family recorded with its source (`family_source` set) — or, on a
-///    catalog row (`source_revision = catalog:<id>`), the catalog's family;
-/// 2. a legacy `family` string that is unambiguous (`sdxl`, a registry id);
-/// 3. the safetensors `header` ([`family_from_header`]);
-/// 4. an ambiguous legacy string (`flux`, `flux2`, `wan`, `ltx` — see
+/// 1. a recorded `base_family` (a registry id, with how it was decided in
+///    `family_source`) — authoritative, whatever the legacy string says;
+/// 2. on a catalog row (`source_revision = catalog:<id>`), the catalog's
+///    legacy family in its catalog meaning;
+/// 3. a legacy `family` string that is unambiguous (`sdxl`, a registry id);
+/// 4. the safetensors `header` ([`family_from_header`]);
+/// 5. an ambiguous legacy string (`flux`, `flux2`, `wan`, `ltx` — see
 ///    [`LEGACY_FAMILIES`]) in its catalog meaning;
-/// 5. the file name, then the display name ([`family_from_name`]).
+/// 6. the file name, then the display name ([`family_from_name`]).
 ///
-/// A recorded family the registry does not know falls through to the
-/// next step. Legacy strings count as [`FamilySource::Name`]: before the
-/// registry, the import derived `family` from the file name.
+/// A recorded base family the registry does not know falls through to the
+/// next step; one without a readable source counts as
+/// [`FamilySource::Name`]. Legacy strings count as [`FamilySource::Name`]:
+/// before the registry, the import derived `family` from the file name.
 pub fn infer_family(
     model: &Model,
     header: Option<&crate::model::SafetensorsHeader>,
 ) -> Option<(&'static BaseFamily, FamilySource)> {
+    if let Some(family) = model.base_family.as_deref().and_then(family_by_id) {
+        let source = model
+            .family_source
+            .as_deref()
+            .and_then(FamilySource::parse)
+            .unwrap_or(FamilySource::Name);
+        return Some((family, source));
+    }
     let stored = model
         .family
         .as_deref()
         .and_then(|f| normalize_library_family(f).map(|family| (f, family)));
-    let recorded = model
-        .family_source
-        .as_deref()
-        .and_then(FamilySource::parse)
-        .or_else(|| is_catalog_row(model).then_some(FamilySource::Catalog));
 
-    if let (Some((_, family)), Some(source)) = (stored, recorded) {
-        return Some((family, source));
+    if let (Some((_, family)), true) = (stored, is_catalog_row(model)) {
+        return Some((family, FamilySource::Catalog));
     }
     let ambiguous = stored.is_some_and(|(raw, _)| legacy_alias(raw.trim()).is_some());
     if let (Some((_, family)), false) = (stored, ambiguous) {

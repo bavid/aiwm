@@ -203,6 +203,7 @@ async fn downloads_verifies_and_imports_a_model() {
             sha256: Some(sha256_hex(&body).to_uppercase()),
             size_bytes: Some(body.len() as u64),
             roles: vec![],
+            origin: Default::default(),
         })
         .await
         .unwrap();
@@ -233,6 +234,7 @@ async fn a_download_with_roles_stamps_them_on_the_imported_model() {
             sha256: Some(sha256_hex(&body)),
             size_bytes: Some(body.len() as u64),
             roles: vec!["chat".into(), "coding".into()],
+            origin: Default::default(),
         })
         .await
         .unwrap();
@@ -260,6 +262,7 @@ async fn a_partial_file_resumes_with_a_range_request() {
             sha256: Some(sha256_hex(&body)),
             size_bytes: Some(body.len() as u64),
             roles: vec![],
+            origin: Default::default(),
         })
         .await
         .unwrap();
@@ -294,6 +297,7 @@ async fn pause_stops_a_running_transfer_and_keeps_the_partial() {
             sha256: Some(sha256_hex(&body)),
             size_bytes: Some(body.len() as u64),
             roles: vec![],
+            origin: Default::default(),
         })
         .await
         .unwrap();
@@ -336,6 +340,7 @@ async fn a_sha_mismatch_fails_the_download_and_removes_the_file() {
             sha256: Some(sha256_hex(&body)), // the *uncorrupted* hash
             size_bytes: Some(body.len() as u64),
             roles: vec![],
+            origin: Default::default(),
         })
         .await
         .unwrap();
@@ -433,6 +438,7 @@ async fn enqueue_is_refused_in_offline_mode() {
             sha256: None,
             size_bytes: None,
             roles: vec![],
+            origin: Default::default(),
         })
         .await
         .unwrap_err();
@@ -447,6 +453,7 @@ fn req(name: &str) -> EnqueueRequest {
         sha256: None,
         size_bytes: None,
         roles: vec![],
+        origin: Default::default(),
     }
 }
 
@@ -665,6 +672,7 @@ fn catalog_req(sha256: &str, model_type: &str, roles: &[&str]) -> EnqueueRequest
     EnqueueRequest {
         model_type: Some(model_type.into()),
         roles: roles.iter().map(|r| (*r).to_string()).collect(),
+        origin: Default::default(),
         ..req_with_sha("model.onnx", sha256)
     }
 }
@@ -778,6 +786,7 @@ async fn a_role_merged_mid_transfer_reaches_the_imported_model() {
         sha256: Some(sha256_hex(&body)),
         size_bytes: Some(body.len() as u64),
         roles,
+        origin: Default::default(),
     };
 
     let d = m.enqueue(request(vec!["chat".into()])).await.unwrap();

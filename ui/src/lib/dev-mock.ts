@@ -25,6 +25,13 @@ import {
   mockDialogOpen,
   mockStorageLocations,
 } from "./dev-mock-storage";
+import {
+  mockDownloadOrigin,
+  mockLibraryPackages,
+  mockResolvePackage,
+  mockSaveBaseFamilies,
+  mockSetBaseFamily,
+} from "./dev-mock-packages";
 
 type AnyRecord = Record<string, unknown>;
 
@@ -40,19 +47,28 @@ function removeWhere<T>(arr: T[], predicate: (item: T) => boolean): void {
 }
 
 const MODELS: AnyRecord[] = [
-  mkModel("m-wan", "wan2.2_ti2v_5B_fp16", { family: "wan", roles: ["base_video"], runtimes: ["comfyui"], vram_estimate_mb: 11800 }),
+  mkModel("m-wan", "wan2.2_ti2v_5B_fp16", { family: "wan", base_family: "wan22-5b", family_source: "catalog", roles: ["base_video"], runtimes: ["comfyui"], vram_estimate_mb: 11800 }),
   mkModel("m-umt5", "umt5_xxl_fp8_e4m3fn_scaled", { roles: ["text_encoder"], runtimes: ["comfyui"] }),
   mkModel("m-wanvae", "wan2.2_vae", { family: "wan", roles: ["vae"], runtimes: ["comfyui"] }),
-  mkModel("m-lora-wan-motion", "Wan Motion Boost", { family: "wan", roles: ["lora"], runtimes: ["comfyui"], size_bytes: 128_000_000 }),
-  mkModel("m-sdxl", "SDXL Base 1.0", { family: "sdxl", roles: ["base_diffusion"], runtimes: ["comfyui"], vram_estimate_mb: 8200 }),
-  mkModel("m-lora-detail", "Add Detail XL", { family: "sdxl", roles: ["lora"], runtimes: ["comfyui"], size_bytes: 220_000_000 }),
-  mkModel("m-lora-flux-style", "Ink Wash Style (Flux)", { family: "flux", roles: ["lora"], runtimes: ["comfyui"], size_bytes: 340_000_000 }),
+  mkModel("m-lora-wan-motion", "Wan Motion Boost", { family: "wan", base_family: "wan22-5b", family_source: "header", roles: ["lora"], runtimes: ["comfyui"], size_bytes: 128_000_000 }),
+  mkModel("m-sdxl", "SDXL Base 1.0", { family: "sdxl", base_family: "sdxl", family_source: "catalog", roles: ["base_diffusion"], runtimes: ["comfyui"], vram_estimate_mb: 8200 }),
+  mkModel("m-lora-detail", "Add Detail XL", { family: "sdxl", base_family: "sdxl", family_source: "civitai", roles: ["lora"], runtimes: ["comfyui"], size_bytes: 220_000_000 }),
+  mkModel("m-lora-flux-style", "Ink Wash Style (Flux)", { family: "flux", base_family: "flux1", family_source: "name", roles: ["lora"], runtimes: ["comfyui"], size_bytes: 340_000_000 }),
   // The two-run lineage the "Your LoRAs" overview shows: v0 trained from
   // scratch, v1 continued from it (see `TRAINING_RUNS`).
-  mkModel("m-lora-ghibli-v0", "Ghibli Look v0", { family: "flux2", roles: ["lora"], runtimes: ["comfyui"], size_bytes: 168_000_000, source: "training:tr-v0", imported_at: "2026-09-12T18:04:00Z" }),
-  mkModel("m-lora-ghibli-v1", "Ghibli Look v1", { family: "flux2", roles: ["lora"], runtimes: ["comfyui"], size_bytes: 168_000_000, source: "training:tr-done", imported_at: "2026-09-17T21:40:00Z" }),
-  mkModel("m-flux2-klein", "FLUX.2 [klein] 9B — Q4_K_M (GGUF)", { family: "flux2", format: "gguf", roles: ["base_diffusion"], runtimes: ["comfyui"], vram_estimate_mb: 5900 }),
-  mkModel("m-lora-flux2-detail", "Realistic Detail LoRA (FLUX.2 Klein 9B)", { family: "flux2", roles: ["lora"], runtimes: ["comfyui"], size_bytes: 165_704_488 }),
+  mkModel("m-lora-ghibli-v0", "Ghibli Look v0", { family: "flux2", base_family: "flux2-klein-9b", family_source: "header", roles: ["lora"], runtimes: ["comfyui"], size_bytes: 168_000_000, source: "training:tr-v0", imported_at: "2026-09-12T18:04:00Z" }),
+  mkModel("m-lora-ghibli-v1", "Ghibli Look v1", { family: "flux2", base_family: "flux2-klein-9b", family_source: "header", roles: ["lora"], runtimes: ["comfyui"], size_bytes: 168_000_000, source: "training:tr-done", imported_at: "2026-09-17T21:40:00Z" }),
+  mkModel("m-flux2-klein", "FLUX.2 [klein] 9B — Q4_K_M (GGUF)", { family: "flux2", base_family: "flux2-klein-9b", family_source: "catalog", format: "gguf", roles: ["base_diffusion"], runtimes: ["comfyui"], vram_estimate_mb: 5900 }),
+  mkModel("m-lora-flux2-detail", "Realistic Detail LoRA (FLUX.2 Klein 9B)", { family: "flux2", base_family: "flux2-klein-9b", family_source: "hf", roles: ["lora"], runtimes: ["comfyui"], size_bytes: 165_704_488 }),
+  // Plan 14 packages: the FLUX.2 [klein] group has both VAEs but not its
+  // Qwen3 text encoder; two Pony LoRAs without a Pony checkpoint (they work
+  // with SDXL); a Wan 14B LoRA that cannot run here; one LoRA of unknown base.
+  mkModel("m-flux2-vae", "flux2-vae", { family: "flux2", roles: ["vae"], runtimes: ["comfyui"], size_bytes: 336_211_292 }),
+  mkModel("m-flux2-edit-vae", "full_encoder_small_decoder", { family: "flux2", roles: ["vae"], runtimes: ["comfyui"], size_bytes: 249_519_092 }),
+  mkModel("m-lora-pony-ink", "Pony Ink Style", { family: "sdxl", base_family: "pony", family_source: "civitai", roles: ["lora"], runtimes: ["comfyui"], size_bytes: 228_000_000, source: "civitai:123456/654321" }),
+  mkModel("m-lora-pony-eyes", "ponyEyesDetail_v2", { base_family: "pony", family_source: "header", roles: ["lora"], runtimes: ["comfyui"], size_bytes: 57_000_000 }),
+  mkModel("m-lora-wan14-motion", "Wan 2.2 I2V A14B Orbit Cam", { family: "wan", base_family: "wan-14b", family_source: "civitai", roles: ["lora"], runtimes: ["comfyui"], size_bytes: 306_000_000, source: "civitai:1800000/2000000" }),
+  mkModel("m-lora-mystery", "mystery_style_v3", { roles: ["lora"], runtimes: ["comfyui"], size_bytes: 144_000_000 }),
   mkModel("m-qwen", "Qwen2.5 7B Instruct", { family: "qwen2", format: "gguf", quant: "Q5_K_M", param_count: 7_615_616_512, ctx_max: 32_768, roles: ["chat"], runtimes: ["llamacpp"], vram_estimate_mb: 6400 }),
   mkModel("m-hermes", "Hermes-3-Llama-3.1-8B", { family: "llama3", format: "gguf", quant: "Q5_K_M", param_count: 8_030_000_000, ctx_max: 131_072, roles: ["chat", "coding"], runtimes: ["llamacpp"], vram_estimate_mb: 5700 }),
   mkModel("m-kokoro", "Kokoro 82M — int8", { family: "kokoro", format: "onnx", roles: ["voice_model"], runtimes: [], size_bytes: 114_119_327 }),
@@ -80,7 +96,8 @@ const JOBS: AnyRecord[] = [
 
 function mkModel(id: string, name: string, over: AnyRecord): AnyRecord {
   return {
-    id, name, publisher: null, family: null, format: "safetensors", quant: null, arch: null,
+    id, name, publisher: null, family: null, base_family: null, family_source: null,
+    format: "safetensors", quant: null, arch: null,
     param_count: null, file_path: `E:\\AI\\models\\${name}`, sha256: null, size_bytes: 6_000_000_000,
     ctx_max: null, vram_estimate_mb: null, ram_estimate_mb: null, source: "manual",
     imported_at: now(), last_used_at: null, use_count: 0,
@@ -2437,6 +2454,14 @@ export function installDevMock(): void {
         m.roles = clean;
         return clean;
       }
+      case "resolve_package":
+        return mockResolvePackage((a.query ?? {}) as AnyRecord, MODELS, CIVITAI_DISCOVER_MODELS);
+      case "library_packages":
+        return mockLibraryPackages(MODELS);
+      case "set_model_base_family":
+        return mockSetBaseFamily(MODELS, a.id, a.family);
+      case "save_base_families":
+        return mockSaveBaseFamilies(MODELS, (a.batch as AnyRecord[]) ?? []);
       case "rename_model": {
         const m = MODELS.find((x) => x.id === a.id);
         if (!m) throw new Error(`model ${a.id} is not in the library`);
@@ -2716,6 +2741,7 @@ export function installDevMock(): void {
           size_bytes: body.size_bytes ?? 4_683_073_536, bytes_done: 0, retries: 0,
           state: "running", error_text: null, model_id: null,
           created_at: now(), updated_at: now(), roles: body.roles ?? [],
+          ...mockDownloadOrigin(body.origin as AnyRecord | undefined),
         };
         DOWNLOADS.unshift(d);
         return d;

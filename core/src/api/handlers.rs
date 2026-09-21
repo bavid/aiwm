@@ -2466,6 +2466,7 @@ pub async fn enqueue_download(app: &App, dto: EnqueueDownloadDto) -> Result<Down
         .filter(|n| !n.is_empty())
         .ok_or_else(|| CoreError::Config("download needs a filename".into()))?
         .to_string();
+    let origin = crate::download::DownloadOrigin::from_dto(dto.origin.as_ref())?;
     app.downloads
         .enqueue(EnqueueRequest {
             url: dto.url,
@@ -2474,6 +2475,7 @@ pub async fn enqueue_download(app: &App, dto: EnqueueDownloadDto) -> Result<Down
             sha256: dto.sha256.filter(|s| !s.trim().is_empty()),
             size_bytes: dto.size_bytes,
             roles: dto.roles,
+            origin,
         })
         .await
 }

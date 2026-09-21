@@ -528,6 +528,7 @@ mod tests {
             publisher: None,
             name: "base weights".into(),
             family: None,
+            base_family: None,
             family_source: None,
             format: "dir".into(),
             quant: None,

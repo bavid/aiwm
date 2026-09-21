@@ -8,6 +8,7 @@ mod gguf;
 mod import;
 mod integrity;
 mod kind;
+pub mod packages;
 mod safetensors;
 
 pub use directory::register_directory_model;

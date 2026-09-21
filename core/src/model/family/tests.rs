@@ -631,6 +631,7 @@ fn model(family: Option<&str>, family_source: Option<&str>, file: &str) -> Model
         publisher: None,
         name: file.into(),
         family: family.map(str::to_string),
+        base_family: None,
         family_source: family_source.map(str::to_string),
         format: "safetensors".into(),
         quant: None,
@@ -673,11 +674,21 @@ fn inferred(m: &Model, h: Option<&SafetensorsHeader>) -> Option<(&'static str, F
     infer_family(m, h).map(|(f, s)| (f.id, s))
 }
 
+/// A model with a recorded `base_family` (and `family_source`) next to its
+/// legacy `family` string.
+fn recorded(base_family: &str, source: Option<&str>, legacy: Option<&str>, file: &str) -> Model {
+    Model {
+        base_family: Some(base_family.into()),
+        ..model(legacy, source, file)
+    }
+}
+
 #[test]
-fn a_recorded_family_beats_the_header_and_the_name() {
-    let m = model(
-        Some("pony"),
+fn a_recorded_base_family_beats_the_header_and_the_name() {
+    let m = recorded(
+        "pony",
         Some("civitai"),
+        None,
         "flux2-klein-9b-thing.safetensors",
     );
     let h = klein4_lora();
@@ -685,11 +696,44 @@ fn a_recorded_family_beats_the_header_and_the_name() {
         inferred(&m, Some(&h)),
         Some(("pony", FamilySource::Civitai))
     );
-    let user = model(Some("sdxl"), Some("user"), "x.safetensors");
+    let user = recorded("sdxl", Some("user"), None, "x.safetensors");
     assert_eq!(
         inferred(&user, Some(&h)),
         Some(("sdxl", FamilySource::User))
     );
+}
+
+#[test]
+fn a_recorded_base_family_beats_a_contradicting_legacy_family() {
+    // The trainer stores both klein sizes as "flux2"; the recorded base
+    // family is the authority, the legacy string stays as it is.
+    let m = recorded("flux2-klein-4b", Some("hf"), Some("flux2"), "x.safetensors");
+    assert_eq!(
+        inferred(&m, None),
+        Some(("flux2-klein-4b", FamilySource::Hf))
+    );
+    let catalog = Model {
+        source_revision: Some("catalog:flux2-klein-9b-q4".into()),
+        ..recorded("flux2-klein-4b", Some("user"), Some("flux2"), "x.gguf")
+    };
+    assert_eq!(
+        inferred(&catalog, None),
+        Some(("flux2-klein-4b", FamilySource::User))
+    );
+}
+
+#[test]
+fn a_family_source_without_a_base_family_records_nothing() {
+    // family_source describes base_family; next to a bare legacy string it
+    // is not a recorded family.
+    let m = model(Some("pony"), Some("civitai"), "x.safetensors");
+    assert_eq!(inferred(&m, None), Some(("pony", FamilySource::Name)));
+}
+
+#[test]
+fn a_base_family_without_its_source_counts_as_the_weakest_hint() {
+    let m = recorded("pony", None, None, "x.safetensors");
+    assert_eq!(inferred(&m, None), Some(("pony", FamilySource::Name)));
 }
 
 #[test]
@@ -744,7 +788,7 @@ fn the_file_name_is_used_last() {
 
 #[test]
 fn a_recorded_family_the_registry_does_not_know_falls_through() {
-    let m = model(Some("krea2"), Some("civitai"), "sd_xl_thing.safetensors");
+    let m = recorded("krea2", Some("civitai"), None, "sd_xl_thing.safetensors");
     assert_eq!(inferred(&m, None), Some(("sdxl", FamilySource::Name)));
 }
 

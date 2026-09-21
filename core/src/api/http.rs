@@ -23,6 +23,8 @@ use super::dto::{
 };
 use super::handlers;
 use crate::db::JobFilter;
+
+mod packages;
 use crate::orchestrator::JobState;
 use crate::{App, CoreError};
 
@@ -193,6 +195,10 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/models/{id}/roles", put(set_model_roles))
         .route("/models/{id}/name", put(rename_model))
         .route("/models/{id}/unload", post(unload_model))
+        .route("/models/{id}/base-family", post(packages::set_base_family))
+        .route("/models/base-families", post(packages::save_base_families))
+        .route("/packages/resolve", get(packages::resolve))
+        .route("/packages/library", get(packages::library))
         .route("/registry/status", get(registry_status))
         .route("/registry/token", put(set_hf_token))
         .route("/civitai/status", get(civitai_status))

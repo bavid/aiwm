@@ -50,6 +50,8 @@
 //!    is still copied onto [`RemoteModel::nsfw`] regardless, as defense in
 //!    depth for the rare mislabelled result.
 
+mod checkpoints;
+
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -57,8 +59,8 @@ use async_trait::async_trait;
 use serde_json::Value;
 
 use super::{
-    Gated, ModelSource, RegistryStatus, RemoteFile, RemoteFormat, RemoteModel, RemoteModelDetails,
-    RemotePreview, SearchQuery, SearchSort, MAX_PREVIEWS,
+    CheckpointCandidate, Gated, ModelSource, RegistryStatus, RemoteFile, RemoteFormat, RemoteModel,
+    RemoteModelDetails, RemotePreview, RemoteVersion, SearchQuery, SearchSort, MAX_PREVIEWS,
 };
 use crate::config::CivitaiFrontDoor;
 use crate::db::now_rfc3339;
@@ -282,8 +284,32 @@ impl ModelSource for CivitaiSource {
             model,
             revision,
             files,
+            versions: versions.map(|a| parse_versions(a)).unwrap_or_default(),
         })
     }
+
+    async fn checkpoints_for_base(
+        &self,
+        base_label: &str,
+        nsfw: bool,
+        limit: usize,
+    ) -> Result<Vec<CheckpointCandidate>> {
+        checkpoints::search(self, base_label, nsfw, limit).await
+    }
+}
+
+/// Every listed version with the base it targets.
+fn parse_versions(versions: &[Value]) -> Vec<RemoteVersion> {
+    versions
+        .iter()
+        .filter_map(|v| {
+            Some(RemoteVersion {
+                id: v.get("id").and_then(Value::as_u64)?.to_string(),
+                name: str_field(v, "name"),
+                base_model: str_field(v, "baseModel"),
+            })
+        })
+        .collect()
 }
 
 // --- pure parsing (unit-tested against canned JSON) ----------------------

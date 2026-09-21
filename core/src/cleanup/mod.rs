@@ -283,6 +283,7 @@ mod tests {
             publisher: None,
             name: over.name,
             family: None,
+            base_family: None,
             family_source: None,
             format: over.format,
             quant: None,
