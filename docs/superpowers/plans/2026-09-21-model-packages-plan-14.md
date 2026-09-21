@@ -47,7 +47,7 @@ Rules for every task: TDD with observed RED; no `unsafe`; no `unwrap/expect` in 
 
 - [x] DB backup; real daemon; resolve one LoRA per family the user has (SDXL, FLUX.2 klein), one Pony, one Wan 14B, one SD 1.5; `GET /packages/library` on the real library; record results and timings. **No download into the user's library without an explicit OK at that point.**
 - [x] `docs/TODO.md` ✅ entry; full gates; commit `docs(models): packages shipped, measured`.
-- [ ] Hand back: whole-branch review → controller gates → merge `--no-ff` → push.
+- [x] Hand back: whole-branch review (approved) → real-run findings fixed → controller gates → merge `--no-ff` → push.
 
 ## Measured
 
