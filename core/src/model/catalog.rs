@@ -1,5 +1,5 @@
 //! A small curated catalogue of image **and video** models the tool knows how to
-//! run: SDXL, the FLUX.1-dev GGUF stack, the Wan 2.2 TI2V-5B video stack, and
+//! run: SDXL, Stable Diffusion 1.5, the FLUX.1-dev GGUF stack, the Wan 2.2 TI2V-5B video stack, and
 //! LTX-Video 0.9.x.
 //!
 //! The MVP has no download manager (that is Phase 6), so "assisted import"
@@ -60,6 +60,27 @@ pub const KNOWN_MODELS: &[KnownModel] = &[
         license: "CreativeML Open RAIL++-M (commercial use allowed)",
         note: "The default. Fits comfortably in 16 GB, huge LoRA/ControlNet ecosystem.",
         is_default: true,
+        media: "image",
+    },
+    // Downloaded from the pinned revision and hashed 2026-09-21: SHA-256 and
+    // size agree with the Hugging Face tree's `lfs.oid` / `size`. Licence from
+    // the model card (`license: creativeml-openrail-m`).
+    KnownModel {
+        id: "sd15-v1-5-emaonly",
+        name: "Stable Diffusion 1.5 (pruned, EMA-only)",
+        kind: "checkpoint",
+        family: Some("sd15"),
+        publisher: "Stability AI / RunwayML",
+        repo: "stable-diffusion-v1-5/stable-diffusion-v1-5",
+        file: "v1-5-pruned-emaonly.safetensors",
+        url: "https://huggingface.co/stable-diffusion-v1-5/stable-diffusion-v1-5/resolve/\
+              451f4fe16113bff5a5d2269ed5ad43b0592e9a14/v1-5-pruned-emaonly.safetensors",
+        sha256: "6ce0161689b3853acaa03779ec93eafe75a02f4ced659bee03f50797806fa2fa",
+        size_bytes: 4_265_146_304,
+        license: "CreativeML Open RAIL-M",
+        note: "The base the large SD 1.5 LoRA library was made for. Renders at 512 px; \
+               light on VRAM. Pinned to commit 451f4fe16113bff5a5d2269ed5ad43b0592e9a14.",
+        is_default: false,
         media: "image",
     },
     KnownModel {
@@ -1143,6 +1164,14 @@ pub const MODEL_STACKS: &[ModelStack] = &[
         is_default: true,
     },
     ModelStack {
+        id: "sd15",
+        label: "Stable Diffusion 1.5",
+        media: "image",
+        member_ids: &["sd15-v1-5-emaonly"],
+        note: "One file — the checkpoint carries its own VAE and text encoder.",
+        is_default: false,
+    },
+    ModelStack {
         id: "flux",
         label: "FLUX.1-dev",
         media: "image",
@@ -1890,5 +1919,44 @@ mod tests {
             assert!(!m.license.is_empty(), "{}", m.id);
             assert!(!m.note.is_empty(), "{}", m.id);
         }
+    }
+
+    /// The SD 1.5 checkpoint was downloaded from the pinned revision and
+    /// hashed on 2026-09-21; the SHA-256 and size agree with the Hugging
+    /// Face tree's `lfs.oid` / `size` for that file.
+    #[test]
+    fn sd15_stack_is_one_pinned_checkpoint_that_carries_everything() {
+        let s = stack("sd15");
+        assert_eq!(s.label, "Stable Diffusion 1.5");
+        assert_eq!(s.media, "image");
+        assert!(!s.is_default, "SDXL stays the default image stack");
+        assert_eq!(s.member_ids, &["sd15-v1-5-emaonly"]);
+
+        let m = member("sd15-v1-5-emaonly");
+        assert_eq!(m.kind, "checkpoint");
+        assert_eq!(m.family, Some("sd15"));
+        assert_eq!(m.media, "image");
+        assert!(!m.is_default);
+        assert_eq!(m.repo, "stable-diffusion-v1-5/stable-diffusion-v1-5");
+        assert_eq!(m.file, "v1-5-pruned-emaonly.safetensors");
+        assert_eq!(
+            m.url,
+            "https://huggingface.co/stable-diffusion-v1-5/stable-diffusion-v1-5/resolve/\
+             451f4fe16113bff5a5d2269ed5ad43b0592e9a14/v1-5-pruned-emaonly.safetensors"
+        );
+        assert_eq!(
+            m.sha256,
+            "6ce0161689b3853acaa03779ec93eafe75a02f4ced659bee03f50797806fa2fa"
+        );
+        assert_eq!(m.size_bytes, 4_265_146_304);
+        assert!(
+            m.license.contains("CreativeML Open RAIL-M"),
+            "{}",
+            m.license
+        );
+        assert_eq!(
+            find_by_sha256(m.sha256).map(|k| k.id),
+            Some("sd15-v1-5-emaonly")
+        );
     }
 }

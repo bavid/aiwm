@@ -82,8 +82,8 @@ const LTX2_REASON: &str = "LTX-2 is a different, much larger audio-video model â
 
 /// The registry. Order is display order.
 pub const FAMILIES: &[BaseFamily] = &[
-    // SD 1.5 is supported; its curated stack arrives with the SD 1.5 task of
-    // Plan 14, so there is no stack to name yet.
+    // SD 1.5 runs through the single-file checkpoint graph at 512 px
+    // (`capability::image_defaults`).
     BaseFamily {
         id: "sd15",
         label: "Stable Diffusion 1.5",
@@ -94,7 +94,7 @@ pub const FAMILIES: &[BaseFamily] = &[
             "CompVis/stable-diffusion-v1-4",
         ],
         arch_group: ArchGroup::Sd15,
-        stack_id: None,
+        stack_id: Some("sd15"),
         runnable: Runnable::Yes,
     },
     BaseFamily {

@@ -123,6 +123,7 @@ fn stack_ids_point_at_real_catalog_stacks() {
             );
         }
     }
+    assert_eq!(family_by_id("sd15").and_then(|f| f.stack_id), Some("sd15"));
     assert_eq!(family_by_id("sdxl").and_then(|f| f.stack_id), Some("sdxl"));
     assert_eq!(family_by_id("flux1").and_then(|f| f.stack_id), Some("flux"));
     assert_eq!(
