@@ -247,6 +247,9 @@ button {
   min-width: 0;
   height: 100%;
   overflow-y: auto;
+  /* A scrollbar that comes and goes with a page's height would shift the
+     whole page by its width. */
+  scrollbar-gutter: stable;
   padding: var(--space-5) var(--space-6) var(--space-6);
   /* Every tab lives in its own always-mounted wrapper (App.tsx). Without a
      column here those wrappers are only as tall as their content, so a page
@@ -270,6 +273,11 @@ button {
 .main > div:not([hidden]) > * {
   flex: 1 0 auto;
   min-height: 0;
+  /* In a flex column, `margin: 0 auto` on a page root shrinks it to its
+     content, so a page re-centred at a new width whenever its content
+     changed — the Models section list jumped sideways on every click. Full
+     width (up to the page's own max-width) is what block layout gave. */
+  width: 100%;
 }
 
 .status-dot {

@@ -20,21 +20,6 @@
   gap: var(--space-5);
 }
 
-/* Below 1400px the section list moves above the sections as a wrapping row
-   of tabs, so the table gets the 180px the side column took. */
-@media (max-width: 1400px) {
-  .models-body {
-    flex-direction: column;
-    align-items: stretch;
-  }
-  .models-body > .section-nav {
-    position: static;
-    width: auto;
-    flex-direction: row;
-    flex-wrap: wrap;
-  }
-}
-
 .models-sections {
   flex: 1;
   min-width: 0;
@@ -166,6 +151,10 @@
 
 .model-table__scroll {
   overflow-x: auto;
+  /* The table's `.visually-hidden` labels are absolutely positioned; without
+     a containing block here they escape this scroller and gave the whole
+     window a sideways scrollbar. */
+  position: relative;
 }
 
 .model-table {
