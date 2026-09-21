@@ -250,6 +250,11 @@ button {
   /* A scrollbar that comes and goes with a page's height would shift the
      whole page by its width. */
   scrollbar-gutter: stable;
+  /* The containing block for every `.visually-hidden` / screen-reader span
+     in a page. Without it they were placed against the window, below and
+     beside the app, and gave the window its own scrollbars — 15px of width
+     that came and went with the section on screen. */
+  position: relative;
   padding: var(--space-5) var(--space-6) var(--space-6);
   /* Every tab lives in its own always-mounted wrapper (App.tsx). Without a
      column here those wrappers are only as tall as their content, so a page
